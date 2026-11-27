@@ -97,8 +97,8 @@
 //! no command surface — `config lint --host-rules` already shipped — so both are
 //! `kind:mechanism`.
 //!
-// carried: mise-tasks/ci-drift.sh crates/batten/src/ci.rs kind:mechanism crates/batten/tests/it/config_lint.rs
-// carried: tests/ci-drift.bats crates/batten/src/ci.rs kind:mechanism crates/batten/tests/it/config_lint.rs
+// carried: mise-tasks/ci-drift.sh crates/batten-base/src/ci.rs kind:mechanism crates/batten/tests/it/config_lint.rs
+// carried: tests/ci-drift.bats crates/batten-base/src/ci.rs kind:mechanism crates/batten/tests/it/config_lint.rs
 //!
 //! ## CARRIED — the decision half, which this file already covered
 //!
@@ -140,6 +140,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
+use batten::capture::StreamedChild as _;
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -249,7 +250,7 @@ fn question(answer: &str) -> serde_json::Value {
 /// ledger this tier reads is one the engine wrote (CLOUD-1078, CLOUD-845).
 fn ask(dir: &Path, answer: &str) -> usize {
     batten::record_asked_for_test(
-        batten::hook::Harness::ClaudeCode,
+        batten::config_model::Harness::ClaudeCode,
         "AskUserQuestion",
         &question(answer),
         dir,
@@ -332,7 +333,7 @@ fn a_question_answered_the_other_way_admits_nothing() {
 fn a_hand_composed_answer_is_never_recorded() {
     let dir = weakening_pr("lint-admit-hand", None);
     let written = batten::record_asked_for_test(
-        batten::hook::Harness::ExitCode,
+        batten::config_model::Harness::ExitCode,
         "AskUserQuestion",
         &question("Admit it"),
         &dir,
@@ -498,6 +499,53 @@ fn a_config_below_the_repository_root_is_not_armed_by_the_roots_claim() {
     );
 }
 
+/// A linked worktree carrying its own `batten.toml` IS the root of its
+/// authority (CLOUD-2532), so its claimed branch is armed at its fork point.
+///
+/// `repo_root` from a linked worktree is the MAIN checkout, so comparing `here`
+/// against it never matched and the claim never armed there: a weakening on a
+/// claimed worktree branch passed the pre-commit lint that refuses it in the
+/// main checkout. The claim is read from the worktree's own git dir, which is
+/// where `git_dir` keys a worktree's receipts.
+#[test]
+fn a_claimed_worktree_branch_is_armed_at_its_fork_point() {
+    let main = weakening_pr("lint-admit-worktree", Some(PAIR));
+    let linked = common::scratch("lint-admit-worktree-linked");
+    let _ = fs::remove_dir_all(&linked);
+    common::git_in(
+        &main,
+        &[
+            "worktree",
+            "add",
+            "--quiet",
+            "-b",
+            "linked",
+            linked.to_str().unwrap_or_default(),
+            "HEAD",
+        ],
+    );
+    let git_dir = common::git_in(&linked, &["rev-parse", "--absolute-git-dir"]);
+    let store = Path::new(git_dir.trim()).join("batten-receipts");
+    fs::create_dir_all(&store).unwrap();
+    fs::write(
+        store.join(batten::claim::receipt_name("linked")),
+        "CLOUD-1\nready-lint pass\n",
+    )
+    .unwrap();
+    let out = lint(&linked, &[]);
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "a claimed worktree branch's unanswered weakening must refuse: {}",
+        stdout(&out)
+    );
+    assert!(
+        stdout(&out).contains("severity-lowered"),
+        "{}",
+        stdout(&out)
+    );
+}
+
 /// Why the FORK POINT and not the trunk's tip: a trunk that moved after the
 /// branch was cut must not be charged to the branch.
 ///
@@ -611,6 +659,41 @@ fn a_rule_switched_off_is_a_smell() {
         stdout(&output).contains("rule-disabled"),
         "got: {}",
         stdout(&output)
+    );
+}
+
+#[test]
+fn a_pin_below_another_key_is_invalid_and_still_loads() {
+    // The pin heads the file, after only `version`: below any other key the file
+    // is refused by name and line, never by a load error, so the engine that
+    // must read the pin to follow it still can.
+    let pin = format!(
+        "engine = {{ release = \"v{}\" }}\n",
+        env!("CARGO_PKG_VERSION")
+    );
+    let dir = repo_with_config(
+        "lint-pin-buried",
+        &format!("version = 1\nunlanded = [\"x\"]\n{pin}"),
+    );
+    let output = lint(&dir, &[]);
+    assert_eq!(output.status.code(), Some(2), "{}", stdout(&output));
+    assert_eq!(
+        stdout(&output),
+        "batten.toml:3 engine-pin-out-of-order\nconfig-lint: 1 smell(s)\n"
+    );
+    let show = common::run(&dir, &["config", "show"]);
+    assert!(
+        show.status.success(),
+        "a buried pin still loads: {}",
+        stdout(&show)
+    );
+    let headed = repo_with_config(
+        "lint-pin-headed",
+        &format!("version = 1\n{pin}unlanded = [\"x\"]\n"),
+    );
+    assert!(
+        !stdout(&lint(&headed, &[])).contains("engine-pin-out-of-order"),
+        "a pin under `version` is in order"
     );
 }
 
@@ -831,7 +914,7 @@ fn the_smell_ids_are_the_same_names_the_check_delta_uses() {
     let checked = batten()
         .args(["check", "--config-from", "origin/main"])
         .current_dir(&repo)
-        .output()
+        .streamed_output()
         .expect("run batten check");
     let checked = String::from_utf8_lossy(&checked.stdout);
     assert!(
@@ -1079,7 +1162,10 @@ fn an_unknown_base_ref_is_a_usage_error() {
 fn config_lint_is_declared_read_in_the_spec() {
     // §5: the derived agent allowlist is `filter(effect == read)`, so a lint that
     // only inspects must say so or it is needlessly excluded.
-    let output = batten().arg("spec").output().expect("run batten spec");
+    let output = batten()
+        .arg("spec")
+        .streamed_output()
+        .expect("run batten spec");
     let spec: serde_json::Value = serde_json::from_slice(&output.stdout).expect("spec is JSON");
     let config = spec["subcommands"]
         .as_array()
@@ -1105,7 +1191,7 @@ fn this_repositorys_own_config_is_clean() {
         .args(["config", "lint"])
         .current_dir(&repo)
         .env_remove("BATTEN_CONFIG_FROM")
-        .output()
+        .streamed_output()
         .expect("run batten config lint");
     assert_eq!(
         output.status.code(),
@@ -1161,7 +1247,7 @@ fn the_two_verbs_agree_on_where_a_weakening_is() {
         .args(["check", "--config-from", "origin/main"])
         .current_dir(&repo)
         .env_remove("BATTEN_CONFIG_FROM")
-        .output()
+        .streamed_output()
         .expect("run batten check");
     let check_out = String::from_utf8_lossy(&check.stdout).into_owned();
 
@@ -1734,7 +1820,7 @@ fn the_drift_report_is_byte_stable_and_reads_stdin() {
             payload.as_bytes(),
         )
         .expect("write payload");
-        child.wait_with_output().expect("run batten")
+        child.streamed_wait().expect("run batten")
     };
 
     let first = piped(&["-J"]);
@@ -1820,4 +1906,78 @@ fn the_armed_comparison_still_reports_a_single_tree_smell() {
     let seen = stdout(&output);
     assert!(seen.contains("empty-protected-set"), "got: {seen}");
     assert!(seen.contains("severity-lowered"), "got: {seen}");
+}
+
+/// A glob widened only to follow a file the branch moved is no weakening, and
+/// a branch with that move and that glob reports nothing for it
+/// (CLOUD-2789).
+///
+/// Fails by: the move-explained finding kept and every other one dropped.
+#[test]
+fn a_glob_that_only_follows_a_moved_file_is_not_reported() {
+    let rule = |glob: &str| {
+        format!(
+            "version = 1\n\n[[rule]]\nid = \"r\"\nkind = \"forbid\"\nglob = \"{glob}\"\n\
+             pattern = \"x\"\nseverity = \"deny\"\nscope = \"tree\"\n"
+        )
+    };
+    let dir = Fixture::new("config-lint-moved-glob")
+        .config(&rule("crates/a/src/**/*.rs"))
+        .files(&[
+            ("crates/a/src/x.rs", "pub fn x() {}\n"),
+            ("crates/a/src/kept.rs", "pub fn kept() {}\n"),
+        ])
+        .git()
+        .base_commit()
+        .build();
+    fs::create_dir_all(dir.join("crates/b/src")).unwrap();
+    common::git_in(&dir, &["mv", "crates/a/src/x.rs", "crates/b/src/x.rs"]);
+    let base = fs::read_to_string(dir.join("batten.toml")).unwrap();
+    fs::write(
+        dir.join("batten.toml"),
+        base.replace("crates/a/src/**/*.rs", "crates/{a,b}/src/**/*.rs"),
+    )
+    .unwrap();
+    common::git_in(&dir, &["commit", "-q", "-am", "move x into b"]);
+    let today = batten::waiver::Date::parse("2026-08-10").unwrap();
+    let found: Vec<String> = batten::lint::run(&dir, Some("origin/main"), today)
+        .unwrap()
+        .iter()
+        .map(batten::lint::Smell::line_text)
+        .collect();
+    assert!(
+        !found
+            .iter()
+            .any(|line| line.contains("rule-predicate-changed")),
+        "{found:?}"
+    );
+    // THE PREMISE: the same glob change with no move IS reported.
+    let unmoved = Fixture::new("config-lint-unmoved-glob")
+        .config(&rule("crates/a/src/**/*.rs"))
+        .files(&[("crates/a/src/kept.rs", "pub fn kept() {}\n")])
+        .git()
+        .base_commit()
+        .build();
+    let base = fs::read_to_string(unmoved.join("batten.toml")).unwrap();
+    fs::write(
+        unmoved.join("batten.toml"),
+        base.replace("crates/a/src/**/*.rs", "crates/{a,b}/src/**/*.rs"),
+    )
+    .unwrap();
+    fs::write(unmoved.join("crates/a/src/x.rs"), "pub fn x() {}\n").unwrap();
+    fs::create_dir_all(unmoved.join("crates/b/src")).unwrap();
+    fs::write(unmoved.join("crates/b/src/y.rs"), "pub fn y() {}\n").unwrap();
+    common::git_in(&unmoved, &["add", "-A"]);
+    common::git_in(&unmoved, &["commit", "-q", "-m", "add y in b"]);
+    let found: Vec<String> = batten::lint::run(&unmoved, Some("origin/main"), today)
+        .unwrap()
+        .iter()
+        .map(batten::lint::Smell::line_text)
+        .collect();
+    assert!(
+        found
+            .iter()
+            .any(|line| line.contains("rule-predicate-changed")),
+        "{found:?}"
+    );
 }

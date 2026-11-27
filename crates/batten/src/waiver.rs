@@ -61,7 +61,7 @@
 //! it (CLOUD-293), so the filter and the diagnostic cannot come to disagree
 //! about which kinds a waiver covers.
 //!
-//! It is down to **one** kind: `judge`, which mints no [`crate::rules::Finding`]
+//! It is down to **one** kind: `judge`, which mints no [`crate::findings::Finding`]
 //! and renders no [`crate::hook::Decision`] — it is refused the `severity` column
 //! and `run_rule` skips it as configured off, so a waiver over it suppresses
 //! nothing however either channel behaves. The mediated kinds left this set with
@@ -127,11 +127,13 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::Result;
-use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
 
+#[cfg(test)]
+use crate::config_check::waiver::validate;
+use crate::config_model::RuleKind;
+use crate::config_model::Waiver;
 use crate::error::UsageError;
-use crate::rules::{self, Finding, RuleKind};
+use crate::findings::Finding;
 
 /// A calendar date, to the day.
 ///
@@ -210,28 +212,12 @@ impl Date {
 
     /// The date of an instant given as seconds since the Unix epoch, UTC.
     ///
-    /// The standard era-based civil-from-days algorithm, hand-written so a date
-    /// costs no dependency — the same reason [`crate::receipt`] gives for its
-    /// timestamp formatter, which now reads its date half from here rather than
-    /// carrying a second copy of this arithmetic.
+    /// [`crate::clock::civil`]'s reading as a `Date`: the one civil-from-days
+    /// conversion in the tree, which the receipt timestamp formatter reads too.
     #[must_use]
     pub fn from_unix_seconds(seconds: u64) -> Date {
-        // Shift to the era starting 0000-03-01; every quantity below is
-        // non-negative, so the arithmetic stays in u64.
-        let z = seconds / 86_400 + 719_468;
-        let era = z / 146_097;
-        let day_of_era = z % 146_097;
-        let year_of_era =
-            (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
-        let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
-        let mp = (5 * day_of_year + 2) / 153;
-        let day = day_of_year - (153 * mp + 2) / 5 + 1;
-        let month = if mp < 10 { mp + 3 } else { mp - 9 };
-        Date {
-            year: year_of_era + era * 400 + u64::from(month <= 2),
-            month,
-            day,
-        }
+        let (year, month, day) = crate::clock::civil(seconds);
+        Date { year, month, day }
     }
 
     /// The canonical `YYYY-MM-DD` spelling — the one [`Date::parse`] accepts.
@@ -258,31 +244,8 @@ pub fn today() -> Result<Date> {
     Ok(Date::from_unix_seconds(since.as_secs()))
 }
 
-/// One declared waiver: which rule, why, until when, and optionally where.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct Waiver {
-    /// The [`crate::rules::Rule::id`] this waiver suppresses findings of.
-    pub rule: String,
-    /// Why the finding is being waived. Required, and required to be non-empty:
-    /// an unjustified waiver is the undesigned hatch this table replaces, and a
-    /// reason nobody had to write is one nobody can review.
-    pub reason: String,
-    /// The last day this waiver applies, `YYYY-MM-DD`. Required — see the module
-    /// docs on why a waiver with no expiry is the rot rather than a convenience.
-    pub expires: String,
-    /// A glob narrowing the waiver to some of the rule's findings.
-    ///
-    /// Absent means the whole rule, which is the widest a waiver can be and
-    /// therefore the one that must be typed deliberately rather than reached by
-    /// omitting a field nobody noticed. Matched with
-    /// [`crate::rules::glob_match`], so a waiver's path vocabulary is the one the
-    /// rules use and not a second dialect.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub path: Option<String>,
-}
-
-impl Waiver {
+/// `Waiver` behaviour that belongs to this module's layer, not the type's (CLOUD-2793).
+pub trait WaiverExt: Sized {
     /// The parsed expiry.
     ///
     /// # Errors
@@ -290,11 +253,7 @@ impl Waiver {
     /// Returns a [`UsageError`] when [`Waiver::expires`] is not a calendar date.
     /// Callers past load do not have to handle it — [`validate`] runs at parse
     /// time, so a resolved config's waivers all carry parseable dates.
-    pub fn expiry(&self) -> Result<Date> {
-        Date::parse(&self.expires).map_err(|err| {
-            UsageError::raise(format!("waiver {}: {}", self.rule, root_message(&err)))
-        })
-    }
+    fn expiry(&self) -> Result<Date>;
 
     /// Whether this waiver has lapsed on `today`.
     ///
@@ -309,30 +268,11 @@ impl Waiver {
     /// the file. [`validate`] makes the case unreachable through the loader; this
     /// is the belt.
     #[must_use]
-    pub fn lapsed(&self, today: Date) -> bool {
-        let Ok(expiry) = self.expiry() else {
-            return true;
-        };
-        // `expires` is the last day it applies, so equality is still live: a
-        // waiver written "expires 2026-08-10" that stopped working on the 10th
-        // would surprise every author who read the key as a deadline.
-        expiry < today
-    }
+    fn lapsed(&self, today: Date) -> bool;
 
     /// Whether this waiver covers `finding` on `today`.
     #[must_use]
-    pub fn covers(&self, finding: &Finding, today: Date) -> bool {
-        if self.rule != finding.rule {
-            return false;
-        }
-        if self.lapsed(today) {
-            return false;
-        }
-        match &self.path {
-            None => true,
-            Some(glob) => rules::glob_match(glob, &finding.path),
-        }
-    }
+    fn covers(&self, finding: &Finding, today: Date) -> bool;
 
     /// The identity two waivers may not share: the rule and the path it narrows
     /// to.
@@ -342,7 +282,40 @@ impl Waiver {
     /// `rule[{id}]` already holds for rules, and the reason CLOUD-233's dedup bug
     /// cannot return is that two waivers of one rule differ here by their path.
     #[must_use]
-    pub fn key(&self) -> String {
+    fn key(&self) -> String;
+}
+
+impl WaiverExt for Waiver {
+    fn expiry(&self) -> Result<Date> {
+        Date::parse(&self.expires).map_err(|err| {
+            UsageError::raise(format!("waiver {}: {}", self.rule, root_message(&err)))
+        })
+    }
+
+    fn lapsed(&self, today: Date) -> bool {
+        let Ok(expiry) = self.expiry() else {
+            return true;
+        };
+        // `expires` is the last day it applies, so equality is still live: a
+        // waiver written "expires 2026-08-10" that stopped working on the 10th
+        // would surprise every author who read the key as a deadline.
+        expiry < today
+    }
+
+    fn covers(&self, finding: &Finding, today: Date) -> bool {
+        if self.rule != finding.rule {
+            return false;
+        }
+        if self.lapsed(today) {
+            return false;
+        }
+        match &self.path {
+            None => true,
+            Some(glob) => crate::selector::glob_match(glob, &finding.path),
+        }
+    }
+
+    fn key(&self) -> String {
         match &self.path {
             None => format!("waiver[{}]", self.rule),
             Some(path) => format!("waiver[{}][{path}]", self.rule),
@@ -355,40 +328,6 @@ fn root_message(err: &anyhow::Error) -> String {
     err.chain()
         .last()
         .map_or_else(|| err.to_string(), std::string::ToString::to_string)
-}
-
-/// Refuse a malformed waiver table at load, so a typo cannot sit inert.
-///
-/// # Errors
-///
-/// Returns a [`UsageError`] (→ exit `1`) for an empty rule id, an empty reason,
-/// an unparseable expiry, or the same rule-and-path waived twice.
-pub fn validate(table: &[Waiver]) -> Result<()> {
-    for (index, waiver) in table.iter().enumerate() {
-        if waiver.rule.trim().is_empty() {
-            return Err(UsageError::raise(
-                "waiver: rule must not be empty — a waiver that names no rule suppresses nothing",
-            ));
-        }
-        if waiver.reason.trim().is_empty() {
-            return Err(UsageError::raise(format!(
-                "waiver {}: reason is required — an unjustified waiver is exactly the hatch this \
-                 table exists to replace",
-                waiver.rule
-            )));
-        }
-        waiver.expiry()?;
-        if table[..index]
-            .iter()
-            .any(|prior| prior.key() == waiver.key())
-        {
-            return Err(UsageError::raise(format!(
-                "{}: declared twice",
-                waiver.key()
-            )));
-        }
-    }
-    Ok(())
 }
 
 /// One suppression this run performed, as an audit record.
@@ -416,7 +355,7 @@ impl Applied {
     /// every waiver.
     #[must_use]
     pub fn line_text(&self) -> String {
-        let head = crate::refusal::head(crate::refusal::Severity::Note, &self.rule);
+        let head = crate::grammar::head(crate::grammar::Severity::Note, &self.rule);
         match self.line {
             Some(line) => format!(
                 "{head} at {}:{line} waived until {}",
@@ -508,7 +447,7 @@ impl Suppressed {
     /// this too — one phrase across both channels.
     #[must_use]
     pub fn line_text(&self) -> String {
-        let head = crate::refusal::head(crate::refusal::Severity::Note, &self.rule);
+        let head = crate::grammar::head(crate::grammar::Severity::Note, &self.rule);
         format!("{head} at this call waived until {}", self.expires)
     }
 }
@@ -525,12 +464,12 @@ impl Suppressed {
 /// over a `shape` row genuinely suppressed nothing, so this answered `false` for
 /// every mediated kind and `waiver-unreachable-kind` said so truthfully. That
 /// channel now honours a waiver, and the three kinds [`RuleKind::scopes`] pairs
-/// with [`crate::rules::RuleScope::MediatedCall`] — `shape`, `receipt`,
+/// with [`crate::preset_catalog::RuleScope::MediatedCall`] — `shape`, `receipt`,
 /// `pipeline` — move across **with** the consumption rather than before it.
 ///
 /// What remains outside is **the advisory kind**, and for a reason no
 /// implementation can retire: `judge` is tree-scoped and still cannot mint a
-/// finding. [`crate::rules::Rule::severity`] is `Allow` for a row carrying no
+/// finding. [`crate::config_model::Rule::severity`] is `Allow` for a row carrying no
 /// `severity` column, and a judge row is refused that column — so `run_rule`
 /// skips it as configured off. [`RuleKind::Judge`]'s own docs put it as
 /// "blocking is not forbidden here, it is unrepresentable", and a waiver over
@@ -608,6 +547,9 @@ pub fn apply(
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+    #[cfg(test)]
+    use crate::rules::RuleKindExt as _;
+    #[cfg(test)]
     use crate::severity::RuleSeverity;
 
     fn waiver(rule: &str, expires: &str) -> Waiver {
@@ -970,7 +912,7 @@ mod tests {
         // suppresses something. Derived rather than listed, so a kind that
         // changes scope moves this assertion with it.
         for &kind in RuleKind::ALL {
-            if kind.scopes() == [crate::rules::RuleScope::MediatedCall] {
+            if kind.scopes() == [crate::preset_catalog::RuleScope::MediatedCall] {
                 assert!(
                     reaches(kind),
                     "{}: the hook consults `live` on every deny, so a waiver reaches this",
@@ -991,7 +933,10 @@ mod tests {
         // it is tree-scoped, and still cannot mint a finding because it is
         // refused the `severity` column and `run_rule` skips an `allow` row.
         // Asserted separately so the case survives a scope change to either side.
-        assert_eq!(RuleKind::Judge.scopes(), [crate::rules::RuleScope::Tree]);
+        assert_eq!(
+            RuleKind::Judge.scopes(),
+            [crate::preset_catalog::RuleScope::Tree]
+        );
         assert!(!reaches(RuleKind::Judge));
     }
 
@@ -1000,7 +945,7 @@ mod tests {
         let unreachable: Vec<&str> = RuleKind::ALL
             .iter()
             .filter(|&&kind| !reaches(kind))
-            .map(|kind| kind.as_str())
+            .map(super::super::rules::RuleKindExt::as_str)
             .collect();
         // `judge` alone, and for the one reason no implementation can retire:
         // it cannot mint a finding at all. The mediated kinds left this list with

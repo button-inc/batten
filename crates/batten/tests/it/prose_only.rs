@@ -41,7 +41,8 @@ use crate::common;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use batten::rules::{self, Rule};
+use batten::config_model::Rule;
+use batten::rules;
 
 /// The row as `batten.toml` declares it, deserialized rather than
 /// struct-literalled: `Rule` carries `deny_unknown_fields`, so this goes through
@@ -160,10 +161,10 @@ fn a_branch_whose_whole_diff_is_comment_lines_is_refused() {
     // `//!` doc comment, on their way to a full required matrix.
     let root = repo(
         "comments",
-        &[("crates/batten/src/git.rs", CODE)],
+        &[("crates/batten-core/src/git.rs", CODE)],
         &Head {
             written: &[(
-                "crates/batten/src/git.rs",
+                "crates/batten-core/src/git.rs",
                 "// a doc line, rewritten\n// and a second one\nfn main() {\n    let x = 1;\n    let y = 2;\n}\n",
             )],
             removed: &[],
@@ -180,10 +181,10 @@ fn one_changed_line_of_code_admits_the_branch() {
     // something to have an opinion about.
     let root = repo(
         "code",
-        &[("crates/batten/src/git.rs", CODE)],
+        &[("crates/batten-core/src/git.rs", CODE)],
         &Head {
             written: &[(
-                "crates/batten/src/git.rs",
+                "crates/batten-core/src/git.rs",
                 "// a doc line, rewritten\nfn main() {\n    let x = 99;\n    let y = 2;\n}\n",
             )],
             removed: &[],
@@ -201,13 +202,13 @@ fn a_comment_change_plus_a_test_change_is_admitted() {
     let root = repo(
         "with-test",
         &[
-            ("crates/batten/src/git.rs", CODE),
+            ("crates/batten-core/src/git.rs", CODE),
             ("tests/a.bats", "@test \"x\" { true; }\n"),
         ],
         &Head {
             written: &[
                 (
-                    "crates/batten/src/git.rs",
+                    "crates/batten-core/src/git.rs",
                     "// rewritten\nfn main() {\n    let x = 1;\n    let y = 2;\n}\n",
                 ),
                 (
@@ -241,10 +242,10 @@ fn a_block_of_code_moved_within_a_file_is_not_a_code_change() {
     // engine is comparing content rather than counting emitted lines.
     let root = repo(
         "moved",
-        &[("crates/batten/src/git.rs", CODE)],
+        &[("crates/batten-core/src/git.rs", CODE)],
         &Head {
             written: &[(
-                "crates/batten/src/git.rs",
+                "crates/batten-core/src/git.rs",
                 "// a doc line\nfn main() {\n    let y = 2;\n    let x = 1;\n}\n",
             )],
             removed: &[],
@@ -265,12 +266,12 @@ fn a_comment_reflowed_across_a_line_boundary_is_still_prose_only() {
     let root = repo(
         "reflowed",
         &[(
-            "crates/batten/src/git.rs",
+            "crates/batten-core/src/git.rs",
             "// one two three four\n// five six\nfn main() {}\n",
         )],
         &Head {
             written: &[(
-                "crates/batten/src/git.rs",
+                "crates/batten-core/src/git.rs",
                 "// one two\n// three four five\n// six\nfn main() {}\n",
             )],
             removed: &[],
@@ -463,6 +464,75 @@ fn a_shell_program_carrying_no_extension_is_read_as_shell() {
         },
     );
     refused(&root);
+}
+
+/// [`findings`] over a change-set, as `check --staged` narrows a run.
+fn findings_scoped(root: &Path, changed: &[&str]) -> Vec<String> {
+    let verdicts = common::verdicts_in(root);
+    let scope = rules::Scope::Changed(changed.iter().map(|path| (*path).to_owned()).collect());
+    rules::run_static_over(
+        &[row()],
+        &[],
+        batten::policy::Vocabulary {
+            patterns: &[],
+            verdicts: &verdicts,
+            words: None,
+            recorders: &[],
+            registers: &[],
+            traversals: &[],
+            records: &[],
+        },
+        root,
+        rules::RunOptions {
+            checks: batten::policy::ModuleChecks::Run,
+            scope: &scope,
+            surface: batten::facts::Surface::Check,
+            now: None,
+            half: None,
+            keyed_bases: &[],
+        },
+    )
+    .expect("the read surface runs a policy row over a change-set")
+    .findings
+    .into_iter()
+    .map(|finding| finding.rule)
+    .collect()
+}
+
+/// A NARROWED RUN'S DELTA NAMES ONLY THE CHANGE-SET (CLOUD-2789). A code edit
+/// beside a comment-only one admits the branch, but a run scoped to the
+/// comment-only file reads a delta holding that file alone, and prices it.
+///
+/// Fails by: the scope's change-set never handed to the delta
+/// (`Scope::changed` answering `None`), so the unstaged code edit admits it.
+#[test]
+fn a_scoped_run_prices_only_the_change_set_it_names() {
+    let root = repo(
+        "scoped",
+        &[
+            ("crates/batten-core/src/git.rs", CODE),
+            ("crates/batten-core/src/other.rs", CODE),
+        ],
+        &Head {
+            written: &[
+                (
+                    "crates/batten-core/src/git.rs",
+                    "// a doc line\nfn main() {\n    let x = 99;\n    let y = 2;\n}\n",
+                ),
+                (
+                    "crates/batten-core/src/other.rs",
+                    "// a doc line, rewritten\nfn main() {\n    let x = 1;\n    let y = 2;\n}\n",
+                ),
+            ],
+            removed: &[],
+        },
+    );
+    admitted(&root);
+    assert_eq!(
+        findings_scoped(&root, &["crates/batten-core/src/other.rs"]),
+        vec!["diff ship early".to_owned()],
+        "scoped to the comment-only file, the code edit beside it is not this change's"
+    );
 }
 
 // changed: "the refusal names paths and a count, never a line of the diff" crates/batten/tests/it/prose_only.rs the shell printed every changed path beside the count; the port emits the count alone, because a diff is content nobody has published

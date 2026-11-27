@@ -182,7 +182,7 @@ fn a_measurement_builds_the_repository_it_was_asked_about() {
         .args(["perf", "measure"])
         .current_dir(&repo)
         .env("PATH", path)
-        .output()
+        .streamed_output()
         .expect("run perf measure");
     assert!(
         !output.status.success(),
@@ -591,6 +591,8 @@ fn measurable(name: &str) -> std::path::PathBuf {
         )
         .file("Cargo.toml", "[workspace]\n")
         .file("crates/batten/src/lib.rs", "// base\n")
+        .file("crates/batten/src/hookcost.rs", "// base\n")
+        .file("mise.toml", "[tools]\n")
         .file(".gitignore", "stub-bin/\ninstruments.log\ntarget/\n");
     for file in ["batten.toml.in", "lib.rs.in"] {
         let path = format!("crates/batten/tests/fixtures/repos/forbid-clean/{file}");
@@ -636,7 +638,7 @@ fn perf(
     for (key, value) in env {
         command.env(key, value);
     }
-    command.output().expect("run batten perf")
+    command.streamed_output().expect("run batten perf")
 }
 
 /// Commit a change to the crate source on top of the base, and answer with
@@ -681,8 +683,21 @@ fn a_measurement_times_every_path_off_its_release_build() {
         "posttool",
         "stop",
         "wired",
+        "session-start",
+        "cargo-fmt",
+        "cargo-fmt-worst",
+        "taplo",
+        "taplo-format",
+        "merge-conflict-markers",
+        "conventional-commit",
+        "commit-attribution",
+        "hook-offbox",
+        "posttool-offbox",
     ] {
-        assert!(records.contains(id), "the {id} path is recorded: {records}");
+        assert!(
+            records.contains(&format!("path={id} ")),
+            "the {id} path is recorded: {records}"
+        );
     }
     let argv = instrumented(&repo);
     assert!(argv.contains("--profile release"), "{argv}");
@@ -690,7 +705,32 @@ fn a_measurement_times_every_path_off_its_release_build() {
         .lines()
         .filter(|line| line.starts_with("hyperfine "))
         .collect();
-    assert_eq!(timed.len(), 7, "{argv}");
+    assert_eq!(timed.len(), 17, "{argv}");
+    // A multi-word argument reaches hyperfine quoted, or it splits the rule
+    // name into three words and the arm measures a usage error.
+    assert!(
+        argv.contains("enforce --rule 'source carry broken'"),
+        "{argv}"
+    );
+    // The steps that moved to `slow` are no commit-time arm (CLOUD-2852).
+    for retired in ["config lint", "test cover missing"] {
+        assert!(!argv.contains(retired), "{argv}");
+    }
+    // The formatter arms run rustfmt over ONE file each, children skipped: the
+    // median staged file, and the largest as the unbudgeted worst case.
+    for file in ["crates/batten/src/hookcost.rs", "crates/batten/src/lib.rs"] {
+        assert!(
+            argv.contains(&format!("--config skip_children=true {file}")),
+            "{argv}"
+        );
+    }
+    // The commit fixture carries its one staged change per subject.
+    let commit = repo.join("target/perf/commit-repo");
+    let staged = common::git_in(&commit, &["diff", "--cached", "--name-only"]);
+    assert_eq!(
+        staged.lines().collect::<Vec<_>>(),
+        ["batten.toml", "crates/batten/src/hookcost.rs", "mise.toml"]
+    );
     for line in timed {
         assert_eq!(
             line.contains("--prepare"),

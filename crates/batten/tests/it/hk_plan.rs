@@ -24,6 +24,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
+use batten::hk::PlanQueryExt as _;
 
 use std::fs;
 
@@ -33,7 +34,7 @@ use batten::hk;
 /// The row `batten.toml` declares, deserialized rather than struct-literalled:
 /// `Rule` carries `deny_unknown_fields`, so this goes through the same column
 /// census a consumer's config does.
-fn row() -> batten::rules::Rule {
+fn row() -> batten::config_model::Rule {
     serde_json::from_value(serde_json::json!({
         "id": "plan require missing",
         "kind": "policy",
@@ -55,11 +56,11 @@ fn row() -> batten::rules::Rule {
 fn the_row_declares_the_plan_fact() {
     let row = row();
     assert!(
-        batten::rules::COLUMN_CENSUS.iter().any(|column| {
+        batten::config_check::rules::COLUMN_CENSUS.iter().any(|column| {
             column.field == "plan"
                 && matches!(
                     column.declares,
-                    batten::rules::Declares::Fact(batten::facts::Fact::Plan, declared)
+                    batten::config_check::rules::Declares::Fact(batten::facts::Fact::Plan, declared)
                         if declared(&row)
                 )
         }),
@@ -91,7 +92,7 @@ fn the_plan_is_never_resolvable_on_the_mediated_path() {
 #[test]
 fn the_boundary_acquires_a_plan_the_module_can_read() {
     let root = common::at_root(".");
-    let query: hk::PlanQuery = serde_json::from_value(
+    let query: batten::config_model::PlanQuery = serde_json::from_value(
         serde_json::json!({"id": "gate", "hook": "check", "required": ["batten-check"]}),
     )
     .expect("the query a row declares");
@@ -111,6 +112,63 @@ fn the_boundary_acquires_a_plan_the_module_can_read() {
             .iter()
             .any(|step| step.name == "batten-check" && step.status == "included"),
         "this repository's gate still runs the step the row requires"
+    );
+    // AND THE MODULE READS WHAT THE BOUNDARY COULD NOT ACQUIRE (CLOUD-845's gap,
+    // a suite that never installs the module): the tree's own
+    // `hk-plan-required` over a checkout with no `hk.pkl`, where no plan can be
+    // taken, says so rather than passing over the declared plan.
+    let module = std::fs::read_to_string(root.join("policy/hk-plan-required.rego"))
+        .expect("the module reads");
+    let dir = common::scratch("hk-plan-unacquired");
+    // EVERY VERDICT THE MODULE RAISES IS DECLARED, or the engine refuses the
+    // row at load — and that refusal NAMES `plan read missing`, so a case
+    // reading the output for the token passed over any module at all, the
+    // predicate mutated away included. Measured on #1276's sweep:
+    // `plan-unacquired-silenced` survived exactly that way.
+    let mut declared = String::new();
+    for id in ["step run missing", "plan run refused", "plan read missing"] {
+        std::fmt::Write::write_fmt(
+            &mut declared,
+            format_args!(
+                "\n[[verdict]]\nid = \"{id}\"\ngloss = \"the fixture class {id}\"\n\
+                 class = \"A fixture class raised by the shipping module.\"\n\n\
+                 [[verdict.route]]\nid = \"read the module\"\nkind = \"document\"\n\
+                 target = \"policy/hk-plan-required.rego\"\n"
+            ),
+        )
+        .expect("write to a string");
+    }
+    common::write(
+        &dir,
+        "batten.toml",
+        &format!(
+            "version = 1\n\n[[rule]]\nid = \"plan require missing\"\nkind = \"policy\"\n\
+             scope = \"tree\"\nmodule = \"policy/hk-plan-required.rego\"\nseverity = \"deny\"\n\n\
+             [[rule.plan]]\nid = \"gate\"\nhook = \"check\"\nrequired = [\"batten-check\"]\n\
+             {declared}"
+        ),
+    );
+    common::write(&dir, "policy/hk-plan-required.rego", &module);
+    common::init_repo(&dir);
+    let answer = common::batten()
+        .args(["check", "--rule", "plan require missing"])
+        .current_dir(&dir)
+        .streamed_output()
+        .expect("run batten check");
+    let said = format!(
+        "{}{}",
+        String::from_utf8_lossy(&answer.stdout),
+        String::from_utf8_lossy(&answer.stderr)
+    );
+    // THE VERDICT, NOT THE TOKEN: exit `2` and the deny line naming the plan.
+    assert_eq!(
+        answer.status.code(),
+        Some(2),
+        "a declared plan the runner could not produce is refused\n{said}"
+    );
+    assert!(
+        said.contains("deny plan read missing at gate"),
+        "the refusal names the plan nobody could acquire\n{said}"
     );
 }
 
@@ -221,10 +279,10 @@ fn an_untracked_file_moves_the_fingerprint() {
 /// than resolving to could-not-look forever.
 #[test]
 fn a_row_naming_an_unplannable_surface_is_refused() {
-    let known: hk::PlanQuery =
+    let known: batten::config_model::PlanQuery =
         serde_json::from_value(serde_json::json!({"id": "gate", "hook": "check"}))
             .expect("a query naming a planned surface");
-    let unknown: hk::PlanQuery =
+    let unknown: batten::config_model::PlanQuery =
         serde_json::from_value(serde_json::json!({"id": "gate", "hook": "post-merge"}))
             .expect("a query naming an unplannable surface");
     assert!(!known.unknown_hook());

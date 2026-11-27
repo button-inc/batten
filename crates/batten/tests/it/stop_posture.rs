@@ -29,9 +29,8 @@
 // port it", and this is that retirement: nothing new is written, the shell's
 // nineteen cases are mapped onto the module's own and the program goes.
 //
-// The program's `#MUTANT hedged-framing-passes` row does not move: the module
-// carries `hedge-unread` over the same conjunct, so the sweep keeps a live
-// mutation on the surviving surface rather than gaining an orphan.
+// The module carries `hedge-unread` over the same conjunct the program's row
+// covered, so the sweep keeps a live mutation on the surviving surface.
 // carried: mise-tasks/stop-posture-check.sh policy/stop-posture.rego kind:mechanism crates/batten/tests/it/stop_posture.rs
 // carried: tests/stop-posture-check.bats policy/stop-posture.rego kind:mechanism crates/batten/tests/it/stop_posture.rs
 // carried: "the first tell AGENTS.md names fires" policy/stop-posture.rego kind:mechanism
@@ -135,8 +134,8 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
+use batten::capture::StreamedChild as _;
 
-#[cfg(unix)]
 use std::fmt::Write as _;
 
 use std::fs;
@@ -408,6 +407,145 @@ fn completion_fixture(name: &str, diverge: bool) -> (PathBuf, PathBuf) {
     (repo, home)
 }
 
+/// A `--depth 1` clone of [`completion_fixture`]'s repository, landing on
+/// `origin/main`, with one local commit on `work` (CLOUD-2655). `main` carries
+/// two commits, so the clone's history stops at a boundary.
+fn shallow_completion_fixture(name: &str) -> (PathBuf, PathBuf) {
+    let (origin, home) = completion_fixture(name, false);
+    common::git_in(&origin, &["checkout", "-q", "main"]);
+    let config = fs::read_to_string(origin.join("batten.toml")).expect("config");
+    fs::write(
+        origin.join("batten.toml"),
+        config.replacen(
+            "must_land_on = \"main\"",
+            "must_land_on = \"origin/main\"",
+            1,
+        ),
+    )
+    .expect("write config");
+    common::git_in(&origin, &["add", "-A"]);
+    common::git_in(&origin, &["commit", "-q", "-m", "chore: land on origin"]);
+    let root = origin.parent().expect("fixture root").to_path_buf();
+    let url = format!("file://{}", origin.display());
+    common::git_in(
+        &root,
+        &[
+            "clone", "-q", "--depth", "1", "--branch", "main", &url, "clone",
+        ],
+    );
+    let repo = root.join("clone");
+    common::git_in(&repo, &["config", "user.name", "Fixture Author"]);
+    common::git_in(&repo, &["config", "user.email", "fixture@example.com"]);
+    common::git_in(&repo, &["checkout", "-q", "-b", "work"]);
+    common::write(&repo, "src/b.rs", "pub fn added() {}\n");
+    common::git_in(&repo, &["add", "src/b.rs"]);
+    common::git_in(&repo, &["commit", "-q", "-m", "add b"]);
+    let session = fs::read_to_string(origin.join("session.jsonl")).expect("transcript");
+    common::write(&repo, "session.jsonl", &session);
+    (repo, home)
+}
+
+/// [`unlanded_fixture`] in a repository that declares `landed_by = "person"`
+/// (CLOUD-2656), with a bare remote holding `main`, and `work` pushed with `-u`
+/// when `pushed`.
+fn person_fixture(name: &str, pushed: bool) -> (PathBuf, PathBuf) {
+    let (repo, home) = unlanded_fixture(name);
+    let config = fs::read_to_string(repo.join("batten.toml")).expect("config");
+    fs::write(
+        repo.join("batten.toml"),
+        config.replacen(
+            "must_land_on = \"main\"",
+            "must_land_on = \"main\"\nlanded_by = \"person\"",
+            1,
+        ),
+    )
+    .expect("write config");
+    common::git_in(&repo, &["add", "batten.toml"]);
+    common::git_in(&repo, &["commit", "-q", "-m", "chore: a person merges"]);
+    let remote = repo.parent().expect("fixture root").join("remote.git");
+    batten::gitwrite::init_bare_on_main(&remote).expect("a bare remote");
+    common::git_in(
+        &repo,
+        &[
+            "remote",
+            "add",
+            "origin",
+            remote.to_str().expect("utf-8 path"),
+        ],
+    );
+    common::git_in(&repo, &["push", "-q", "origin", "main"]);
+    if pushed {
+        common::git_in(&repo, &["push", "-q", "-u", "origin", "work"]);
+    }
+    (repo, home)
+}
+
+/// A PUSHED BRANCH IN A PERSON-MERGES REPOSITORY HEARS THE MERGE IS HELD
+/// (CLOUD-2656), and is not sent to `land`.
+#[test]
+fn a_person_landed_pushed_branch_hears_the_merge_is_held() {
+    let (repo, home) = person_fixture("stop-person-pushed", true);
+    let first = hook_in(&repo, &home, &stop_payload("Landed and pushed.", false));
+    let said = stdout_of(&first);
+    assert!(said.contains("commit merge held"), "{said}");
+    assert!(!said.contains("batten land lap"), "{said}");
+}
+
+/// ...and its Stop is never refused (CLOUD-2656).
+#[test]
+fn a_person_landed_pushed_branch_is_not_refused() {
+    let (repo, home) = person_fixture("stop-person-pushed-free", true);
+    let stop = || hook_in(&repo, &home, &stop_payload("Landed and pushed.", false));
+    let said = stdout_of(&stop());
+    assert!(said.contains("commit merge held"), "{said}");
+    let second = stop();
+    assert_eq!(
+        second.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&second.stderr)
+    );
+}
+
+/// AN UNPUSHED BRANCH IS REFUSED NAMING THE PUSH (CLOUD-2656): the agent's last
+/// step in a person-merges repository is the push, never `land`.
+#[test]
+fn a_person_landed_unpushed_branch_is_refused_naming_the_push() {
+    let (repo, home) = person_fixture("stop-person-unpushed", true);
+    common::write(&repo, "src/c.rs", "pub fn later() {}\n");
+    common::git_in(&repo, &["add", "-A"]);
+    common::git_in(&repo, &["commit", "-q", "-m", "add c"]);
+    let stop = || hook_in(&repo, &home, &stop_payload("Landed and pushed.", false));
+    let first = stop();
+    assert_eq!(
+        first.status.code(),
+        Some(0),
+        "the first Stop is the advisory"
+    );
+    assert!(stdout_of(&first).contains("commit push missing"));
+    let second = stop();
+    let stderr = String::from_utf8_lossy(&second.stderr).into_owned();
+    assert_eq!(second.status.code(), Some(2), "{stderr}");
+    assert!(stderr.contains("commit push missing"), "{stderr}");
+    assert!(stderr.contains("git push"), "{stderr}");
+}
+
+/// A SHALLOW CLONE SAYS ONCE THAT IT COULD NOT LOOK (CLOUD-2655): the first
+/// signalled Stop names `commit ship unknown` and the unshallow, the second is
+/// silent, and neither refuses.
+#[test]
+fn a_shallow_clone_stop_says_once_it_could_not_look() {
+    let (repo, home) = shallow_completion_fixture("stop-shallow");
+    let first = hook_in(&repo, &home, &stop_payload("Landed and pushed.", false));
+    let said = stdout_of(&first);
+    assert!(said.contains("commit ship unknown"), "{said}");
+    assert!(said.contains("git fetch --unshallow"), "{said}");
+    let second = hook_in(&repo, &home, &stop_payload("Landed and pushed.", false));
+    assert_eq!(second.status.code(), Some(0), "{}", stdout_of(&second));
+    let again = stdout_of(&second);
+    assert!(!again.contains("commit ship unknown"), "{again}");
+}
+
 /// `batten hook` against an isolated state home, so the store this writes and
 /// reads is the fixture's own.
 fn hook_in(dir: &Path, home: &Path, payload: &str) -> Output {
@@ -419,7 +557,7 @@ fn hook_in(dir: &Path, home: &Path, payload: &str) -> Output {
     command
         .current_dir(dir)
         .args(["adjudicate", "--harness", "claude-code"])
-        .env("GIT_CEILING_DIRECTORIES", env!("CARGO_TARGET_TMPDIR"))
+        .env("GIT_CEILING_DIRECTORIES", common::target_tmp())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -430,7 +568,7 @@ fn hook_in(dir: &Path, home: &Path, payload: &str) -> Output {
         .expect("piped stdin")
         .write_all(payload.as_bytes())
         .expect("write payload");
-    child.wait_with_output().expect("run batten hook")
+    child.streamed_wait().expect("run batten hook")
 }
 
 fn stdout_of(output: &Output) -> String {
@@ -465,7 +603,7 @@ fn the_hot_path_drops_the_modules_own_cases_and_policy_test_keeps_them() {
     let graded = batten()
         .current_dir(&dir)
         .args(["policy", "test"])
-        .output()
+        .streamed_output()
         .expect("run batten policy test");
     let report = String::from_utf8(graded.stdout).expect("stdout is UTF-8");
     assert_eq!(
@@ -802,6 +940,48 @@ fn a_stranded_finding_is_pointed_at_and_the_turn_still_ends() {
     );
 }
 
+/// A stop row that REFUSES (exit 2) is demoted to the nudge, never dropped.
+/// Fails by: the deny arm read as saying nothing, so a refusing stop row's
+/// reason and its row id never reach the reader.
+#[test]
+fn a_refusing_stop_row_still_speaks() {
+    // The row runs `/bin/sh`, which a Windows runner does not have (CLOUD-113);
+    // the script is handed to it, so no execute bit and no unix-only API.
+    if !cfg!(unix) {
+        return;
+    }
+    let dir = repo("stop-handler-deny");
+    let script = dir.join("deny-stub.sh");
+    fs::write(&script, "printf '%s\\n' 'refused for turn 14'\nexit 2\n").expect("write stub");
+    let config = dir.join("batten.toml");
+    let mut text = fs::read_to_string(&config).expect("read config");
+    let _ = write!(
+        text,
+        "\n[[hook.handler]]\nid = \"deny-sink\"\non = \"stop\"\nrun = [\"/bin/sh\", {:?}]\n",
+        script.display().to_string()
+    );
+    fs::write(&config, text).expect("declare the stop row");
+    let transcript = dir.join("session.jsonl");
+    fs::write(&transcript, "{}\n").expect("write transcript");
+    let payload = serde_json::json!({
+        "hook_event_name": "Stop",
+        "session_id": "s-1",
+        "stop_hook_active": false,
+        "last_assistant_message": "Landed and pushed.",
+        "transcript_path": transcript.display().to_string(),
+    });
+    let output = hook(&dir, &payload.to_string());
+    let stdout = stdout_of(&output);
+    assert!(
+        stdout.contains("refused for turn 14"),
+        "the reason travels: {stdout}"
+    );
+    assert!(
+        stdout.contains("hook.handler.deny-sink"),
+        "and so does the row that said it: {stdout}"
+    );
+}
+
 /// EVERY APPLICABLE RUNG SPEAKS, IN RANK ORDER (CLOUD-2078).
 ///
 /// The ladder used to stop at its first rung, so a module finding hid every
@@ -919,7 +1099,7 @@ fn the_stop_guard_bypass_silences_the_whole_surface() {
         .expect("piped stdin")
         .write_all(payload.as_bytes())
         .expect("write payload");
-    let output = child.wait_with_output().expect("run batten hook");
+    let output = child.streamed_wait().expect("run batten hook");
     let stdout = String::from_utf8(output.stdout).expect("stdout is UTF-8");
     assert!(
         !stdout.contains("turn 12"),
@@ -1372,10 +1552,10 @@ fn verb_in(dir: &Path, home: &Path, args: &[&str]) -> Output {
     command
         .current_dir(dir)
         .args(args)
-        .env("GIT_CEILING_DIRECTORIES", env!("CARGO_TARGET_TMPDIR"))
+        .env("GIT_CEILING_DIRECTORIES", common::target_tmp())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    command.output().expect("run batten verb")
+    command.streamed_output().expect("run batten verb")
 }
 
 /// A SKIPPED SCAN HOLDS A RULE FINDING — IT DOES NOT RESOLVE IT (CLOUD-1480).
@@ -1625,6 +1805,84 @@ fn a_filed_row_naming_the_diff_is_pointed_at_under_its_real_row_id() {
     );
 }
 
+/// A row this branch's own commits close is answered: the merge lands it, so
+/// asking for it on every Stop asks a question the branch already settled.
+///
+/// Fails by: a row named in closing form still listed, or a row merely
+/// mentioned (not closed) dropped from the checklist.
+#[test]
+fn a_row_the_branch_closes_leaves_the_filed_checklist() {
+    let dir = scratch("filed-row-closed-here");
+    common::init_repo(&dir);
+    // THE CLOSING GRAMMAR AND THE TRUNK, from the committed authority: the
+    // closing read needs both, and the fixture carries neither.
+    let base = format!("{CONFIG}{FILED_ROWS}");
+    let committed: toml::Table = fs::read_to_string(common::at_root("batten.toml"))
+        .expect("read the committed authority")
+        .parse()
+        .expect("the committed authority parses");
+    let grammar: Vec<toml::Value> = committed["pattern"]
+        .as_array()
+        .expect("the authority declares patterns")
+        .iter()
+        .filter(|row| {
+            row["id"].as_str().is_some_and(|id| {
+                (id.starts_with("ready-") || id == "clause-label")
+                    && !base.contains(&format!("\"{id}\""))
+            })
+        })
+        .cloned()
+        .collect();
+    let mut patterns = toml::Table::new();
+    patterns.insert("pattern".to_owned(), toml::Value::Array(grammar));
+    fs::write(
+        dir.join("batten.toml"),
+        format!(
+            "must_land_on = \"origin/main\"\n{base}\n{}",
+            toml::to_string(&patterns).expect("the patterns serialize")
+        ),
+    )
+    .expect("write config");
+    fs::create_dir_all(dir.join("policy")).expect("policy dir");
+    install_modules(&dir);
+    fs::copy(
+        common::at_root("policy/filed-here.rego"),
+        dir.join("policy/filed-here.rego"),
+    )
+    .expect("install the filed-here module");
+    common::git_in(&dir, &["add", "-A"]);
+    common::git_in(&dir, &["commit", "--quiet", "-m", "base"]);
+    common::pin_origin_main(&dir);
+    common::write(&dir, "src/b.rs", "fn main() {}\n");
+    common::git_in(&dir, &["add", "-A"]);
+    common::git_in(
+        &dir,
+        &[
+            "commit",
+            "--quiet",
+            "-m",
+            "fix: the thing\n\nCloses CLOUD-9\nSee CLOUD-7",
+        ],
+    );
+    let receipts = dir.join(".git/batten-receipts");
+    fs::create_dir_all(&receipts).expect("receipts dir");
+    fs::write(
+        receipts.join("board-writes.main"),
+        "issue CLOUD-7 2099-01-01T00:00:00Z ready 0 - 0\n\
+         issue CLOUD-9 2099-01-01T00:00:00Z ready 0 - 0\n",
+    )
+    .expect("write the board record");
+    let stdout = stdout_of(&hook(&dir, &stop_payload("Done.", false)));
+    assert!(
+        stdout.contains("CLOUD-7 filed"),
+        "a row only mentioned stays listed: {stdout}"
+    );
+    assert!(
+        !stdout.contains("CLOUD-9 filed"),
+        "the row the branch closes is off the checklist: {stdout}"
+    );
+}
+
 /// The checklist re-evaluates OPEN rows: one the tracker last said was a
 /// duplicate is closed, and listing it asks for a groom it does not need.
 #[test]
@@ -1678,7 +1936,7 @@ fn a_closed_row_leaves_the_filed_checklist() {
         .take()
         .expect("piped stdin")
         .write_all(read.as_bytes());
-    let seeded = child.wait_with_output().expect("store the read");
+    let seeded = child.streamed_wait().expect("store the read");
     assert_eq!(seeded.status.code(), Some(0), "{}", common::stderr(&seeded));
 
     let stdout = stdout_of(&hook_in(&dir, &home, &stop_payload("Done.", false)));

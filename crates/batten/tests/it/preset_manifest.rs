@@ -10,6 +10,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
+use batten::preset::ManifestExt as _;
 
 use common::Fixture;
 
@@ -92,7 +93,7 @@ fn every_declared_preset_can_be_enabled_at_its_own_scope() {
     // enabled and both must resolve. Looping the pair rather than a single value
     // is what keeps the reachability claim honest for such a preset: enabling the
     // half a consumer happens not to want must not be the half that fails.
-    for manifest in batten::preset::MANIFESTS {
+    for manifest in batten::preset_catalog::MANIFESTS {
         for scope in manifest.scopes() {
             let root = Fixture::new(&format!(
                 "preset-enable-{}-{}",
@@ -110,7 +111,7 @@ fn every_declared_preset_can_be_enabled_at_its_own_scope() {
                  {}\
                  severity = \"deny\"\n",
                 scope.as_str(),
-                if scope == batten::rules::RuleScope::Tree {
+                if scope == batten::preset_catalog::RuleScope::Tree {
                     "sources = [\"**/*.md\"]\n"
                 } else {
                     ""
@@ -182,6 +183,11 @@ fn a_preset_reading_a_provider_is_refused_where_the_row_names_none() {
         stderr.contains("no provider"),
         "and names what the row declared, so a reader sees which half to change: {stderr}"
     );
+    // CLOUD-2658: and the repair, spelled as the column takes it.
+    assert!(
+        stderr.contains("provider = \"github-actions\""),
+        "the refusal names the key that repairs it: {stderr}"
+    );
 }
 
 /// The same preset loads once the row declares the provider its modules read.
@@ -242,4 +248,88 @@ fn a_module_reading_no_provider_loads_with_no_provider_declared() {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
+}
+
+// CLOUD-2812: `rust`, the first preset moved in, carries the crate-reach
+// module (CLOUD-2798) and its executable remedy as a verdict route.
+/// The vendored module, as the binary carries it.
+///
+/// READ THROUGH `PresetModuleExt::text`, NOT `include_str!`: the mutation sweep
+/// mutates a preset in its overlay (`BATTEN_PRESET_OVERLAY`), never in place,
+/// and only `text` reads the overlay. A compile-time copy is the unmutated
+/// module whatever the sweep wrote, so `#MUTANT unlisted-admitted` survived
+/// this case by construction.
+fn module() -> String {
+    use batten::preset::PresetModuleExt as _;
+    batten::preset_catalog::find("rust")
+        .expect("the rust preset ships")
+        .modules
+        .iter()
+        .find(|module| module.pointer.ends_with("/crate-reach.rego"))
+        .expect("the rust preset carries crate-reach")
+        .text()
+        .into_owned()
+}
+
+/// Run the binary at `dir` with `args`; stdout and stderr together.
+fn said_by(dir: &std::path::Path, args: &[&str]) -> String {
+    let ran = common::batten()
+        .current_dir(dir)
+        .args(args)
+        .streamed_output()
+        .expect("run batten");
+    format!(
+        "{}{}",
+        String::from_utf8_lossy(&ran.stdout),
+        String::from_utf8_lossy(&ran.stderr)
+    )
+}
+
+/// Fails by: the unlisted arm or the undeclared arm unread, which reddens one
+/// of the module's three cases (`#MUTANT unlisted-admitted`).
+#[test]
+fn the_rust_preset_suite_passes() {
+    let dir = common::scratch("rust-preset-suite");
+    // The two verdicts the module emits ship in the binary (202e0ee5), so the
+    // fixture declares none: a consumer row re-declaring one is refused as dead.
+    let config = "version = 1\n\n[[rule]]\nid = \"crate reach wrong\"\nkind = \"policy\"\n\
+         scope = \"tree\"\nmodule = \"policy/crate-reach.rego\"\nseverity = \"deny\"\n";
+    common::write(&dir, "batten.toml", config);
+    common::write(&dir, "policy/crate-reach.rego", &module());
+    common::init_repo(&dir);
+    let out = said_by(&dir, &["policy", "test"]);
+    assert!(out.contains("3 passed, 0 failed"), "{out}");
+}
+
+/// Fails by: a vendored verdict's command route not reaching `policy
+/// explain`, so a consumer enabling the preset is told the refusal but not
+/// the executable remedy.
+#[test]
+fn a_preset_remedy_is_a_verdict_route() {
+    let dir = common::scratch("rust-preset-explain");
+    common::write(
+        &dir,
+        "batten.toml",
+        "version = 1\n\n[[rule]]\nid = \"crate graph wrong\"\nkind = \"policy\"\n\
+         scope = \"tree\"\npreset = \"rust\"\nseverity = \"deny\"\n",
+    );
+    common::init_repo(&dir);
+    let out = said_by(&dir, &["policy", "explain", "crate reach unknown"]);
+    assert!(
+        out.contains("batten modules cut --dry-run <from> <name> <module>"),
+        "the remedy argv must be printed\n{out}"
+    );
+}
+
+/// A copy at `1.9.0` is behind a preset shipped at `1.10.0`: the comparison is
+/// semver's, never the strings'.
+///
+/// Fails by: comparing the versions as text, where `"1.10.0" < "1.9.0"`.
+#[test]
+fn a_minor_ten_is_newer_than_a_minor_nine() {
+    let (_, _, recorded) =
+        batten::preset::ejected_from("# batten-ejected: git/m version 1.9.0\n").expect("parsed");
+    let (_, _, shipped) =
+        batten::preset::ejected_from("# batten-ejected: git/m version 1.10.0\n").expect("parsed");
+    assert!(recorded < shipped);
 }

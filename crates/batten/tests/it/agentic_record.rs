@@ -185,7 +185,7 @@ fn repo(name: &str, trials: Option<&str>, method: Option<&str>) -> PathBuf {
 fn findings(dir: &std::path::Path) -> String {
     let mut command = batten();
     command.current_dir(dir).arg("check");
-    let outcome = command.output().expect("run batten check");
+    let outcome = command.streamed_output().expect("run batten check");
 
     // A NON-VERDICT EXIT IS NOT AN EMPTY ANSWER. `check` exits 0 clean and 2 on a
     // policy verdict; every other code is a statement about the INVOCATION — a
@@ -395,7 +395,7 @@ fn the_committed_records_satisfy_this_gate() {
 ///
 /// The scratch repository stays: `input.tree.*` is defined over TRACKED paths, so
 /// git is what makes the surface non-empty. One per block, not one per mutation.
-fn replay_vocabulary() -> Vec<batten::verdict::DeclaredVerdict> {
+fn replay_vocabulary() -> Vec<batten::config_model::DeclaredVerdict> {
     // NARROWED TO WHAT THIS MODULE RAISES, and the whole table is refused here.
     // `run_static` holds the both-directions invariant the registry holds: a
     // declared class nothing raises "reads as coverage". A fixture enabling ONE
@@ -416,9 +416,9 @@ fn replay_vocabulary() -> Vec<batten::verdict::DeclaredVerdict> {
 
 fn replayed_findings(
     dir: &std::path::Path,
-    verdicts: &[batten::verdict::DeclaredVerdict],
+    verdicts: &[batten::config_model::DeclaredVerdict],
 ) -> String {
-    let row: batten::rules::Rule = serde_json::from_value(serde_json::json!({
+    let row: batten::config_model::Rule = serde_json::from_value(serde_json::json!({
         "id": "fact file missing",
         "kind": "policy",
         "scope": "tree",

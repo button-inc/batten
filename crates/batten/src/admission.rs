@@ -61,7 +61,7 @@
 //!
 //! Non-negotiable rule 3. The predicate is **every declared question answered
 //! non-emptily ⇒ issue**, never "is this justification good", which is exactly the
-//! model verdict a gate may not contain. The forcing function is articulation, not
+//! gated-model verdict a gate may not contain. The forcing function is articulation, not
 //! approval — the cost is thinking, not asking.
 
 use std::collections::BTreeMap;
@@ -139,6 +139,25 @@ pub enum Anchor {
         /// The commit the call was refused at.
         head: String,
     },
+    /// A mediated call, by a digest of the INPUTS its decision read
+    /// (CLOUD-2779), as [`inputs_digest`] computes it.
+    ///
+    /// `Call { head }` bound the whole commit, so every commit voided every
+    /// mediated admission whatever it touched: measured on #1276, one protected
+    /// path's admission minted and spent at two HEADs an unrelated commit apart.
+    /// What `path write refused` decides over is the PATH: whether it is
+    /// protected, which the epoch binds, and what it holds, which this binds as
+    /// the path's committed blob or its absence. A commit that leaves that blob
+    /// alone leaves the admission bound; the commit that changes it voids it.
+    ///
+    /// The COMMITTED blob, never the working tree's: the admitted write is the
+    /// thing that changes the working copy, so an anchor over it would void the
+    /// admission on its own first use and refuse the second Edit of one change.
+    ///
+    /// A rule with no declared input reader keeps `Call { head }` — the narrower
+    /// binding is earned per rule by naming what its decision reads, never
+    /// assumed (`call_anchor` in `lib.rs` is that table).
+    Inputs(String),
 }
 
 impl Anchor {
@@ -154,6 +173,7 @@ impl Anchor {
         match self {
             Anchor::Finding(fingerprint) => format!("finding:{fingerprint}"),
             Anchor::Call { head } => format!("call:{head}"),
+            Anchor::Inputs(digest) => format!("inputs:{digest}"),
         }
     }
 
@@ -166,6 +186,9 @@ impl Anchor {
     pub fn parse(token: &str) -> Option<Anchor> {
         if let Some(rest) = token.strip_prefix("finding:") {
             return Some(Anchor::Finding(rest.to_owned()));
+        }
+        if let Some(rest) = token.strip_prefix("inputs:") {
+            return Some(Anchor::Inputs(rest.to_owned()));
         }
         token.strip_prefix("call:").map(|rest| Anchor::Call {
             head: rest.to_owned(),
@@ -187,7 +210,7 @@ impl TryFrom<String> for Anchor {
     /// be matched against anything.
     fn try_from(token: String) -> std::result::Result<Anchor, String> {
         Anchor::parse(&token).ok_or_else(|| {
-            format!("`{token}` names no anchor kind; expected `finding:` or `call:`")
+            format!("`{token}` names no anchor kind; expected `finding:`, `call:` or `inputs:`")
         })
     }
 }
@@ -305,10 +328,15 @@ impl Refused {
 /// anywhere.
 #[must_use]
 pub fn address(binding: &Binding) -> String {
+    sha256_hex(PROTOCOL, &canonical(binding))
+}
+
+/// SHA-256 over `label` then `body`, as lowercase hex.
+fn sha256_hex(label: &str, body: &str) -> String {
     use sha2::{Digest as _, Sha256};
     let mut hasher = Sha256::new();
-    hasher.update(PROTOCOL.as_bytes());
-    hasher.update(canonical(binding).as_bytes());
+    hasher.update(label.as_bytes());
+    hasher.update(body.as_bytes());
     // Hex by hand rather than `{:x}`: the pinned `sha2` returns a `GenericArray`,
     // which does not implement `LowerHex`. Same fold `contract::snapshot_path`
     // uses, and one buffer rather than a `format!` per byte.
@@ -320,6 +348,36 @@ pub fn address(binding: &Binding) -> String {
             let _ = write!(hex, "{byte:02x}");
             hex
         })
+}
+
+/// The label inside an [`Anchor::Inputs`] digest, apart from [`PROTOCOL`] so an
+/// inputs digest and an admission address can never be the same bytes hashed.
+pub const INPUTS_PROTOCOL: &str = "batten-admission-inputs-v1";
+
+/// The digest of what a mediated decision read (CLOUD-2779): each input by name,
+/// with its object id, or `None` where it is absent.
+///
+/// Canonical for the same reason [`canonical`] is: a JSON object of sorted
+/// string keys, absence spelled `null` so a missing path and one named `""` are
+/// different facts.
+#[must_use]
+pub fn inputs_digest(inputs: &[(&str, Option<&str>)]) -> String {
+    let sorted: BTreeMap<&str, Option<&str>> = inputs.iter().copied().collect();
+    let members: Vec<String> = sorted
+        .iter()
+        .map(|(name, id)| member(name, &id.map_or_else(|| "null".to_owned(), string)))
+        .collect();
+    sha256_hex(INPUTS_PROTOCOL, &format!("{{{}}}", members.join(",")))
+}
+
+/// The path a mediated subject names: its first word, before the program it was
+/// refused under (`batten.toml Edit`, `batten.toml,Edit`, or the bare path).
+#[must_use]
+pub fn subject_path(subject: &str) -> &str {
+    subject
+        .split(|c: char| c.is_whitespace() || c == ',')
+        .next()
+        .unwrap_or_default()
 }
 
 /// The canonical serialization of a binding — RFC 8785 (JCS), over the subset
@@ -694,7 +752,7 @@ fn lock(dir: &Path) -> Result<std::fs::File> {
 #[must_use]
 pub fn load(repo_root: &Path, admission: &str) -> Option<Record> {
     let path = record_path(repo_root, admission).ok()?;
-    let bytes = std::fs::read(path).ok()?;
+    let bytes = crate::fsio::read(path).ok()?;
     let record: Record = serde_json::from_slice(&bytes).ok()?;
     (record.predicate_type == PREDICATE_TYPE).then_some(record)
 }
@@ -872,7 +930,7 @@ pub fn chain_head(repo_root: &Path, rule: &str, subject: &str) -> Result<Option<
         if path.extension().is_none_or(|ext| ext != "json") {
             continue;
         }
-        let Ok(bytes) = std::fs::read(&path) else {
+        let Ok(bytes) = crate::fsio::read(&path) else {
             continue;
         };
         let Ok(record) = serde_json::from_slice::<Record>(&bytes) else {
@@ -890,6 +948,24 @@ pub fn chain_head(repo_root: &Path, rule: &str, subject: &str) -> Result<Option<
         .into_iter()
         .map(|record| record.admission)
         .find(|admission| !claimed.contains(admission)))
+}
+
+/// Whether the store holds any admission record at all.
+///
+/// [`admitted`] answers `None` for a store with none, so a caller that must
+/// first resolve the HEAD and the epoch to ask it can ask this instead and skip
+/// both: the same answer, without the work, on every denied call of a session
+/// that has never recorded an admission (2026-11-15).
+#[must_use]
+pub fn holds_any(repo_root: &Path) -> bool {
+    let Ok(dir) = store_dir(repo_root) else {
+        return false;
+    };
+    std::fs::read_dir(dir).is_ok_and(|entries| {
+        entries
+            .flatten()
+            .any(|entry| entry.path().extension().is_some_and(|ext| ext == "json"))
+    })
 }
 
 /// The SPENT admission covering one finding, if the store holds it (CLOUD-1120).
@@ -946,7 +1022,7 @@ pub fn admitted(
         if path.extension().is_none_or(|ext| ext != "json") {
             continue;
         }
-        let Ok(bytes) = std::fs::read(&path) else {
+        let Ok(bytes) = crate::fsio::read(&path) else {
             continue;
         };
         let Ok(record) = serde_json::from_slice::<Record>(&bytes) else {
@@ -1000,9 +1076,57 @@ pub fn admitted(
 /// ISSUED record still binds the same terms, which is the economy [`admitted`]
 /// enforces with `State::Spent`. That gap is closed one field over: the address
 /// binds `answers`, so a block with no articulation cannot recompute at all.
+/// A spent admission for `rule`/`verdict` over a subject that NAMES `path` —
+/// its first word, before the program it was refused under — in this
+/// situation (step 14).
+///
+/// The post-call protected-write comparison knows the path that changed and
+/// not the program that changed it: the program is what escaped the pre-call
+/// gate. So the subject's path half is what binds, and the other four fields
+/// bind exactly as [`admitted`]'s do.
+///
+/// # Errors
+///
+/// Propagates only a store-resolution failure, as [`admitted`] does.
+pub fn admitted_path(
+    repo_root: &Path,
+    rule: &str,
+    verdict: &str,
+    path: &str,
+    anchor: &str,
+    epoch: &str,
+) -> Result<Option<String>> {
+    let dir = store_dir(repo_root)?;
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return Ok(None);
+    };
+    for entry in entries.flatten() {
+        let file = entry.path();
+        if file.extension().is_none_or(|ext| ext != "json") {
+            continue;
+        }
+        let Ok(bytes) = crate::fsio::read(&file) else {
+            continue;
+        };
+        let Ok(record) = serde_json::from_slice::<Record>(&bytes) else {
+            continue;
+        };
+        let binding = &record.binding;
+        let named = subject_path(&binding.subject) == path;
+        if record.state == State::Spent
+            && named
+            && binding.rule == rule
+            && binding.verdict == verdict
+            && binding.anchor.token() == anchor
+            && binding.epoch == epoch
+        {
+            return Ok(Some(record.admission));
+        }
+    }
+    Ok(None)
+}
+
 #[must_use]
-//MUTANT-SUITE crates/batten/tests/it/admission.rs
-//MUTANT recomputes-unchecked|s@^        if !articulation.recomputes() {$@        if false {@|a_tampered_block_in_the_head_commit_admits_nothing
 pub fn admitted_by_block(
     message: &str,
     rule: &str,
@@ -1064,16 +1188,16 @@ const REJECTED_ROUTE: &str = "rejected-route";
 /// this, an agent reaching for the override because the correct route was a
 /// clause the caller's paraphrase had dropped.
 #[must_use]
-pub fn questions_for(entry: &crate::verdict::DeclaredVerdict) -> Option<Vec<Question>> {
+pub fn questions_for(entry: &crate::config_model::DeclaredVerdict) -> Option<Vec<Question>> {
     let precondition = entry.routes.iter().find_map(|route| {
-        (route.kind == crate::verdict::RouteKind::Override)
+        (route.kind == crate::preset_catalog::RouteKind::Override)
             .then_some(route.precondition.as_deref())
             .flatten()
     })?;
     let declined: Vec<&str> = entry
         .routes
         .iter()
-        .filter(|route| route.kind != crate::verdict::RouteKind::Override)
+        .filter(|route| route.kind != crate::preset_catalog::RouteKind::Override)
         .map(|route| route.id.as_str())
         .collect();
     Some(vec![
@@ -1104,7 +1228,7 @@ pub fn questions_for(entry: &crate::verdict::DeclaredVerdict) -> Option<Vec<Ques
 ///
 /// **The gate never adjudicates the reason** (non-negotiable rule 3): the
 /// predicate is presence and well-formedness, never quality. An answer is
-/// well-formed when it is not blank — anything stronger is a model verdict, and a
+/// well-formed when it is not blank — anything stronger is a gated-model verdict, and a
 /// gate containing one would be worse than today's password.
 #[must_use]
 pub fn unanswered<'a>(
@@ -1126,7 +1250,7 @@ pub fn unanswered<'a>(
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
-
+    #[cfg(test)]
     fn binding() -> Binding {
         Binding {
             rule: "prose-only".to_owned(),
@@ -1149,6 +1273,79 @@ mod tests {
             prev: None,
             author: "alec@button.is".to_owned(),
         }
+    }
+
+    /// Fails by: a spent admission answering a protected write it does not
+    /// bind on any one of its five terms — another rule, verdict, path,
+    /// call or policy epoch — or an issued one answering at all.
+    #[test]
+    fn a_path_admission_binds_every_term() {
+        let scratch = crate::scratch::scratch("admission-admitted-path");
+        crate::testing::contain_state(&scratch.join("data"));
+        let root = scratch.join("repo");
+        std::fs::create_dir_all(&root).unwrap();
+        let spent = |binding: Binding| Record {
+            state: State::Spent,
+            ..Record::issue(binding)
+        };
+        let bound = binding();
+        let anchor = bound.anchor.token();
+        store(&root, &spent(bound.clone())).unwrap();
+        store(
+            &root,
+            &Record::issue(Binding {
+                subject: "c.rs".to_owned(),
+                ..bound.clone()
+            }),
+        )
+        .unwrap();
+        let ask = |rule: &str, verdict: &str, path: &str, anchor: &str, epoch: &str| {
+            admitted_path(&root, rule, verdict, path, anchor, epoch).unwrap()
+        };
+        let (rule, verdict, epoch) = (bound.rule.as_str(), bound.verdict.as_str(), "epoch-1");
+        assert!(
+            ask(rule, verdict, "a.rs", &anchor, epoch).is_some(),
+            "the premise"
+        );
+        assert_eq!(
+            ask(rule, verdict, "b.rs", &anchor, epoch),
+            None,
+            "not its first path"
+        );
+        assert_eq!(
+            ask(rule, verdict, "c.rs", &anchor, epoch),
+            None,
+            "issued, not spent"
+        );
+        assert_eq!(ask("other", verdict, "a.rs", &anchor, epoch), None, "rule");
+        assert_eq!(ask(rule, "other", "a.rs", &anchor, epoch), None, "verdict");
+        assert_eq!(
+            ask(rule, verdict, "a.rs", "call:other", epoch),
+            None,
+            "anchor"
+        );
+        assert_eq!(
+            ask(rule, verdict, "a.rs", &anchor, "epoch-2"),
+            None,
+            "epoch"
+        );
+    }
+
+    /// Fails by: a store with a record read as empty — every admission would
+    /// then be skipped — or an empty one read as holding one.
+    #[test]
+    fn holds_any_is_whether_the_store_has_a_record() {
+        let dir = crate::scratch::scratch("admission-holds-any");
+        crate::testing::contain_state(&dir.join("state"));
+        let repo = dir.join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        assert!(!holds_any(&repo), "no store directory");
+        let store = store_dir(&repo).unwrap();
+        std::fs::create_dir_all(&store).unwrap();
+        std::fs::write(store.join(".lock"), "").unwrap();
+        assert!(!holds_any(&repo), "a lock is not a record");
+        std::fs::write(store.join("a.json"), "{}").unwrap();
+        assert!(holds_any(&repo), "a record");
     }
 
     #[test]
@@ -1232,6 +1429,35 @@ mod tests {
                 "`{key}` is neither a string, a string map nor null — write the JCS number rule first"
             );
         }
+    }
+
+    /// Fails by: a digest that ignores the object id (every blob binds alike),
+    /// or one that spells absence as an id (a deleted path binds as present).
+    #[test]
+    fn an_inputs_digest_moves_with_each_input_and_its_absence() {
+        let at = |id: Option<&str>| inputs_digest(&[("a.md", id)]);
+        assert_ne!(at(Some("1111")), at(Some("2222")), "the blob binds");
+        assert_ne!(at(Some("1111")), at(None), "absence is its own input");
+        assert_ne!(at(Some("")), at(None), "an empty id is not absence");
+        assert_ne!(
+            inputs_digest(&[("a.md", None)]),
+            inputs_digest(&[("b.md", None)]),
+            "the path binds"
+        );
+        assert_eq!(
+            inputs_digest(&[("a", Some("1")), ("b", Some("2"))]),
+            inputs_digest(&[("b", Some("2")), ("a", Some("1"))]),
+            "order-free"
+        );
+        let anchor = Anchor::Inputs(at(None));
+        assert_eq!(Anchor::parse(&anchor.token()), Some(anchor));
+        assert_eq!(
+            Anchor::parse("call:0123"),
+            Some(Anchor::Call {
+                head: "0123".to_owned()
+            }),
+            "a legacy block still reads as it did"
+        );
     }
 
     #[test]

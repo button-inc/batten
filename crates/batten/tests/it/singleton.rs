@@ -41,8 +41,8 @@ fn singleton(dir: &Path, args: &[&str]) -> Output {
     command
         .args(args)
         .current_dir(dir)
-        .env("GIT_CEILING_DIRECTORIES", env!("CARGO_TARGET_TMPDIR"))
-        .output()
+        .env("GIT_CEILING_DIRECTORIES", common::target_tmp())
+        .streamed_output()
         .expect("run batten singleton")
 }
 
@@ -95,8 +95,8 @@ fn the_refusal_names_the_holders_phase_when_the_registry_knows_it() {
     register
         .args(["task", "register", "land", &live, "ci-wait(lap 1)"])
         .current_dir(&repo)
-        .env("GIT_CEILING_DIRECTORIES", env!("CARGO_TARGET_TMPDIR"))
-        .output()
+        .env("GIT_CEILING_DIRECTORIES", common::target_tmp())
+        .streamed_output()
         .expect("register the holder");
     singleton(&repo, &["acquire", "land", &live]);
 
@@ -367,8 +367,8 @@ fn the_lock_is_a_directory_rather_than_a_flock_file() {
 // had just given one owner, so the port removes a duplicate reader rather than
 // relocating one. It shares `pid_exists` for the same reason.
 //
-// carried: mise-tasks/singleton.sh crates/batten/src/task.rs kind:verb crates/batten/tests/it/singleton.rs
-// carried: tests/singleton.bats crates/batten/src/task.rs kind:verb crates/batten/tests/it/singleton.rs
+// carried: mise-tasks/singleton.sh crates/batten-base/src/task.rs kind:verb crates/batten/tests/it/singleton.rs
+// carried: tests/singleton.bats crates/batten-base/src/task.rs kind:verb crates/batten/tests/it/singleton.rs
 //
 // carried: "an unheld task is acquired, and the pid file names the caller" crates/batten/tests/it/singleton.rs
 // carried: "THE ACCEPTANCE CASE: a second acquire is refused while the first is alive, and names the live pid" crates/batten/tests/it/singleton.rs
@@ -377,7 +377,7 @@ fn the_lock_is_a_directory_rather_than_a_flock_file() {
 // carried: "singleton.bats::a lock whose holder is dead is reclaimed, not waited out" crates/batten/tests/it/singleton.rs
 // carried: "singleton.bats::AN EMPTY PID FILE IS HELD, NEVER FREE — absence of evidence is not evidence" crates/batten/tests/it/singleton.rs
 // carried: "a lock directory with no pid file at all is held too" crates/batten/tests/it/singleton.rs
-// carried: "TWO SIGHTINGS: a lock that changed hands under the reclaim is not stolen" crates/batten/src/task.rs kind:mechanism
+// carried: "TWO SIGHTINGS: a lock that changed hands under the reclaim is not stolen" crates/batten-base/src/task.rs kind:mechanism
 // carried: "release frees the lock for the next caller" crates/batten/tests/it/singleton.rs
 // carried: "release of a lock that was never taken is a no-op, not a failure" crates/batten/tests/it/singleton.rs
 // carried: "tasks are locked independently — a held land does not block another task" crates/batten/tests/it/singleton.rs

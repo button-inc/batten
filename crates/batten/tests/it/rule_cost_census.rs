@@ -30,7 +30,8 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use batten::rules::{self, Rule};
+use batten::config_model::Rule;
+use batten::rules;
 
 /// An empty vocabulary: every row here is a native `forbid`, which raises no
 /// declared verdict token, and `load` refuses a table naming a token nothing

@@ -274,6 +274,7 @@ fn collect_read_only(node: &CommandSpec, root_name: &str, out: &mut Vec<ReadOnly
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+    #[cfg(test)]
     use crate::surface;
 
     fn spec() -> CommandSpec {
@@ -406,6 +407,355 @@ mod tests {
             "commands missing an effect: {missing:?}"
         );
     }
+    /// Every read-effect command path, sorted: the literal
+    /// [`allowlist_is_exactly_the_read_commands`] compares the derived allowlist to,
+    /// with each row's reason beside it. A const rather than a function body
+    /// so the ledger carries no line count of its own.
+    const READ_PATHS: &[&str] = &[
+        // The gate half of the attribution pair. It reads commit metadata
+        // through git's read-only plumbing and matches configured patterns
+        // against it, so it is `read`; `attribution identity` writes
+        // .git/config and is deliberately absent, as is the noun above it.
+        "attribution check",
+        // The TAGGER half of the same pair, and it is `read` for exactly
+        // `attribution check`'s reason one row up: it opens the tag object
+        // through git's read-only plumbing, matches the rendered tagger
+        // against configured patterns, and writes nothing. It is a
+        // separate row rather than covered by the noun because
+        // `attribution identity` shares that noun and writes .git/config.
+        "attribution tagger",
+        // `board check` LEFT this list with its body (CLOUD-1221): a
+        // coherent graph mints the move receipt a guard reads, so it is
+        // `write`, `claim check`'s class, and not a read-only entry.
+        // Both navigation verbs are on it, and the `capture` noun above
+        // them is not: the noun is unclassified because `capture prune`
+        // removes, which is the fail-safe reading a consumer treating an
+        // entry as a prefix depends on (CLOUD-121).
+        "capture find",
+        "capture list",
+        "capture show",
+        // The shell census (CLOUD-843), noun AND verb, `commit`'s reading:
+        // its whole subtree reads — declared manifests and tracked files —
+        // and starts nothing, so the noun smuggles no write.
+        "census",
+        "census shell",
+        "check",
+        // The VERB only, and the `checks` noun above it is not here
+        // (CLOUD-1143). The noun is unclassified for `capture`'s reason
+        // one row up: a consumer treating an entry as a prefix must not
+        // inherit a claim the whole subtree has not earned. The verb is
+        // `read` structurally — it decides over a reading handed to it on
+        // stdin and cannot start a program, because the FETCH stays with
+        // the poller that already holds the body.
+        "checks green",
+        // `claim race` is read where its two siblings are not, and the
+        // difference is the receipt: `claim check` and `claim bot` mint
+        // one, this asks the forge a question and prints the answer. A
+        // row claiming `write` would keep a pure read off the allowlist,
+        // which is the harmless direction — but it would also be false,
+        // and this list is read as a statement about what the binary
+        // does.
+        // The two key readers that retired `mise-tasks/claimed-keys.sh`
+        // and `mise-tasks/merged-pr-keys.sh` (CLOUD-1711). Both walk the
+        // ref log and the closing bodies through git's read-only
+        // plumbing and write nothing, so they sit beside `claim race`
+        // rather than with `claim check`, which records.
+        // The slow-tier probe and the suite selector, retired out of
+        // `mise-tasks/ci-slow-needed.sh` and `mise-tasks/suite-select.sh`
+        // (CLOUD-1716). Both read the diff and the declared headers and
+        // decide over them; neither runs a suite or moves a ref, so the
+        // effect is `read` and the allowlist carries them. `ci wait` is
+        // deliberately absent: it polls the forge and is not read-only in
+        // this sense.
+        "ci slow-needed",
+        "ci suites",
+        "claim keys",
+        "claim merged",
+        "claim race",
+        // Both `commit` rows, unlike attribution's. The noun IS `read`
+        // here because its whole subtree is — nothing under it writes —
+        // so it can make the claim `attribution` cannot (CLOUD-701).
+        "commit",
+        "commit check",
+        "config",
+        "config deprecations",
+        "config epoch",
+        "config lint",
+        "config show",
+        "defects query",
+        // A pure function of stdin: it opens no file, spawns nothing,
+        // and reaches no configured command, so it is the narrowest
+        // possible `read` (CLOUD-53). The `design` noun is absent for
+        // `receipt`'s reason — `design attest` is the declared next verb
+        // under it.
+        "design audit",
+        "doctor",
+        // Loads and resolves the committed config and reports whether a
+        // row was dropped (CLOUD-1973): the bare report's `config` check,
+        // asked alone. It reads files and spawns nothing.
+        "doctor config",
+        // WHETHER THE AGENT PROXY WOULD CARRY THIS CONTAINER'S REQUESTS
+        // (CLOUD-1399). `read`, and on the strictest reading of it: the
+        // whole verb resolves two strings against a comma list. Nothing
+        // is spawned, nothing is dialled, and no name is looked up — the
+        // reserved `.invalid` probe it asks about cannot be delegated, so
+        // it never leaves the process. It reads THIS process's own
+        // environment rather than a repository path, which is the
+        // capability being admitted: the same question asked through a
+        // task runner grades a value that runner's env block has already
+        // corrected.
+        "doctor egress",
+        // WHETHER THE FORGE CREDENTIAL CARRIES THE CLAIMS THE TASKS NEED
+        // (CLOUD-843, retiring `gh-preflight`). `read`: GETs against the
+        // endpoints the committed `[[forge.probe]]` rows name, beside
+        // `lease carries`' two forge reads. A row declaring a write claim is
+        // reported and never called, so nothing here performs one.
+        "doctor forge",
+        // What plan mode refused, counted (CLOUD-2292): one journal
+        // family folded and printed, nothing written or spawned.
+        "doctor gaps",
+        // Whether this checkout's commit path runs the gate (CLOUD-1398).
+        // `read`, and structurally so: it resolves a directory through
+        // git's own config and stats two files. Nothing is EXECUTED, and
+        // the distinction is the whole reason this is admissible — the
+        // stronger question, whether each hook RUNS, needs executing one,
+        // which reaches user-supplied code and is exactly what a row on
+        // this allowlist may not do (CLOUD-170). Following the symlink is
+        // a read of the link's target, not a spawn of it.
+        "doctor gate",
+        // The one row that is both a parent and a `read` verb of its own
+        // (CLOUD-777). House style §2 spells the verb `doctor <SUB>` and
+        // §8 promises what bare `doctor` does, so both are on the list —
+        // unlike every other noun here, which performs no default action
+        // and is absent for that reason. Both read committed files and
+        // spawn nothing: the sub-verb compares each harness's wiring
+        // against a derivation computed in-process.
+        "doctor hooks",
+        // WHICH engine the registrations reach, where the row above
+        // answers whether they reach one at all (CLOUD-1349). Read for a
+        // stricter reason than its sibling: it resolves a program name
+        // and then deliberately does NOT run it, comparing the file's
+        // bytes against the artifact this tree builds. Spawning what a
+        // wiring file names would put config-supplied code behind a row
+        // on this very allowlist, which is CLOUD-170's invariant and the
+        // reason `on_path` stats rather than executes.
+        "doctor mediator",
+        // `read`, and structurally, for the sub-verb above's reason: it
+        // opens the session's own task store through a link the engine
+        // parked and counts what is not `completed`. It spawns nothing,
+        // writes nothing, and reaches no network — the store is a
+        // directory of small JSON files (CLOUD-1376).
+        "doctor session",
+        // Whether every tool the manifest declares is installed
+        // (CLOUD-1683). `read`, and STRUCTURALLY so for the reason its
+        // two siblings above are: the probe reading arrives on stdin
+        // rather than being fetched here, so this opens the manifest,
+        // parses a document the caller handed it, and spawns nothing.
+        // Fetching it in-process would resolve the runner off `PATH` and
+        // run it, which is precisely what a row on this allowlist may not
+        // do — the caller-fetches-gate-decides split is what keeps the
+        // row honest rather than merely promised.
+        "doctor toolchain",
+        // The engine pin's identity (CLOUD-2061): it lists the tracked
+        // engine inputs and hashes their bytes, and writes nothing.
+        "engine digest",
+        "generate",
+        "generate completions",
+        // §11's third derivation (CLOUD-62): the hook wiring a host
+        // needs, derived from the same `Harness` data the adapters are
+        // built from. On the list for the structural reason the others
+        // are — it returns bytes and writes nothing. Emphatically NOT
+        // the verb that installs them: `generate` stays stdout-only,
+        // and the install surface is `init`'s.
+        "generate hooks",
+        // The two human renderings (CLOUD-69) are on the list for the
+        // same structural reason the shell one is: they return bytes
+        // and write nothing.
+        "generate man",
+        "generate markdown",
+        "generate schema",
+        // The adopted runner's drift gate (CLOUD-947): a `read`, where its
+        // generator sibling writes the artifact and so is not here.
+        "hk drift",
+        // `land placed` (CLOUD-2707) compares the tree with HEAD and HEAD with
+        // the remote-tracking refs, writes nothing and always exits 0: it is
+        // advice on stderr. Sorted before `landed`, since a space precedes `e`.
+        "land placed",
+        // The board sweep (CLOUD-186, CLOUD-1127). It reads a payload on
+        // stdin and three caller-supplied evidence files and starts no
+        // program — the `claimed-keys` spawn its shell predecessor made
+        // is supplied AS evidence instead, which is exactly what keeps
+        // this on the read surface rather than needing `enforce`.
+        //
+        // The noun above it is unclassified, for `capture`'s reason: a
+        // consumer treating an entry as a prefix must be handed only what
+        // is actually read-only, and a noun is not a command.
+        // The other half of the same question (CLOUD-1513), and read for
+        // the same reason plus one of its own: the remote's branch names
+        // arrive as `--refs` EVIDENCE rather than through a
+        // `git ls-remote`, so this arm starts no program either. That
+        // was the design constraint the flag exists to satisfy.
+        //
+        // `--gather` (CLOUD-843) keeps it: the verb may now acquire the
+        // arms itself, but from the trunk's history in process and from
+        // the forge through the vendored client — `claim merged`'s own
+        // route — so it still starts no program. A forge that client
+        // cannot list is could-not-look on that arm, and `--refs` is
+        // still how such a consumer supplies it.
+        //
+        // Before its sibling because the list is compared SORTED, not as
+        // a set: `abandoned` precedes `check`.
+        "landed abandoned",
+        "landed check",
+        // FIVE OF THE TEN LEASE ARMS, and the noun is NOT among them
+        // (CLOUD-1274). `lease acquire|renew|hold|release|reserve` each
+        // reach `swap`, which is a compare-and-swap against a REMOTE ref
+        // — the only remote write in this crate — so the noun stays
+        // unclassified for `capture`'s reason two rows up: a consumer
+        // treating an entry as a prefix must not be handed the writes.
+        //
+        // `check` is a separate row from `status` rather than a flag on
+        // it, and this list is why: the allowlist is
+        // `filter(effect == read)` with no second list, so a refusing
+        // flag on a reporting row would drop the reporting invocation
+        // every consumer already uses.
+        "lease authorises",
+        // The staleness half of the CI-side precondition (CLOUD-1148
+        // §2). Two forge reads and no write, so it belongs here beside
+        // `check` rather than with the five arms that reach `swap`.
+        "lease carries",
+        "lease check",
+        "lease held",
+        "lease peek",
+        "lease status",
+        // The `lint` noun is on the list with its kind, for the same
+        // reason as `policy` below: `lint <kind>` reads text the caller
+        // names and answers about its shape, so the whole subtree is
+        // read and the noun row smuggles no write (CLOUD-84).
+        "lint",
+        "lint brief",
+        // The two MCP readers (CLOUD-843), and never the `mcp` noun: `call`
+        // reaches the network and `spawn` execs. `grant` resolves names
+        // through two files and a payload; `posture` reads the settings, the
+        // host's logs and the spawn ledger. Neither starts a program.
+        "mcp grant",
+        "mcp posture",
+        // The module-graph noun AND verb (CLOUD-2789): they only read.
+        "modules",
+        "modules metrics",
+        // `modules ratchet` writes its record and `modules cut` writes the tree,
+        // so neither is here (CLOUD-2821, CLOUD-2812).
+        // CLOUD-1267. Only the CENSUS is on the allowlist: it is one
+        // pass over the declarations, reading what each gate declares
+        // and answering whether every one is enforced or exempt. Both
+        // `mutate sweep` and the noun above it are `write` and so are
+        // absent — the sweep stages a tree and spawns a suite runner
+        // against it, and the noun STATES that rather than inheriting
+        // it, which is the fail-safe reading for a consumer treating an
+        // allowlist entry as a prefix (CLOUD-121).
+        "mutate census",
+        // Whether the state repository answers discovery (CLOUD-2718).
+        // `read`, beside `doctor forge`'s GETs: one discovery request,
+        // no file written and no directory created. The `offbox` noun
+        // is absent for `receipt`'s reason — its later verbs push.
+        "offbox status",
+        // CLOUD-479. `payload field` is a decoder, not a mediator: it
+        // reads stdin, projects one allowlisted field, and renders no
+        // verdict — so `read` is the honest classification and the
+        // derived allowlist is where it belongs. `hook` next door stays
+        // unclassified because its DECISION mediates writes.
+        "payload",
+        "payload field",
+        // The comparison verb ALONE, never the `perf` noun and never
+        // `pair` or `gate` beside it (CLOUD-1163 unit 10): those build two
+        // release binaries and materialise a tree, so the noun takes the
+        // conservative reading exactly as `provision` does below. This one
+        // opens no file and spawns nothing — it reads records on stdin and
+        // decides a ratio.
+        "perf compare",
+        // The `policy` noun is on the list with its verbs, unlike
+        // `receipt`: every verb in its §2 subtree is read, so there is
+        // no write for the noun row to smuggle on (CLOUD-50).
+        "policy",
+        "policy budget",
+        "policy explain",
+        "policy hooks",
+        // `explain`'s sibling and read on the same terms (CLOUD-1637):
+        // the committed authority is loaded and one field of a row it
+        // already holds is printed. No spawn, no network, no tree walk.
+        "policy rule",
+        "policy test",
+        "policy tools",
+        // The freshness verb, never the `provision` noun or `apply`:
+        // that subtree writes, so the noun takes the conservative
+        // reading (CLOUD-90).
+        "provision status",
+        // The lint verb, never the `ready` noun: the noun performs no
+        // default action and is `Unclassified` for the reason every other
+        // bare noun here is. `claim check` is absent from BOTH lists —
+        // its pullable path mints a receipt, so it is `write`, and a row
+        // claiming otherwise would advertise a writing verb as read-only.
+        "ready lint",
+        // CLOUD-1753's port of `tree-clean`, and `read` in §5's strong
+        // sense: it counts what `git status` reports and writes nothing,
+        // which is what lets `verify` ask it in `depends` without the ask
+        // itself becoming a reason the answer changes.
+        "receipt clean",
+        "receipt status",
+        // The composed receipt read that retired `mise-tasks/verified.sh`
+        // (CLOUD-1148). Three `receipt::validity` reads and no write, so
+        // it belongs here beside `receipt status` rather than with
+        // `receipt record`.
+        "receipt verified",
+        // The reclaim census's fold (CLOUD-843): it reads the boot list and
+        // the log and writes nothing, where its three siblings record.
+        "record census tally",
+        // The read half of the out-of-tree verdict stores (CLOUD-1713).
+        // `record` itself is the write band and is absent here on
+        // purpose; these two leaves fold and print what is already
+        // stored and open nothing.
+        "record fold",
+        "record show",
+        // The release path's five readers (CLOUD-2033): each asks the
+        // forge or git a question and prints one answer; none writes.
+        // `settings` joined when `--probe`, its one write, went
+        // (CLOUD-2508).
+        "release guard",
+        "release in-flight",
+        "release land-state",
+        "release pin",
+        "release settings",
+        // CLOUD-1180's recovered `agent` slice. BOTH the noun and its
+        // leaf are read, and that is the row's §2 predicate rather than
+        // an accident: `show` is the read band under CLOUD-1184's
+        // grammar, and `surface::tests::every_leaf_under_show_is_read`
+        // is what keeps a writer from ever reaching this list through
+        // the noun's own `read` (CLOUD-170's prefix hazard).
+        "show",
+        "show agent",
+        "spec",
+        "state list",
+        // The step noun's reading leaves (CLOUD-2786/2787/2788/2835): `base`,
+        // `cover`, `env` and `exists` read and write nothing; the noun stays
+        // off for `capture`'s reason, since `run` executes.
+        "step base",
+        "step cover",
+        "step env",
+        "step exists",
+        // The verb, never the `worktree` noun: the noun stays
+        // `Unclassified`, so it is off this list (CLOUD-51, CLOUD-780).
+        // The two `task` leaves that read: the registry's report, which
+        // deletes nothing since CLOUD-2372, and one field of one record.
+        // The noun's other five WRITE.
+        "task alive",
+        "task read",
+        // CLOUD-1718's fold, and `read` in §5's strong sense rather than
+        // its polite one: its whole input is two integers on argv, it
+        // opens nothing and spawns nothing, and its output is one of §7's
+        // four codes. There is no tree for it to be well-behaved about.
+        "verdict",
+        "worktree status",
+    ];
 
     #[test]
     fn allowlist_is_exactly_the_read_commands() {
@@ -422,333 +772,7 @@ mod tests {
             .map(|entry| entry.path)
             .collect();
         emitted.sort();
-        assert_eq!(
-            emitted,
-            vec![
-                // The gate half of the attribution pair. It reads commit metadata
-                // through git's read-only plumbing and matches configured patterns
-                // against it, so it is `read`; `attribution identity` writes
-                // .git/config and is deliberately absent, as is the noun above it.
-                "attribution check".to_owned(),
-                // The TAGGER half of the same pair, and it is `read` for exactly
-                // `attribution check`'s reason one row up: it opens the tag object
-                // through git's read-only plumbing, matches the rendered tagger
-                // against configured patterns, and writes nothing. It is a
-                // separate row rather than covered by the noun because
-                // `attribution identity` shares that noun and writes .git/config.
-                "attribution tagger".to_owned(),
-                // `board check` LEFT this list with its body (CLOUD-1221): a
-                // coherent graph mints the move receipt a guard reads, so it is
-                // `write`, `claim check`'s class, and not a read-only entry.
-                // Both navigation verbs are on it, and the `capture` noun above
-                // them is not: the noun is unclassified because `capture prune`
-                // removes, which is the fail-safe reading a consumer treating an
-                // entry as a prefix depends on (CLOUD-121).
-                "capture find".to_owned(),
-                "capture list".to_owned(),
-                "capture show".to_owned(),
-                // The shell census (CLOUD-843), noun AND verb, `commit`'s reading:
-                // its whole subtree reads — declared manifests and tracked files —
-                // and starts nothing, so the noun smuggles no write.
-                "census".to_owned(),
-                "census shell".to_owned(),
-                "check".to_owned(),
-                // The VERB only, and the `checks` noun above it is not here
-                // (CLOUD-1143). The noun is unclassified for `capture`'s reason
-                // one row up: a consumer treating an entry as a prefix must not
-                // inherit a claim the whole subtree has not earned. The verb is
-                // `read` structurally — it decides over a reading handed to it on
-                // stdin and cannot start a program, because the FETCH stays with
-                // the poller that already holds the body.
-                "checks green".to_owned(),
-                // `claim race` is read where its two siblings are not, and the
-                // difference is the receipt: `claim check` and `claim bot` mint
-                // one, this asks the forge a question and prints the answer. A
-                // row claiming `write` would keep a pure read off the allowlist,
-                // which is the harmless direction — but it would also be false,
-                // and this list is read as a statement about what the binary
-                // does.
-                // The two key readers that retired `mise-tasks/claimed-keys.sh`
-                // and `mise-tasks/merged-pr-keys.sh` (CLOUD-1711). Both walk the
-                // ref log and the closing bodies through git's read-only
-                // plumbing and write nothing, so they sit beside `claim race`
-                // rather than with `claim check`, which records.
-                // The slow-tier probe and the suite selector, retired out of
-                // `mise-tasks/ci-slow-needed.sh` and `mise-tasks/suite-select.sh`
-                // (CLOUD-1716). Both read the diff and the declared headers and
-                // decide over them; neither runs a suite or moves a ref, so the
-                // effect is `read` and the allowlist carries them. `ci wait` is
-                // deliberately absent: it polls the forge and is not read-only in
-                // this sense.
-                "ci slow-needed".to_owned(),
-                "ci suites".to_owned(),
-                "claim keys".to_owned(),
-                "claim merged".to_owned(),
-                "claim race".to_owned(),
-                // Both `commit` rows, unlike attribution's. The noun IS `read`
-                // here because its whole subtree is — nothing under it writes —
-                // so it can make the claim `attribution` cannot (CLOUD-701).
-                "commit".to_owned(),
-                "commit check".to_owned(),
-                "config".to_owned(),
-                "config deprecations".to_owned(),
-                "config epoch".to_owned(),
-                "config lint".to_owned(),
-                "config show".to_owned(),
-                "defects query".to_owned(),
-                // A pure function of stdin: it opens no file, spawns nothing,
-                // and reaches no configured command, so it is the narrowest
-                // possible `read` (CLOUD-53). The `design` noun is absent for
-                // `receipt`'s reason — `design attest` is the declared next verb
-                // under it.
-                "design audit".to_owned(),
-                "doctor".to_owned(),
-                // Loads and resolves the committed config and reports whether a
-                // row was dropped (CLOUD-1973): the bare report's `config` check,
-                // asked alone. It reads files and spawns nothing.
-                "doctor config".to_owned(),
-                // WHETHER THE AGENT PROXY WOULD CARRY THIS CONTAINER'S REQUESTS
-                // (CLOUD-1399). `read`, and on the strictest reading of it: the
-                // whole verb resolves two strings against a comma list. Nothing
-                // is spawned, nothing is dialled, and no name is looked up — the
-                // reserved `.invalid` probe it asks about cannot be delegated, so
-                // it never leaves the process. It reads THIS process's own
-                // environment rather than a repository path, which is the
-                // capability being admitted: the same question asked through a
-                // task runner grades a value that runner's env block has already
-                // corrected.
-                "doctor egress".to_owned(),
-                // WHETHER THE FORGE CREDENTIAL CARRIES THE CLAIMS THE TASKS NEED
-                // (CLOUD-843, retiring `gh-preflight`). `read`: GETs against the
-                // endpoints the committed `[[forge.probe]]` rows name, beside
-                // `lease carries`' two forge reads. A row declaring a write claim is
-                // reported and never called, so nothing here performs one.
-                "doctor forge".to_owned(),
-                // What plan mode refused, counted (CLOUD-2292): one journal
-                // family folded and printed, nothing written or spawned.
-                "doctor gaps".to_owned(),
-                // Whether this checkout's commit path runs the gate (CLOUD-1398).
-                // `read`, and structurally so: it resolves a directory through
-                // git's own config and stats two files. Nothing is EXECUTED, and
-                // the distinction is the whole reason this is admissible — the
-                // stronger question, whether each hook RUNS, needs executing one,
-                // which reaches user-supplied code and is exactly what a row on
-                // this allowlist may not do (CLOUD-170). Following the symlink is
-                // a read of the link's target, not a spawn of it.
-                "doctor gate".to_owned(),
-                // The one row that is both a parent and a `read` verb of its own
-                // (CLOUD-777). House style §2 spells the verb `doctor <SUB>` and
-                // §8 promises what bare `doctor` does, so both are on the list —
-                // unlike every other noun here, which performs no default action
-                // and is absent for that reason. Both read committed files and
-                // spawn nothing: the sub-verb compares each harness's wiring
-                // against a derivation computed in-process.
-                "doctor hooks".to_owned(),
-                // WHICH engine the registrations reach, where the row above
-                // answers whether they reach one at all (CLOUD-1349). Read for a
-                // stricter reason than its sibling: it resolves a program name
-                // and then deliberately does NOT run it, comparing the file's
-                // bytes against the artifact this tree builds. Spawning what a
-                // wiring file names would put config-supplied code behind a row
-                // on this very allowlist, which is CLOUD-170's invariant and the
-                // reason `on_path` stats rather than executes.
-                "doctor mediator".to_owned(),
-                // `read`, and structurally, for the sub-verb above's reason: it
-                // opens the session's own task store through a link the engine
-                // parked and counts what is not `completed`. It spawns nothing,
-                // writes nothing, and reaches no network — the store is a
-                // directory of small JSON files (CLOUD-1376).
-                "doctor session".to_owned(),
-                // Whether every tool the manifest declares is installed
-                // (CLOUD-1683). `read`, and STRUCTURALLY so for the reason its
-                // two siblings above are: the probe reading arrives on stdin
-                // rather than being fetched here, so this opens the manifest,
-                // parses a document the caller handed it, and spawns nothing.
-                // Fetching it in-process would resolve the runner off `PATH` and
-                // run it, which is precisely what a row on this allowlist may not
-                // do — the caller-fetches-gate-decides split is what keeps the
-                // row honest rather than merely promised.
-                "doctor toolchain".to_owned(),
-                // The engine pin's identity (CLOUD-2061): it lists the tracked
-                // engine inputs and hashes their bytes, and writes nothing.
-                "engine digest".to_owned(),
-                "generate".to_owned(),
-                "generate completions".to_owned(),
-                // §11's third derivation (CLOUD-62): the hook wiring a host
-                // needs, derived from the same `Harness` data the adapters are
-                // built from. On the list for the structural reason the others
-                // are — it returns bytes and writes nothing. Emphatically NOT
-                // the verb that installs them: `generate` stays stdout-only,
-                // and the install surface is `init`'s.
-                "generate hooks".to_owned(),
-                // The two human renderings (CLOUD-69) are on the list for the
-                // same structural reason the shell one is: they return bytes
-                // and write nothing.
-                "generate man".to_owned(),
-                "generate markdown".to_owned(),
-                "generate schema".to_owned(),
-                // The adopted runner's drift gate (CLOUD-947): a `read`, where its
-                // generator sibling writes the artifact and so is not here.
-                "hk drift".to_owned(),
-                // The board sweep (CLOUD-186, CLOUD-1127). It reads a payload on
-                // stdin and three caller-supplied evidence files and starts no
-                // program — the `claimed-keys` spawn its shell predecessor made
-                // is supplied AS evidence instead, which is exactly what keeps
-                // this on the read surface rather than needing `enforce`.
-                //
-                // The noun above it is unclassified, for `capture`'s reason: a
-                // consumer treating an entry as a prefix must be handed only what
-                // is actually read-only, and a noun is not a command.
-                // The other half of the same question (CLOUD-1513), and read for
-                // the same reason plus one of its own: the remote's branch names
-                // arrive as `--refs` EVIDENCE rather than through a
-                // `git ls-remote`, so this arm starts no program either. That
-                // was the design constraint the flag exists to satisfy.
-                //
-                // `--gather` (CLOUD-843) keeps it: the verb may now acquire the
-                // arms itself, but from the trunk's history in process and from
-                // the forge through the vendored client — `claim merged`'s own
-                // route — so it still starts no program. A forge that client
-                // cannot list is could-not-look on that arm, and `--refs` is
-                // still how such a consumer supplies it.
-                //
-                // Before its sibling because the list is compared SORTED, not as
-                // a set: `abandoned` precedes `check`.
-                "landed abandoned".to_owned(),
-                "landed check".to_owned(),
-                // FIVE OF THE TEN LEASE ARMS, and the noun is NOT among them
-                // (CLOUD-1274). `lease acquire|renew|hold|release|reserve` each
-                // reach `swap`, which is a compare-and-swap against a REMOTE ref
-                // — the only remote write in this crate — so the noun stays
-                // unclassified for `capture`'s reason two rows up: a consumer
-                // treating an entry as a prefix must not be handed the writes.
-                //
-                // `check` is a separate row from `status` rather than a flag on
-                // it, and this list is why: the allowlist is
-                // `filter(effect == read)` with no second list, so a refusing
-                // flag on a reporting row would drop the reporting invocation
-                // every consumer already uses.
-                "lease authorises".to_owned(),
-                // The staleness half of the CI-side precondition (CLOUD-1148
-                // §2). Two forge reads and no write, so it belongs here beside
-                // `check` rather than with the five arms that reach `swap`.
-                "lease carries".to_owned(),
-                "lease check".to_owned(),
-                "lease held".to_owned(),
-                "lease peek".to_owned(),
-                "lease status".to_owned(),
-                // The `lint` noun is on the list with its kind, for the same
-                // reason as `policy` below: `lint <kind>` reads text the caller
-                // names and answers about its shape, so the whole subtree is
-                // read and the noun row smuggles no write (CLOUD-84).
-                "lint".to_owned(),
-                "lint brief".to_owned(),
-                // The two MCP readers (CLOUD-843), and never the `mcp` noun: `call`
-                // reaches the network and `spawn` execs. `grant` resolves names
-                // through two files and a payload; `posture` reads the settings, the
-                // host's logs and the spawn ledger. Neither starts a program.
-                "mcp grant".to_owned(),
-                "mcp posture".to_owned(),
-                // CLOUD-1267. Only the CENSUS is on the allowlist: it is one
-                // pass over the declarations, reading what each gate declares
-                // and answering whether every one is enforced or exempt. Both
-                // `mutate sweep` and the noun above it are `write` and so are
-                // absent — the sweep stages a tree and spawns a suite runner
-                // against it, and the noun STATES that rather than inheriting
-                // it, which is the fail-safe reading for a consumer treating an
-                // allowlist entry as a prefix (CLOUD-121).
-                "mutate census".to_owned(),
-                // CLOUD-479. `payload field` is a decoder, not a mediator: it
-                // reads stdin, projects one allowlisted field, and renders no
-                // verdict — so `read` is the honest classification and the
-                // derived allowlist is where it belongs. `hook` next door stays
-                // unclassified because its DECISION mediates writes.
-                "payload".to_owned(),
-                "payload field".to_owned(),
-                // The comparison verb ALONE, never the `perf` noun and never
-                // `pair` or `gate` beside it (CLOUD-1163 unit 10): those build two
-                // release binaries and materialise a tree, so the noun takes the
-                // conservative reading exactly as `provision` does below. This one
-                // opens no file and spawns nothing — it reads records on stdin and
-                // decides a ratio.
-                "perf compare".to_owned(),
-                // The `policy` noun is on the list with its verbs, unlike
-                // `receipt`: every verb in its §2 subtree is read, so there is
-                // no write for the noun row to smuggle on (CLOUD-50).
-                "policy".to_owned(),
-                "policy budget".to_owned(),
-                "policy explain".to_owned(),
-                "policy hooks".to_owned(),
-                // `explain`'s sibling and read on the same terms (CLOUD-1637):
-                // the committed authority is loaded and one field of a row it
-                // already holds is printed. No spawn, no network, no tree walk.
-                "policy rule".to_owned(),
-                "policy test".to_owned(),
-                "policy tools".to_owned(),
-                // The freshness verb, never the `provision` noun or `apply`:
-                // that subtree writes, so the noun takes the conservative
-                // reading (CLOUD-90).
-                "provision status".to_owned(),
-                // The lint verb, never the `ready` noun: the noun performs no
-                // default action and is `Unclassified` for the reason every other
-                // bare noun here is. `claim check` is absent from BOTH lists —
-                // its pullable path mints a receipt, so it is `write`, and a row
-                // claiming otherwise would advertise a writing verb as read-only.
-                "ready lint".to_owned(),
-                // CLOUD-1753's port of `tree-clean`, and `read` in §5's strong
-                // sense: it counts what `git status` reports and writes nothing,
-                // which is what lets `verify` ask it in `depends` without the ask
-                // itself becoming a reason the answer changes.
-                "receipt clean".to_owned(),
-                "receipt status".to_owned(),
-                // The composed receipt read that retired `mise-tasks/verified.sh`
-                // (CLOUD-1148). Three `receipt::validity` reads and no write, so
-                // it belongs here beside `receipt status` rather than with
-                // `receipt record`.
-                "receipt verified".to_owned(),
-                // The reclaim census's fold (CLOUD-843): it reads the boot list and
-                // the log and writes nothing, where its three siblings record.
-                "record census tally".to_owned(),
-                // The read half of the out-of-tree verdict stores (CLOUD-1713).
-                // `record` itself is the write band and is absent here on
-                // purpose; these two leaves fold and print what is already
-                // stored and open nothing.
-                "record fold".to_owned(),
-                "record show".to_owned(),
-                // The release path's five readers (CLOUD-2033): each asks the
-                // forge or git a question and prints one answer; none writes.
-                // `settings` joined when `--probe`, its one write, went
-                // (CLOUD-2508).
-                "release guard".to_owned(),
-                "release in-flight".to_owned(),
-                "release land-state".to_owned(),
-                "release pin".to_owned(),
-                "release settings".to_owned(),
-                // CLOUD-1180's recovered `agent` slice. BOTH the noun and its
-                // leaf are read, and that is the row's §2 predicate rather than
-                // an accident: `show` is the read band under CLOUD-1184's
-                // grammar, and `surface::tests::every_leaf_under_show_is_read`
-                // is what keeps a writer from ever reaching this list through
-                // the noun's own `read` (CLOUD-170's prefix hazard).
-                "show".to_owned(),
-                "show agent".to_owned(),
-                "spec".to_owned(),
-                "state list".to_owned(),
-                // The verb, never the `worktree` noun: the noun stays
-                // `Unclassified`, so it is off this list (CLOUD-51, CLOUD-780).
-                // The two `task` leaves that read: the registry's report, which
-                // deletes nothing since CLOUD-2372, and one field of one record.
-                // The noun's other five WRITE.
-                "task alive".to_owned(),
-                "task read".to_owned(),
-                // CLOUD-1718's fold, and `read` in §5's strong sense rather than
-                // its polite one: its whole input is two integers on argv, it
-                // opens nothing and spawns nothing, and its output is one of §7's
-                // four codes. There is no tree for it to be well-behaved about.
-                "verdict".to_owned(),
-                "worktree status".to_owned(),
-            ]
-        );
+        assert_eq!(emitted, READ_PATHS);
     }
 
     #[test]
@@ -982,6 +1006,10 @@ mod tests {
             "engine stamp".to_owned(),
             "engine update".to_owned(),
             "exec".to_owned(),
+            // CLOUD-2690: the forge's door, one event payload on stdin.
+            "forge".to_owned(),
+            "forge intake".to_owned(),
+            "forge poll".to_owned(),
             // The schema is emitted by `generate`, not `config`: it is a
             // derivation of the config types, and §11 gives every
             // derivation the one emitter (CLOUD-244).
@@ -1038,6 +1066,7 @@ mod tests {
             // fetch the lap already makes. `write` for that fetch, and so absent
             // from the read-only allowlist.
             "land linear".to_owned(),
+            "land placed".to_owned(),
             "land push".to_owned(),
             "land replay".to_owned(),
             "land verify".to_owned(),
@@ -1098,6 +1127,12 @@ mod tests {
             // name, so a second server meant a second copy of the script. Here it
             // is an argument.
             "mcp spawn".to_owned(),
+            // The module-graph noun and its verb (CLOUD-2789): the gate that
+            // holds the crate's largest cycle from growing.
+            "modules".to_owned(),
+            "modules cut".to_owned(),
+            "modules metrics".to_owned(),
+            "modules ratchet".to_owned(),
             // CLOUD-1267's noun and its two verbs, retired out of
             // `mise-tasks/mutant.sh` and `mise-tasks/mutant-census.sh`.
             // Stated here rather than regenerated, on the terms `checks`
@@ -1113,8 +1148,17 @@ mod tests {
             // refuses an `ask`, and a `write` noun is what a consumer reading
             // an allowlist entry as a prefix should find (CLOUD-121).
             "mutate".to_owned(),
+            "mutate cargo".to_owned(),
             "mutate census".to_owned(),
             "mutate sweep".to_owned(),
+            // Off-box session state (CLOUD-2717). The noun is unclassified
+            // because the verbs that follow `status` write a remote.
+            "offbox".to_owned(),
+            "offbox push".to_owned(),
+            "offbox restore".to_owned(),
+            "offbox rotate".to_owned(),
+            "offbox run".to_owned(),
+            "offbox status".to_owned(),
             // CLOUD-479. `payload field` is a decoder, not a mediator: it
             // reads stdin, projects one allowlisted field, and renders no
             // verdict — so `read` is the honest classification and the
@@ -1331,6 +1375,11 @@ mod tests {
             // what this assertion exists to prompt.
             "semver".to_owned(),
             "semver check".to_owned(),
+            // A parent's children, followed to done or dead (CLOUD-2826):
+            // `Unclassified`, off the read allowlist, because the leaf writes
+            // its per-child cache under the state directory.
+            "session".to_owned(),
+            "session watch".to_owned(),
             // One task per clone (CLOUD-428), ported off
             // `mise-tasks/singleton.sh` under CLOUD-843. Both verbs are
             // `Effect::Write` and so are deliberately absent from the read
@@ -1345,9 +1394,6 @@ mod tests {
             "show agent".to_owned(),
             "singleton".to_owned(),
             "singleton acquire".to_owned(),
-            // The per-turn background run (CLOUD-1991, retiring `cross-turn`):
-            // unclassified, since it runs the command it is handed.
-            "singleton detach".to_owned(),
             "singleton release".to_owned(),
             "spec".to_owned(),
             // The container's declared preconditions (CLOUD-1324) — §9's
@@ -1368,7 +1414,13 @@ mod tests {
             // The step cache (CLOUD-843, retiring `step-receipt`). All four rows
             // are unclassified: `run` executes the command it is handed.
             "step".to_owned(),
+            "step base".to_owned(),
             "step check".to_owned(),
+            "step cover".to_owned(),
+            "step env".to_owned(),
+            "step exists".to_owned(),
+            "step graph".to_owned(),
+            "step graph run".to_owned(),
             "step record".to_owned(),
             "step run".to_owned(),
             // The build-tree noun (CLOUD-1030), ported off
@@ -1456,12 +1508,14 @@ mod tests {
         // (§6, byte-stable), KDL had no consumer, so it is removed from the
         // document rather than implemented. Committed here so re-adding a
         // format is a deliberate edit to this list and to §2 together.
-        let formats: Vec<String> = <crate::cli::SpecFormat as clap::ValueEnum>::value_variants()
-            .iter()
-            .filter_map(|format| {
-                clap::ValueEnum::to_possible_value(format).map(|value| value.get_name().to_owned())
-            })
-            .collect();
+        let formats: Vec<String> =
+            <crate::surface_table::SpecFormat as clap::ValueEnum>::value_variants()
+                .iter()
+                .filter_map(|format| {
+                    clap::ValueEnum::to_possible_value(format)
+                        .map(|value| value.get_name().to_owned())
+                })
+                .collect();
         assert_eq!(formats, vec!["json".to_owned()]);
     }
 }

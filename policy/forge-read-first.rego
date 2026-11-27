@@ -43,14 +43,22 @@ reached contains program.name if {
 reached contains program.name if {
 	some program in input.call.programs
 	program.name == "git"
-	program.arguments[0] in forge_verbs
+
+	# THE ENGINE'S SUBCOMMAND, NOT `arguments[0]` (step 14): `git -C /repo push`
+	# put `-C` where this looked, so a forge push with a global option was never
+	# selected.
+	program.subcommand in forge_verbs
 }
 
 reached contains program.name if {
 	some program in input.call.programs
 	program.name == "mise"
-	program.arguments[0] == "run"
-	program.arguments[1] == "land"
+
+	# THE ENGINE'S TASK READING, NOT `arguments[0..1]` (step 14): `mise r land`,
+	# `mise run -- land` and `mise -C /repo run land` each start `land` and none
+	# put `run` then `land` in the first two words.
+	is_array(program.tasks)
+	"land" in program.tasks
 }
 
 reached contains input.call.tool if startswith(input.call.tool, "mcp__github__")
@@ -91,14 +99,14 @@ test_gh_through_the_pin_in_a_compound_is_selected if {
 test_a_git_push_is_selected if {
 	some _ in violation with input as {"call": {
 		"event": "pre-tool",
-		"programs": [{"program": "git", "name": "git", "arguments": ["push", "origin", "HEAD"], "mediated": false}],
+		"programs": [{"program": "git", "name": "git", "arguments": ["push", "origin", "HEAD"], "subcommand": "push", "mediated": false}],
 	}}
 }
 
 test_land_is_selected if {
 	some _ in violation with input as {"call": {
 		"event": "pre-tool",
-		"programs": [{"program": "mise", "name": "mise", "arguments": ["run", "land"], "mediated": false}],
+		"programs": [{"program": "mise", "name": "mise", "arguments": ["run", "land"], "subcommand": "run", "tasks": ["land"], "mediated": false}],
 	}}
 }
 
@@ -124,14 +132,14 @@ test_a_listing_is_not_selected if {
 test_a_local_git_call_is_not_selected if {
 	count(violation) == 0 with input as {"call": {
 		"event": "pre-tool",
-		"programs": [{"program": "git", "name": "git", "arguments": ["status"], "mediated": false}],
+		"programs": [{"program": "git", "name": "git", "arguments": ["status"], "subcommand": "status", "mediated": false}],
 	}}
 }
 
 test_a_commit_message_saying_push_is_not_selected if {
 	count(violation) == 0 with input as {"call": {
 		"event": "pre-tool",
-		"programs": [{"program": "git", "name": "git", "arguments": ["commit", "-m", "push"], "mediated": false}],
+		"programs": [{"program": "git", "name": "git", "arguments": ["commit", "-m", "push"], "subcommand": "commit", "mediated": false}],
 	}}
 }
 
@@ -155,5 +163,5 @@ test_a_gh_call_at_stop_is_not_selected if {
 
 deny contains message if {
 	some v in violation
-	message := v.verdict
+	message = v.verdict
 }

@@ -111,17 +111,23 @@ const SUBJECT: &str = "the release binary hyperfine measured\n";
 /// satisfy.
 fn pattern_rows() -> String {
     let committed = common::committed_patterns();
-    let row = committed
-        .iter()
-        .find(|pattern| pattern.id == "published-budget-value")
-        .expect("the committed table declares the row the module resolves");
-    format!(
-        "[[pattern]]\nid = \"{}\"\nregex = '{}'\n",
-        row.id, row.regex
-    )
+    let mut rows = String::new();
+    // The budget cell's row and, since CLOUD-2852, the measured p95 cell's.
+    for id in ["published-budget-value", "published-measure-value"] {
+        let row = committed
+            .iter()
+            .find(|pattern| pattern.id == id)
+            .expect("the committed table declares the row the module resolves");
+        let _ = write!(
+            rows,
+            "[[pattern]]\nid = \"{}\"\nregex = '{}'\n\n",
+            row.id, row.regex
+        );
+    }
+    rows
 }
 
-/// Exactly the four classes `policy/perf-assert.rego` raises.
+/// Exactly the classes `policy/perf-assert.rego` raises.
 ///
 /// **NAMED, NEVER PREFIX-MATCHED, and that is a measured correction** (CLOUD-1321).
 /// This selected on `starts_with("path measure")`, `("prose state")` and
@@ -130,10 +136,12 @@ fn pattern_rows() -> String {
 /// raised by an unrelated `review state other` row; the prefix swept it into a
 /// bundle that enables ONE module, nothing there raises it, and the registry's own
 /// both-directions check failed the config LOAD. The fixture cannot grow a class
-/// its module does not raise, so the list is the four ids and the coupling to
+/// its module does not raise, so the list is the ids it raises and the coupling to
 /// somebody else's naming is gone.
-const RAISED: [&str; 4] = [
+const RAISED: [&str; 6] = [
+    "hook measure late",
     "path measure late",
+    "path measure absent",
     "path measure partial",
     "prose state wrong",
     "source read missing",
@@ -194,22 +202,53 @@ input = "subject.bin"
 
 /// A README table publishing `budget` for every path the module gates.
 pub(crate) fn agreeing_readme() -> String {
-    "| path | what it does | p50 | p95 | budget |\n\
-     | ---- | ------------ | --- | --- | ------ |\n\
-     | `noop` | process start | 2.1 ms | 2.4 ms | ≤ 100 ms |\n\
-     | `check` | one-rule tree | 2.3 ms | 2.7 ms | ≤ 100 ms |\n\
-     | `hook` | adjudication | 2.8 ms | 3.0 ms | ≤ 100 ms |\n\
-     | `passthrough` | a call no rule selects | — | — | ≤ 100 ms |\n\
-     | `posttool` | a PostToolUse call | — | — | ≤ 100 ms |\n\
-     | `stop` | an end of turn | — | — | ≤ 100 ms |\n\
-     | `wired` | as settings.json invokes it | 8.0 ms | 8.4 ms | ≤ 100 ms |\n"
+    "| path | what it does | p50 | p95 | target | budget |\n\
+     | ---- | ------------ | --- | --- | ------ | ------ |\n\
+     | `noop` | process start | 2.1 ms | 2.4 ms | — | ≤ 100 ms |\n\
+     | `check` | one-rule tree | 2.3 ms | 2.7 ms | — | ≤ 100 ms |\n\
+     | `hook` | adjudication | 2.8 ms | 3.0 ms | ≤ 10 ms | ≤ 100 ms |\n\
+     | `passthrough` | a call no rule selects | — | — | ≤ 10 ms | ≤ 100 ms |\n\
+     | `posttool` | a PostToolUse call | — | — | ≤ 10 ms | ≤ 100 ms |\n\
+     | `stop` | an end of turn | — | — | ≤ 10 ms | ≤ 100 ms |\n\
+     | `session-start` | a session's first moment | — | — | ≤ 10 ms | ≤ 100 ms |\n\
+     | `wired` | as settings.json invokes it | 8.0 ms | 8.4 ms | ≤ 10 ms | ≤ 100 ms |\n\
+     | `hook-offbox` | adjudication, daemon watch on | — | — | ≤ 10 ms | ≤ 100 ms |\n\
+     | `posttool-offbox` | a PostToolUse call, daemon watch on | — | — | ≤ 10 ms | ≤ 100 ms |\n"
         .to_owned()
+        + &COMMIT_STEPS
+            .iter()
+            .flat_map(|step| {
+                [
+                    "| `",
+                    *step,
+                    "` | a commit-time hook step | 8.0 ms | 9.0 ms | — | ≤ 100 ms |\n",
+                ]
+            })
+            .collect::<String>()
 }
+
+/// The default commit-time hook steps `perf measure` times in its commit fixture
+/// (CLOUD-2789), each budgeted like any other path.
+pub(crate) const COMMIT_STEPS: [&str; 6] = [
+    "cargo-fmt",
+    "taplo",
+    "taplo-format",
+    "merge-conflict-markers",
+    "conventional-commit",
+    "commit-attribution",
+];
 
 /// Every budgeted path measured comfortably inside its ceiling, as the producer
 /// takes them: `<name> <token>` per line.
 pub(crate) fn clean_record() -> String {
-    "noop 2.4\ncheck 2.7\nhook 3.0\npassthrough 2.2\nposttool 2.3\nstop 2.6\nwired 8.4\n".to_owned()
+    "noop 2.4\ncheck 2.7\nhook 3.0\npassthrough 2.2\nposttool 2.3\nstop 2.6\nsession-start 4.1\nwired 8.4\n\
+     hook/p50 2.8\npassthrough/p50 2.0\nposttool/p50 2.1\nstop/p50 2.4\nsession-start/p50 3.9\nwired/p50 8.0\n\
+     hook-offbox 3.2\nhook-offbox/p50 3.0\nposttool-offbox 2.6\nposttool-offbox/p50 2.4\n"
+        .to_owned()
+        + &COMMIT_STEPS
+            .iter()
+            .flat_map(|step| [*step, " 9.0\n"])
+            .collect::<String>()
 }
 
 /// A scratch repository carrying the fixture config, the COMMITTED module, and
@@ -242,7 +281,7 @@ pub(crate) fn record(dir: &Path, records: &str) {
 pub(crate) fn findings(dir: &Path) -> String {
     let mut command = batten();
     command.current_dir(dir).arg("check");
-    let outcome = command.output().expect("run batten check");
+    let outcome = command.streamed_output().expect("run batten check");
 
     // A NON-VERDICT EXIT IS NOT AN EMPTY ANSWER, and reading it as one is how this
     // file went green over a dead gate (CLOUD-1321). `check` exits 0 clean and 2
@@ -307,6 +346,81 @@ fn a_budgeted_path_absent_from_a_present_record_is_refused() {
     );
 }
 
+// --- the p50 target (CLOUD-2730) ---------------------------------------------
+//
+// The target is what a hook call normally costs and the budget is what it must
+// never exceed, so the two findings are told apart by token: each case below
+// trips exactly one of them.
+
+#[test]
+fn a_p50_over_its_target_is_the_target_finding_alone() {
+    let dir = repo("target-over", Some(&agreeing_readme()));
+    record(
+        &dir,
+        &clean_record()
+            .replace("posttool 2.3", "posttool 50")
+            .replace("posttool/p50 2.1", "posttool/p50 11"),
+    );
+    let answer = findings(&dir);
+    assert!(
+        answer.contains("hook measure late"),
+        "a p50 over its target is a finding:\n{answer}"
+    );
+    assert!(
+        !answer.contains("path measure late"),
+        "a p95 of 50 is inside the 100 ms budget:\n{answer}"
+    );
+}
+
+#[test]
+fn a_p95_over_its_budget_is_the_budget_finding_alone() {
+    let dir = repo("target-under", Some(&agreeing_readme()));
+    record(
+        &dir,
+        &clean_record()
+            .replace("posttool 2.3", "posttool 101")
+            .replace("posttool/p50 2.1", "posttool/p50 9"),
+    );
+    let answer = findings(&dir);
+    assert!(
+        answer.contains("path measure late"),
+        "a p95 over its ceiling is a finding:\n{answer}"
+    );
+    assert!(
+        !answer.contains("hook measure late"),
+        "a p50 of 9 is inside the 10 ms target, whatever the p95 reads:\n{answer}"
+    );
+}
+
+#[test]
+fn a_targeted_path_with_no_p50_is_refused() {
+    let dir = repo("target-partial", Some(&agreeing_readme()));
+    record(&dir, &clean_record().replace("posttool/p50 2.1\n", ""));
+    let answer = findings(&dir);
+    assert!(
+        answer.contains("path measure partial"),
+        "a targeted arm with no p50 in a present record is a finding:\n{answer}"
+    );
+    assert!(!answer.contains("hook measure late"), "{answer}");
+}
+
+#[test]
+fn a_readme_publishing_a_different_target_is_refused() {
+    let dir = repo(
+        "readme-target-disagrees",
+        Some(&agreeing_readme().replace(
+            "| `hook` | adjudication | 2.8 ms | 3.0 ms | ≤ 10 ms | ≤ 100 ms |",
+            "| `hook` | adjudication | 2.8 ms | 3.0 ms | ≤ 20 ms | ≤ 100 ms |",
+        )),
+    );
+    record(&dir, &clean_record());
+    let answer = findings(&dir);
+    assert!(
+        answer.contains("prose state wrong"),
+        "the published target and the enforced one must agree:\n{answer}"
+    );
+}
+
 #[test]
 fn no_record_at_all_is_silent() {
     // ABSENT IS NOT INCOMPLETE, and this is the case that keeps every checkout
@@ -338,13 +452,33 @@ fn a_record_does_not_survive_its_subject() {
     );
 }
 
+/// A commit hook is a batten hook (CLOUD-2789): each default commit-time step
+/// over the 100 ms ceiling is refused, as any invocation path is.
+///
+/// Fails by: a step's row dropped from `perf-assert`'s budgets, which leaves
+/// its arm measured and never gated.
+#[test]
+fn a_commit_time_step_over_its_budget_is_refused() {
+    for step in COMMIT_STEPS {
+        let dir = repo(&format!("commit-over-{step}"), Some(&agreeing_readme()));
+        let over = clean_record().replace(&format!("\n{step} 9.0\n"), &format!("\n{step} 150\n"));
+        assert_ne!(over, clean_record(), "the clean record carries {step}");
+        record(&dir, &over);
+        let answer = findings(&dir);
+        assert!(
+            answer.contains("path measure late"),
+            "{step} over its ceiling is a finding:\n{answer}"
+        );
+    }
+}
+
 #[test]
 fn a_readme_publishing_a_different_budget_is_refused() {
     let dir = repo(
         "readme-disagrees",
         Some(&agreeing_readme().replace(
-            "| `noop` | process start | 2.1 ms | 2.4 ms | ≤ 100 ms |",
-            "| `noop` | process start | 2.1 ms | 2.4 ms | ≤ 50 ms |",
+            "| `noop` | process start | 2.1 ms | 2.4 ms | — | ≤ 100 ms |",
+            "| `noop` | process start | 2.1 ms | 2.4 ms | — | ≤ 50 ms |",
         )),
     );
     record(&dir, &clean_record());
@@ -360,7 +494,7 @@ fn a_readme_with_no_row_for_a_budgeted_path_is_refused() {
     let dir = repo(
         "readme-short",
         Some(&agreeing_readme().replace(
-            "| `wired` | as settings.json invokes it | 8.0 ms | 8.4 ms | ≤ 100 ms |\n",
+            "| `wired` | as settings.json invokes it | 8.0 ms | 8.4 ms | ≤ 10 ms | ≤ 100 ms |\n",
             "",
         )),
     );
@@ -424,9 +558,13 @@ fn measured() -> String {
         ("passthrough", "2.2"),
         ("posttool", "2.3"),
         ("stop", "2.6"),
+        ("session-start", "4.1"),
         ("wired", "8.4"),
+        ("hook-offbox", "3.2"),
+        ("posttool-offbox", "2.6"),
     ]
-    .iter()
+    .into_iter()
+    .chain(COMMIT_STEPS.map(|step| (step, "9.0")))
     .fold(String::new(), |mut lines, (path, p95)| {
         let _ = writeln!(lines, "path={path} p50=1.9 p95={p95} mean=2.0 runs=30");
         lines
@@ -437,7 +575,7 @@ fn measured() -> String {
 fn record_picked(dir: &Path, lines: &str) -> std::process::Output {
     run_with_stdin(
         dir,
-        &["record", "tool", "perf-p95", "--pick", "path=p95"],
+        &["record", "tool", "perf-p95", "--pick", "path=p95,p50"],
         lines,
     )
 }

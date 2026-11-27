@@ -18,16 +18,16 @@
 //! the deciding path rather than counting. Those are properties of the compiled
 //! binary.
 //
-// carried: mise-tasks/ci-slow-needed.sh crates/batten/src/ci.rs kind:verb crates/batten/tests/it/ci_slow_needed.rs runs:mise+run+ci-slow-needed
-// carried: tests/ci-slow-needed.bats crates/batten/src/ci.rs kind:verb crates/batten/tests/it/ci_slow_needed.rs
+// carried: mise-tasks/ci-slow-needed.sh crates/batten-base/src/ci.rs kind:verb crates/batten/tests/it/ci_slow_needed.rs runs:mise+run+ci-slow-needed
+// carried: tests/ci-slow-needed.bats crates/batten-base/src/ci.rs kind:verb crates/batten/tests/it/ci_slow_needed.rs
 //
-// carried: "a crates change still needs the slow tier" crates/batten/src/ci.rs
-// carried: "a memories-only diff does not need the slow tier" crates/batten/src/ci.rs
-// carried: "the bot config is inert too — the diff that bought an 18-minute run" crates/batten/src/ci.rs
-// carried: "ONE non-inert path in a mostly-inert diff still needs the tier" crates/batten/src/ci.rs
-// carried: "an empty diff is could-not-look, not a clean skip" crates/batten/src/ci.rs kind:verb crates/batten/tests/it/ci_slow_needed.rs runs:mise+run+ci-slow-needed
-// carried: "no base revision refuses rather than guessing" crates/batten/src/ci.rs kind:verb crates/batten/tests/it/ci_slow_needed.rs runs:mise+run+ci-slow-needed
-// carried: "output is a pointer — no file contents echoed" crates/batten/src/ci.rs kind:verb crates/batten/tests/it/ci_slow_needed.rs runs:mise+run+ci-slow-needed
+// carried: "a crates change still needs the slow tier" crates/batten-base/src/ci.rs
+// carried: "a memories-only diff does not need the slow tier" crates/batten-base/src/ci.rs
+// carried: "the bot config is inert too — the diff that bought an 18-minute run" crates/batten-base/src/ci.rs
+// carried: "ONE non-inert path in a mostly-inert diff still needs the tier" crates/batten-base/src/ci.rs
+// carried: "an empty diff is could-not-look, not a clean skip" crates/batten-base/src/ci.rs kind:verb crates/batten/tests/it/ci_slow_needed.rs runs:mise+run+ci-slow-needed
+// carried: "no base revision refuses rather than guessing" crates/batten-base/src/ci.rs kind:verb crates/batten/tests/it/ci_slow_needed.rs runs:mise+run+ci-slow-needed
+// carried: "output is a pointer — no file contents echoed" crates/batten-base/src/ci.rs kind:verb crates/batten/tests/it/ci_slow_needed.rs runs:mise+run+ci-slow-needed
 // changed: "the probe mode holds the inert list to both directions" policy/ci-slow-inert.rego the probes are unchanged and both directions survive — a live path declared inert, and an inert path no longer covered — but they are a rule over declared config rather than a flag on the program that owns the list, which is what the move from program to `[ci] slow_inert` makes possible
 
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
@@ -38,7 +38,8 @@ use crate::common::{self, Fixture, batten, git_in};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use batten::rules::{self, Rule};
+use batten::config_model::Rule;
+use batten::rules;
 
 /// A repository with one commit to diff against, and a second the checkout sits
 /// on. The config declares the inert list this tree's own does.
@@ -64,7 +65,7 @@ fn a_live_path_needs_the_tier_and_is_named() {
     let output = batten()
         .args(["ci", "slow-needed", "--base", "base"])
         .current_dir(&dir)
-        .output()
+        .streamed_output()
         .expect("run batten ci slow-needed");
 
     assert_eq!(output.status.code(), Some(0), "the tier is needed");
@@ -83,7 +84,7 @@ fn an_all_inert_diff_does_not_need_the_tier() {
     let output = batten()
         .args(["ci", "slow-needed", "--base", "base"])
         .current_dir(&dir)
-        .output()
+        .streamed_output()
         .expect("run batten ci slow-needed");
 
     assert_eq!(
@@ -102,7 +103,7 @@ fn an_empty_diff_is_could_not_look_rather_than_a_clean_skip() {
     let output = batten()
         .args(["ci", "slow-needed", "--base", "HEAD"])
         .current_dir(&dir)
-        .output()
+        .streamed_output()
         .expect("run batten ci slow-needed");
 
     assert_eq!(output.status.code(), Some(3), "could-not-look, not clean");
@@ -118,7 +119,7 @@ fn a_base_that_does_not_resolve_refuses_rather_than_guessing() {
     let output = batten()
         .args(["ci", "slow-needed", "--base", "no-such-rev"])
         .current_dir(&dir)
-        .output()
+        .streamed_output()
         .expect("run batten ci slow-needed");
 
     assert_ne!(
@@ -141,7 +142,7 @@ fn a_head_carrying_the_checkouts_tree_answers_the_plain_question() {
     let output = batten()
         .args(["ci", "slow-needed", "--base", "base", "--head", "HEAD"])
         .current_dir(&dir)
-        .output()
+        .streamed_output()
         .expect("run batten ci slow-needed");
 
     assert_eq!(
@@ -160,7 +161,7 @@ fn a_head_the_checkout_is_not_standing_on_is_refused_rather_than_answered() {
     let output = batten()
         .args(["ci", "slow-needed", "--base", "base", "--head", "base"])
         .current_dir(&dir)
-        .output()
+        .streamed_output()
         .expect("run batten ci slow-needed");
 
     assert_eq!(

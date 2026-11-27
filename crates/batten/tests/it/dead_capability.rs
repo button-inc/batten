@@ -40,7 +40,8 @@ use crate::common;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use batten::rules::{self, Rule};
+use batten::config_model::Rule;
+use batten::rules;
 
 /// The predicate id the module declares — NOT the `[[rule]]` id, which is
 /// `verb reach other`. The two differ, and the difference is load-bearing for the
@@ -78,12 +79,29 @@ fn decl(verb: &str) -> Vec<String> {
 /// NO HAND-ROLLED `git init` — [`common::init_repo`] copies the one template the
 /// whole suite shares (CLOUD-1419).
 fn repo(name: &str, before: &[String], after: &[String], callers: &[(&str, &str)]) -> PathBuf {
+    repo_at(name, TABLE, before, after, callers)
+}
+
+/// The verb table's path, and the path it had before CLOUD-2789 moved it.
+const TABLE: &str = "crates/batten/src/surface_table.rs";
+const FORMER: &str = "crates/batten/src/surface.rs";
+
+/// [`repo`] with the committed side at `base_at`: [`FORMER`] is a base from
+/// before the table moved, and the working side is always at [`TABLE`].
+fn repo_at(
+    name: &str,
+    base_at: &str,
+    before: &[String],
+    after: &[String],
+    callers: &[(&str, &str)],
+) -> PathBuf {
     let root = common::scratch(name);
     common::init_repo(&root);
 
-    let surface = root.join("crates/batten/src/surface.rs");
+    let base = root.join(base_at);
+    let surface = root.join(TABLE);
     fs::create_dir_all(surface.parent().expect("a parent")).expect("scratch parent");
-    fs::write(&surface, join(before)).expect("seed the committed side");
+    fs::write(&base, join(before)).expect("seed the committed side");
     for (path, body) in callers {
         let at = root.join(path);
         fs::create_dir_all(at.parent().expect("a parent")).expect("caller parent");
@@ -93,6 +111,12 @@ fn repo(name: &str, before: &[String], after: &[String], callers: &[(&str, &str)
     common::git_in(&root, &["commit", "--quiet", "-m", "base"]);
     common::pin_origin_main(&root);
 
+    // The former file stays, holding what the table left behind, as the real
+    // tree's `surface.rs` does: the engine keeps base lines for an edited path.
+    if base != surface {
+        fs::write(&base, "pub use crate::surface_table::*;\n")
+            .expect("move the table off its former path");
+    }
     fs::write(&surface, join(after)).expect("write the working side");
 
     install_module(&root);
@@ -125,9 +149,9 @@ fn row() -> Rule {
         "kind": "policy",
         "scope": "tree",
         "base": "origin/main",
-        "delta_sources": ["crates/batten/src/surface.rs"],
+        "delta_sources": [TABLE, FORMER],
         "line_sources": [
-            "crates/batten/src/surface.rs",
+            TABLE,
             "mise-tasks/**",
             ".github/workflows/*.yml",
             ".claude/**",
@@ -246,6 +270,26 @@ fn a_branch_that_adds_a_wired_verb_is_clean() {
     );
 }
 
+/// A verb whose output a task captures with `$(…)` is called: the `)` closing
+/// the substitution is the call's tail, as a space or a quote is. Fails by:
+/// `)` dropped from `CALL_TAIL`, which refused every caller written that way.
+#[test]
+fn a_verb_called_inside_a_command_substitution_is_reached() {
+    let root = repo(
+        "dead-capability-substituted",
+        &[],
+        &decl("mutate jobs"),
+        &[(
+            "mise.toml",
+            "run = \"jobs=$(cargo run --quiet -p batten -- mutate jobs) && cargo mutants --jobs $jobs\"\n",
+        )],
+    );
+    assert!(
+        predicates(&root).is_empty(),
+        "a verb called inside $(...) is reached"
+    );
+}
+
 /// An ADDED verb with no caller but a declaration. This is the parallel-verb
 /// state CLOUD-1335 argued for, and refusing it outright is what would push an
 /// author to wire a fake caller.
@@ -282,6 +326,33 @@ fn a_branch_that_adds_an_unreached_verb_is_refused() {
         vec![UNREACHED.to_owned()],
         "under its own declared class"
     );
+}
+
+/// THE MOVE IS NOT AN ADD (CLOUD-2789): over a base from before the table
+/// moved, a verb the former path already declared is not new, and the engine
+/// has to fill `base-lines` from the former path for the module to see it.
+#[test]
+fn a_verb_the_former_table_declared_survives_the_move() {
+    let verb = decl("lease acquire");
+    let root = repo_at("dead-capability-moved", FORMER, &verb, &verb, &[]);
+    assert!(
+        predicates(&root).is_empty(),
+        "a pre-existing unreached verb is not refused by the move: {:?}",
+        predicates(&root)
+    );
+}
+
+/// AND THE FALLBACK IS NOT A PASS: a verb the former table lacked is new.
+#[test]
+fn a_verb_added_across_the_move_is_refused() {
+    let root = repo_at(
+        "dead-capability-moved-added",
+        FORMER,
+        &[],
+        &decl("lease acquire"),
+        &[],
+    );
+    assert_eq!(predicates(&root), vec![UNREACHED.to_owned()]);
 }
 
 /// A COMMENT IS NOT A CALL SITE. The row's own measurement is that every textual

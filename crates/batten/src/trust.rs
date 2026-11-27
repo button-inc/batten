@@ -59,425 +59,14 @@
 //! Every comparison is key-local and order-independent, so the report is a
 //! deterministic function of the two configs and nothing else.
 
+use crate::rules::RuleExt as _;
+use crate::waiver::WaiverExt as _;
 use std::collections::BTreeSet;
-use std::path::Path;
 
-use anyhow::Result;
-
-use crate::UsageError;
-use crate::config::{self, Config, Strictness};
-use crate::git;
-use crate::rules::{Rule, RuleKind};
+use crate::config_model::{Config, Strictness};
+use crate::config_model::{Rule, RuleKind};
 use crate::severity::RuleSeverity;
-use crate::waiver;
-
-/// Load the committed authority from a git ref instead of the working tree.
-///
-/// The strict reading, and the one every caller that must not degrade keeps:
-/// both unreadable states collapse into one refusal. [`load`] is the same read
-/// with the states returned as values, for the two callers that implement §4's
-/// lifecycle.
-///
-/// # Errors
-///
-/// Returns a [`crate::UsageError`] (→ exit `1`) when the ref is unknown, the
-/// config is absent at that ref, or it fails to parse — every one a statement
-/// about the *invocation*, never a policy verdict.
-pub fn load_base(dir: &Path, reference: &str) -> Result<Config> {
-    match load(dir, reference, OfflineFallback::Refuse)? {
-        Load::Loaded(loaded) => Ok(loaded.config),
-        Load::RefUnreachable { reference } => Err(UsageError::raise(format!(
-            "cannot resolve {reference} in this repository"
-        ))),
-        Load::AbsentAtRef { reference } => Err(UsageError::raise(format!(
-            "{} is absent at {reference}",
-            config::CONFIG_FILE
-        ))),
-    }
-}
-
-/// Where the config a run was judged by actually came from.
-///
-/// Modelled on [`crate::git::Evidence`]: every variant that means "this config
-/// governed the run" names what proves it, and [`Provenance::Pin`] cannot be
-/// spelled without a [`PinEvidence`] — so "degraded, holding no pin" is not a
-/// state this type can represent. [`Pin::verify`] is the only constructor of
-/// that evidence, and it is private to this module.
-#[derive(Debug, Clone, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum Provenance {
-    /// Read from the ref the caller named, at `commit`.
-    Ref { reference: String, commit: String },
-    /// Served from the last validated config, because the ref was unreachable
-    /// and `[trust] offline_fallback` said it may be.
-    Pin(PinEvidence),
-}
-
-/// What a served pin is, and what proves it is the config it claims to be.
-///
-/// The digest is [`crate::identity::surface_fingerprint`] over the one pinned
-/// file — `epoch`'s own hashing, so the pin is checked with the construction
-/// this crate already uses for config bytes rather than a second one. It is
-/// **self-verification**: it catches truncation and corruption between the run
-/// that minted the pin and the run that serves it.
-///
-/// It is deliberately **not** a defence against an attacker who can write
-/// `state_home`, who could recompute the digest over bytes of their choosing.
-/// Closing that is §8's signed content-addressed reference, filed separately;
-/// stating the residual here is what keeps a later reader from mistaking this
-/// for the stronger property.
-///
-/// **The fields are private, and that is the guarantee rather than tidiness.**
-/// Public fields would make this constructible from a literal by anyone, so
-/// [`Provenance::Pin`] would be spellable out of thin air and the promise above
-/// would be prose. [`Pin::verify`] is the only place one is built, exactly as
-/// `git::verdict` is the only place a [`crate::git::Verdict`] is;
-/// `the_pin_evidence_cannot_be_forged` is the source-level gate on it.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PinEvidence {
-    /// The ref this pin was minted for. A pin is served only for the same one.
-    reference: String,
-    /// The commit the pinned bytes were read from.
-    commit: String,
-    /// The digest that verified them, as an opaque token.
-    digest: String,
-}
-
-impl PinEvidence {
-    /// The ref this pin answers for.
-    #[must_use]
-    pub fn reference(&self) -> &str {
-        &self.reference
-    }
-
-    /// The commit the pinned bytes came from.
-    #[must_use]
-    pub fn commit(&self) -> &str {
-        &self.commit
-    }
-
-    /// The digest that verified the pinned bytes.
-    ///
-    /// An opaque token, never the bytes it covers (non-negotiable rule 4).
-    #[must_use]
-    pub fn digest(&self) -> &str {
-        &self.digest
-    }
-}
-
-/// A config that governed a run, and the proof of where it came from.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Loaded {
-    pub config: Config,
-    pub provenance: Provenance,
-}
-
-/// The outcome of loading the base-ref authority.
-///
-/// The shape CLOUD-720 exists to reach: `git::show` already told the two
-/// unreadable states apart, but `Result<Config>` destroyed the distinction at
-/// this boundary, and last-known-good is built entirely on it.
-///
-/// **Only [`Load::RefUnreachable`] may degrade.** A ref that resolves and
-/// declares no `batten.toml` is [`Load::AbsentAtRef`] and refuses in every
-/// configuration — otherwise a branch pointing `--config-from` at a config-less
-/// ref picks its own policy, the exact substitution the flag exists to defeat.
-#[derive(Debug, Clone, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum Load {
-    /// A config governs the run; its [`Provenance`] says which source it is.
-    ///
-    /// Boxed because a whole [`Config`] dwarfs the two refusal arms, and every
-    /// caller of [`load`] pays the enum's size on the path where the ref was
-    /// unreachable too.
-    Loaded(Box<Loaded>),
-    /// The revspec does not resolve here, and no pin was served — either
-    /// because the key is off, or because there is no valid pin for this ref.
-    RefUnreachable { reference: String },
-    /// The ref resolves and carries no `batten.toml`. Never degrades.
-    AbsentAtRef { reference: String },
-}
-
-/// Whether this call is permitted to answer an unreachable ref from a pin.
-///
-/// A parameter rather than a config read inside [`load`], because the answer is
-/// a property of the *call site*: `config epoch --config-from` reads bytes for
-/// every `[epoch] tracked` path and a pin carrying one file cannot answer for
-/// it, so that caller passes [`OfflineFallback::Refuse`] regardless of what any
-/// config says.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum OfflineFallback {
-    /// An unreachable ref refuses. The default everywhere.
-    Refuse,
-    /// An unreachable ref may be answered from a valid pin, if
-    /// `[trust] offline_fallback` is on in the pinned config.
-    Permitted,
-}
-
-/// Load the base-ref authority, with the two unreadable states as values.
-///
-/// On a readable ref this also **mints nothing**: writing the pin is the job of
-/// the run that reaches a verdict ([`record_pin`]), not of the load, because a
-/// config that loaded and then failed the run proved less than "validated".
-///
-/// # Errors
-///
-/// Returns a [`crate::UsageError`] (→ exit `1`) when the ref resolves to
-/// something unreadable, when the config at it fails to parse, or when a pin
-/// exists for this ref and cannot be honoured — see [`Pin::verify`] for why an
-/// unreadable *pin* is loud where an unreadable cache is silent.
-pub fn load(dir: &Path, reference: &str, fallback: OfflineFallback) -> Result<Load> {
-    match git::read_at(dir, reference, config::CONFIG_FILE)? {
-        git::BaseBlob::Found { text, commit } => {
-            // `parse_base`, never `parse`: a ref carries the config the engine
-            // of its day accepted, and a key THIS build has retired must not
-            // make the whole comparison unreadable (`config::RETIRED_KEYS`).
-            let config =
-                config::parse_base(&text, &format!("{reference}:{}", config::CONFIG_FILE))?;
-            Ok(Load::Loaded(Box::new(Loaded {
-                config,
-                provenance: Provenance::Ref {
-                    reference: reference.to_owned(),
-                    commit,
-                },
-            })))
-        }
-        // The one state §4 lets degrade. Everything below still has to hold:
-        // the call site must permit it, a pin must exist for THIS ref, it must
-        // verify, and the pinned config must itself declare the key.
-        git::BaseBlob::RefUnreachable { reference } => {
-            if fallback == OfflineFallback::Refuse {
-                return Ok(Load::RefUnreachable { reference });
-            }
-            let Some(pin) = Pin::read(dir, &reference)? else {
-                return Ok(Load::RefUnreachable { reference });
-            };
-            let (config, evidence) = pin.verify(&reference)?;
-            // THE PINNED CONFIG'S OWN KEY DECIDES, not the working tree's. The
-            // working tree is the change under review; letting it authorise the
-            // fallback would be the branch choosing to be judged offline, which
-            // is the substitution `--config-from` exists to defeat.
-            if !offline_fallback(&config) {
-                return Ok(Load::RefUnreachable { reference });
-            }
-            Ok(Load::Loaded(Box::new(Loaded {
-                config,
-                provenance: Provenance::Pin(evidence),
-            })))
-        }
-        // Never degrades, in any configuration. There is no branch here to add
-        // one to, which is the point of splitting the states rather than adding
-        // a flag to one.
-        git::BaseBlob::AbsentAtRef { reference, .. } => Ok(Load::AbsentAtRef { reference }),
-    }
-}
-
-/// Is `[trust] offline_fallback` on in this config?
-///
-/// An absent `[trust]` table is the strict answer, so the default and the
-/// missing table agree by construction rather than by two matching literals.
-#[must_use]
-pub fn offline_fallback(config: &Config) -> bool {
-    config
-        .trust
-        .as_ref()
-        .is_some_and(|trust| trust.offline_fallback)
-}
-
-/// The pin's file name inside the per-repository state directory.
-///
-/// Beside `epoch.json` and `store.json`, and deliberately **not** part of
-/// CLOUD-232's cache contract: same directory, different file, different
-/// failure semantics. The epoch cache may fail silently because an optimization
-/// that can refuse the answer is a defect; a pinned *policy* is the inverse.
-const PIN_FILE: &str = "trust-pin.json";
-
-/// The pin format's version. An unrecognised value is refused, not ignored.
-const PIN_SCHEMA: u32 = 1;
-
-/// The last validated base-ref config, as it sits on disk.
-///
-/// One ref per pin, named inside the record rather than encoded in the file
-/// name: a ref is `/`-separated and turning one into a filename would invent a
-/// sanitisation scheme, and a pin minted for `origin/main` must not answer for
-/// `origin/release`.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-struct Pin {
-    schema: u32,
-    reference: String,
-    commit: String,
-    digest: String,
-    config: String,
-}
-
-impl Pin {
-    /// This repository's pin file, or `None` when no state directory resolves.
-    ///
-    /// Canonicalized first for `epoch::cache_path`'s reason: callers reach here
-    /// with `Path::new(".")`, whose final component is `None`, so
-    /// [`crate::state::derive_repo_name`] would refuse it.
-    fn path(dir: &Path) -> Option<std::path::PathBuf> {
-        let absolute = std::fs::canonicalize(dir).ok()?;
-        crate::state::repo_state_dir(&absolute)
-            .ok()
-            .map(|state| state.join(PIN_FILE))
-    }
-
-    /// The pin recorded for `reference`, if there is one.
-    ///
-    /// **Absent is `None`; unreadable is an error.** The asymmetry is the whole
-    /// difference from the epoch cache one file over: a missing pin means this
-    /// clone has never validated that ref, which is an ordinary state that
-    /// resolves to a refusal. A pin that exists and cannot be read is a
-    /// *policy* artifact this run cannot account for, and skipping it would
-    /// turn a corrupt file into a silent strict-mode run — safe here, but the
-    /// same code path is what a later reader would copy.
-    ///
-    /// # Errors
-    ///
-    /// Returns a [`crate::UsageError`] (→ exit `1`) when the file exists and
-    /// cannot be read or parsed.
-    fn read(dir: &Path, reference: &str) -> Result<Option<Self>> {
-        let Some(path) = Self::path(dir) else {
-            return Ok(None);
-        };
-        let text = match std::fs::read_to_string(&path) {
-            Ok(text) => text,
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-            Err(_) => {
-                return Err(UsageError::raise(format!(
-                    "the offline config pin at {} cannot be read",
-                    path.display()
-                )));
-            }
-        };
-        let pin: Pin = serde_json::from_str(&text).map_err(|_| {
-            UsageError::raise(format!(
-                "the offline config pin at {} is not a pin this build can read",
-                path.display()
-            ))
-        })?;
-        // A pin minted for another ref is not this ref's answer, and a pin from
-        // a schema this build does not know is not readable. Both are ABSENT
-        // rather than corrupt: nothing was tampered with, there is simply no
-        // pin here for this question.
-        if pin.schema != PIN_SCHEMA || pin.reference != reference {
-            return Ok(None);
-        }
-        Ok(Some(pin))
-    }
-
-    /// Check the pinned bytes against their digest and parse them.
-    ///
-    /// The only constructor of [`PinEvidence`], which is what makes
-    /// [`Provenance::Pin`] unspellable without a pin that verified — the same
-    /// construction `git::verdict` uses to keep a landed verdict from existing
-    /// without its evidence.
-    ///
-    /// # Errors
-    ///
-    /// Returns a [`crate::UsageError`] (→ exit `1`) when the digest does not
-    /// match the bytes, or when the bytes do not parse as a config. Both refuse
-    /// rather than falling through to the strict path: a pin that fails its own
-    /// check is a fact about this clone's state that the operator has to see.
-    fn verify(self, reference: &str) -> Result<(Config, PinEvidence)> {
-        let computed = pin_digest(&self.config);
-        if computed != self.digest {
-            return Err(UsageError::raise(format!(
-                "the offline config pin for {reference} does not match its digest"
-            )));
-        }
-        let config = config::parse_base(&self.config, &format!("pin:{reference}"))?;
-        Ok((
-            config,
-            PinEvidence {
-                reference: self.reference,
-                commit: self.commit,
-                digest: self.digest,
-            },
-        ))
-    }
-}
-
-/// The digest a pin is verified against: `epoch`'s hashing over the one file.
-///
-/// [`crate::identity::surface_fingerprint`] rather than a bare `sha256`, so the
-/// pin is checked with the domain-tagged construction this crate already uses
-/// for config bytes. It coincides with `config_epoch` only for the default
-/// `[epoch] tracked` list; it is used here as a self-integrity check, never as
-/// an epoch.
-fn pin_digest(config: &str) -> String {
-    crate::identity::surface_fingerprint(&[(
-        config::CONFIG_FILE.to_owned(),
-        config.as_bytes().to_vec(),
-    )])
-    .to_hex()
-}
-
-/// Record the config a run was judged by, so a later run with an unreachable
-/// ref has a last-known-good to serve.
-///
-/// Called by the run that **reached a verdict**, never by the load: "validated"
-/// is scoped to what a single run already proved, and a config that parsed and
-/// then failed the run proved less than that.
-///
-/// Two things it deliberately does not do. It does not mint from a run that was
-/// itself served from a pin — that would let one validation refresh itself
-/// forever — and it does not fail the run it is called from. The second is the
-/// only place this shares the epoch cache's posture, and for a different
-/// reason: the verdict is already computed and correct, so refusing to publish
-/// it over a full disk would discard an answer to protect a future one.
-pub fn record_pin(dir: &Path, loaded: &Loaded) {
-    let Provenance::Ref { reference, commit } = &loaded.provenance else {
-        return;
-    };
-    let Ok(text) = toml::to_string(&loaded.config) else {
-        return;
-    };
-    let Some(path) = Pin::path(dir) else { return };
-    let Some(parent) = path.parent() else { return };
-    if std::fs::create_dir_all(parent).is_err() {
-        return;
-    }
-    let pin = Pin {
-        schema: PIN_SCHEMA,
-        reference: reference.clone(),
-        commit: commit.clone(),
-        digest: pin_digest(&text),
-        config: text,
-    };
-    let Ok(json) = serde_json::to_string_pretty(&pin) else {
-        return;
-    };
-    // Temp file plus rename inside the state directory, the construction
-    // `store::write_record` uses: a concurrent reader sees the old pin or the
-    // new one, never a torn one — which `Pin::read` would refuse loudly.
-    let temp = parent.join(format!("{PIN_FILE}.{}.tmp", std::process::id()));
-    if crate::durable::replace(&temp, format!("{json}\n")).is_err() {
-        return;
-    }
-    if std::fs::rename(&temp, &path).is_err() {
-        let _ = std::fs::remove_file(&temp);
-    }
-}
-
-/// The one line a run served from a pin writes, on the messaging channel.
-///
-/// Shaped like [`config::DEFAULTS_NOTE`]: it names the consequence and the fix,
-/// it is exactly one line, and it goes only to stderr. stdout stays the findings
-/// channel and must be byte-identical to the run that read the ref, which is
-/// also why no `-J` field pairs with this. A silent degrade is what this exists
-/// to make impossible.
-#[must_use]
-pub fn pinned_note(evidence: &PinEvidence) -> String {
-    let commit = evidence.commit();
-    format!(
-        "{} is unreachable; judging by the last validated config, pinned at {} — fetch the ref to \
-         judge by it again",
-        evidence.reference(),
-        &commit[..commit.len().min(12)]
-    )
-}
+use crate::trust_pin::offline_fallback;
 
 /// What kind of weakening a [`Weakening`] is, as a stable identifier.
 ///
@@ -511,7 +100,7 @@ pub enum WeakeningKind {
     /// A waiver's expiry moved later, extending a suppression the base ref had
     /// bounded (CLOUD-721).
     ///
-    /// The identity in [`crate::waiver::Waiver::key`] deliberately omits
+    /// The identity in [`crate::config_model::Waiver::key`] deliberately omits
     /// `expires`, so a base waiver lapsed in 2020 and a working one live until
     /// 2099 are the *same* key and [`added_entries`] sees nothing — while the
     /// second suppresses every finding of its rule and the first suppresses
@@ -1068,9 +657,17 @@ pub enum WeakeningKind {
     /// command key or unit header removed, or a whole manifest dropped is a home
     /// the ban no longer reads — and an exempt glob ADDED is a file it no longer
     /// refuses. The exempt half is the added direction because that list is
-    /// exemptions, `PerfExemptionAdded`'s reason one table over; it is compared
-    /// only where the base declared a census at all, because a census ARRIVING is
-    /// the ban starting to apply, which is a tightening.
+    /// exemptions, `PerfExemptionAdded`'s reason one table over; the homes and
+    /// the exempt list are compared only where the base declared a census.
+    ///
+    /// Two more widen what the ban admits (CLOUD-2628), and both are compared
+    /// against a base with no census too, since the ban judges presence there:
+    /// the EFFECTIVE mode moving from presence to migrate (`mode = "migrate"`
+    /// or a non-empty legacy `exempt`), keyed `census.shell.mode[migrate]`; and
+    /// a `[[census.shell.generated]]` entry whose `(path, check)` pair the base
+    /// did not carry, keyed `census.shell.generated[<path>]`. A legacy census
+    /// moving to a declared `mode = "migrate"` is migrate to migrate, no
+    /// weakening.
     ///
     /// Appended, for the `Ord` reason its neighbours give.
     ShellCensusNarrowed,
@@ -1110,7 +707,7 @@ pub enum WeakeningKind {
 impl WeakeningKind {
     /// Every kind, so anything ranging over the vocabulary is derived rather
     /// than re-typed — the idiom [`crate::effect::Effect::ALL`] and
-    /// [`crate::outputs::Watched::ALL`] already use.
+    /// [`crate::config_model::Watched::ALL`] already use.
     ///
     /// [`CENSUS`] reads this: a kind added here without a field claiming it, or
     /// claimed by two fields, fails the census rather than sitting unattributed.
@@ -1859,6 +1456,14 @@ pub const CENSUS: &[FieldCoverage] = &[
         coverage: Coverage::Compared(&[WeakeningKind::MustLandOnRemoved]),
     },
     FieldCoverage {
+        field: "landed_by",
+        coverage: Coverage::NoMonotoneReading(
+            "who takes the last step is a fact about the repository's process (CLOUD-2656): \
+             `person` drops the refusal of a pushed branch, `agent` sends an agent to a merge a \
+             person-merges repository forbids, so neither direction is a raise",
+        ),
+    },
+    FieldCoverage {
         field: "hook",
         coverage: Coverage::Compared(&[WeakeningKind::HandlerRemoved]),
     },
@@ -2085,7 +1690,7 @@ impl Weakening {
     pub fn line(&self) -> String {
         format!(
             "{}:{} {}→{}",
-            config::CONFIG_FILE,
+            crate::config_model::CONFIG_FILE,
             self.key,
             self.base,
             self.working
@@ -2221,19 +1826,19 @@ pub fn weakenings(base: &Config, working: &Config) -> Vec<Weakening> {
     // The added direction (CLOUD-208). A waiver the base does not carry is a
     // suppression the branch introduced, which is the one shape where "the
     // working tree has more" means "the bar is lower". Keyed by
-    // `crate::waiver::Waiver::key`, so a whole-rule waiver and a path-narrowed
+    // `crate::config_model::Waiver::key`, so a whole-rule waiver and a path-narrowed
     // one are distinct entries rather than one that swallows the other.
     found.extend(added_entries(
         WeakeningKind::WaiverAdded,
         &base
             .waivers
             .iter()
-            .map(waiver::Waiver::key)
+            .map(crate::config_model::Waiver::key)
             .collect::<Vec<_>>(),
         &working
             .waivers
             .iter()
-            .map(waiver::Waiver::key)
+            .map(crate::config_model::Waiver::key)
             .collect::<Vec<_>>(),
     ));
 
@@ -2465,8 +2070,8 @@ fn mint_weakenings(base: &Config, working: &Config) -> Vec<Weakening> {
     // never, changed never — and a branch could disarm a refusal unseen. And its
     // direction is the writer's inverted: removing a marker a deny row reads is
     // exactly what lowers that bar, so the exemption above cannot apply to it.
-    let key = |mint: &crate::mint::Declared| {
-        if mint.mode == crate::mint::MintMode::Clear {
+    let key = |mint: &crate::config_model::MintDeclared| {
+        if mint.mode == crate::config_model::MintMode::Clear {
             format!("mint[{}:clear]", mint.name)
         } else {
             format!("mint[{}]", mint.name)
@@ -2478,7 +2083,9 @@ fn mint_weakenings(base: &Config, working: &Config) -> Vec<Weakening> {
         &ids(working
             .mints
             .iter()
-            .filter(|mint| mint.mode == crate::mint::MintMode::Clear || !arms_only(&mint.name))
+            .filter(|mint| {
+                mint.mode == crate::config_model::MintMode::Clear || !arms_only(&mint.name)
+            })
             .map(key)),
     ));
     for base_mint in &base.mints {
@@ -2578,7 +2185,8 @@ fn perf_exemption_weakenings(base: &Config, working: &Config) -> Vec<Weakening> 
 /// Every home is keyed so a removal names what stopped being read: a workflow
 /// glob by itself, a manifest's command key as `path:key`, its unit header as
 /// `path:header`. The exempt list is compared in the ADDED direction, and only
-/// where the base declared a census — see [`WeakeningKind::ShellCensusNarrowed`].
+/// where the base declared a census; the effective mode and the generated table
+/// are compared against any base — see [`WeakeningKind::ShellCensusNarrowed`].
 fn shell_census_weakenings(base: &Config, working: &Config) -> Vec<Weakening> {
     let kind = WeakeningKind::ShellCensusNarrowed;
     let shell = |config: &Config| {
@@ -2587,19 +2195,22 @@ fn shell_census_weakenings(base: &Config, working: &Config) -> Vec<Weakening> {
             .as_ref()
             .and_then(|census| census.shell.clone())
     };
-    let keys = |census: &crate::census::ShellCensus| -> Vec<String> {
+    let keys = |census: &crate::config_model::ShellCensus| -> Vec<String> {
         census
             .manifests
             .iter()
+            // A carrier's fields, or the row's own keys: a manifest's `run`
+            // reads the same whether its row names `keys = ["run"]` or the
+            // `mise-task` carrier (CLOUD-2627), so the change is no narrowing.
             .flat_map(|manifest| {
                 manifest
-                    .keys
-                    .iter()
+                    .fields()
+                    .into_iter()
                     .map(move |key| format!("{}:{key}", manifest.path))
             })
             .collect()
     };
-    let units = |census: &crate::census::ShellCensus| -> Vec<String> {
+    let units = |census: &crate::config_model::ShellCensus| -> Vec<String> {
         census
             .manifests
             .iter()
@@ -2611,23 +2222,62 @@ fn shell_census_weakenings(base: &Config, working: &Config) -> Vec<Weakening> {
             })
             .collect()
     };
-    let exempt = |census: &crate::census::ShellCensus| -> Vec<String> {
+    let exempt = |census: &crate::config_model::ShellCensus| -> Vec<String> {
         census
             .exempt
             .iter()
             .map(|glob| format!("census.shell.exempt[{glob}]"))
             .collect()
     };
-    let Some(was) = shell(base) else {
-        return Vec::new();
+    // THE TWO ADMISSIONS, compared before the early return below: a base with
+    // no census is judged for presence, so a head that migrates or admits a
+    // generated file is the ban reaching less (CLOUD-2628).
+    let mut found = Vec::new();
+    let migrating = |census: Option<&crate::config_model::ShellCensus>| {
+        census.is_some_and(crate::config_model::ShellCensus::migrating)
     };
-    let now = shell(working).unwrap_or_default();
-    let mut found = removed_entries(
+    let (was_shell, now_shell) = (shell(base), shell(working));
+    if !migrating(was_shell.as_ref()) && migrating(now_shell.as_ref()) {
+        found.push(Weakening::new(
+            kind,
+            "census.shell.mode[migrate]",
+            "absent",
+            "present",
+        ));
+    }
+    let pairs =
+        |census: Option<&crate::config_model::ShellCensus>| -> BTreeSet<(String, Option<String>)> {
+            census
+                .map(|census| {
+                    census
+                        .generated
+                        .iter()
+                        .map(|entry| (entry.path.clone(), entry.check.clone()))
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
+    let was_pairs = pairs(was_shell.as_ref());
+    for (path, check) in pairs(now_shell.as_ref()) {
+        if !was_pairs.contains(&(path.clone(), check)) {
+            found.push(Weakening::new(
+                kind,
+                format!("census.shell.generated[{path}]"),
+                "absent",
+                "present",
+            ));
+        }
+    }
+    let Some(was) = was_shell else {
+        return found;
+    };
+    let now = now_shell.unwrap_or_default();
+    found.extend(removed_entries(
         kind,
         &was.workflows,
         &now.workflows,
         "census.shell.workflows",
-    );
+    ));
     found.extend(removed_entries(
         kind,
         &keys(&was),
@@ -3151,7 +2801,7 @@ fn scalar_weakenings(base: &Config, working: &Config) -> Vec<Weakening> {
 /// Each server `config` governs under any exposed name, with the addresses that
 /// select it: a `permission_aliases` entry some `endpoint_contains` row declares.
 fn governed_aliases(
-    config: Option<&crate::mcp::McpConfig>,
+    config: Option<&crate::config_model::McpConfig>,
 ) -> std::collections::BTreeMap<String, BTreeSet<String>> {
     let mut governed = std::collections::BTreeMap::new();
     let Some(config) = config else {
@@ -3176,11 +2826,9 @@ fn governed_aliases(
 /// Keyed on the effective governed set rather than on the list, so deleting the
 /// alias, deleting its selector and deleting `[mcp]` report the same key: each
 /// leaves `mcp grant --guard` silent on a renamed key the base ref refused.
-//MUTANT-SUITE crates/batten/src/trust.rs
-//MUTANT mcp-alias-loss-unseen|s@^    for (alias, needles) in governed_aliases(base) {$@    for (alias, needles) in governed_aliases(None) {@|losing_a_governed_mcp_name_is_a_weakening
 fn mcp_weakenings(
-    base: Option<&crate::mcp::McpConfig>,
-    working: Option<&crate::mcp::McpConfig>,
+    base: Option<&crate::config_model::McpConfig>,
+    working: Option<&crate::config_model::McpConfig>,
 ) -> Vec<Weakening> {
     let now = governed_aliases(working);
     let mut found = Vec::new();
@@ -3209,8 +2857,6 @@ fn mcp_weakenings(
 /// comparing them has them adjacent.
 /// The `[forge] nothing_graded` statuses `working` declares and `base` does not,
 /// ascending (CLOUD-2080).
-//MUTANT-SUITE crates/batten/src/trust.rs
-//MUTANT nothing-graded-unchecked|s@^        if !before.contains(\&status) {$@        if false {@|widening_nothing_graded_is_a_weakening
 fn nothing_graded_added(base: &Config, working: &Config) -> Vec<u16> {
     // The EFFECTIVE lists, so an absent key (the documented default) and the
     // same list declared explicitly are one reading.
@@ -3332,7 +2978,8 @@ fn verified_by(config: &Config) -> Vec<String> {
 /// Absent and empty reach the same value on purpose: both are could-not-look to
 /// [`crate::lease::decide`], so a comparison that told them apart would report a
 /// weakening where the reader sees no change in posture.
-fn landing_paths(config: &Config) -> Vec<String> {
+#[must_use]
+pub fn landing_paths(config: &Config) -> Vec<String> {
     config
         .lease
         .as_ref()
@@ -3397,7 +3044,7 @@ fn verdict_override_conditions(config: &Config) -> Vec<(String, String)> {
             entry
                 .routes
                 .iter()
-                .filter(|route| route.kind == crate::verdict::RouteKind::Override)
+                .filter(|route| route.kind == crate::preset_catalog::RouteKind::Override)
                 .map(move |route| {
                     (
                         entry.id.clone(),
@@ -3627,7 +3274,7 @@ fn min_version_weakening(base: &Config, working: &Config) -> Option<Weakening> {
 
 /// Waivers whose expiry the working tree pushed further out.
 ///
-/// Paired by [`crate::waiver::Waiver::key`], which is the identity two waivers
+/// Paired by [`crate::config_model::Waiver::key`], which is the identity two waivers
 /// may not share — and which deliberately omits `expires`, so this comparison is
 /// exactly the blind spot that identity leaves: same rule, same path, a date
 /// moved from lapsed to live suppresses everything the base ref reported and
@@ -3637,7 +3284,10 @@ fn min_version_weakening(base: &Config, working: &Config) -> Option<Weakening> {
 /// never against today. A malformed expiry is refused at load, so a pair that
 /// cannot both be parsed is unreachable through the loader and is skipped rather
 /// than guessed at.
-fn waiver_expiry_weakenings(base: &[waiver::Waiver], working: &[waiver::Waiver]) -> Vec<Weakening> {
+fn waiver_expiry_weakenings(
+    base: &[crate::config_model::Waiver],
+    working: &[crate::config_model::Waiver],
+) -> Vec<Weakening> {
     base.iter()
         .filter_map(|row| {
             let other = working.iter().find(|other| other.key() == row.key())?;
@@ -3673,8 +3323,8 @@ fn waiver_expiry_weakenings(base: &[waiver::Waiver], working: &[waiver::Waiver])
 /// `too_many_lines` refused — and the shape [`budget_weakenings`] below already
 /// sets for a table whose weakenings are more than one comparison.
 fn refusal_weakenings(
-    base: Option<&crate::refusal::Ceiling>,
-    working: Option<&crate::refusal::Ceiling>,
+    base: Option<&crate::config_model::Ceiling>,
+    working: Option<&crate::config_model::Ceiling>,
 ) -> Vec<Weakening> {
     let mut found: Vec<Weakening> = Vec::new();
     found.extend(ceiling_raised(
@@ -3694,8 +3344,8 @@ fn refusal_weakenings(
 
 /// Budget sets removed, files or embedded declarations dropped, ceilings raised.
 fn budget_weakenings(
-    base: Option<&crate::budget::Budget>,
-    working: Option<&crate::budget::Budget>,
+    base: Option<&crate::config_model::Budget>,
+    working: Option<&crate::config_model::Budget>,
 ) -> Vec<Weakening> {
     let mut found = Vec::new();
     let Some(base) = base else {
@@ -3749,7 +3399,7 @@ fn budget_weakenings(
 }
 
 /// Each embedded declaration as one entry: the document, then the key in it.
-fn embedded_entries(set: &crate::budget::BudgetSet) -> Vec<String> {
+fn embedded_entries(set: &crate::config_model::BudgetSet) -> Vec<String> {
     set.embedded
         .iter()
         .map(|decl| format!("{}#{}", decl.path, decl.key))
@@ -3888,12 +3538,13 @@ fn ci_weakenings(base: Option<&crate::ci::Ci>, working: Option<&crate::ci::Ci>) 
 /// reviewer needs. The gate refuses an absent table loudly on its own (exit 1),
 /// which is a second signal rather than a reason for this one to stay quiet.
 ///
-/// The `identity` beneath the lists is not compared: which name and email a
-/// repository holds itself accountable to is that repository's own decision, and
-/// two identities cannot be ranked.
+/// The `identity` beneath the lists is not compared, and its REMOVAL is not a
+/// weakening (CLOUD-2659): who answers for a commit is resolved at run time from
+/// the person making it, never from a committed name, so the table is no longer
+/// a repository's decision and its absence ranks below nothing.
 fn attribution_weakenings(
-    base: Option<&crate::attribution::Attribution>,
-    working: Option<&crate::attribution::Attribution>,
+    base: Option<&crate::config_model::Attribution>,
+    working: Option<&crate::config_model::Attribution>,
 ) -> Vec<Weakening> {
     let mut found = Vec::new();
     let Some(base) = base else {
@@ -3915,11 +3566,11 @@ fn attribution_weakenings(
         &keyed("attribution.trailer_allow", &base.trailer_allow),
         &keyed("attribution.trailer_allow", candidate),
     ));
-    found
+    found // the identity is not compared (CLOUD-2659)
 }
 
 /// The three deny lists, keyed as `batten.toml` spells them.
-fn deny_lists(attribution: &crate::attribution::Attribution) -> [(&'static str, &Vec<String>); 3] {
+fn deny_lists(attribution: &crate::config_model::Attribution) -> [(&'static str, &Vec<String>); 3] {
     [
         ("attribution.identity_deny", &attribution.identity_deny),
         ("attribution.trailer_deny", &attribution.trailer_deny),
@@ -3934,8 +3585,8 @@ fn deny_lists(attribution: &crate::attribution::Attribution) -> [(&'static str, 
 /// deleting the table is a silent deactivation rather than a loud refusal. A
 /// class *added* admits a record the ledger used to refuse.
 fn defects_weakenings(
-    base: Option<&crate::defects::Defects>,
-    working: Option<&crate::defects::Defects>,
+    base: Option<&crate::config_model::Defects>,
+    working: Option<&crate::config_model::Defects>,
 ) -> Vec<Weakening> {
     let Some(base) = base else {
         return Vec::new();
@@ -4100,18 +3751,20 @@ fn native_weakenings<'a>(
     base: &'a [Rule],
     working: &'a [Rule],
 ) -> impl Iterator<Item = Weakening> + 'a {
-    crate::rules::NativeGate::ALL.iter().filter_map(|gate| {
-        let was = crate::rules::native_grade(base, *gate);
-        let now = crate::rules::native_grade(working, *gate);
-        (now < was).then(|| {
-            Weakening::new(
-                WeakeningKind::SeverityLowered,
-                format!("native[{}]", gate.as_str()),
-                severity_token(was),
-                severity_token(now),
-            )
+    crate::config_model::NativeGate::ALL
+        .iter()
+        .filter_map(|gate| {
+            let was = crate::rules::native_grade(base, *gate);
+            let now = crate::rules::native_grade(working, *gate);
+            (now < was).then(|| {
+                Weakening::new(
+                    WeakeningKind::SeverityLowered,
+                    format!("native[{}]", gate.as_str()),
+                    severity_token(was),
+                    severity_token(now),
+                )
+            })
         })
-    })
 }
 
 /// Rule columns that are not the rule's predicate, each with why not.
@@ -4330,7 +3983,7 @@ fn column_token(value: &serde_json::Value) -> String {
     if value.is_null() {
         return "absent".to_owned();
     }
-    let digest = crate::receipt::hex_sha256(value.to_string().as_bytes());
+    let digest = crate::digest::sha256_hex(value.to_string().as_bytes());
     format!("sha256:{}", &digest[..12])
 }
 
@@ -4418,6 +4071,7 @@ fn strictness_token(strictness: Strictness) -> String {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+    use crate::config;
 
     fn parse(text: &str) -> Config {
         config::parse(text, "test").unwrap()
@@ -4630,14 +4284,14 @@ mod tests {
     #[test]
     fn lowering_a_rules_severity_is_a_weakening() {
         let base = parse(&format!("version = 1\n{}", rule("r", "deny")));
-        let working = parse(&format!("version = 1\n{}", rule("r", "warn")));
+        let working = parse(&format!("version = 1\n{}", rule("r", "advise")));
         assert_eq!(
             weakenings(&base, &working),
             vec![Weakening::new(
                 WeakeningKind::SeverityLowered,
                 "rule[r].severity",
                 "deny",
-                "warn"
+                "advise"
             )]
         );
     }
@@ -4800,7 +4454,7 @@ mod tests {
     /// for the same reason: the authority on which fields exist is the struct,
     /// and any second list of them is the drift being fixed.
     fn config_fields() -> Vec<&'static str> {
-        let source = include_str!("config.rs");
+        let source = include_str!("config_model.rs");
         let start = source
             .find("pub struct Config {")
             .expect("Config is declared here");
@@ -5080,8 +4734,8 @@ mod tests {
         // And the census deleted outright is every home at once.
         assert_eq!(weakenings(&full, &config("")).len(), 3);
 
-        // THE OTHER DIRECTION. More homes, fewer exemptions, and a census
-        // arriving where there was none are all the ban reaching further.
+        // THE OTHER DIRECTION. More homes and fewer exemptions are the ban
+        // reaching further.
         assert!(weakenings(&census("", "\"boot.sh\"", manifest), &full).is_empty());
         assert!(
             weakenings(
@@ -5090,7 +4744,111 @@ mod tests {
             )
             .is_empty()
         );
-        assert!(weakenings(&config(""), &full).is_empty());
+        // A census arriving WITH an exempt list is not a tightening any more
+        // (CLOUD-2628): no census is presence, and `exempt` reads as migrate.
+        assert_eq!(
+            only(&config(""), &full),
+            Weakening::new(
+                WeakeningKind::ShellCensusNarrowed,
+                "census.shell.mode[migrate]",
+                "absent",
+                "present",
+            )
+        );
+    }
+
+    #[test]
+    fn moving_the_shell_ban_off_presence_is_a_weakening() {
+        // CLOUD-2628. The effective mode is migrate for `mode = "migrate"` or a
+        // non-empty legacy `exempt`, presence otherwise — a base with no census
+        // included, since the ban judges presence there.
+        let census = |body: &str| config(&format!("[census.shell]\n{body}"));
+        let migrate = Weakening::new(
+            WeakeningKind::ShellCensusNarrowed,
+            "census.shell.mode[migrate]",
+            "absent",
+            "present",
+        );
+        let presence = census("workflows = [\"ci/*.yml\"]\n");
+        let declared = census("workflows = [\"ci/*.yml\"]\nmode = \"migrate\"\n");
+        assert_eq!(only(&presence, &declared), migrate);
+        assert_eq!(only(&config(""), &census("exempt = [\"x\"]\n")), migrate);
+        // `exempt = []` is the same as absent: still presence.
+        assert!(
+            weakenings(
+                &presence,
+                &census("workflows = [\"ci/*.yml\"]\nexempt = []\n")
+            )
+            .is_empty()
+        );
+        // Legacy migrate to declared migrate is migrate to migrate.
+        let legacy = census("workflows = [\"ci/*.yml\"]\nexempt = [\"x\"]\n");
+        let both = census("workflows = [\"ci/*.yml\"]\nexempt = [\"x\"]\nmode = \"migrate\"\n");
+        assert!(weakenings(&legacy, &both).is_empty());
+        // And back to presence is the ban reaching further.
+        assert!(weakenings(&declared, &presence).is_empty());
+    }
+
+    #[test]
+    fn admitting_a_generated_file_is_a_weakening() {
+        // CLOUD-2628. A generated entry is the presence ban's only admission, so
+        // a `(path, check)` pair the base did not carry admits shell it refused.
+        let entry = |path: &str, check: &str| {
+            format!(
+                "[[census.shell.generated]]\npath = \"{path}\"\ngenerator = \"gen\"\n\
+                 check = \"{check}\"\n"
+            )
+        };
+        let census = |rows: &[String]| config(&format!("[census.shell]\n{}", rows.concat()));
+        let none = census(&[]);
+        let one = census(&[entry("gen/a.sh", "t.rs::a")]);
+        let added = Weakening::new(
+            WeakeningKind::ShellCensusNarrowed,
+            "census.shell.generated[gen/a.sh]",
+            "absent",
+            "present",
+        );
+        assert_eq!(only(&none, &one), added);
+        assert_eq!(only(&config(""), &one), added);
+        // The same glob held by another test is another admission.
+        assert_eq!(only(&one, &census(&[entry("gen/a.sh", "t.rs::b")])), added);
+        assert!(weakenings(&one, &one).is_empty());
+        assert!(weakenings(&one, &none).is_empty());
+    }
+
+    #[test]
+    fn naming_a_carrier_for_the_keys_it_reads_is_no_narrowing() {
+        // CLOUD-2627: `carrier = "mise-task"` reads `run` and `hk-step` reads
+        // `check`/`fix`, so a row moving from `keys` to its carrier compares
+        // equal, both ways; a carrier reading fewer fields than the keys did is
+        // still a removal.
+        let row = |path: &str, fields: &str| {
+            format!("[[census.shell.manifest]]\npath = \"{path}\"\n{fields}\n")
+        };
+        let census = |rows: &[String]| config(&format!("[census.shell]\n{}", rows.concat()));
+        let keyed = census(&[
+            row("m.toml", "keys = [\"run\"]"),
+            row("h.pkl", "keys = [\"check\", \"fix\"]"),
+        ]);
+        let carried = census(&[
+            row("m.toml", "carrier = \"mise-task\""),
+            row("h.pkl", "carrier = \"hk-step\""),
+        ]);
+        assert!(weakenings(&keyed, &carried).is_empty());
+        assert!(weakenings(&carried, &keyed).is_empty());
+        let wider = census(&[
+            row("m.toml", "keys = [\"run\", \"cmd\"]"),
+            row("h.pkl", "keys = [\"check\", \"fix\"]"),
+        ]);
+        assert_eq!(
+            only(&wider, &carried),
+            Weakening::new(
+                WeakeningKind::ShellCensusNarrowed,
+                "census.shell.manifest[m.toml:cmd]",
+                "present",
+                "absent",
+            )
+        );
     }
 
     #[test]
@@ -6099,7 +5857,11 @@ mod tests {
         // exempts — and the failure direction is worse here: an exemption that
         // names nothing merely never fires, while a NARROWING key that names
         // nothing is a name a later column could accidentally acquire.
-        let source = concat!(include_str!("rules.rs"), include_str!("facts.rs"));
+        // `Rule` and its rows moved to `config_model` (CLOUD-2789 phase 2).
+        let source = concat!(
+            include_str!("config_model.rs"),
+            include_str!("../../batten-facts/src/facts.rs")
+        );
         for (key, reason) in RULE_NARROWING_ON_ARRIVAL {
             assert!(
                 source.contains(&format!("pub {key}:")),
@@ -6164,94 +5926,8 @@ mod tests {
         let weakening = Weakening::new(WeakeningKind::ReadyCutoverRelaxed, "k", "a", "b");
         assert_eq!(
             crate::output::Line::line(&weakening),
-            format!("{}:k a→b", config::CONFIG_FILE)
+            format!("{}:k a→b", crate::config_model::CONFIG_FILE)
         );
-    }
-
-    /// A pin is recorded for the ref a run read, read back only for that ref,
-    /// verified against its digest, and noted by its ref and short commit.
-    #[test]
-    fn a_recorded_pin_answers_its_own_ref_and_refuses_tampering() {
-        crate::testing::contain_state(&crate::scratch::scratch("trust-data"));
-        let dir = crate::scratch::scratch("trust-pin-roundtrip");
-        let path = Pin::path(&dir).expect("a state directory resolves");
-        assert!(path.ends_with(PIN_FILE), "{}", path.display());
-        let _ = std::fs::remove_file(&path);
-        assert!(
-            Pin::read(&dir, "origin/main").unwrap().is_none(),
-            "no pin yet"
-        );
-
-        let loaded = Loaded {
-            config: config("[trust]\noffline_fallback = true\n"),
-            provenance: Provenance::Ref {
-                reference: "origin/main".to_owned(),
-                commit: "0123456789abcdef0123".to_owned(),
-            },
-        };
-        record_pin(&dir, &loaded);
-        assert!(Pin::read(&dir, "origin/other").unwrap().is_none());
-        let pin = Pin::read(&dir, "origin/main").unwrap().expect("the pin");
-        let (pinned, evidence) = pin.clone().verify("origin/main").unwrap();
-        assert!(offline_fallback(&pinned));
-        assert_eq!(evidence.reference(), "origin/main");
-        assert_eq!(evidence.commit(), "0123456789abcdef0123");
-        assert_eq!(evidence.digest(), pin.digest);
-        assert_eq!(evidence.digest(), pin_digest(&pin.config));
-        assert_eq!(
-            pinned_note(&evidence),
-            "origin/main is unreachable; judging by the last validated config, pinned at \
-             0123456789ab — fetch the ref to judge by it again"
-        );
-
-        let mut tampered = pin;
-        tampered.config.push_str("\n# edited\n");
-        assert!(tampered.verify("origin/main").is_err());
-
-        std::fs::remove_file(&path).unwrap();
-        std::fs::create_dir_all(&path).unwrap();
-        assert!(
-            Pin::read(&dir, "origin/main").is_err(),
-            "an unreadable pin is loud"
-        );
-        std::fs::remove_dir_all(&path).unwrap();
-    }
-
-    /// An unreachable ref is answered from its pin only where the call permits
-    /// it and the pinned config declares the fallback.
-    #[test]
-    fn an_unreachable_ref_is_served_from_its_pin_only_where_both_permit() {
-        crate::testing::contain_state(&crate::scratch::scratch("trust-data"));
-        let dir = crate::scratch::scratch("trust-pin-load");
-        crate::gitwrite::init_on_main(&dir).unwrap();
-        let reference = "origin/nowhere";
-        let pin = |extra: &str| {
-            record_pin(
-                &dir,
-                &Loaded {
-                    config: config(extra),
-                    provenance: Provenance::Ref {
-                        reference: reference.to_owned(),
-                        commit: "c0ffee".to_owned(),
-                    },
-                },
-            );
-        };
-        pin("[trust]\noffline_fallback = true\n");
-        assert!(matches!(
-            load(&dir, reference, OfflineFallback::Refuse).unwrap(),
-            Load::RefUnreachable { .. }
-        ));
-        let Load::Loaded(served) = load(&dir, reference, OfflineFallback::Permitted).unwrap()
-        else {
-            panic!("a permitted call with a valid pin is served from it");
-        };
-        assert!(matches!(served.provenance, Provenance::Pin(_)));
-        pin("");
-        assert!(matches!(
-            load(&dir, reference, OfflineFallback::Permitted).unwrap(),
-            Load::RefUnreachable { .. }
-        ));
     }
 
     #[test]
@@ -6334,7 +6010,7 @@ mod tests {
         // The fail-safe direction one level down from `CENSUS`: a column added to
         // `Rule` is compared until somebody exempts it here, so this only has to
         // keep the exemptions honest.
-        let source = include_str!("rules.rs");
+        let source = include_str!("config_model.rs");
         let start = source
             .find("pub struct Rule {")
             .expect("Rule is declared here");
@@ -6600,6 +6276,16 @@ mod tests {
     const ATTRIBUTION: &str = "\n[attribution]\nidentity_deny = [\"vendor\", \"other\"]\ntrailer_deny = [\"Co-Made-By\"]\nbody_deny = [\"advert\"]\ntrailer_allow = [\"Signed-off-by\"]\n\n[attribution.identity]\nname = \"A Person\"\nemail = \"person@example.invalid\"\n";
 
     #[test]
+    fn removing_the_committed_identity_is_not_a_weakening() {
+        let without = ATTRIBUTION
+            .split("\n[attribution.identity]")
+            .next()
+            .unwrap_or_default();
+        assert_ne!(without, ATTRIBUTION);
+        assert!(weakenings(&config(ATTRIBUTION), &config(without)).is_empty());
+    }
+
+    #[test]
     fn shrinking_a_deny_list_or_widening_the_carve_out_is_a_weakening() {
         let base = config(ATTRIBUTION);
         assert_eq!(
@@ -6809,45 +6495,6 @@ mod tests {
     }
 
     #[test]
-    fn the_pin_evidence_cannot_be_forged() {
-        // THE GATE THAT SHIPS WITH THE CLAIM (non-negotiable rule 2, CLOUD-720).
-        // `Provenance`'s doc says a degraded load "is not a state this type can
-        // represent" — and that is only true while `PinEvidence` is
-        // unconstructible from a literal. It shipped with three `pub` fields, so
-        // the promise was prose: any caller could have written
-        // `Provenance::Pin(PinEvidence { .. })` out of nothing and produced a
-        // run claiming a validation no pin ever backed.
-        //
-        // Private fields move the guarantee to the crate boundary, which is
-        // where the forgery risk is: inside this module the one construction
-        // site is `Pin::verify`, and it is reviewable beside the check it
-        // performs. `git.rs`'s `no_ancestry_decides_merged_ness` is the shape —
-        // scan this file's own source, because the decision lives here and
-        // exempting it would gut the gate.
-        //
-        // The search token is assembled so this test's own source is not a
-        // match, and the slice starts AFTER the opening brace: the declaration
-        // line is itself `pub`, and reading it as a field is the exact defect
-        // this gate had on its first run.
-        let source = include_str!("trust.rs");
-        let needle = ["pub struct ", "PinEvidence {"].concat();
-        let open = source
-            .find(&needle)
-            .expect("the evidence type is declared here")
-            + needle.len();
-        let body = &source[open..];
-        let fields = &body[..body.find("\n}").expect("the declaration is closed")];
-        for line in fields.lines() {
-            assert!(
-                !line.trim_start().starts_with("pub "),
-                "PinEvidence must keep its fields private, or `Provenance::Pin` becomes \
-                 spellable from a literal outside this module and the type-level guarantee is \
-                 prose. Offending field: {line}"
-            );
-        }
-    }
-
-    #[test]
     fn every_kind_is_exercised_by_a_case_in_this_module() {
         // Rules ship with their mechanism (non-negotiable rule 2): a kind with
         // no case is a comparison nothing shows can fire, which is how a
@@ -6871,13 +6518,13 @@ mod tests {
         // tightening the token ceiling while raising the repeat allowance is
         // still a weakening, and a single comparison would let it through.
         let mut base = Config::declaring_nothing();
-        base.hook_output = Some(crate::hookcost::Ceiling {
+        base.hook_output = Some(crate::config_model::HookCeiling {
             max_tokens: 4_000,
             max_repeats: 1,
         });
 
         let mut mixed = Config::declaring_nothing();
-        mixed.hook_output = Some(crate::hookcost::Ceiling {
+        mixed.hook_output = Some(crate::config_model::HookCeiling {
             max_tokens: 100,
             max_repeats: 9,
         });
@@ -6922,10 +6569,10 @@ mod tests {
     fn raising_or_dropping_the_advisory_ceiling_is_a_weakening() {
         // The channel budget's own ratchet, and the kind's exercising case.
         let mut base = Config::declaring_nothing();
-        base.advisory = Some(crate::advisory::Channel { max_tokens: 400 });
+        base.advisory = Some(crate::config_model::Channel { max_tokens: 400 });
 
         let mut raised = Config::declaring_nothing();
-        raised.advisory = Some(crate::advisory::Channel { max_tokens: 4000 });
+        raised.advisory = Some(crate::config_model::Channel { max_tokens: 4000 });
         assert_eq!(
             only(&base, &raised),
             Weakening::new(
@@ -6954,13 +6601,13 @@ mod tests {
         // table. Both are one kind, because `ceiling_raised` already treats an
         // absent working value as the widest raise there is.
         let mut base = Config::declaring_nothing();
-        base.refusal = Some(crate::refusal::Ceiling {
+        base.refusal = Some(crate::config_model::Ceiling {
             max_tokens: 24,
             first_sighting_max_tokens: None,
         });
 
         let mut raised = Config::declaring_nothing();
-        raised.refusal = Some(crate::refusal::Ceiling {
+        raised.refusal = Some(crate::config_model::Ceiling {
             max_tokens: 200,
             first_sighting_max_tokens: None,
         });
@@ -6991,12 +6638,12 @@ mod tests {
         // it exists to protect: tightening a ceiling is the ratchet turning the
         // way it is supposed to.
         let mut base = Config::declaring_nothing();
-        base.refusal = Some(crate::refusal::Ceiling {
+        base.refusal = Some(crate::config_model::Ceiling {
             max_tokens: 24,
             first_sighting_max_tokens: None,
         });
         let mut working = Config::declaring_nothing();
-        working.refusal = Some(crate::refusal::Ceiling {
+        working.refusal = Some(crate::config_model::Ceiling {
             max_tokens: 12,
             first_sighting_max_tokens: None,
         });
@@ -7017,16 +6664,16 @@ mod tests {
         // stop deciding anything and every class name goes back to free text,
         // with the config still loading clean. Nothing else in this comparison
         // would see that.
-        let word = |w: &str| crate::verdict::VocabularyWord {
+        let word = |w: &str| crate::config_model::VocabularyWord {
             word: w.to_owned(),
             gloss: "a word".to_owned(),
         };
         let mut base = Config::declaring_nothing();
-        base.vocabulary = crate::verdict::Vocabulary {
+        base.vocabulary = crate::config_model::Vocabulary {
             subject: vec![word("task")],
             action: vec![word("read")],
             condition: vec![word("first")],
-            ..crate::verdict::Vocabulary::default()
+            ..crate::config_model::Vocabulary::default()
         };
         let working = Config::declaring_nothing();
 
@@ -7046,23 +6693,23 @@ mod tests {
         // still spends it fails the load on its own, loudly, naming the word. So
         // the whole table going away is the only silent case, and it is the only
         // one reported.
-        let word = |w: &str| crate::verdict::VocabularyWord {
+        let word = |w: &str| crate::config_model::VocabularyWord {
             word: w.to_owned(),
             gloss: "a word".to_owned(),
         };
         let mut base = Config::declaring_nothing();
-        base.vocabulary = crate::verdict::Vocabulary {
+        base.vocabulary = crate::config_model::Vocabulary {
             subject: vec![word("task"), word("shell")],
             action: vec![word("read")],
             condition: vec![word("first")],
-            ..crate::verdict::Vocabulary::default()
+            ..crate::config_model::Vocabulary::default()
         };
         let mut working = Config::declaring_nothing();
-        working.vocabulary = crate::verdict::Vocabulary {
+        working.vocabulary = crate::config_model::Vocabulary {
             subject: vec![word("task")],
             action: vec![word("read")],
             condition: vec![word("first")],
-            ..crate::verdict::Vocabulary::default()
+            ..crate::config_model::Vocabulary::default()
         };
 
         let found = weakenings(&base, &working);
@@ -7378,11 +7025,11 @@ mod tests {
     }
 
     /// One `[[mint]]` row, for the three cases below.
-    fn mint(name: &str, requires: &[&str]) -> crate::mint::Declared {
-        crate::mint::Declared {
+    fn mint(name: &str, requires: &[&str]) -> crate::config_model::MintDeclared {
+        crate::config_model::MintDeclared {
             name: name.to_owned(),
             tool: "get_issue".to_owned(),
-            key: crate::mint::MintKey::Named,
+            key: crate::config_model::MintKey::Named,
             key_from: Some("id".to_owned()),
             key_from_input: None,
             key_shape: None,
@@ -7391,29 +7038,30 @@ mod tests {
             selects: None,
             requires: requires.iter().map(|path| (*path).to_owned()).collect(),
             after: None,
-            mode: crate::mint::MintMode::Replace,
+            after_mode: None,
+            mode: crate::config_model::MintMode::Replace,
             body: "{id} {now}".to_owned(),
         }
     }
 
     /// A recorder naming one program, for the cases below.
-    fn recorder(name: &str, tool: &str, program: &str) -> crate::recorder::Declared {
-        crate::recorder::Declared {
+    fn recorder(name: &str, tool: &str, program: &str) -> crate::config_model::RecorderDeclared {
+        crate::config_model::RecorderDeclared {
             name: name.to_owned(),
             record: name.to_owned(),
             tool: tool.to_owned(),
             requires_recorded: None,
-            key: crate::recorder::RecordKey::Branch,
+            key: crate::config_model::RecordKey::Branch,
             requires: vec!["id".to_owned()],
             refused_when_input: Vec::new(),
             refused_when_result: Vec::new(),
             requires_input_matching: std::collections::BTreeMap::new(),
-            columns: vec![crate::recorder::Column {
+            columns: vec![crate::config_model::Column {
                 name: "verdict".to_owned(),
-                value: crate::recorder::Value::Program {
+                value: crate::config_model::Value::Program {
                     run: program.to_owned(),
-                    stdin: Box::new(crate::recorder::Value::Result("description".to_owned())),
-                    read: crate::recorder::Read::Status(
+                    stdin: Box::new(crate::config_model::Value::Result("description".to_owned())),
+                    read: crate::config_model::Read::Status(
                         [(String::from("0"), String::from("pass"))]
                             .into_iter()
                             .collect(),
@@ -7519,7 +7167,7 @@ mod tests {
         base.recorders = vec![recorder("board-writes", "*save_issue", "linter")];
         base.programs = [(
             String::from("linter"),
-            crate::recorder::Program {
+            crate::config_model::Program {
                 path: String::from("mise-tasks/ready-lint.sh"),
                 args: Vec::new(),
             },
@@ -7529,7 +7177,7 @@ mod tests {
         let mut working = base.clone();
         working.programs = [(
             String::from("linter"),
-            crate::recorder::Program {
+            crate::config_model::Program {
                 path: String::from("mise-tasks/always-passes.sh"),
                 args: Vec::new(),
             },
@@ -7557,7 +7205,7 @@ mod tests {
         let mut base = Config::declaring_nothing();
         base.programs = [(
             String::from("linter"),
-            crate::recorder::Program {
+            crate::config_model::Program {
                 path: String::from("mise-tasks/ready-lint.sh"),
                 args: Vec::new(),
             },
@@ -7614,7 +7262,6 @@ mod tests {
 
     #[test]
     fn a_marker_mint_a_receipt_row_also_reads_is_still_a_weakening() {
-        // MUTANT: dropping the `checks` arm of the exemption's reader test lets
         // this mint pass as marker-only while it satisfies a receipt row.
         let reader = receipt_rule("ready", "").replace("[\"verify\"]", "[\"pr-open\"]");
         let base = parse(&format!("version = 1\n{MARKER_DENY}{reader}"));
@@ -7750,7 +7397,4 @@ Each undoes one half of `BoardSweepRefusalWidened`, and the named case is the
 one that stops discriminating. The named case is this file's own unit tier, so
 the declared suite is this file, `landed.rs`'s reason.
 
-#MUTANT-SUITE crates/batten/src/trust.rs
-#MUTANT sweep-refusal-widening-unread|s@sweep_refusals(working, base)@sweep_refusals(base, base)@|dropping_a_sweep_gate_or_adding_an_abstention_is_a_weakening
-#MUTANT sweep-abstention-to-refusal-flagged|s@gate.refuses.iter().chain(gate.abstains.iter())@gate.refuses.iter().chain(gate.refuses.iter())@|dropping_a_sweep_gate_or_adding_an_abstention_is_a_weakening
 */

@@ -188,7 +188,7 @@ declared_dispositions := {name | some name in method.adjudication.dispositions}
 unsupported contains index if {
 	count(declared_dispositions) > 0
 	some index, trial in trials
-	disposition := trial.falsifier.disposition
+	disposition = trial.falsifier.disposition
 	not disposition in declared_dispositions
 }
 
@@ -197,7 +197,7 @@ unsupported contains index if {
 unsupported contains index if {
 	count(declared_dispositions) > 0
 	some index, trial in trials
-	disposition := trial.falsifier.disposition
+	disposition = trial.falsifier.disposition
 	disposition in declared_dispositions
 	disposition != "pending"
 	not "result" in object.keys(trial)

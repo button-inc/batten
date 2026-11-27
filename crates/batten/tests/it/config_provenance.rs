@@ -49,7 +49,7 @@ fn shown(dir: &Path, env: &[(&str, &str)]) -> (Vec<u8>, BTreeMap<String, Value>)
     for (name, value) in env {
         command.env(name, value);
     }
-    let output = command.output().expect("batten runs");
+    let output = command.streamed_output().expect("batten runs");
     assert_eq!(
         output.status.code(),
         Some(0),

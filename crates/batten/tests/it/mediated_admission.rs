@@ -82,11 +82,15 @@ fn fixture(name: &str) -> PathBuf {
 }
 
 /// A Claude Code `PreToolUse` envelope for a write tool aimed at `path`.
+///
+/// The content is a config that loads: a write of `batten.toml` whose text
+/// would not load is refused by the engine before any admission is consulted
+/// (`config-write-unloadable`), and this suite is about the admission.
 fn write_payload(path: &str) -> String {
     let escaped = serde_json::to_string(path).expect("a path is encodable");
     format!(
         "{{\"hook_event_name\":\"PreToolUse\",\"session_id\":\"s1\",\"tool_name\":\"Write\",\
-         \"tool_input\":{{\"file_path\":{escaped},\"content\":\"x\"}}}}"
+         \"tool_input\":{{\"file_path\":{escaped},\"content\":\"version = 1\\n\"}}}}"
     )
 }
 
@@ -408,5 +412,151 @@ fn an_admission_for_another_subject_does_not_admit_this_one() {
         verdict(&dir, GUARDED),
         Some(2),
         "an admission bound elsewhere must not reach this refusal"
+    );
+}
+
+// ─── WHAT A PROTECTED ADMISSION IS BOUND TO (CLOUD-2779) ─────────────────────
+//
+// A `call:` anchor named the HEAD the call was refused at, so every commit voided
+// every outstanding protected admission, whatever it touched — measured on #1276,
+// `batten.toml,Edit` minted and spent at two HEADs one unrelated commit apart.
+// The decision `path write refused` reads is the PATH: whether it is protected
+// (the epoch's half) and what it holds (the anchor's half). So the anchor is the
+// path's committed blob, or its absence, and nothing else the tree carries.
+
+/// A protected path that is not the authority, so committing a change to it
+/// moves the anchor without also moving the epoch — the two terms stay apart.
+const DOC: &str = "guarded.md";
+
+fn doc_fixture(name: &str) -> PathBuf {
+    Fixture::new(name)
+        .config(
+            "version = 1\n\
+             protected = [\"batten.toml\", \"guarded.md\"]\n\n\
+             [[verb]]\n\
+             verb = \"tee\"\n\
+             effect = \"write\"\n\
+             redirect = \"write through the surface that owns the file\"\n",
+        )
+        .file(DOC, "as reviewed\n")
+        .file(ORDINARY, "not protected\n")
+        .git()
+        .base_commit()
+        .build()
+}
+
+/// Request and spend one protected admission for [`DOC`], asserting it admits.
+fn admit_doc(dir: &Path, reason: &str) {
+    assert_eq!(verdict(dir, DOC), Some(2), "the premise");
+    let admission = request(dir, DOC, reason);
+    assert!(spend(dir, &admission, DOC), "spend must consume it");
+    assert_eq!(verdict(dir, DOC), Some(0), "a spent admission admits");
+}
+
+fn commit_all(dir: &Path, message: &str) {
+    common::git_in(dir, &["add", "-A"]);
+    common::git_in(dir, &["commit", "-qm", message]);
+}
+
+/// Fails by: anchor the admission on HEAD, as `call:<sha>` did, and the
+/// unrelated commit voids it.
+#[test]
+fn an_unrelated_commit_leaves_a_protected_admission_valid() {
+    let dir = doc_fixture("mediated-admission-unrelated-commit");
+    admit_doc(&dir, "the doc's owning surface cannot express this edit");
+    common::write(&dir, ORDINARY, "an unrelated change\n");
+    commit_all(&dir, "chore: an unrelated commit");
+    assert_eq!(
+        verdict(&dir, DOC),
+        Some(0),
+        "a commit that leaves the admitted path's blob alone leaves the admission bound"
+    );
+}
+
+/// Fails by: an anchor that reads nothing of the path (a constant, or the
+/// subject alone) keeps admitting after the path it was decided over changed.
+#[test]
+fn a_commit_touching_the_admitted_path_voids_its_admission() {
+    let dir = doc_fixture("mediated-admission-touched-commit");
+    admit_doc(&dir, "decided over the doc as it was reviewed");
+    common::write(&dir, DOC, "changed since the decision\n");
+    commit_all(&dir, "fix: change the guarded doc");
+    assert_eq!(
+        verdict(&dir, DOC),
+        Some(2),
+        "the decision read the path's blob, and that blob moved"
+    );
+}
+
+/// The spend is what admits, not a commit: the admitted Edit lands in the
+/// working tree, and the next Edit before any commit is still admitted.
+///
+/// Fails by: an anchor over the WORKING-TREE content, which the first admitted
+/// write itself moves, so the second Edit of one change is refused.
+#[test]
+fn a_spent_admission_admits_the_next_edit_before_any_commit() {
+    let dir = doc_fixture("mediated-admission-next-edit");
+    admit_doc(&dir, "one change, written in two edits");
+    common::write(&dir, DOC, "the first admitted edit landed\n");
+    assert_eq!(
+        verdict(&dir, DOC),
+        Some(0),
+        "the next Edit of the same change is admitted from the spend"
+    );
+}
+
+/// An admission spent before this change carries `call:<head>`, and it still
+/// reads and admits at that HEAD exactly as it did.
+///
+/// Fails by: drop the legacy lookup and a record minted by the previous binary
+/// stops admitting mid-session, which is the re-mint this row removes.
+#[test]
+fn a_legacy_call_anchored_admission_still_admits_at_its_head() {
+    use batten::admission::{self, Anchor, Binding, Situation};
+
+    let dir = doc_fixture("mediated-admission-legacy-call");
+    assert_eq!(verdict(&dir, DOC), Some(2), "the premise");
+    let head = batten::git::head_commit(&dir).expect("a head");
+    let epoch = batten::epoch::for_rule(&dir, None, RULE, CLASS).expect("an epoch");
+    let anchor = Anchor::Call { head };
+    let token = anchor.token();
+    let issued = admission::issue(
+        &dir,
+        Binding {
+            rule: RULE.to_owned(),
+            verdict: CLASS.to_owned(),
+            subject: DOC.to_owned(),
+            anchor,
+            epoch: epoch.clone(),
+            answers: std::collections::BTreeMap::from([
+                (
+                    "precondition".to_owned(),
+                    "minted by the previous binary".to_owned(),
+                ),
+                ("lost".to_owned(), "the legacy record".to_owned()),
+                ("rejected-route".to_owned(), "none applies".to_owned()),
+            ]),
+            prev: None,
+            author: "alec@wenzowski.com".to_owned(),
+        },
+    )
+    .expect("issued");
+    admission::consume(
+        &dir,
+        &issued,
+        &Situation {
+            rule: RULE,
+            verdict: CLASS,
+            subject: DOC,
+            anchor: &token,
+            epoch: &epoch,
+        },
+    )
+    .expect("the store answered")
+    .expect("spent");
+    assert_eq!(
+        verdict(&dir, DOC),
+        Some(0),
+        "a legacy record admits at its HEAD"
     );
 }

@@ -16,7 +16,7 @@
 //!   [`crate::identity::code_fingerprint`] therefore cannot be handed one — a
 //!   compile error, not a recall obligation. Routing, not hashing, is where an
 //!   offline-guessing oracle would be created (CLOUD-123).
-//! - **The finding has nowhere to put one.** [`crate::rules::Finding`] carries a
+//! - **The finding has nowhere to put one.** [`crate::findings::Finding`] carries a
 //!   rule, a severity, a path, a line and an identity. There is no span field, so
 //!   pointer-only output is structural in text and `-J` alike rather than a
 //!   property of the renderer.
@@ -62,7 +62,18 @@
 //! keys are held. Key loss is the other branch and never a degraded rotation: its
 //! predicate is [`orphaned_key_ids`], ledger against file, because "the key file is
 //! missing" is indistinguishable from a repository that never scanned.
+//!
+//! # A keyless entry that removes spans (CLOUD-2726)
+//!
+//! [`redact`] replaces each matched span with a marker in a staged copy, for a
+//! caller that must not commit one. It does not weaken containment: the span
+//! still has no route back to a `&str` — the one method it gained consumes the
+//! span and returns a boolean — and the entry reads no key, mints no identity
+//! and writes no ledger, so it adds a way to remove a matched byte and none to
+//! carry one.
 
+use crate::capture::Streamed as _;
+use crate::rules::RuleExt as _;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -71,11 +82,12 @@ use anyhow::{Context, Result};
 
 use serde::{Deserialize, Serialize};
 
+use crate::config_model::Provision;
+use crate::config_model::Rule;
 use crate::error::UsageError;
+use crate::findings::Finding;
 use crate::identity::{Fingerprint, IdentityKey, SecretSpan};
-use crate::provision::Provision;
 use crate::refusal::{Fix, Refusal};
-use crate::rules::{Finding, Rule};
 use crate::waiver::Date;
 
 /// The `[[provision]]` entry this kind runs.
@@ -308,7 +320,7 @@ pub fn custody(repo_root: &Path, today: Date) -> Result<Custody> {
 /// Errors are pointer-only: a malformed file is named by path and by which line
 /// failed, never by its contents, because its contents are key material.
 fn read(path: &Path) -> Result<Option<Custody>> {
-    let text = match fs::read_to_string(path) {
+    let text = match crate::fsio::read_to_string(path) {
         Ok(text) => text,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(err) => {
@@ -697,7 +709,7 @@ pub fn events(repo_root: &Path) -> Result<Vec<Event>> {
 ///
 /// As [`events`].
 pub fn events_at(path: &Path) -> Result<Vec<Event>> {
-    let text = match fs::read_to_string(path) {
+    let text = match crate::fsio::read_to_string(path) {
         Ok(text) => text,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
         Err(err) => {
@@ -984,7 +996,7 @@ fn lost_from(events: &[Event], held_witnesses: &[String]) -> Vec<String> {
 /// and no new capability: the bytes move from disk to disk through one `String`
 /// that is never rendered.
 fn generation_lines(path: &Path) -> Result<(String, String)> {
-    let text = fs::read_to_string(path)
+    let text = crate::fsio::read_to_string(path)
         .with_context(|| format!("read the secret-identity key {}", path.display()))?;
     let mut lines = text.lines();
     let id = lines.next().unwrap_or_default().trim().to_owned();
@@ -1038,7 +1050,7 @@ pub fn scan(
 
     let mut parsed: Vec<Match> = Vec::new();
     for batch in crate::rules::batches(matched) {
-        parsed.extend(run_once(rule, &binary, root, &batch)?);
+        parsed.extend(run_once(&rule.id, &binary, root, &batch)?);
     }
 
     for hit in parsed {
@@ -1112,7 +1124,7 @@ fn resolve_scanner(provisions: &[Provision], root: &Path) -> Result<PathBuf> {
         return Err(UsageError::raise(
             Refusal::declared(
                 SCANNER,
-                crate::verdict::Native::ScannerUnpinned,
+                crate::error::Native::ScannerUnpinned,
                 &[crate::verdict::Subject::Artifact {
                     artifact: SCANNER.to_owned(),
                 }],
@@ -1141,7 +1153,7 @@ fn resolve_scanner(provisions: &[Provision], root: &Path) -> Result<PathBuf> {
         return Err(UsageError::raise(
             Refusal::declared(
                 SCANNER,
-                crate::verdict::Native::ScannerUnprovisioned,
+                crate::error::Native::ScannerUnprovisioned,
                 &[crate::verdict::Subject::Artifact {
                     artifact: SCANNER.to_owned(),
                 }],
@@ -1154,7 +1166,11 @@ fn resolve_scanner(provisions: &[Provision], root: &Path) -> Result<PathBuf> {
 }
 
 /// One scanner invocation over one batch of paths.
-fn run_once(rule: &Rule, binary: &Path, root: &Path, batch: &[&str]) -> Result<Vec<Match>> {
+///
+/// `root` is used as the child's working directory and nothing else, which is
+/// what lets [`redact`] run the same spawn over a staging directory. `label`
+/// names the caller in an error: a rule's id, or the redactor's own word.
+fn run_once(label: &str, binary: &Path, root: &Path, batch: &[&str]) -> Result<Vec<Match>> {
     // Both streams are captured and NEITHER is forwarded. stdout carries the
     // matched bytes and is parsed here; stderr can carry a path the tool
     // failed to read, and echoing a child's stream would put output Batten
@@ -1171,7 +1187,11 @@ fn run_once(rule: &Rule, binary: &Path, root: &Path, batch: &[&str]) -> Result<V
             .current_dir(root)
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
-            .output()
+            .streamed_output_keeping(crate::capture::Keep {
+                stdin: false,
+                stdout: true,
+                stderr: true,
+            })
     };
 
     // THE SAME RESOLUTION EVERY SPAWNING KIND GETS (CLOUD-617), and here for the
@@ -1200,11 +1220,14 @@ fn run_once(rule: &Rule, binary: &Path, root: &Path, batch: &[&str]) -> Result<V
             .current_dir(root)
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
-            .output(),
+            .streamed_output_keeping(crate::capture::Keep {
+                stdin: false,
+                stdout: true,
+                stderr: true,
+            }),
     };
 
-    let output =
-        result.with_context(|| format!("rule {}: run the pinned secret scanner", rule.id))?;
+    let output = result.with_context(|| format!("rule {label}: run the pinned secret scanner"))?;
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let mut parsed = Vec::new();
@@ -1217,17 +1240,16 @@ fn run_once(rule: &Rule, binary: &Path, root: &Path, batch: &[&str]) -> Result<V
         // error names WHICH line by ordinal and never what it said.
         let hit = parse_line(line, batch).ok_or_else(|| {
             anyhow::anyhow!(
-                "rule {}: the secret scanner emitted a line this build cannot parse \
+                "rule {label}: the secret scanner emitted a line this build cannot parse \
                  (output line {}); refusing to report a clean tree from a stream that \
                  failed to parse",
-                rule.id,
                 ordinal + 1
             )
         })?;
         parsed.push(hit);
     }
 
-    cross_check(rule, output.status.code(), parsed.len())?;
+    cross_check(label, output.status.code(), parsed.len())?;
     Ok(parsed)
 }
 
@@ -1239,30 +1261,124 @@ fn run_once(rule: &Rule, binary: &Path, root: &Path, batch: &[&str]) -> Result<V
 /// secrets the tool says it did not find; a found exit with nothing parsed would
 /// report a clean tree the tool says is not clean — and that second one is the
 /// silent false green this whole clause exists to prevent.
-fn cross_check(rule: &Rule, code: Option<i32>, parsed: usize) -> Result<()> {
+fn cross_check(label: &str, code: Option<i32>, parsed: usize) -> Result<()> {
     match code {
         Some(EXIT_CLEAN) if parsed == 0 => Ok(()),
         Some(EXIT_FOUND) if parsed > 0 => Ok(()),
         Some(EXIT_CLEAN) => Err(anyhow::anyhow!(
-            "rule {}: the secret scanner exited clean while emitting {parsed} match(es); \
-             the exit status and the output disagree, so neither is a verdict",
-            rule.id
+            "rule {label}: the secret scanner exited clean while emitting {parsed} match(es); \
+             the exit status and the output disagree, so neither is a verdict"
         )),
         Some(EXIT_FOUND) => Err(anyhow::anyhow!(
-            "rule {}: the secret scanner reported findings and emitted none this build \
-             could parse; clean is never inferred from a stream that failed to parse",
-            rule.id
+            "rule {label}: the secret scanner reported findings and emitted none this build \
+             could parse; clean is never inferred from a stream that failed to parse"
         )),
         Some(other) => Err(anyhow::anyhow!(
-            "rule {}: the secret scanner exited {other}, which is neither its clean nor \
-             its found status",
-            rule.id
+            "rule {label}: the secret scanner exited {other}, which is neither its clean nor \
+             its found status"
         )),
         None => Err(anyhow::anyhow!(
-            "rule {}: the secret scanner was killed by a signal, so it reached no verdict",
-            rule.id
+            "rule {label}: the secret scanner was killed by a signal, so it reached no verdict"
         )),
     }
+}
+
+/// What a redacted span is replaced by.
+pub const REDACTED: &str = "[REDACTED]";
+
+/// The word [`redact`]'s errors carry where a scan's carry a rule id.
+const REDACT_LABEL: &str = "offbox";
+
+/// Replace every span the pinned scanner matches in `paths` under `staging`
+/// with [`REDACTED`], and return how many spans were replaced (CLOUD-2726).
+///
+/// **Keyless.** It reads no key, mints no identity and writes no ledger: a
+/// redactor needs the bytes gone, not named, so the custody half of this module
+/// is not reached at all.
+///
+/// The scanner is resolved from `project_root`, because the provision cache is
+/// keyed by the project, and RUN in `staging`, because that is where the files
+/// are. `paths` are relative to `staging`.
+///
+/// **Line counts never change.** A span is replaced within its line, so a store
+/// whose index counts its lines stays consistent with them.
+///
+/// **Nothing is left half-redacted.** Every match is applied in memory first,
+/// and a file is written only once all of them have been.
+///
+/// # Errors
+///
+/// - **exit 1** ([`UsageError`]) where `staging` is relative, the manifest
+///   declares no scanner, or the provision cache holds no binary — [`scan`]'s
+///   own refusals.
+/// - **exit 3** for every fail-closed case: output this build cannot parse, an
+///   exit status that disagrees with the parse, a staged file that will not
+///   read as text, and a span that is not on the line the scanner named. The
+///   last means the scanner and the file disagree, and a file is never reported
+///   redacted while a span the scanner saw is still in it.
+pub fn redact(
+    provisions: &[Provision],
+    project_root: &Path,
+    staging: &Path,
+    paths: &[String],
+) -> Result<usize> {
+    if !staging.is_absolute() {
+        return Err(UsageError::raise(format!(
+            "rule {REDACT_LABEL}: the staging directory {} is relative, so the scanner's working \
+             directory would depend on the caller's",
+            staging.display()
+        )));
+    }
+    let binary = resolve_scanner(provisions, project_root)?;
+    let named: Vec<&String> = paths.iter().collect();
+    let mut hits: std::collections::BTreeMap<String, Vec<Match>> =
+        std::collections::BTreeMap::new();
+    for batch in crate::rules::batches(&named) {
+        for hit in run_once(REDACT_LABEL, &binary, staging, &batch)? {
+            hits.entry(hit.path.clone()).or_default().push(hit);
+        }
+    }
+
+    let mut replaced = 0;
+    let mut rewritten: Vec<(PathBuf, String)> = Vec::new();
+    for (path, matched) in hits {
+        let full = staging.join(&path);
+        // Pointer-only: the error names the staged path and never a byte of it.
+        let text = fs::read_to_string(&full).with_context(|| {
+            format!("rule {REDACT_LABEL}: read the staged file {path} to redact it")
+        })?;
+        // `split_inclusive` keeps each terminator on its line, so joining the
+        // lines back gives the file byte for byte apart from the spans.
+        let mut lines: Vec<String> = text.split_inclusive('\n').map(str::to_owned).collect();
+        for hit in matched {
+            let Some(line) = lines.get_mut(hit.line - 1) else {
+                return Err(anyhow::anyhow!(
+                    "rule {REDACT_LABEL}: the secret scanner named line {} of {path}, which the \
+                     staged file does not have",
+                    hit.line
+                ));
+            };
+            let found = hit.span.replace_in(line, REDACTED);
+            if !found {
+                return Err(anyhow::anyhow!(
+                    "rule {REDACT_LABEL}: the secret scanner matched a span on line {} of {path} \
+                     that the staged file does not hold there; nothing was redacted",
+                    hit.line
+                ));
+            }
+            replaced += 1;
+        }
+        rewritten.push((full, lines.concat()));
+    }
+    for (full, text) in rewritten {
+        crate::durable::replace(&full, text).map_err(|err| {
+            anyhow::anyhow!(
+                "rule {REDACT_LABEL}: the redacted {} will not write: {err}",
+                full.display()
+            )
+        })?;
+    }
+    Ok(replaced)
 }
 
 /// Parse one `<path>:<line>:<span>` output line, given the paths this batch
@@ -1304,7 +1420,7 @@ fn parse_line(line: &str, batch: &[&str]) -> Option<Match> {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
-
+    #[cfg(test)]
     fn date() -> Date {
         Date {
             year: 2026,
@@ -1376,7 +1492,7 @@ mod tests {
     fn a_malformed_key_is_refused_rather_than_re_minted() {
         let path = scratch("malformed");
         load_or_mint_at(&path, date()).unwrap();
-        let before = fs::read_to_string(&path).unwrap();
+        let before = crate::fsio::read_to_string(&path).unwrap();
 
         fs::write(&path, "2026-08-13\nnot-hex\n").unwrap();
         let err = load_or_mint_at(&path, date()).unwrap_err().to_string();
@@ -1403,13 +1519,13 @@ mod tests {
         // the branch under test. Pre-creating the file *is* the other process.
         let path = scratch("race");
         let winner = load_or_mint_at(&path, date()).unwrap();
-        let winner_bytes = fs::read_to_string(&path).unwrap();
+        let winner_bytes = crate::fsio::read_to_string(&path).unwrap();
 
         let loser = mint(&path, date()).unwrap();
 
         assert_eq!(loser.id(), winner.id());
         assert_eq!(
-            fs::read_to_string(&path).unwrap(),
+            crate::fsio::read_to_string(&path).unwrap(),
             winner_bytes,
             "the loser wrote nothing; a truncating write here would re-identify \
              every finding already emitted under the winner's key"
@@ -1436,10 +1552,13 @@ mod tests {
     fn a_retired_key_with_an_empty_id_is_refused() {
         let path = scratch("retired-empty-id");
         load_or_mint_at(&path, date()).unwrap();
-        let text = fs::read_to_string(&path).unwrap();
+        let text = crate::fsio::read_to_string(&path).unwrap();
         let hex = text.lines().nth(1).unwrap().to_owned();
         fs::write(&path, format!("{text}\n{hex}\n")).unwrap();
-        assert_eq!(fs::read_to_string(&path).unwrap().lines().nth(2), Some(""));
+        assert_eq!(
+            crate::fsio::read_to_string(&path).unwrap().lines().nth(2),
+            Some("")
+        );
         assert!(custody_at(&path, date()).is_err());
     }
 
@@ -1496,7 +1615,7 @@ mod tests {
     fn the_key_bytes_reach_no_rendering() {
         let path = scratch("redaction");
         let key = load_or_mint_at(&path, date()).unwrap();
-        let hex = fs::read_to_string(&path).unwrap();
+        let hex = crate::fsio::read_to_string(&path).unwrap();
         let hex = hex.lines().nth(1).unwrap().to_owned();
 
         let rendered = format!("{key:?}");
@@ -1599,15 +1718,15 @@ severity = "deny"
 
     #[test]
     fn the_two_agreeing_cases_are_the_only_ones_that_pass() {
-        assert!(cross_check(&rule(), Some(EXIT_CLEAN), 0).is_ok());
-        assert!(cross_check(&rule(), Some(EXIT_FOUND), 3).is_ok());
+        assert!(cross_check(&rule().id, Some(EXIT_CLEAN), 0).is_ok());
+        assert!(cross_check(&rule().id, Some(EXIT_FOUND), 3).is_ok());
     }
 
     #[test]
     fn a_clean_exit_with_matches_is_refused() {
         // The tool says nothing was found and the stream says otherwise. Neither
         // is a verdict, so this is exit 3 rather than a report.
-        let err = cross_check(&rule(), Some(EXIT_CLEAN), 2).unwrap_err();
+        let err = cross_check(&rule().id, Some(EXIT_CLEAN), 2).unwrap_err();
         assert!(
             err.downcast_ref::<UsageError>().is_none(),
             "internal, not usage"
@@ -1620,17 +1739,17 @@ severity = "deny"
         // The silent false green this clause exists to prevent: the tool found
         // secrets, the parser produced none, and reporting clean would be a
         // clean tree inferred from a stream that failed to parse.
-        let err = cross_check(&rule(), Some(EXIT_FOUND), 0).unwrap_err();
+        let err = cross_check(&rule().id, Some(EXIT_FOUND), 0).unwrap_err();
         assert!(err.downcast_ref::<UsageError>().is_none());
         assert!(err.to_string().contains("never inferred"), "{err}");
     }
 
     #[test]
     fn a_tool_error_or_a_signal_is_neither_verdict() {
-        let err = cross_check(&rule(), Some(2), 0).unwrap_err();
+        let err = cross_check(&rule().id, Some(2), 0).unwrap_err();
         assert!(err.to_string().contains("neither its clean nor"), "{err}");
 
-        let err = cross_check(&rule(), None, 0).unwrap_err();
+        let err = cross_check(&rule().id, None, 0).unwrap_err();
         assert!(err.to_string().contains("signal"), "{err}");
     }
 
@@ -1642,14 +1761,14 @@ severity = "deny"
         const SECRET: &str = "tok-would-be-leaked";
         let batch = ["src/a.rs"];
         let rendered: Vec<String> = vec![
-            cross_check(&rule(), Some(EXIT_CLEAN), 2)
+            cross_check(&rule().id, Some(EXIT_CLEAN), 2)
                 .unwrap_err()
                 .to_string(),
-            cross_check(&rule(), Some(EXIT_FOUND), 0)
+            cross_check(&rule().id, Some(EXIT_FOUND), 0)
                 .unwrap_err()
                 .to_string(),
-            cross_check(&rule(), Some(2), 0).unwrap_err().to_string(),
-            cross_check(&rule(), None, 0).unwrap_err().to_string(),
+            cross_check(&rule().id, Some(2), 0).unwrap_err().to_string(),
+            cross_check(&rule().id, None, 0).unwrap_err().to_string(),
             resolve_scanner(&[], Path::new("/nowhere"))
                 .unwrap_err()
                 .to_string(),
@@ -1683,7 +1802,7 @@ sha256 = "00"
         assert!(err.downcast_ref::<UsageError>().is_some(), "{err}");
         let text = err.to_string();
         assert!(
-            text.contains(crate::verdict::Native::ScannerUnpinned.id()),
+            text.contains(crate::error::Native::ScannerUnpinned.id()),
             "{text}"
         );
         let mut findings = Vec::new();
@@ -1942,7 +2061,7 @@ sha256 = "00"
         .unwrap();
         record_orphan(&path, "2026-08-13", 2).unwrap();
 
-        let text = fs::read_to_string(ledger_beside(&path)).unwrap();
+        let text = crate::fsio::read_to_string(ledger_beside(&path)).unwrap();
         assert!(!text.contains(&hex), "the ledger carries no key material");
         assert!(text.contains(key.id()), "it does carry the coordinate");
         // And the redacting `Debug` holds for the custody wrapper too, which is a

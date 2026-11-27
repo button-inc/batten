@@ -53,6 +53,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
+use batten::capture::StreamedChild as _;
 
 use std::path::{Path, PathBuf};
 use std::process::Output;
@@ -266,7 +267,7 @@ fn a_credential_file_that_will_not_read_names_the_variable_and_never_the_path() 
         .args(["mcp", "call", "srv", "get_thing"])
         .current_dir(&repo)
         .env("BATTEN_TEST_TOKEN_FILE", secret_dir.join("absent.txt"))
-        .output()
+        .streamed_output()
         .expect("run batten");
     assert_eq!(answer.status.code(), Some(3));
     let message = stderr(&answer);
@@ -295,7 +296,7 @@ fn a_resolved_credential_reaches_no_output_on_any_path() {
         .args(["mcp", "call", "srv", "get_thing"])
         .current_dir(&repo)
         .env("BATTEN_TEST_TOKEN", token)
-        .output()
+        .streamed_output()
         .expect("run batten");
     assert!(
         !answer.status.success(),
@@ -566,7 +567,7 @@ fn seed_write_response(dir: &Path, home: &Path, document: &serde_json::Value) {
         .expect("piped stdin")
         .write_all(envelope.as_bytes())
         .expect("write the response");
-    let recorded = child.wait_with_output().expect("record the response");
+    let recorded = child.streamed_wait().expect("record the response");
     assert_eq!(
         recorded.status.code(),
         Some(0),
@@ -688,10 +689,6 @@ fn a_successful_envelope_is_still_a_result_and_not_a_refusal() {
         Some("KEY-1")
     );
 }
-
-/*
-#MUTANT error-message-dropped|s@            .and_then(serde_json::Value::as_str)@            .and_then(|_unread| None::<\&str>)@|a_refusal_carries_the_servers_own_message_and_not_only_its_code
-*/
 
 // --- a failed result is not a success (CLOUD-1645) ---------------------------
 //
@@ -843,7 +840,7 @@ fn find_in(dir: &Path, home: &Path, args: &[&str]) -> Output {
     let mut command = common::batten();
     command.args(args).current_dir(dir);
     common::state_home(&mut command, home);
-    command.output().expect("run the capture verb")
+    command.streamed_output().expect("run the capture verb")
 }
 
 #[test]
@@ -874,7 +871,9 @@ fn this_change_introduces_no_consumer_identifier_into_the_crate() {
     // it would be worse than either. What this case owns is that the MCP change
     // adds none of its own.
     let mut hits: Vec<String> = Vec::new();
-    for path in sources(&at_root("crates/batten/src")) {
+    // Every workspace crate's `src/` (CLOUD-2789): a launcher layout cut into
+    // `batten-base` is still in the engine.
+    for path in common::engine_sources() {
         let Ok(source) = std::fs::read_to_string(&path) else {
             continue;
         };
@@ -921,23 +920,6 @@ fn this_change_introduces_no_consumer_identifier_into_the_crate() {
             "mcp.rs must not name a tracker method in code: {needle}"
         );
     }
-}
-
-/// Every `.rs` file under `root`, recursively.
-fn sources(root: &Path) -> Vec<PathBuf> {
-    let mut found = Vec::new();
-    let Ok(entries) = std::fs::read_dir(root) else {
-        return found;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            found.extend(sources(&path));
-        } else if path.extension().and_then(|ext| ext.to_str()) == Some("rs") {
-            found.push(path);
-        }
-    }
-    found
 }
 
 #[test]

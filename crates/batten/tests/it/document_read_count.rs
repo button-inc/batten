@@ -22,7 +22,8 @@ use crate::common;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use batten::rules::{self, Rule};
+use batten::config_model::Rule;
+use batten::rules;
 
 /// A bundle that decides over a declared document, so a row actually evaluates.
 const READS_A_KEY: &str = r#"
@@ -52,7 +53,7 @@ violation contains {"rule": "no-stray-key", "verdict": "stray key probe"} if {
 /// alternative is naming a `Vec` at every load site. A test binary is a
 /// short-lived process and the table is tens of entries.
 fn fixtures(root: &Path) -> batten::policy::Vocabulary<'static> {
-    let table: &'static [batten::verdict::DeclaredVerdict] =
+    let table: &'static [batten::config_model::DeclaredVerdict] =
         Box::leak(common::verdicts_in(root).into_boxed_slice());
     batten::policy::Vocabulary {
         patterns: &[],

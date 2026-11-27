@@ -1,6 +1,8 @@
 #MUTANT-SUITE crates/batten/tests/it/hook_skip_local.rs
 #MUTANT skip-assignment-unread|s@^\tsome word in segment.words$@\tsome word in []@|a_local_step_skip_is_refused
 #MUTANT skip-pattern-unread|s@^\tregex.match(data.batten.patterns\["hook-step-skip-assignment"\], word)$@\tfalse@|the_retired_carve_is_refused_like_any_other
+#MUTANT plumbing-commit-unread|s@^plumbing_commit(words) if git_subcommand(words) == "commit-tree"$@plumbing_commit(words) if false@|a_plumbing_commit_is_refused
+#MUTANT branch-ref-unread|s@^\tgit_subcommand(words) == "update-ref"$@\tfalse@|a_branch_ref_written_by_hand_is_refused
 # Switching a gate off for a local commit is a decision, not a flag (CLOUD-1340).
 #
 # MEASURED ON THE BRANCH THAT FILED IT, and the incident is the whole reason this
@@ -175,7 +177,119 @@ test_a_quoted_mention_is_not_an_invocation if {
 	}]}}
 }
 
+# A COMMIT NO HOOK EVER JUDGED (CLOUD-2847). `git commit-tree` writes a commit
+# object, and `git update-ref refs/heads/<b>` moves a branch onto it, without
+# `pre-commit` or `commit-msg` ever running. Measured on #1276: a subagent refused
+# a worktree built two branches this way and pushed 18 commits that no
+# commit-time gate had seen, and nothing here fired. It is the variable's hole by
+# another route, so it raises the same class, which declares no override. The
+# route is a clone with hooks installed and `git commit` / `git cherry-pick`.
+violation contains {
+	"rule": "hook skip unseen",
+	"verdict": "hook skip unseen",
+	"subjects": [{"count": 1}],
+} if {
+	some segment in input.call.segments
+	plumbing_commit(segment.words)
+}
+
+valued_global := {"-C", "-c", "--git-dir", "--work-tree", "--namespace"}
+
+# The subcommand of a `git` invocation: the first word after `git` that is
+# neither a global option nor the value of one that takes a value, so
+# `git -C dir commit-tree` reads as `commit-tree`.
+git_subcommand(words) := words[k] if {
+	some i
+	git_word(words[i])
+	some k
+	k > i
+	not startswith(words[k], "-")
+	not valued_global[words[k - 1]]
+
+	# `numbers.range` counts DOWN when its bounds cross, so for `k == i + 1` it
+	# would yield `i + 1, i` and judge `git` itself; the bounds are re-checked.
+	count([m |
+		some m in numbers.range(i + 1, k - 1)
+		m > i
+		m < k
+		not global_word(words, m)
+	]) == 0
+}
+
+git_word(w) if w == "git"
+
+git_word(w) if endswith(w, "/git")
+
+global_word(words, m) if startswith(words[m], "-")
+
+global_word(words, m) if valued_global[words[m - 1]]
+
+plumbing_commit(words) if git_subcommand(words) == "commit-tree"
+
+plumbing_commit(words) if {
+	git_subcommand(words) == "update-ref"
+	not deletes(words)
+	some w in words
+	startswith(w, "refs/heads/")
+}
+
+deletes(words) if {
+	some w in words
+	w in {"-d", "--delete"}
+}
+
+test_a_plumbing_commit_is_refused if {
+	some _ in violation with input as {"call": {"segments": [{
+		"words": ["git", "commit-tree", "abc", "-p", "HEAD", "-m", "x"],
+		"raw": "git commit-tree abc -p HEAD -m x",
+		"terminator": null,
+	}]}}
+}
+
+test_a_plumbing_commit_behind_a_directory_option_is_refused if {
+	some _ in violation with input as {"call": {"segments": [
+		{"words": ["cd", "/tmp"], "raw": "cd /tmp", "terminator": "&&"},
+		{
+			"words": ["git", "-C", "/tmp/clone", "commit-tree", "abc", "-m", "x"],
+			"raw": "git -C /tmp/clone commit-tree abc -m x",
+			"terminator": null,
+		},
+	]}}
+}
+
+test_a_branch_ref_written_by_hand_is_refused if {
+	some _ in violation with input as {"call": {"segments": [{
+		"words": ["git", "update-ref", "refs/heads/feat", "abc"],
+		"raw": "git update-ref refs/heads/feat abc",
+		"terminator": null,
+	}]}}
+}
+
+test_deleting_a_ref_is_left_to_the_git_preset if {
+	count(violation) == 0 with input as {"call": {"segments": [{
+		"words": ["git", "update-ref", "-d", "refs/heads/feat"],
+		"raw": "git update-ref -d refs/heads/feat",
+		"terminator": null,
+	}]}}
+}
+
+test_a_note_ref_is_not_refused if {
+	count(violation) == 0 with input as {"call": {"segments": [{
+		"words": ["git", "update-ref", "refs/notes/x", "abc"],
+		"raw": "git update-ref refs/notes/x abc",
+		"terminator": null,
+	}]}}
+}
+
+test_a_log_mentioning_the_word_is_not_refused if {
+	count(violation) == 0 with input as {"call": {"segments": [{
+		"words": ["git", "log", "--grep", "commit-tree"],
+		"raw": "git log --grep commit-tree",
+		"terminator": null,
+	}]}}
+}
+
 deny contains message if {
 	some v in violation
-	message := v.verdict
+	message = v.verdict
 }

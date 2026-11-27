@@ -55,6 +55,7 @@
 #![cfg(unix)]
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+use batten::capture::StreamedChild as _;
 use std::path::Path;
 
 use crate::common;
@@ -118,7 +119,7 @@ fn toolchain(dir: &Path, manifest: &str, probe: &str) -> (i32, String) {
         .expect("the probe channel is open")
         .write_all(probe.as_bytes())
         .expect("hand the probe over");
-    let output = child.wait_with_output().expect("the verb exited");
+    let output = child.streamed_wait().expect("the verb exited");
     (
         output.status.code().expect("the verb exited"),
         common::stdout(&output),
@@ -260,7 +261,7 @@ fn the_refusing_arm_emits_a_json_document_and_not_an_internal_failure() {
             .expect("the probe channel is open")
             .write_all(ONE_MISSING.as_bytes())
             .expect("hand the probe over");
-        let output = child.wait_with_output().expect("the verb exited");
+        let output = child.streamed_wait().expect("the verb exited");
         (
             output.status.code().expect("the verb exited"),
             common::stdout(&output),
@@ -353,7 +354,7 @@ fn the_extracted_verify_body_is_the_task_and_not_the_whole_file() {
 /// borrowed tips were measured in on 2026-09-25/26.
 #[test]
 fn both_base_armed_gates_read_the_base_the_lap_actually_borrowed() {
-    let gated = task_body("verify:gated");
+    let gated = common::task_reaches("verify:gated");
     for (wrapper, armed, gate) in [
         (
             "verify:config-lint",
@@ -363,8 +364,8 @@ fn both_base_armed_gates_read_the_base_the_lap_actually_borrowed() {
         ("verify:commit-lint", "BASE_SHA", "mise run commit-lint"),
     ] {
         assert!(
-            gated.contains(&format!("mise run {wrapper}")),
-            "the gate set reaches {gate} through {wrapper}: {gated}"
+            gated.iter().any(|task| task == wrapper),
+            "the gate set reaches {gate} through {wrapper}: {gated:?}"
         );
         let body = task_body(wrapper);
         assert!(body.contains(gate), "{wrapper} runs {gate}: {body}");

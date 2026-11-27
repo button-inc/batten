@@ -93,7 +93,7 @@ floor := value if {
 	top_level(line)
 	contains(line, "=")
 	key(line) == "rust-version"
-	value := quoted(line)
+	value = quoted(line)
 }
 
 # The bare key, left of the first `=`. Compared WHOLE rather than by prefix: a
@@ -120,7 +120,7 @@ pin := value if {
 	key(line) == "rust"
 	contains(line, "version")
 	after := substring(line, indexof(line, "version"), -1)
-	value := quoted(after)
+	value = quoted(after)
 }
 
 pin := value if {
@@ -129,11 +129,11 @@ pin := value if {
 	contains(line, "=")
 	key(line) == "rust"
 	not contains(line, "version")
-	value := quoted(line)
+	value = quoted(line)
 }
 
 renovate_lines := lines if {
-	lines := input.tree.lines[renovate_path]
+	lines = input.tree.lines[renovate_path]
 }
 
 # A `//` opening a line, or following whitespace. The URL in a schema key keeps
@@ -171,11 +171,11 @@ constraint := value if {
 	some j, line in renovate_lines
 	j >= constraints_start
 	j <= constraints_end
-	text := decommented(line)
+	text = decommented(line)
 	contains(text, "rust")
 	contains(text, ":")
 	after := substring(text, indexof(text, "rust"), -1)
-	value := quoted(after)
+	value = quoted(after)
 }
 
 # --- the could-not-look arms -------------------------------------------------

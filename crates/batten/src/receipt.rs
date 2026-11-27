@@ -82,13 +82,18 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 
+use crate::config_check::receipt::safe_subject;
+use crate::config_check::receipt::validate_check_name;
+#[cfg(test)]
+use crate::config_check::receipt::validate_verified_by;
+use crate::config_model::ReceiptKey;
+use crate::digest::sha256_hex as hex_sha256;
 use crate::error::UsageError;
 use crate::exit::ExitCode;
-use crate::output::{Mode, Verbosity};
-use crate::rules::ReceiptKey;
-use crate::{config, git, identity, output, state};
+use crate::output::Mode;
+use crate::surface_table::Verbosity;
+use crate::{git, identity, output, state};
 
 /// The in-toto Statement v1 type identifier (CLOUD-132: adopt the format).
 ///
@@ -489,48 +494,6 @@ fn repo_facts() -> Result<RepoFacts> {
     })
 }
 
-/// Validate a check name for use as an identity field and a filename
-/// component: ASCII alphanumeric first, then alphanumeric plus `.`, `_`, `-`.
-fn validate_check_name(check: &str) -> Result<()> {
-    let mut chars = check.chars();
-    let first_ok = chars.next().is_some_and(|c| c.is_ascii_alphanumeric());
-    let rest_ok = chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'));
-    if first_ok && rest_ok {
-        Ok(())
-    } else {
-        Err(UsageError::raise(format!(
-            "check name {check:?} is not a valid identifier (ASCII alphanumeric, then alphanumeric or `.`, `_`, `-`)"
-        )))
-    }
-}
-
-/// Refuse a `[receipt] verified_by` naming a check no receipt can ever be
-/// written for.
-///
-/// # AT LOAD, BECAUSE THE ALTERNATIVE IS A CONFIG THAT IS PERMANENTLY UNUSABLE
-///
-/// `receipt record` and `receipt status` already refuse these names, and nothing
-/// held the config table to the same rule (review of #848). So
-/// `verified_by = ["fmt check"]` loaded clean, `receipt record "fmt check"`
-/// exited `1` with *"not a valid identifier"*, no receipt could ever exist, and
-/// [`run_verified`] — which validates nothing and hashes the name straight into
-/// a path — reported `NOT verified: <head> fmt check missing` forever. The
-/// refusal pointed at a missing receipt rather than at the unwritable name that
-/// made it missing, which is the inert-typo class every other declared table in
-/// `config::validate_tables` is refused at load for.
-///
-/// Fail-closed either way; what changes is that the diagnosis names the cause.
-///
-/// # Errors
-///
-/// [`crate::UsageError`] naming the first offending check.
-pub fn validate_verified_by(checks: &[String]) -> Result<()> {
-    for check in checks {
-        validate_check_name(check)?;
-    }
-    Ok(())
-}
-
 /// The canonical receipt path for a check: `<state>/receipts/<fingerprint>.json`.
 fn receipt_path(repo_root: &str, check: &str) -> Result<std::path::PathBuf> {
     let fingerprint = identity::scope_fingerprint(check, RECEIPT_SCOPE_KEY);
@@ -589,7 +552,7 @@ impl SourcedStore {
     /// CLOUD-859's fix, since the existing three-valued contract already carries
     /// it and no new verdict was needed.
     pub(crate) fn record(&self, check: &str) -> Option<crate::facts::Sourced> {
-        crate::facts::Sourced::parse(&std::fs::read_to_string(self.path(check)?).ok()?)
+        crate::facts::Sourced::parse(&crate::fsio::read_to_string(self.path(check)?).ok()?)
     }
 
     /// Whether `check`'s record is older than the declaring row's bound
@@ -651,7 +614,7 @@ fn sourced_store_in(
         None
     };
     // `named` over an agent-sourced check is REFUSED AT LOAD
-    // (`facts::validate_keying`), so this is reachable only from a policy
+    // (`rules::validate_keying`), so this is reachable only from a policy
     // assembled in-process. Resolved anyway rather than left to a wildcard arm
     // below: `_ =>` would silently absorb a fourth keying, which is the shape
     // `facts.rs`'s own no-wildcard scan exists to refuse.
@@ -667,7 +630,7 @@ fn sourced_store_in(
             ReceiptKey::Branch => branch.clone()?,
             ReceiptKey::Named => named.clone()?,
             // `delta` over an agent-sourced check is REFUSED AT LOAD
-            // (`facts::validate_keying`) for the reason `named` is, one step
+            // (`rules::validate_keying`) for the reason `named` is, one step
             // further along: the identity needs the row's `key_base`, and a
             // `[[fact]]` row has no such column to read one from. So this is
             // reachable only from a policy assembled in-process, and it answers
@@ -687,7 +650,7 @@ fn sourced_store_in(
 /// sides ask on different calls: the read resolves subjects for the checks a
 /// mediated call requires, and the write resolves one for the fact whose command
 /// just ran. That difference is exactly why
-/// [`crate::facts::validate_keying`] refuses `named` for an agent-sourced
+/// [`crate::config_check::rules::validate_keying`] refuses `named` for an agent-sourced
 /// check — this envelope carries no subject to project — so the third arm is
 /// unreachable through a loaded config and is written out rather than wildcarded.
 fn sourced_subject(key: ReceiptKey, named: Option<&str>) -> Option<String> {
@@ -746,34 +709,6 @@ pub fn record_sourced(
     }
     crate::durable::replace(path, record.render())?;
     Ok(())
-}
-
-/// Whether `subject` is safe to use as one path component under the receipt
-/// store (CLOUD-987).
-///
-/// **Refused, never rewritten.** The subject of a [`ReceiptKey::Named`] receipt
-/// comes out of the mediated call's own arguments, so it is the least trusted
-/// string in the envelope that this engine turns into a filename. Rewriting a bad
-/// one — stripping separators, replacing `..` — would file two different subjects
-/// under one receipt and let a fresh read of A authorise a stale write to B,
-/// which is precisely the confusion `ReceiptKey::Named` exists to prevent. So a
-/// value that is not already a single safe component is not a subject at all.
-///
-/// The bound is structural rather than a format: what a tracker's identifiers
-/// look like is a consumer fact (non-negotiable rule 1), and a row that wants to
-/// insist on a shape has `when_present` and its own selection for that. What the
-/// core knows is that a path component may not be empty, may not be `.` or `..`,
-/// may not contain a separator or a NUL, and may not be unboundedly long.
-///
-/// `pub(crate)` since CLOUD-1024: the mint that WRITES a named receipt has to
-/// refuse exactly the subjects the reader refuses, or the two halves disagree
-/// about which filenames exist.
-pub(crate) fn safe_subject(subject: &str) -> bool {
-    !subject.is_empty()
-        && subject != "."
-        && subject != ".."
-        && subject.len() <= 128
-        && !subject.contains(|ch: char| ch == '/' || ch == '\\' || ch == '\0' || ch.is_control())
 }
 
 /// The subject a [`ReceiptKey::Delta`] receipt is filed under (CLOUD-1547).
@@ -873,7 +808,7 @@ pub(crate) fn verdicts(
     subject: Option<&str>,
     key_bases: &BTreeMap<String, String>,
     max_ages: &BTreeMap<String, u64>,
-    field_bounds: &BTreeMap<String, crate::rules::FieldBound>,
+    field_bounds: &BTreeMap<String, crate::config_model::FieldBound>,
     now: std::time::SystemTime,
 ) -> Option<BTreeMap<String, Validity>> {
     let facts = repo_facts().ok()?;
@@ -1119,7 +1054,7 @@ fn named_validity(git_dir: &str, check: &str, subject: &str) -> Validity {
     let path = Path::new(git_dir)
         .join("batten-receipts")
         .join(format!("{check}.{subject}"));
-    if std::fs::read_to_string(&path).is_ok() {
+    if crate::fsio::read_to_string(&path).is_ok() {
         Validity::Valid
     } else {
         Validity::Missing
@@ -1217,7 +1152,7 @@ fn branch_validity_with(
     let path = Path::new(git_dir)
         .join("batten-receipts")
         .join(branch_receipt_name(check, branch));
-    let Ok(body) = std::fs::read_to_string(&path) else {
+    let Ok(body) = crate::fsio::read_to_string(&path) else {
         return Validity::Missing;
     };
     let recorded = recorded_base(&body);
@@ -1409,58 +1344,16 @@ pub fn head_receipt_valid(check: &str) -> bool {
 }
 
 fn load_statement(path: &Path) -> Option<Statement> {
-    let bytes = std::fs::read(path).ok()?;
+    let bytes = crate::fsio::read(path).ok()?;
     let statement: Statement = serde_json::from_slice(&bytes).ok()?;
     (statement.statement_type == STATEMENT_TYPE && statement.predicate_type == PREDICATE_TYPE)
         .then_some(statement)
 }
 
-/// Lowercase hex SHA-256 over `bytes` — the value an in-toto digest set's
-/// `sha256` key carries.
-///
-/// Public because the envelope's digest vocabulary is shared: [`crate::design`]
-/// binds a capture with the same digest-set spelling, and a second hash of the
-/// same bytes written in a second module is how two "sha256" fields come to
-/// disagree. A *plain* digest, deliberately not [`crate::identity`]'s
-/// domain-tagged construction: this value is produced by whatever attestation
-/// tool wrote the record, so it must be the ordinary one anybody can reproduce.
-#[must_use]
-pub fn hex_sha256(bytes: &[u8]) -> String {
-    let digest = Sha256::digest(bytes);
-    let mut hex = String::with_capacity(digest.len() * 2);
-    for byte in digest {
-        // Infallible nibble pushes, the same shape as `Fingerprint::to_hex`.
-        hex.push(char::from_digit(u32::from(byte >> 4), 16).unwrap_or('0'));
-        hex.push(char::from_digit(u32::from(byte & 0x0f), 16).unwrap_or('0'));
-    }
-    hex
-}
-
-/// Format seconds since the Unix epoch as RFC 3339 UTC (`1970-01-01T00:00:00Z`).
-///
-/// The date half comes from [`crate::waiver::Date::from_unix_seconds`] — one
-/// hand-written civil-from-days conversion in the tree rather than two, so a date
-/// still costs no dependency and cannot be right in one module and wrong in the
-/// other. Only the time-of-day arithmetic is here.
-///
-/// **The receipt's validity never reads this timestamp — expiry is a git fact,
-/// never a clock.** That is right *here* and does not generalise: a receipt's
-/// claim is about a specific SHA, so a SHA comparison is the invalidator. A
-/// waiver's claim is a human judgement whose warrant decays in calendar time and
-/// leaves no git trace, which is why [`crate::waiver`] does evaluate a clock — at
-/// its boundary, with the date threaded in as data. Different claims, different
-/// invalidators (CLOUD-208).
-#[must_use]
-pub fn rfc3339_utc(unix_seconds: u64) -> String {
-    let date = crate::waiver::Date::from_unix_seconds(unix_seconds);
-    let second_of_day = unix_seconds % 86_400;
-    let (hour, minute, second) = (
-        second_of_day / 3_600,
-        (second_of_day % 3_600) / 60,
-        second_of_day % 60,
-    );
-    format!("{}T{hour:02}:{minute:02}:{second:02}Z", date.text())
-}
+/// Format seconds since the Unix epoch as RFC 3339 UTC (`1970-01-01T00:00:00Z`):
+/// the one formatter, kept in the `clock` leaf beside the civil-date arithmetic
+/// it reads (CLOUD-2789).
+use crate::clock::rfc3339_utc;
 
 /// How many paths differ from HEAD, or [`None`] when the tree matches it.
 ///
@@ -1631,7 +1524,7 @@ pub fn run_record(check: &str, mode: Mode, err: &mut dyn Write) -> Result<ExitCo
     validate_check_name(check)?;
     let facts = repo_facts()?;
     tree_is_head(&facts, err)?;
-    let policy = git::show(Path::new("."), "HEAD", config::CONFIG_FILE)
+    let policy = git::show(Path::new("."), "HEAD", crate::config_model::CONFIG_FILE)
         .map_err(|_| {
             UsageError::raise(
                 "batten.toml is not committed at HEAD, so there is no policy to digest",
@@ -1743,7 +1636,7 @@ fn record_agent_context(
     mode: Mode,
     err: &mut dyn Write,
 ) -> Result<()> {
-    let config = crate::config::load(Path::new(crate::config::CONFIG_FILE))?;
+    let config = crate::config::load(Path::new(crate::config_model::CONFIG_FILE))?;
     let declared = config
         .transcript
         .as_ref()
@@ -1808,7 +1701,7 @@ fn record_agent_context(
             )?;
             return Ok(());
         }
-        crate::transcript::Capability::Present(stream) => stream,
+        crate::transcript::Capability::Present(stream) => *stream,
     };
 
     let statement = AgentStatement {
@@ -1900,8 +1793,6 @@ struct StatusReport<'a> {
 /// A **detached HEAD under `--key branch`** is an internal error rather than a
 /// verdict, for [`branch_facts`]'s reason: a rebase detaches, and answering
 /// "not valid" there would make every rebase look like an unclaimed branch.
-//MUTANT delta-base-unchecked|s@^            if git::resolve_ref(Path::new(&facts.repo_root), base)?.is_none() {$@            if false {@|an_unresolvable_base_is_refused_rather_than_read_missing
-//MUTANT delta-status-unread|s@^                    let verdict = named_validity(&facts.git_dir, check, &identity);$@                    let verdict = Validity::Valid;@|a_dispatched_review_answers_only_once_it_completes
 pub fn run_status(
     check: &str,
     key: ReceiptKey,
@@ -2038,8 +1929,6 @@ pub fn run_status(
 /// verdict about any receipt. And a [`UsageError`] for `--json` beside more than
 /// one check: the verb's document is ONE verdict, and several documents on one
 /// stream are not one document.
-//MUTANT-SUITE crates/batten/src/receipt.rs
-//MUTANT receipt-any-stops-at-the-first|s@        if verdict == ExitCode::Success {@        if verdict != ExitCode::Success {@|any_one_valid_receipt_satisfies_the_walk
 pub fn run_status_any(
     checks: &[String],
     key: ReceiptKey,
@@ -2275,8 +2164,8 @@ pub fn run_verified(out: &mut dyn Write) -> Result<ExitCode> {
 /// of its lines carries the verdict is a different question with a different
 /// answer; a `mode = "replace"` receipt has exactly one line, which is the family
 /// this column is for.
-fn field_refutes(path: &Path, bound: &crate::rules::FieldBound) -> bool {
-    let Ok(text) = std::fs::read_to_string(path) else {
+fn field_refutes(path: &Path, bound: &crate::config_model::FieldBound) -> bool {
+    let Ok(text) = crate::fsio::read_to_string(path) else {
         return false;
     };
     let Some(line) = text.lines().next() else {
@@ -2317,6 +2206,7 @@ const fn key_token(key: ReceiptKey) -> &'static str {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
 
+    #[cfg(test)]
     /// The three-valued read, and the two arms that must ALLOW.
     ///
     /// `Refuted` is the only verdict in this module that is a statement about
@@ -2328,7 +2218,7 @@ mod tests {
     fn a_field_bound_refutes_only_a_field_that_says_something_else() {
         let dir = std::env::temp_dir().join(format!("batten-field-bound-{}", std::process::id()));
         std::fs::create_dir_all(&dir).expect("the scratch directory is creatable");
-        let bound = crate::rules::FieldBound {
+        let bound = crate::config_model::FieldBound {
             at: 6,
             is: "ready".to_owned(),
         };
@@ -2559,7 +2449,11 @@ mod tests {
         }
         // UNIQUE TO THIS RUN, so no record an earlier run left behind can
         // answer the read-back for this one.
-        let name = format!("batten-unit-{}-{}", std::process::id(), crate::now_unix());
+        let name = format!(
+            "batten-unit-{}-{}",
+            std::process::id(),
+            crate::clock::now_unix()
+        );
         let store = sourced_store(&[(&name, &ReceiptKey::Named)], Some("CLOUD-1")).unwrap();
         let _written = Removed(store.path(&name).unwrap());
         record_sourced(&name, ReceiptKey::Named, Some("CLOUD-1"), &sourced(5)).unwrap();
@@ -2782,7 +2676,7 @@ mod tests {
         let _ = std::fs::remove_file(&path);
     }
 
-    /// `#MUTANT receipt-any-stops-at-the-first` reddens here. The disjunction
+    /// A mutant stopping at the first kind reddens here. The disjunction
     /// `verify`'s claim step asks (CLOUD-843): the second kind answering is
     /// enough, and the third is never read.
     #[test]
@@ -2879,7 +2773,7 @@ mod tests {
             id: "CLOUD-1".to_owned(),
             status: "Todo".to_owned(),
             assigned: false,
-            live_pr: None,
+            live_prs: Vec::new(),
             description: None,
             created_at: None,
         }];
@@ -3186,7 +3080,7 @@ mod tests {
             id: "CLOUD-1".to_owned(),
             status: "Todo".to_owned(),
             assigned: false,
-            live_pr: None,
+            live_prs: Vec::new(),
             description: None,
             created_at: None,
         }];
@@ -3200,7 +3094,7 @@ mod tests {
             "2026-01-01T00:00:00Z",
         )
         .expect("mint a receipt");
-        let text = std::fs::read_to_string(&minted).expect("read the minted receipt");
+        let text = crate::fsio::read_to_string(&minted).expect("read the minted receipt");
         assert_eq!(
             recorded_base(&text),
             Some("deadbeef".to_owned()),
@@ -3461,7 +3355,3 @@ mod tests {
 
 // The receipt verbs and the hook's receipt verdicts read the checkout they run
 // in, so the compiled-binary tier is what judges them.
-//MUTANT-SUITE crates/batten/tests/it/receipt_verified.rs
-//MUTANT-SUITE crates/batten/tests/it/receipt_clean.rs
-//MUTANT-SUITE crates/batten/tests/it/review_receipt_delta.rs
-//MUTANT-SUITE crates/batten/tests/it/call_arguments.rs

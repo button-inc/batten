@@ -1,0 +1,16 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH batten-modules-metrics 1  batten 
+.SH NAME
+batten\-modules\-metrics \- Print every module\-graph metric of a source root as one record line
+.SH SYNOPSIS
+\fBbatten modules metrics\fR [\fB\-h\fR|\fB\-\-help\fR] <\fB\-\-root\fR> 
+.SH DESCRIPTION
+Print every module\-graph metric of a source root as one record line
+.SH OPTIONS
+.TP
+\fB\-\-root\fR \fI<root>\fR
+The crate\*(Aqs source root, the directory holding lib.rs
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help

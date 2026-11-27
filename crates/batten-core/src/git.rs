@@ -1,0 +1,10218 @@
+//! Resolve the repository root through git's common-dir finder.
+//!
+//! The one `repo_root` primitive (CLOUD-34). Every path resolved against "the
+//! repository" derives from this function; a second resolver is a bug, and the
+//! single-implementation assertion in this module's tests is the gate that
+//! keeps one from landing. The root is the parent of git's *common* directory
+//! — never `--show-toplevel` — so a call from inside a linked worktree (agents
+//! work in `.claude/worktrees/`) answers with the main repository root, where
+//! per-repository config and state live, rather than the worktree's own
+//! toplevel.
+//!
+//! Resolution is in-process (CLOUD-740). [`gix::open::Options::isolated`]
+//! declines system, global and environment configuration outright, so an ambient
+//! override — a hook context exporting `GIT_DIR`, say — cannot make the answer be
+//! about some *other* repository, which is the mis-rooting bug class this module
+//! exists to kill. The answer is a function of the (cwd-resolved) `start`
+//! argument and on-disk state only.
+//!
+//! **That scrub is structural, where it used to be a maintained list.** Five
+//! environment variables were removed by name from every child — three redirects
+//! and two discovery fences — and a sixth arriving in a future git would simply
+//! not have been removed. Declining the environment as a class has no such gap,
+//! and there is no constant left to keep current.
+//!
+//! # Merged-ness (CLOUD-36)
+//!
+//! # One backend now, and what the confinement became (CLOUD-320's `git.rs` row)
+//!
+//! This heading read *"Two backends, and where the line is"* and the paragraph
+//! under it said part of this module shells out — **which the paragraph four
+//! lines below has contradicted since CLOUD-740 landed**, in this same header.
+//! Corrected rather than left as a second authority: there is one backend, it is
+//! `gix`, and the split the section named is gone.
+//!
+//! What the in-process choice bought stands unchanged and is recorded below;
+//! what moved is the confinement. `gix_is_confined_to_the_git_modules` names a
+//! CLOSED list of three rather than this file alone, because the effect split
+//! that matters — a `read`-effect gate must not reach a write — is
+//! `policy/module-layering.rego`'s forbidden edges over the use graph, and
+//! folding the write half back in here would make those edges unspellable.
+//!
+//! **In-process, because each had a defect a library makes unrepresentable.**
+//! [`show`] read a caller's ref out of argv, so `--config-from
+//! --output=<path>` made a `read`-effect verb write a file (CLOUD-718).
+//! [`count_at_rev`] parsed `ls-tree` under the host's `core.quotePath`, so a
+//! ratchet spanning a non-ASCII path reported clean while a test was deleted
+//! (CLOUD-749) — CLOUD-328's failure class on a second axis.
+//!
+//! **NOTHING HERE SPAWNS `git` ANY MORE (CLOUD-740).** The last child was
+//! `repo_root`'s, and `no_second_git_invoker_exists` is now the terminal
+//! assertion the four slices were sequenced toward: a literal `git` spawn
+//! anywhere under `src/` fails it, this file included. That gate used to exempt
+//! this module, because this module held the one invoker; the exemption is what
+//! went, and the claim is strictly stronger and much simpler for it.
+//!
+//! Three helpers went with the last of them — `query`, `query_bytes` and
+//! `query_optional` — along with `command`, the two discovery-scrub constants and
+//! the `queries_spawned` counter. So did a family of hazards that were being
+//! *remembered* rather than made impossible: `--end-of-options` on every argv
+//! carrying a caller's token, its inverse in `rev-parse`'s ref-PRINTING modes
+//! where the flag is echoed as an output line rather than consumed, and
+//! `core.quotePath` deciding whether a non-ASCII path arrived readable. A
+//! resolver takes no flags and a path is bytes, so none of the three has anywhere
+//! left to occur.
+//!
+//! What did NOT come from gix is worth naming, because two questions were
+//! answered by refusing a dependency rather than by taking one. `uncommitted` and
+//! `changed_paths` read the index, the `HEAD` tree and the vendored `ignore`
+//! walker instead of gix's `status`, and `check_ignore` reads that same walker's
+//! rules rather than gix's excludes: both gix features pull the
+//! materialise-blobs-to-disk and external-program surface CLOUD-739 declined, and
+//! buying it to delete a spawn would be buying the thing the spawn was being
+//! deleted for. `working_tree_changes` carries the cost that choice has —
+//! clean/smudge filters are not applied — and states why over-reporting is the
+//! safe direction there.
+//!
+//! An earlier revision of this paragraph said *"migrating buys nothing an agent
+//! can observe"* and called rewriting patch identity *"risk with no return"*. It
+//! was written while all three of those rows sat cancelled, and a later session
+//! read it here and restated it as fact. Both halves failed in the same
+//! direction, and the migration that has now happened settles it: the risk was
+//! **priced** rather than absent, by a differential gate that compares the
+//! VERDICT the two implementations give over the same rebase, squash and
+//! cherry-pick corpus — never the hashes, which differ by construction and whose
+//! agreement would assert the migration did not happen.
+//!
+//! **What the price is, since a cost must be named as one (CLOUD-320).** These
+//! spawns stay under a build strategy rather than a capability limit. `git2` has
+//! the APIs — `Diff::patchid()` included — and is barred by `macos-link-check`
+//! rule 1 because `libgit2-sys` declares a `links` key, because the Darwin legs
+//! cross-build SDK-free under zig, because that build strategy is priced by
+//! RUNNER BILLING — an account setting, not a property of this code.
+//!
+//! **The chain ends in a price, and this file must not restate what the price
+//! IS.** An earlier version did: it named a per-OS multiplier and a repository
+//! visibility, and said the clause would expire when the visibility changed. It
+//! did change, and the sentence describing the wait outlived the wait — a
+//! comment holding a fact that lives in another system is a cache with no
+//! invalidation. Name the DEPENDENCY and the row that owns re-deciding it
+//! (CLOUD-737); the value itself is cached once, dated, in `ci.yml` and nowhere
+//! else. `provision.rs` documents its own shell-out in this shape,
+//! and `every_stays_shelled_out_claim_names_its_price` is what keeps this
+//! paragraph here rather than trusting the next author to remember it.
+//!
+//! **Nothing here is kept because gix cannot do it (CLOUD-780, 2026-08-20).**
+//! Two primitives used to be, and the standing strategy decided them the other
+//! way: *gix for everything gix can do; where it cannot, implement LESS rather
+//! than keep a spawn path.* So they were deleted, and the pileup gate and
+//! `worktree reclaim` retired with them — a deliberate capability loss, priced
+//! on CLOUD-780's row rather than restated here, and the reason that row is
+//! worth reading is that a partial drop would have been worse than either end
+//! state: `reclaim` was the crate's only destructive path, and its safety was
+//! the very interlock the drop removes.
+//!
+//! That leaves a property, not just a smaller module. Every spawn left in here
+//! is **unported**, never *unportable*, which is what makes the backend
+//! swappable at all and what CLOUD-737's re-decision needs to be a real choice.
+//! `no_gix_gap_primitive_survives` is the gate that keeps it true: the
+//! vocabulary of the two dropped concepts may not reappear anywhere in `src/`,
+//! so reinstating one is a visible change rather than a quiet regression.
+//!
+//! The latency argument for migrating more was measured and does not carry it:
+//! the only spawns on the mediated-call path are `key_facts`', and they cost
+//! **6.7ms** on a **100ms** budget for the two `requires_key` command shapes
+//! alone (`gh pr create`, `gh pr ready`) — a handful of calls per session.
+//!
+//! This module is also where "did this work land?" is answered, because every
+//! `git` process the crate spawns is spawned here — `no_second_git_invoker`
+//! below is the gate that keeps a second git-touching module, and therefore a
+//! second answer to *landed*, from appearing.
+//!
+//! **The answer is content, never reachability.** Every reachability test —
+//! asking whether a commit is an ancestor of the target, or which branches
+//! contain it — keys on the commit SHA, and every one of them answers "not
+//! landed" about a branch that was rebased, squashed, or cherry-picked on its
+//! way to `main`. On a fast-forward trunk that is the *normal* way work lands.
+//! A false *not landed* on work that did land is silently wrong rather than
+//! loudly broken, and it is the failure class Batten exists to catch. So
+//! [`landing`] compares **patch identity** — [`crate::patch::identity`] over each
+//! change — and, for the squash case that per-commit identity cannot see, the
+//! patch identity of the branch's cumulative diff.
+//!
+//! Reachability appears in exactly one role: *selecting* which commits to hash.
+//! It never produces a verdict. Every [`Verdict::Landed`] is backed by an
+//! [`Evidence`] naming the target commit whose patch identity matched, and the
+//! type offers no way to spell a landed verdict while holding no evidence.
+//! `policy/ancestry-decides-nothing.rego` is the source-level gate — a
+//! registered Rego module over `Fact::Invocations`, which replaced this
+//! module's own `no_ancestry_decides_merged_ness` scan (CLOUD-756).
+//!
+//! Two consequences worth stating, because neither is obvious:
+//!
+//! * **A negative answer is bounded, and says so.** The target is searched over
+//!   a [`Window`] of commits, so the honest negative is
+//!   [`Verdict::NotLandedWithinWindow`] with [`Scan::target_truncated`] — never
+//!   a bare "no". The type refuses to assert an absence it did not prove,
+//!   because *that* absence is the dangerous direction.
+//! * **`git cherry` is deliberately not used**, despite being git's own
+//!   patch-id equivalence tool. Its upstream limit defaults to the merge base,
+//!   so a branch that was cherry-picked to the target and *then* synced with it
+//!   has its own landing fall outside the search — and `git cherry` reports the
+//!   work as unlanded. It also reports only `+`/`-`, which cannot populate
+//!   [`Evidence`]. The technique is adopted; the command is not.
+//!
+
+use std::collections::{BTreeMap, BTreeSet};
+use std::ffi::OsStr;
+use std::num::NonZeroUsize;
+use std::path::{Path, PathBuf};
+
+use anyhow::{Result, bail};
+use serde::Serialize;
+
+use crate::error::UsageError;
+
+/// The identity of a change's *content*, independent of the commit that carries
+/// it.
+///
+/// Two commits with the same `PatchId` make the same change to the same paths,
+/// whatever their SHA, author, message, date, or parents — which is precisely
+/// what makes a rebased, amended, or cherry-picked commit recognisable after it
+/// lands under a new SHA.
+///
+/// **Computed in-process, and the normalisation is ours** (CLOUD-739).
+/// [`crate::patch`] is the authority on what that normalisation is and why each
+/// part of it was chosen; it is deliberately NOT restated here, because two
+/// copies of a definition drift and only one of them can be the one the code
+/// implements. The short version a reader needs at this type: line numbers are
+/// excluded so a rebase still matches, and whitespace is significant, which
+/// diverges from `git patch-id` on purpose.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+pub struct PatchId(String);
+
+impl PatchId {
+    /// The one constructor, so a slip in rendering cannot manufacture an
+    /// equality (CLOUD-739 §7c).
+    ///
+    /// Exactly 64 lowercase hex digits: the identity is a SHA-256 over this
+    /// crate's own canonical form, so its width is fixed by that and no longer
+    /// by the repository's hash. It used to accept 40 as well, because it was
+    /// parsing whatever `git patch-id` printed and that followed the repository
+    /// — SHA-1 or SHA-256. Nothing prints it now, so the narrower rule is the
+    /// honest one, and a 40-hex value reaching here is a defect rather than a
+    /// SHA-1 repository.
+    fn parse(text: &str) -> Result<Self> {
+        let ok = text.len() == 64
+            && text
+                .chars()
+                .all(|c| c.is_ascii_digit() || matches!(c, 'a'..='f'));
+        if ok {
+            Ok(Self(text.to_owned()))
+        } else {
+            bail!("a patch identity must be 64 lowercase hex digits, not {text:?}")
+        }
+    }
+
+    /// The hash in git's own lowercase hex form.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for PatchId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+/// How far back on the target [`landing`] looks for a matching change.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct Window(NonZeroUsize);
+
+impl Window {
+    /// The default search depth: 1000 commits of the target.
+    ///
+    /// Chosen as "further back than any review cycle, short of a full-history
+    /// scan". The two directions are not symmetric — a window that is too small
+    /// yields the dangerous verdict, a window that is too large costs one
+    /// longer `git log` — so the default is generous and a caller may widen it.
+    /// A landing older than the window is reported as
+    /// [`Verdict::NotLandedWithinWindow`], never as a proven absence.
+    pub const DEFAULT: Self = Self(match NonZeroUsize::new(1000) {
+        Some(commits) => commits,
+        // Unreachable — 1000 is not zero — but the lints forbid a panicking
+        // path, and a const `match` keeps this total.
+        None => NonZeroUsize::MIN,
+    });
+
+    /// A window of `commits` target commits. Non-zero by type: a zero window
+    /// would search nothing and report every branch unlanded.
+    #[must_use]
+    pub const fn of(commits: NonZeroUsize) -> Self {
+        Self(commits)
+    }
+
+    /// The depth, as git's `--max-count` takes it.
+    #[must_use]
+    pub const fn commits(self) -> usize {
+        self.0.get()
+    }
+}
+
+impl Default for Window {
+    fn default() -> Self {
+        Self::DEFAULT
+    }
+}
+
+/// What made one change count as landed. Every variant that means "landed"
+/// names the target commit that carries it — there is no way to record a
+/// landing without the proof of it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Evidence {
+    /// A commit on the target makes the identical change.
+    PatchId {
+        /// The target commit carrying it.
+        target_commit: String,
+        /// The identity both sides share.
+        patch_id: PatchId,
+    },
+    /// A commit on the target makes the branch's *cumulative* change — the
+    /// squash-merge shape, where no individual commit survived the merge and
+    /// so none of them matches on its own.
+    Squash {
+        /// The squashed commit on the target.
+        target_commit: String,
+        /// The identity of the branch's whole diff.
+        patch_id: PatchId,
+    },
+    /// The commit changes nothing, so there is nothing of it to land.
+    NoContent,
+}
+
+impl Evidence {
+    /// The target commit this evidence points at, or `None` for
+    /// [`Evidence::NoContent`], which points at nothing.
+    #[must_use]
+    pub fn target_commit(&self) -> Option<&str> {
+        match self {
+            Evidence::PatchId { target_commit, .. } | Evidence::Squash { target_commit, .. } => {
+                Some(target_commit)
+            }
+            Evidence::NoContent => None,
+        }
+    }
+}
+
+/// The landing verdict for a branch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Verdict {
+    /// Every commit that changes anything is accounted for on the target.
+    Landed,
+    /// Some commits landed and some did not.
+    PartiallyLanded,
+    /// The branch's net change against the target is empty, so there is no
+    /// unlanded work — an empty commit, a change and its revert, or a branch
+    /// the target has already absorbed entirely.
+    NothingToLand,
+    /// No match was found **within the window searched**. Named for what it
+    /// proves: this is an unproven absence, not an absence. A consumer
+    /// rendering it must say so, and [`Scan::target_truncated`] says whether
+    /// older history went unexamined.
+    NotLandedWithinWindow,
+}
+
+/// What [`landing`] actually looked at, so a negative verdict can be read for
+/// how much it proves.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Scan {
+    /// The resolved full SHA of the target.
+    pub target_commit: String,
+    /// The resolved full SHA of the head.
+    pub head_commit: String,
+    /// How many target commits were hashed.
+    pub target_commits_scanned: usize,
+    /// The window filled: older target history was **not** examined, so a
+    /// negative verdict is unproven rather than false.
+    pub target_truncated: bool,
+    /// The head-side window filled: the branch has more commits than were
+    /// examined.
+    pub head_truncated: bool,
+    /// The window this scan used.
+    pub window: Window,
+}
+
+/// One head-side commit and what became of it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct CommitLanding {
+    /// Full SHA on the head side.
+    pub commit: String,
+    /// `None` for a commit whose diff is empty: `git patch-id` emits nothing
+    /// for an empty patch, and an absent identity must never be matched against
+    /// another absent identity.
+    pub patch_id: Option<PatchId>,
+    /// The proof this commit's change is on the target, or `None`.
+    pub evidence: Option<Evidence>,
+}
+
+/// The result of [`landing`]: pointer-only — SHAs and identities, never file
+/// content — and byte-stable for identical repository state.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Landing {
+    /// The verdict, derived from the evidence below and nothing else.
+    pub verdict: Verdict,
+    /// Head-side commits, oldest first — the fixed reporting order.
+    pub commits: Vec<CommitLanding>,
+    /// The patch identity of the whole branch; `None` when its cumulative diff
+    /// is empty.
+    pub cumulative: Option<PatchId>,
+    /// Branch-level proof: `Some` when the branch's whole change is on the
+    /// target as a *single* commit.
+    ///
+    /// That is the squash-merge shape, and it is also trivially true of a
+    /// one-commit branch that landed intact — so this is "the whole change is
+    /// one commit over there", not "someone ran a squash merge". A consumer
+    /// that wants to know whether the individual commits survived should read
+    /// [`CommitLanding::evidence`], which answers exactly that.
+    pub cumulative_evidence: Option<Evidence>,
+    /// What was examined to reach the verdict.
+    pub scanned: Scan,
+}
+
+impl Landing {
+    /// Whether the branch has no unlanded content — [`Verdict::Landed`] or
+    /// [`Verdict::NothingToLand`]. A branch with nothing to land is not
+    /// unlanded work, and a consumer that only matched `Landed` would report a
+    /// fast-forwarded branch as outstanding.
+    #[must_use]
+    pub const fn is_landed(&self) -> bool {
+        matches!(self.verdict, Verdict::Landed | Verdict::NothingToLand)
+    }
+
+    /// The head-side commits with no proof on the target — the pointer a
+    /// consumer surfaces for a negative verdict.
+    #[must_use]
+    pub fn unlanded(&self) -> Vec<&str> {
+        self.commits
+            .iter()
+            .filter(|commit| commit.evidence.is_none())
+            .map(|commit| commit.commit.as_str())
+            .collect()
+    }
+}
+
+/// Strip Windows' verbatim prefix, so a canonicalised path is comparable with
+/// every other path in the crate.
+///
+/// **This is a regression this migration introduced, caught by CI on Windows and
+/// nowhere else.** The shelled-out predecessor answered from
+/// `git rev-parse --show-toplevel`, which is a plain path. `Path::canonicalize`
+/// is not: on Windows it returns the VERBATIM spelling, `\\?\D:\a\batten`, and
+/// nothing else in the crate produces one. `receipt::judgeable` then asks whether
+/// a `std::path::absolute` path starts with the root, the two never share a
+/// prefix, and the write reads as OUTSIDE the repository — so the claim gate
+/// allowed every write on Windows while denying correctly everywhere else.
+/// Measured as exactly one red case out of 2288, which is what an answer that is
+/// wrong only under a prefix looks like.
+///
+/// A verbatim UNC path (`\\?\UNC\server\share`) is LEFT ALONE: its plain
+/// spelling is not equivalent — verbatim paths skip normalisation — so rewriting
+/// one would trade a comparison bug for a resolution bug. On every other platform
+/// this is the identity.
+fn plain(path: PathBuf) -> PathBuf {
+    let Some(text) = path.to_str() else {
+        return path;
+    };
+    let Some(rest) = text.strip_prefix(r"\\?\") else {
+        return path;
+    };
+    if rest.starts_with("UNC\\") {
+        return path;
+    }
+    PathBuf::from(rest)
+}
+
+/// `path` canonicalized and spelled [`plain`], or `path` unchanged where it does
+/// not resolve: THE spelling to compare against any root this module returns.
+///
+/// Every root here is spelled this way, and a bare `Path::canonicalize` on
+/// Windows answers in the verbatim spelling, which shares no prefix with any of
+/// them. Measured twice: once in `receipt::judgeable` (above), and once in
+/// `testing::falls_through`, which read every owned fixture as falling through
+/// and refused 2,614 cases on the Windows leg of #1089 while the Linux suite
+/// stayed green (CLOUD-2059). `tests/it/canonical_spelling.rs` holds every other
+/// bare call in the engine to its counted ceiling.
+#[must_use]
+pub fn canonical(path: &Path) -> PathBuf {
+    plain(path.canonicalize().unwrap_or_else(|_| path.to_path_buf()))
+}
+
+/// Where a call's target sits (CLOUD-2672).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Placement {
+    /// Inside a working tree, judged by this root: the directory itself where
+    /// it holds the authority, else its worktree's, else its repository's.
+    Root(PathBuf),
+    /// In no repository at all.
+    Outside,
+    /// A repository this cannot root: one with no working tree, or a discovery
+    /// that failed for any reason but "none here".
+    Unplaceable,
+}
+
+/// Place `target` (CLOUD-2672). A target that does not exist yet is placed by
+/// its nearest existing ancestor, a lexical walk up the path, and a file by its
+/// directory; then git's own discovery, never a config search.
+///
+/// **gix's error is kept**, because `repo_root`'s untyped one cannot tell "in no
+/// repository" from "in one this cannot root", and only the first allows.
+#[must_use]
+pub fn placement(target: &Path, file: &str) -> Placement {
+    let mut probe = target.to_path_buf();
+    while !probe.exists() {
+        if !probe.pop() {
+            return Placement::Outside;
+        }
+    }
+    // Resolved BEFORE a file is stepped up from, so a symlink names the
+    // repository its target lives in, not the one holding the link.
+    let mut probe = canonical(&probe);
+    if !probe.is_dir() {
+        probe.pop();
+    }
+    match gix::discover::upwards_opts(&probe, discovery(&ceiling_dirs())) {
+        Ok((found, _)) => {
+            if found
+                .into_repository_and_work_tree_directories()
+                .1
+                .is_none()
+            {
+                return Placement::Unplaceable;
+            }
+            if probe.join(file).is_file() {
+                return Placement::Root(probe);
+            }
+            authority_root(&probe, file).map_or(Placement::Unplaceable, |root| {
+                Placement::Root(canonical(&root))
+            })
+        }
+        Err(err) => undiscovered(&err),
+    }
+}
+
+/// Where a failed discovery places a target: no repository above it is
+/// `Outside`, while any other failure — an untrusted repository, a ceiling
+/// that cannot be matched — is `Unplaceable`, never read as no repository.
+/// gix 0.90 erases the operation's error into `gix::Error`; the variants are
+/// recovered by downcast, never by the broad `NotFound` class, which would
+/// also read an untrusted repository as no repository.
+fn undiscovered(err: &gix::Error) -> Placement {
+    if matches!(
+        err.downcast_any_ref::<gix::discover::upwards::Error>(),
+        Some(
+            gix::discover::upwards::Error::NoGitRepository { .. }
+                | gix::discover::upwards::Error::NoGitRepositoryWithinCeiling { .. }
+                | gix::discover::upwards::Error::NoGitRepositoryWithinFs { .. }
+        )
+    ) {
+        Placement::Outside
+    } else {
+        Placement::Unplaceable
+    }
+}
+
+/// Resolve the root of THIS WORKING TREE — the checkout `start` is actually in.
+///
+/// # THE SIBLING TO [`repo_root`], AND CHOOSING BETWEEN THEM IS THE WHOLE POINT
+///
+/// `repo_root` answers with the MAIN checkout on purpose, because per-repository
+/// state must be one store across every linked worktree (CLOUD-164). That makes
+/// it the wrong anchor for anything a BRANCH decides, and the difference is
+/// invisible until somebody works in a linked worktree — which is where agents
+/// work.
+///
+/// Measured (review of #848): `receipt verified` anchored `[receipt]
+/// verified_by` on `repo_root`, so a worktree whose branch TIGHTENED the check
+/// set was judged against the main checkout's looser one and a head carrying
+/// half the receipts exited `0`. The reverse is as bad — a main config naming a
+/// check the branch retired makes the worktree permanently unverifiable.
+///
+/// **The rule: committed config is the WORKING TREE's, state is the
+/// REPOSITORY's.** A `batten.toml` is a file this branch may change, so it is
+/// read from here; a receipt store is shared, so it is rooted on `repo_root`.
+///
+/// A relative `start` resolves against the process working directory, and the
+/// returned path is absolute. Unlike a bare cwd read this WALKS UP, so a call
+/// from a subdirectory finds the checkout's own authority rather than none —
+/// which is the defect on the other side of this one.
+///
+/// # Errors
+///
+/// As [`repo_root`]: not a directory, not inside a repository, or a bare
+/// repository with no working tree to root.
+pub fn worktree_root(start: &Path) -> Result<PathBuf> {
+    if !start.is_dir() {
+        return Err(UsageError::raise(format!(
+            "{} is not a directory",
+            start.display()
+        )));
+    }
+    let repo = open_upwards(start, Vec::new()).map_err(|_| {
+        UsageError::raise(format!(
+            "{} is not inside a git repository",
+            start.display()
+        ))
+    })?;
+    let Some(workdir) = repo.workdir() else {
+        return Err(UsageError::raise(format!(
+            "{} is inside a bare repository, which has no working tree to root",
+            start.display()
+        )));
+    };
+    Ok(canonical(workdir))
+}
+
+/// The root an authority named `file` governs `start` from: the linked
+/// worktree's own when it carries `file`, else the repository's
+/// ([`crate::config::authority_root`] names `batten.toml`). Here, not in
+/// `config`, because it is git discovery alone, and [`placement`] needs it
+/// without reaching the config model (CLOUD-2789).
+///
+/// # Errors
+///
+/// As [`repo_root`].
+pub fn authority_root(start: &Path, file: &str) -> Result<PathBuf> {
+    if let Ok(worktree) = worktree_root(start)
+        && worktree.join(file).is_file()
+    {
+        return Ok(worktree);
+    }
+    repo_root(start)
+}
+
+/// Resolve the root of the repository containing `start`: the working-tree
+/// directory whose `.git` is the repository's *common* directory.
+///
+/// From a nested subdirectory this is the enclosing repository's root; from a
+/// linked worktree it is the **main** repository root (the common dir is
+/// shared), which is what keeps per-repository config and state stable across
+/// worktrees. A relative `start` resolves against the process working
+/// directory; the returned path is always absolute, as git reports it.
+///
+/// # Errors
+///
+/// Returns a [`UsageError`] (exit `1` at the consumer boundary) when `start`
+/// is not a directory, is not inside a git repository, or is inside a layout
+/// with no derivable working-tree root (a bare repository, a submodule
+/// interior, a separate git dir). Returns an internal error when git itself
+/// cannot run or produces undecodable output.
+pub fn repo_root(start: &Path) -> Result<PathBuf> {
+    // An explicit guard rather than letting git report it: `git -C ""` leaves
+    // the cwd unchanged, so an empty or missing path would silently answer for
+    // the wrong directory instead of failing.
+    if !start.is_dir() {
+        return Err(UsageError::raise(format!(
+            "{} is not a directory",
+            start.display()
+        )));
+    }
+    // UNFENCED, and this is the one caller that is. `repo_root`'s contract is
+    // that its answer is a function of `start` and the filesystem — every path
+    // the crate resolves against "the repository" derives from it, so a ceiling
+    // in the ambient environment must not move the root out from under a caller
+    // that never asked about it. Every OTHER read goes through `open`, which
+    // honours the ceiling, because a caller that fenced discovery on purpose is
+    // relying on being refused rather than answered about whatever repository
+    // sits further up the tree.
+    let repo = open_upwards(start, Vec::new()).map_err(|_| {
+        UsageError::raise(format!(
+            "{} is not inside a git repository",
+            start.display()
+        ))
+    })?;
+    // A bare repository has no working tree to root, and that refusal must stay
+    // LOUD rather than deriving a directory that is not a checkout.
+    if repo.worktree().is_none() {
+        return Err(UsageError::raise(format!(
+            "{} is inside a bare repository, which has no working tree to root",
+            start.display()
+        )));
+    }
+    // The COMMON dir, never the worktree's own: a linked worktree shares it, and
+    // rooting on the per-worktree directory is what would make two siblings
+    // resolve to two stores instead of one (CLOUD-164).
+    //
+    // The `DISCOVERY_FENCES` scrub that used to happen here and only here is gone
+    // with the process. `open`'s isolated handle declines the environment
+    // outright, so an ambient `GIT_CEILING_DIRECTORIES` cannot shape this answer
+    // and no constant has to be maintained for that to stay true.
+    let common_dir = repo.common_dir();
+    let common_dir = canonical(common_dir);
+    // The parent is the root only when the common dir is a `<root>/.git`. A
+    // submodule interior or a separate git dir would "derive" a directory that
+    // is not a working tree at all — refuse loudly instead of mis-rooting.
+    if common_dir.file_name() != Some(OsStr::new(".git")) {
+        return Err(UsageError::raise(format!(
+            "cannot derive a repository root from {}: not a `<root>/.git` layout",
+            common_dir.display()
+        )));
+    }
+    match common_dir.parent() {
+        Some(root) => Ok(root.to_path_buf()),
+        // Unreachable given the guard above (an absolute `…/.git` always has a
+        // parent), but kept total: the lints forbid panicking on any path.
+        None => Err(UsageError::raise(format!(
+            "cannot derive a repository root from {}",
+            common_dir.display()
+        ))),
+    }
+}
+
+/// The repository's common git directory — shared by the main checkout and
+/// every linked worktree, which is what makes worktree siblings resolve to one
+/// store rather than one each (CLOUD-164).
+///
+/// Recorded by [`crate::store`] as *metadata*. It is deliberately not a key: a
+/// repository that moves on disk changes this string while remaining the same
+/// repository, and a store keyed on it would orphan itself on a `mv`.
+///
+/// # Errors
+///
+/// Returns a [`UsageError`] when `dir` is not a directory or not inside a git
+/// repository.
+pub fn common_dir(dir: &Path) -> Result<String> {
+    if !dir.is_dir() {
+        return Err(UsageError::raise(format!(
+            "{} is not a directory",
+            dir.display()
+        )));
+    }
+    let repo = open(dir)?;
+    // Absolute, as `--path-format=absolute` asked for: the value is recorded as
+    // store metadata, and a relative one would be read against whatever
+    // directory the reader happens to be in.
+    let common = repo.common_dir();
+    let absolute = canonical(common);
+    Ok(absolute.to_string_lossy().into_owned())
+}
+
+/// Every configured remote as `(name, url)` pairs, sorted by name.
+///
+/// `git remote -v` is deliberately not used: it prints each remote twice (fetch
+/// and push) in a format that has to be re-parsed. `config --get-regexp` names
+/// the fetch URL exactly once per remote.
+///
+/// A repository with no remotes is the *normal* empty case, not a failure —
+/// CLOUD-164's fixture (c) is a no-remote repository — so a non-zero exit from
+/// `config --get-regexp` (which is how git reports "no matching keys") yields an
+/// empty list rather than an error.
+///
+/// # Errors
+///
+/// Returns an error only when `git` itself cannot run or emits non-UTF-8.
+pub fn remotes(dir: &Path) -> Result<Vec<(String, String)>> {
+    // No remotes configured is the normal empty case, and so is a directory this
+    // cannot open — both were an empty list under the shell-out, where a
+    // non-zero exit could not be told apart from one.
+    let Ok(repo) = open(dir) else {
+        return Ok(Vec::new());
+    };
+    let mut found: Vec<(String, String)> = Vec::new();
+    for name in repo.remote_names() {
+        let name = name.to_string();
+        // A `[remote ""]` section is listed by gix and names nothing.
+        if name.is_empty() {
+            continue;
+        }
+        // The FETCH url, exactly once per remote — which is what
+        // `config --get-regexp remote.*.url` named and what `git remote -v`
+        // would have printed twice in a format needing re-parsing.
+        let Ok(remote) = repo.find_remote(name.as_str()) else {
+            continue;
+        };
+        let Some(url) = remote.url(gix::remote::Direction::Fetch) else {
+            continue;
+        };
+        // A blank url never reaches here: gix refuses it at `find_remote` above.
+        found.push((name, url.to_bstring().to_string()));
+    }
+    // `read`-order from git config is file order; a recorded value that a gate
+    // compares must not depend on it.
+    found.sort();
+    found.dedup();
+    Ok(found)
+}
+
+/// The repository's root commits (`rev-list --max-parents=0 --all`), sorted.
+///
+/// The strongest continuity evidence a store has: a repository keeps its root
+/// commits across a move, a rename, and a remote change, and two unrelated
+/// repositories sharing one is not a case that arises from ordinary work. This
+/// is what lets a moved no-remote checkout be *adopted* rather than orphaned.
+///
+/// **Selecting commits, not deciding reachability.** `rev-list` ranges are
+/// explicitly legal under this module's ancestry gate; what is forbidden is
+/// deciding merged-ness from a reachability answer, which this does not do.
+///
+/// An empty repository has no commits, so an empty list is a normal answer.
+///
+/// # Errors
+///
+/// Returns an error only when `git` itself cannot run or emits non-UTF-8.
+pub fn root_commits(dir: &Path) -> Result<Vec<String>> {
+    // An unborn HEAD with no refs at all: no commits to list, not a failure.
+    let Ok(repo) = open(dir) else {
+        return Ok(Vec::new());
+    };
+    let Ok(references) = repo.references() else {
+        return Ok(Vec::new());
+    };
+    let Ok(all) = references.all() else {
+        return Ok(Vec::new());
+    };
+    // `--all`: every ref is a tip, and the walk keeps only the commits with no
+    // parents. Selecting commits, never deciding reachability — the distinction
+    // this module's ancestry gate draws.
+    let references: Vec<gix::Reference<'_>> = all.filter_map(std::result::Result::ok).collect();
+    // KEYED ON WHAT EACH REF NAMES, NOT WHAT IT PEELS TO (CLOUD-2813). Peeling
+    // decompresses every annotated tag object: measured, 25% of a warm `stop`
+    // was spent building this key, after the walk itself was cached. The same
+    // raw targets always peel to the same tips, so they decide a hit, and a
+    // symbolic ref adds nothing a direct ref beside it does not already name.
+    let mut raw: Vec<gix::ObjectId> = references
+        .iter()
+        .filter_map(|reference| reference.target().try_id().map(gix::oid::to_owned))
+        .collect();
+    raw.sort_unstable();
+    raw.dedup();
+    // ONE WALK PER CALL (CLOUD-2813). The walk inflates every commit in the
+    // history, and `store::resolve` reached it three times per `stop`: measured
+    // by callgrind, 3 calls and 1.585 G of the path's 1.845 G instructions. The
+    // answer is a function of the refs' targets ([`RootsKey`]), so within a hook
+    // call's scope it is computed once per distinct set.
+    let key: RootsKey = (repo.git_dir().to_path_buf(), raw);
+    if let Some(found) = with_opens(|opens| opens.2.get(&key).cloned()).flatten() {
+        return Ok(found);
+    }
+    // ACROSS CALLS, INCREMENTALLY (CLOUD-2813). One walk per call is still
+    // O(history) on every hook call, so the last answer is kept under the
+    // repository's state cache: reused when the refs name what they named,
+    // extended from the prior tips when they moved forward.
+    let entry = roots_entry(&repo);
+    let prior = entry
+        .as_ref()
+        .and_then(|(path, cache_key)| read_roots(path, cache_key));
+    if let Some(prior) = prior.as_ref().filter(|prior| prior.raw == key.1) {
+        let found = prior.roots.clone();
+        let _ = with_opens(|opens| opens.2.insert(key, found.clone()));
+        return Ok(found);
+    }
+    // `--all`: every ref is a tip, and the walk keeps only the commits with no
+    // parents. Selecting commits, never deciding reachability — the distinction
+    // this module's ancestry gate draws.
+    let mut tips: Vec<gix::ObjectId> = references
+        .into_iter()
+        .filter_map(|reference| reference.into_fully_peeled_id().ok())
+        .map(gix::Id::detach)
+        .collect();
+    tips.sort_unstable();
+    tips.dedup();
+    let found = match prior {
+        Some(ref prior) => roots_since(&repo, &tips, &prior.tips, &prior.roots)
+            .unwrap_or_else(|| all_roots(&repo, &tips)),
+        None => all_roots(&repo, &tips),
+    };
+    if let Some((path, cache_key)) = &entry {
+        write_roots(
+            path,
+            cache_key,
+            &RootsEntry {
+                raw: key.1.clone(),
+                tips,
+                roots: found.clone(),
+            },
+        );
+    }
+    let _ = with_opens(|opens| opens.2.insert(key, found.clone()));
+    Ok(found)
+}
+
+/// Every parentless commit reachable from `tips`, sorted: the full walk.
+fn all_roots(repo: &gix::Repository, tips: &[gix::ObjectId]) -> Vec<String> {
+    let mut found: Vec<String> = Vec::new();
+    if let Ok(walk) = repo.rev_walk(tips.iter().copied()).all() {
+        for info in walk.flatten() {
+            if info.parent_ids().count() == 0 {
+                found.push(info.id().to_hex().to_string());
+            }
+        }
+    }
+    found.sort();
+    found.dedup();
+    found
+}
+
+/// The roots of `tips`, extended from a prior answer instead of walked from
+/// scratch, or `None` when the extension cannot be shown exact.
+///
+/// **Exact or nothing.** Walking from the new tips with the old ones hidden
+/// yields exactly the commits reachable now and not then. If every old tip is
+/// still reachable — still a tip, or a parent of one of those new commits —
+/// then everything reachable then is reachable now, so the roots now are the
+/// old roots plus the new commits' own. A fast-forward commit or fetch always
+/// satisfies that; a rewind, a deleted ref or a missing object does not, and
+/// answers `None`, which the caller turns into the full walk.
+fn roots_since(
+    repo: &gix::Repository,
+    tips: &[gix::ObjectId],
+    old_tips: &[gix::ObjectId],
+    old_roots: &[String],
+) -> Option<Vec<String>> {
+    if old_tips.iter().any(|tip| repo.find_object(*tip).is_err()) {
+        return None;
+    }
+    let walk = repo
+        .rev_walk(tips.iter().copied())
+        .with_hidden(old_tips.iter().copied())
+        .all()
+        .ok()?;
+    let mut parents: std::collections::HashSet<gix::ObjectId> = std::collections::HashSet::new();
+    let mut found: BTreeSet<String> = old_roots.iter().cloned().collect();
+    for info in walk {
+        let info = info.ok()?;
+        let mut parentless = true;
+        for parent in info.parent_ids() {
+            parentless = false;
+            parents.insert(parent.detach());
+        }
+        if parentless {
+            found.insert(info.id().to_hex().to_string());
+        }
+    }
+    let kept = old_tips
+        .iter()
+        .all(|tip| tips.binary_search(tip).is_ok() || parents.contains(tip));
+    kept.then(|| found.into_iter().collect())
+}
+
+/// The cache encoding; bumping it makes every older entry a miss. `2` adds the
+/// refs' raw targets, which decide a hit without peeling.
+const ROOTS_FORMAT: &str = "batten-roots-2";
+
+/// One persisted answer: the refs' raw targets (the hit key), the peeled tips
+/// (what an incremental walk hides), and the roots.
+struct RootsEntry {
+    raw: Vec<gix::ObjectId>,
+    tips: Vec<gix::ObjectId>,
+    roots: Vec<String>,
+}
+
+/// Where this repository's last (tips, roots) answer is kept, and its key, or
+/// `None` for a bare repository or an unresolvable state directory — a miss,
+/// never a failure.
+fn roots_entry(repo: &gix::Repository) -> Option<(PathBuf, String)> {
+    let state = crate::state::repo_state_dir(repo.workdir()?).ok()?;
+    let path = batten_facts::cache::root_under(&state)?.join("roots");
+    let git_dir = repo.git_dir().to_string_lossy();
+    Some((
+        path,
+        batten_facts::cache::key(ROOTS_FORMAT, &[git_dir.as_bytes()]),
+    ))
+}
+
+/// The prior answer: `raw`, `tip` and `root` lines, each a hex id. Anything
+/// unreadable is a miss, and the full walk answers instead.
+fn read_roots(path: &Path, cache_key: &str) -> Option<RootsEntry> {
+    let body = String::from_utf8(batten_facts::cache::read(path, cache_key)?.into_vec()).ok()?;
+    let mut held = RootsEntry {
+        raw: Vec::new(),
+        tips: Vec::new(),
+        roots: Vec::new(),
+    };
+    for line in body.lines() {
+        match line.split_once(' ')? {
+            ("raw", hex) => held.raw.push(gix::ObjectId::from_hex(hex.as_bytes()).ok()?),
+            ("tip", hex) => held
+                .tips
+                .push(gix::ObjectId::from_hex(hex.as_bytes()).ok()?),
+            ("root", hex) => held.roots.push(hex.to_owned()),
+            _ => return None,
+        }
+    }
+    Some(held)
+}
+
+/// Publish the answer, ignoring every failure: the roots are already computed
+/// and correct, and a cache that could refuse the answer would be a defect.
+fn write_roots(path: &Path, cache_key: &str, held: &RootsEntry) {
+    let mut body = String::new();
+    for (label, ids) in [("raw", &held.raw), ("tip", &held.tips)] {
+        for id in ids {
+            body.push_str(label);
+            body.push(' ');
+            body.push_str(&id.to_hex().to_string());
+            body.push('\n');
+        }
+    }
+    for root in &held.roots {
+        body.push_str("root ");
+        body.push_str(root);
+        body.push('\n');
+    }
+    batten_facts::cache::write(path, cache_key, body.as_bytes());
+}
+
+/// Open the repository containing `dir`, isolated from the ambient environment.
+///
+/// The one in-process entry point, so every gix caller in this module gets the
+/// same isolation rather than each remembering to ask for it (CLOUD-718).
+///
+/// **The scrub is structural here, not a maintained list.**
+/// [`gix::open::Options::isolated`] declines system, global and environment
+/// configuration outright, and discovery runs with default options rather than
+/// the environment's — so an ambient `GIT_DIR` or `GIT_CEILING_DIRECTORIES`
+/// cannot redirect the answer, and no constant has to be kept current for that
+/// to stay true. Do **not** reach for `discover_with_environment_overrides`: it
+/// re-admits exactly what the scrub exists to refuse.
+///
+/// Discovery walks *upwards* from `dir`, deliberately: callers pass a relative
+/// `"."` (`receipt.rs`), and a linked worktree must resolve its own `HEAD`
+/// rather than the main checkout's.
+///
+/// # Errors
+///
+/// Returns a [`UsageError`] (→ exit `1`) when `dir` is not inside a repository
+/// this binary can open.
+fn open(dir: &Path) -> Result<gix::Repository> {
+    open_upwards(dir, ceiling_dirs())
+}
+
+/// `GIT_CEILING_DIRECTORIES`, as discovery ceilings.
+///
+/// **The one environment variable this module still reads, and the asymmetry is
+/// deliberate.** [`gix::open::Options::isolated`] declines the environment as a
+/// class, which is right for everything that could REDIRECT an answer: a
+/// `GIT_DIR` or `GIT_WORK_TREE` names a different repository, and honouring one
+/// is the mis-rooting bug this module exists to kill. A ceiling cannot redirect.
+/// It can only stop the walk earlier, so its worst outcome is a refusal — the
+/// fail-safe direction — and a caller that fenced discovery on purpose is
+/// entitled to have the fence respected rather than walked straight past.
+///
+/// This is not `gix::discover`'s `_with_environment_overrides`, which re-admits
+/// the redirecting variables too. Only the ceiling is read, and only here.
+fn ceiling_dirs() -> Vec<PathBuf> {
+    std::env::var_os("GIT_CEILING_DIRECTORIES")
+        .map(|raw| std::env::split_paths(&raw).collect())
+        .unwrap_or_default()
+}
+
+/// [`open`], with the discovery ceilings supplied rather than read.
+///
+/// **A CEILING THAT FENCES NOTHING HERE IS IGNORED, as git ignores it** (CLOUD-2064).
+/// gix's default errors when no ceiling contains the search directory, so a
+/// `GIT_CEILING_DIRECTORIES` naming only directories elsewhere on the machine made
+/// every read inside a valid checkout report "not a git repository" — a refusal
+/// git itself does not make, and not the fail-safe direction [`ceiling_dirs`]
+/// claims, because nothing was fenced.
+///
+/// Each ceiling is canonicalized as `start` is below: gix compares them without
+/// resolving symlinks, so a ceiling spelled through one (or, on Windows, without
+/// the `\\?\` prefix `canonicalize` adds to `start`) would never contain it.
+///
+/// **THE OPEN IS REMEMBERED, the discovery is not** (CLOUD-2433). One hook call
+/// read the same repository ten times, and each open re-parsed its config — 92%
+/// of a discovery's cost. Discovery still runs per call, so `dir` and the
+/// ceilings decide every answer; within a hook call's [`open_scope`], what it
+/// found is then opened once while the files the open read are unchanged
+/// ([`Opens`]). Outside a scope every open is fresh.
+fn open_upwards(dir: &Path, ceilings: Vec<PathBuf>) -> Result<gix::Repository> {
+    open_isolated(dir, ceilings, true)
+}
+
+/// [`open_upwards`], remembering the open only when `remember` asks and a scope
+/// is alive. A WRITE never does ([`open_for_write`]): a remembered handle is a
+/// clone that shares its index and packed-refs snapshots, and a write through
+/// one would leave every later read in the call answered from the shared copy.
+fn open_isolated(dir: &Path, ceilings: Vec<PathBuf>, remember: bool) -> Result<gix::Repository> {
+    let ceilings: Vec<PathBuf> = ceilings
+        .into_iter()
+        .map(|ceiling| ceiling.canonicalize().unwrap_or(ceiling))
+        .collect();
+    // ABSOLUTE before discovery, because callers pass a relative `"."`
+    // (`receipt.rs` does, for every read) and a ceiling is an absolute path. An
+    // upward walk over relative components can never match one, so a fence a
+    // caller set would be walked straight past — silently, and only for the
+    // callers that pass a relative path. `git -C .` resolved the working
+    // directory before comparing; this is that step, made explicit.
+    let start = dir.canonicalize();
+    let start = start.as_deref().unwrap_or(dir);
+    let refused = || UsageError::raise(format!("{} is not a git repository", dir.display()));
+    // NO SCOPE, NO MEMO WORK: outside a hook call this is the plain open, without
+    // a second walk or the config reads a remembered entry would need.
+    if !remember || !scope_open() {
+        return gix::discover_opts(start, discovery(&ceilings), gix::open::Options::isolated())
+            .map_err(|_| refused());
+    }
+    // THE WALK IS REMEMBERED TOO (CLOUD-2840's perf-gate). One hook call walked
+    // up from the same directory nine times, each walk a `statx` per level and
+    // marker; a found repository is the same repository for the rest of the
+    // scope unless a write spends it, which forgets the walks with the opens.
+    let walk_key: WalkKey = (start.to_path_buf(), ceilings.clone());
+    let walked = with_opens(|opens| opens.3.get(&walk_key).cloned()).flatten();
+    let (found, trust) = if let Some(walked) = walked {
+        walked
+    } else {
+        let walked =
+            gix::discover::upwards_opts(start, discovery(&ceilings)).map_err(|_| refused())?;
+        let _ = with_opens(|opens| opens.3.insert(walk_key, walked.clone()));
+        walked
+    };
+    let (git_dir, worktree) = found.into_repository_and_work_tree_directories();
+    let key = OpenKey {
+        git_dir,
+        worktree,
+        trust,
+        cwd: std::env::current_dir().ok(),
+    };
+    if let Some(repo) = with_opens(|opens| opens.get(&key)).flatten() {
+        return Ok(repo);
+    }
+    // READ BEFORE THE OPEN, so a file changed while gix parses it is remembered
+    // as what it was before — and the next call, reading the change, misses.
+    let read = read_by_open(&key.git_dir);
+    let repo = gix::discover_opts(start, discovery(&ceilings), gix::open::Options::isolated())
+        .map_err(|_| refused())?;
+    // Only the repository the key names: a `.git` made or removed between the
+    // two walks would otherwise file another repository's handle under it.
+    if repo.git_dir() == key.git_dir {
+        let _ = with_opens(|opens| opens.remember(key, &repo, read));
+    }
+    Ok(repo)
+}
+
+/// The discovery options [`open_upwards`] walks with: the ceilings, ignored
+/// where they fence nothing.
+fn discovery(ceilings: &[PathBuf]) -> gix::discover::upwards::Options<'static> {
+    gix::discover::upwards::Options {
+        ceiling_dirs: ceilings.to_vec(),
+        match_ceiling_dir_or_error: false,
+        ..Default::default()
+    }
+}
+
+/// What a discovery found, and so what an open of it depends on besides files:
+/// the process working directory, which gix resolves relative paths against.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct OpenKey {
+    git_dir: PathBuf,
+    worktree: Option<PathBuf>,
+    trust: gix::sec::Trust,
+    cwd: Option<PathBuf>,
+}
+
+/// The repositories one hook call opened, one per [`OpenKey`] (CLOUD-2433).
+///
+/// **SCOPED TO ONE HOOK CALL, never the thread** ([`open_scope`]), as the
+/// crate's other hook memos are. A remembered handle is handed out as a clone,
+/// and a clone SHARES gix's index, packed-refs and shallow snapshots, which
+/// reload only when a file's mtime moves forward — so a long-lived process that
+/// writes refs or the index and reads them back in the same tick would be
+/// answered from the old snapshot (code review of CLOUD-2433). Within one hook
+/// call, which only reads, a shared handle is what a single open used
+/// throughout would be; outside one, every open is fresh, as before.
+///
+/// An entry is believed only while every file the isolated open reads holds the
+/// bytes it held before the open — absence included. BYTES, not a stat stamp:
+/// the files are a few hundred bytes, so a read costs about what a `stat` does,
+/// and a byte comparison has no racy window — a stamp-checked entry could not
+/// be made for two seconds after a write, so whether a call hit depended on the
+/// clock (CLOUD-2433's verify, `shell_retirement_cost`).
+///
+/// **A WRITE SPENDS THE SCOPE** (CLOUD-2526). "A hook call only reads" was
+/// assumed, not checked: a write in the call followed by a read would be served
+/// the snapshot from before it. So [`open_for_write`] clears the memo and marks
+/// it spent ([`Opens::spend`]), and a spent scope remembers nothing more — every
+/// later open in the call is fresh. That holds for every write that opens through
+/// [`open_for_write`] or calls [`spend_scope`] (`gitwrite::commit_paths`).
+/// `init_on_main` and `seed` create the repository they write, so nothing of it
+/// can have been remembered. A child `git` or a direct filesystem write is
+/// unseen, and no gate holds the rule: a gix write is a call on a handle, not a
+/// shape a source scan can tell from a read. A read that only needs an unshared
+/// handle takes [`open_fresh`], which spends nothing.
+///
+/// `.0` is the remembered opens; `.1` is whether a write has spent the scope;
+/// `.2` is [`root_commits`]' answers ([`RootsKey`]); `.3` is the upward walks
+/// ([`WalkKey`]). A tuple rather than named fields so the memo's existing cases
+/// keep their base form (`test replay`).
+#[derive(Default)]
+struct Opens(
+    BTreeMap<OpenKey, Opened>,
+    bool,
+    BTreeMap<RootsKey, Vec<String>>,
+    BTreeMap<WalkKey, (gix::discover::repository::Path, gix::sec::Trust)>,
+);
+
+/// An upward walk's whole input: the canonical start and the canonical
+/// ceilings. A walk that found nothing is never remembered, so a repository
+/// made later in the scope is still found.
+type WalkKey = (PathBuf, Vec<PathBuf>);
+
+/// A [`root_commits`] answer's whole input: the repository's git directory and
+/// its sorted, deduplicated ref tips.
+///
+/// **Exact by construction, so a write need not spend it.** Commits are
+/// immutable, so the commits reachable from a set of tips, and the parentless
+/// ones among them, are a function of the tips alone. A write that moves a ref
+/// changes the tips and therefore the key; one that does not leaves the answer
+/// true.
+type RootsKey = (PathBuf, Vec<gix::ObjectId>);
+
+/// One remembered open: the repository, and the bytes its open read.
+struct Opened {
+    repo: gix::Repository,
+    read: Vec<Option<Vec<u8>>>,
+}
+
+thread_local! {
+    /// Thread-local because this build's gix handle is not `Send` (no
+    /// `parallel` feature); `Some` only while an [`OpenScope`] is alive.
+    static OPENS: std::cell::RefCell<Option<Opens>> = const { std::cell::RefCell::new(None) };
+}
+
+/// The guard [`open_scope`] returns: the memo dies with the guard that opened it.
+#[derive(Debug)]
+pub struct OpenScope {
+    /// Whether this guard opened the memo. A scope opened inside another one
+    /// shares the outer memo and leaves it standing when it drops.
+    owner: bool,
+}
+
+impl Drop for OpenScope {
+    fn drop(&mut self) {
+        if self.owner {
+            let _ = with_cell(|opens| *opens = None);
+        }
+    }
+}
+
+/// Remember this thread's repository opens for the life of the returned guard
+/// (CLOUD-2433). `run_hook` holds it, beside its other per-call memos.
+#[must_use = "the memo lives only as long as the guard: an unbound scope ends at once"]
+pub fn open_scope() -> OpenScope {
+    let owner = with_cell(|opens| {
+        if opens.is_some() {
+            return false;
+        }
+        *opens = Some(Opens::default());
+        true
+    });
+    OpenScope {
+        owner: owner.unwrap_or(false),
+    }
+}
+
+/// `with` over the memo's cell, or `None` during thread teardown or while it is
+/// borrowed — never a panic, since a guard can drop during an unwind.
+fn with_cell<R>(with: impl FnOnce(&mut Option<Opens>) -> R) -> Option<R> {
+    OPENS
+        .try_with(|cell| cell.try_borrow_mut().ok().map(|mut opens| with(&mut opens)))
+        .ok()
+        .flatten()
+}
+
+/// `with` over this scope's [`Opens`], or `None` outside a scope, during thread
+/// teardown, or re-entered — each a miss.
+fn with_opens<R>(with: impl FnOnce(&mut Opens) -> R) -> Option<R> {
+    with_cell(|opens| opens.as_mut().map(with)).flatten()
+}
+
+/// Whether an open may be remembered: a scope is alive and no write has spent
+/// it ([`Opens::spend`]).
+fn scope_open() -> bool {
+    with_opens(|opens| !opens.1).unwrap_or(false)
+}
+
+/// The entry whose presence makes a directory a repository of its own — git's
+/// own boundary marker, and therefore the one this crate reads.
+///
+/// It is a *directory* in a plain clone and a *file* in a submodule or a linked
+/// worktree, which is why presence is what is tested and never the kind.
+pub const NESTED_REPOSITORY_MARKER: &str = ".git";
+
+/// Render a relative path with `/` separators, so globbing and output are
+/// identical across platforms (§6 byte-stability spans OSes).
+fn rel_to_slash(rel: &Path) -> String {
+    rel.components()
+        .map(|component| component.as_os_str().to_string_lossy())
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+/// Every file under `root`, as sorted repo-relative `/`-separated paths — the
+/// one tree walk the crate has.
+///
+/// Sorted, so any pass over it is deterministic (§6), and `.git` is skipped:
+/// the object store is never policy input. A second walker would be a second
+/// answer to "what does Batten look at", which is the divergence
+/// [`crate::markers`] reuses this to avoid.
+///
+/// # Ignored files are not policy input (CLOUD-214)
+///
+/// The walk is the [`ignore`] crate's — ripgrep's — so "which files does this
+/// repository consider its own" is answered by the `.gitignore` the contributors
+/// already maintain rather than by a second list here. Adopted, not rebuilt:
+/// nested `.gitignore` files, negations, and `.git/info/exclude` all come with
+/// it, and none of them is this crate's to re-implement.
+///
+/// The measurement that decided it, on this repository after one `cargo build`:
+/// the hand-rolled walk yielded **9221** paths, of which **8891 (96%)** were
+/// ignored build output under `target/` and only 330 were the repository's own.
+/// A `forbid` rule was one broad glob away from reporting findings against
+/// compiler artifacts, and every rule paid to walk them.
+///
+/// Two settings are load-bearing and pinned by tests rather than left to the
+/// crate's defaults:
+///
+/// * **Hidden entries are walked** (`hidden(false)`). `ignore` skips dotfiles by
+///   default, which would silently drop `.github/`, `.serena/` and `.claude/` —
+///   three directories this repository's committed rules select outright, so the
+///   default would turn live gates into dead ones with no diagnostic.
+/// * **Ignore files are honoured, `require_git` off.** A fixture that is not a
+///   git repository still reads its own `.gitignore`, so the selection does not
+///   change shape depending on whether git happens to be initialised.
+///
+/// # The selection stops at a nested repository (CLOUD-328)
+///
+/// A directory carrying [`NESTED_REPOSITORY_MARKER`] is a repository of its
+/// own, and this walk does not enter it. **This is the single statement of
+/// which files a glob selects, and the base-rev half of a ratchet
+/// ([`crate::git::count_at_rev`]) reads the same rule** — it skips gitlink
+/// entries — so the two halves select the same set by construction rather than
+/// by a consumer's care with globs.
+///
+/// Without it the two disagree, and the direction is the dangerous one: a
+/// `non_decreasing` row whose glob spans a submodule sits permanently above a
+/// base that counted one gitlink, so no deletion could ever pull it back under
+/// and **the gate cannot fail**. Measured on this repository at the commit that
+/// raised CLOUD-328: base 637 against working 1404, a fixed `+767` in a tree
+/// where nothing had been added.
+///
+/// It is not a ratchet-only property, because this is not a ratchet-only
+/// walker: it is also what stops a `forbid` rule reporting findings against
+/// vendored third-party code, and a `budget` or a marker scan from measuring a
+/// checkout that is not this one. The rule is stated in git's terms rather than
+/// as a submodule list precisely so a linked worktree — `.claude/worktrees/`,
+/// where agents work — is bounded by the same reading.
+///
+/// `root` itself is never a boundary: it carries the marker by definition, and
+/// only *descended* directories are tested.
+///
+/// # Errors
+///
+/// An I/O failure while walking propagates as an internal error (→ exit `3`).
+pub fn tree_files(root: &Path) -> anyhow::Result<Vec<String>> {
+    let root = root.to_path_buf();
+    let mut walker = ignore::WalkBuilder::new(&root);
+    walker
+        // Dotfiles are ordinary policy input here; see the doc comment.
+        .hidden(false)
+        // A `.gitignore` means what it says whether or not `git init` has run,
+        // so the selection does not change shape under a fixture.
+        .require_git(false)
+        // The repository's own ignore surface, and only it. A developer's global
+        // excludes are a property of their machine, not of this repository, and
+        // a gate whose file set varies per workstation is not one gate.
+        .git_global(false)
+        .git_ignore(true)
+        .git_exclude(true)
+        .parents(false)
+        // One filesystem: a walk that follows a mount out of the repository is
+        // measuring somebody else's disk.
+        .same_file_system(true)
+        .follow_links(false);
+    // The CLOUD-328 boundary, restated on the adopted walker. `ignore` skips the
+    // root's own `.git` but knows nothing about a nested repository, so the rule
+    // this crate states has to be applied here or it would be silently dropped
+    // by the very change that adopts a better walk. `tests/submodule.rs` is what
+    // catches that, and it is why those assertions landed first.
+    let boundary = root.clone();
+    walker.filter_entry(move |entry| {
+        if entry.file_type().is_some_and(|kind| !kind.is_dir()) {
+            return true;
+        }
+        // The object store is never policy input, and this skip cannot be left
+        // to the walker: `ignore` excludes `.git` as a *hidden* entry, and
+        // `hidden(false)` above — which this repository's own rules require, to
+        // reach `.github/` and `.serena/` — switches that off along with it.
+        // Dropping it would put every blob, ref and hook body into the file set.
+        if entry.file_name() == std::ffi::OsStr::new(NESTED_REPOSITORY_MARKER) {
+            return false;
+        }
+        // `root` carries the marker by definition; testing it would empty every
+        // walk, so only descended directories are judged.
+        if entry.path() == boundary {
+            return true;
+        }
+        !entry.path().join(NESTED_REPOSITORY_MARKER).exists()
+    });
+
+    let mut files = Vec::new();
+    for entry in walker.build() {
+        let entry = entry?;
+        // Directories, and the root itself, are not files; a symlink is not
+        // followed, so it never contributes a path outside the tree.
+        if !entry.file_type().is_some_and(|kind| kind.is_file()) {
+            continue;
+        }
+        if let Ok(rel) = entry.path().strip_prefix(&root) {
+            files.push(rel_to_slash(rel));
+        }
+    }
+    // `ignore` yields in directory order; §6 byte-stability is this sort.
+    files.sort();
+    Ok(files)
+}
+
+/// The gix crates, and their releases, [`read_by_open`]'s list was audited
+/// against (CLOUD-2526). The list is what an isolated open reads, and three
+/// crates decide that — `gix`'s open, `gix-discover`'s walk and `gix-config`'s
+/// load — each of which a lockfile update can move alone. One that reads another
+/// file would have a remembered handle served stale, so any of them moving fails
+/// `the_memos_read_list_was_audited_against_this_gix` until the list is
+/// re-audited against the new open and this moves with it.
+///
+/// Re-audited for gix 0.90.0 / gix-config 0.62.2 / gix-discover 0.57.1
+/// (2026-11-11): `Permissions::isolated()` still disables system, installation,
+/// global, user, environment and include config, and the new
+/// `system_config_path` / `git_installation_config_path` options load only under
+/// those permissions. `gix-discover` now resolves `commondir` itself, which is
+/// already on the list. The one addition, an ownership check lowering trust on
+/// the resolved git, common and worktree directories, reads metadata rather
+/// than file content, so the list is unchanged.
+#[cfg(test)]
+const AUDITED_GIX: &[(&str, &str)] = &[
+    ("gix", "0.90.0"),
+    ("gix-config", "0.62.2"),
+    ("gix-discover", "0.57.1"),
+];
+
+/// The bytes of every file an isolated open of `git_dir` reads — no includes,
+/// no system, global or environment configuration
+/// (`gix::open::Options::isolated`) — with an absent file as `None`. The common
+/// directory is resolved through `commondir` exactly as gix resolves it, and
+/// `commondir`'s own bytes are among those compared.
+fn read_by_open(git_dir: &Path) -> Vec<Option<Vec<u8>>> {
+    let common = gix::discover::path::from_plain_file(&git_dir.join("commondir"))
+        .and_then(Result::ok)
+        .map_or_else(|| git_dir.to_path_buf(), |common| git_dir.join(common));
+    let mut read = vec![
+        git_dir.join("commondir"),
+        git_dir.join("config"),
+        git_dir.join("config.worktree"),
+    ];
+    // Without a `commondir` the common config IS `<git_dir>/config`, already read.
+    if common != git_dir {
+        read.push(common.join("config"));
+    }
+    read.iter()
+        .map(|path| crate::fsio::read(path).ok())
+        .collect()
+}
+
+impl Opens {
+    /// The repository remembered for `key`, if every file its open read is
+    /// unchanged.
+    fn get(&self, key: &OpenKey) -> Option<gix::Repository> {
+        let opened = self.0.get(key)?;
+        let now = read_by_open(&key.git_dir);
+        (opened.read == now).then(|| opened.repo.clone())
+    }
+
+    /// Remember `repo` as `key`'s open, made from the files as `read` before it.
+    fn remember(&mut self, key: OpenKey, repo: &gix::Repository, read: Vec<Option<Vec<u8>>>) {
+        let opened = Opened {
+            repo: repo.clone(),
+            read,
+        };
+        self.0.insert(key, opened);
+    }
+
+    /// A write opened a repository: forget every open, and remember none for
+    /// the rest of the scope (CLOUD-2526).
+    fn spend(&mut self) {
+        self.0.clear();
+        self.3.clear();
+        self.1 = true;
+    }
+}
+
+/// Open the repository containing `dir` with git's **resolved** configuration —
+/// system, global and repository-local together.
+///
+/// The one deliberate exception to [`open`], and the distinction it rests on is
+/// worth stating because collapsing the two would be a silent behaviour change.
+/// [`open`]'s isolation exists to stop the ambient environment deciding **which
+/// repository** an answer is about: a stray `GIT_DIR` redirecting discovery is
+/// the mis-rooting bug class this module exists to kill. It is not a claim that
+/// git's configuration is untrustworthy to READ.
+///
+/// Two callers ask a question whose subject IS the resolved configuration —
+/// [`config_value`] and [`stamped_identity`], both of which feed the attribution
+/// decision. "Is there an accountable identity here at all" is answered by an
+/// identity inherited from a wider scope just as much as by a local one, so
+/// reading these through an isolated handle would report `None` for a developer
+/// whose `user.email` is set globally, and the attribution gate would refuse a
+/// correctly-configured machine.
+///
+/// DISCOVERY still runs isolated: the path is found by [`open`] and only then
+/// re-opened for its configuration, so the ambient environment picks neither the
+/// repository nor the answer — only the config scopes git itself would consult
+/// contribute.
+///
+/// # Errors
+///
+/// Returns a [`UsageError`] (→ exit `1`) when `dir` is not inside a repository
+/// this binary can open.
+fn open_configured(dir: &Path) -> Result<gix::Repository> {
+    let isolated = open(dir)?;
+    gix::open(isolated.git_dir())
+        .map_err(|_| UsageError::raise(format!("{} is not a git repository", dir.display())))
+}
+
+/// Read a tracked file's contents at a git ref, without touching the working
+/// tree.
+///
+/// This is the trust boundary behind `--config-from` (CLOUD-31): policy is read
+/// from a ref a pull request cannot edit, so a working-tree change that relaxes
+/// the rules cannot lower the bar it is judged by. It reads and never writes,
+/// which is what keeps the calling verb `read`.
+///
+/// **In-process, and that is the security property** (CLOUD-718). This used to
+/// spell `git show {reference}:{path}`, interpolating a caller's `reference`
+/// into argv. `--config-from` is `global: true`, so that string reaches every
+/// verb from a flag or `BATTEN_CONFIG_FROM`, and a value of
+/// `--output=<path>` made `git show` exit `0`, print nothing, and **write a
+/// file** — a `read`-effect verb, in the derived read-only allowlist a mediated
+/// agent may call unprompted, induced to write a caller-chosen path. Carrying
+/// `--end-of-options` would have made that *refused*; there being no argv makes
+/// it *unrepresentable*, which is the right strength for a boundary whose whole
+/// job is to be un-influenceable by the change under review.
+///
+/// Two more defects closed as consequences rather than as separate care. A
+/// `reference:directory` printed a tree listing that `[epoch] tracked` would
+/// have hashed as file content; a blob lookup cannot return a tree. And "the
+/// ref does not resolve" and "the path is absent at that ref" were one message,
+/// where they are two answers here — CLOUD-720 needs to tell them apart to
+/// build last-known-good, and `the_two_unreadable_states_are_distinct` is what
+/// makes that a fact it inherits rather than a promise. This function still
+/// renders both as one `Result`; [`read_at`] is the same read with the two
+/// states returned as values, and is what a caller that must branch on them
+/// calls.
+///
+/// The scrub is structural too. Where the shell-out removed five environment
+/// variables by name, [`gix::open::Options::isolated`] declines system, global
+/// and environment config outright, and discovery runs with default options
+/// rather than the environment's — so an ambient `GIT_DIR` or
+/// `GIT_CEILING_DIRECTORIES` cannot redirect the answer, and no list has to be
+/// maintained for that to stay true. Discovery still walks *upwards* from
+/// `dir`, because callers pass a relative `"."` (`receipt.rs`) and because a
+/// linked worktree must resolve its own `HEAD`, not the main checkout's.
+///
+/// `path` is repo-relative and `/`-separated, as git addresses blobs.
+///
+/// # Errors
+///
+/// Returns a [`UsageError`] (→ exit `1`) when the ref does not resolve, the
+/// path is absent at that ref, the object there is not a file, or its bytes are
+/// not UTF-8 — all bad input naming config this binary cannot honour, never a
+/// policy verdict. The non-UTF-8 case is exit `1` rather than the internal `3`
+/// it used to be: §7 routes unreadable *config* to `1`, and `epoch.rs` already
+/// cites this function as the precedent for that.
+pub fn show(dir: &Path, reference: &str, path: &str) -> Result<String> {
+    match read_at(dir, reference, path)? {
+        BaseBlob::Found { text, .. } => Ok(text),
+        BaseBlob::RefUnreachable { reference } => Err(UsageError::raise(format!(
+            "cannot resolve {reference} in this repository"
+        ))),
+        BaseBlob::AbsentAtRef { reference, path } => Err(UsageError::raise(format!(
+            "{path} is absent at {reference}"
+        ))),
+    }
+}
+
+/// What reading a tracked file at a ref found: the bytes, or which of the two
+/// unreadable states it hit.
+///
+/// [`show`] already told those two states apart, but only inside two different
+/// `UsageError` strings — so the distinction existed for a human reading stderr
+/// and was destroyed for a caller. CLOUD-720 needs to branch on it: an
+/// unreachable *reference* is the one state house style §4 lets degrade to a
+/// pinned last-known-good, and a ref that resolves while declaring no config
+/// must stay strict, or a branch pointing `--config-from` at a config-less ref
+/// picks its own policy.
+///
+/// Only those two are variants. "The object there is not a blob" and "its bytes
+/// are not UTF-8" stay hard errors on [`read_at`]: neither is unreachable and
+/// neither is absent — both are an authority this binary found and cannot
+/// honour, and degrading on either would serve a pin in place of a config that
+/// is *present and broken*.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BaseBlob {
+    /// The ref resolved and carried a readable file, at `commit`.
+    ///
+    /// The commit is the evidence half: a pin minted from these bytes records
+    /// which commit it came from, so a served pin can say what it is serving.
+    Found { text: String, commit: String },
+    /// The revspec does not resolve in this repository — a mistyped ref, or one
+    /// this checkout never fetched. The only state that may degrade.
+    RefUnreachable { reference: String },
+    /// The ref resolves and the path is not there — a branch from before the
+    /// config landed. Never degrades, in any configuration.
+    AbsentAtRef { reference: String, path: String },
+}
+
+/// [`show`], with the two unreadable states returned rather than rendered.
+///
+/// Every boundary property [`show`] documents is this function's: no argv, so
+/// no `reference` can be read as an option; [`gix::open::Options::isolated`],
+/// so an ambient `GIT_DIR` cannot redirect the answer; a blob lookup, so a
+/// `reference:directory` cannot return a tree listing.
+///
+/// # Errors
+///
+/// Returns a [`UsageError`] (→ exit `1`) when `dir` is not a directory this
+/// binary can open as a repository, when the ref resolves to something that is
+/// not a tree, when the object at `path` is not a file, or when its bytes are
+/// not UTF-8. The two states a caller can act on come back as [`BaseBlob`]
+/// variants instead.
+pub fn read_at(dir: &Path, reference: &str, path: &str) -> Result<BaseBlob> {
+    if !dir.is_dir() {
+        return Err(UsageError::raise(format!(
+            "{} is not a directory",
+            dir.display()
+        )));
+    }
+    let repository = open(dir)?;
+
+    // State one: the revspec does not resolve here. gix's error is
+    // version-dependent prose in the same way git's stderr was, so it never
+    // reaches the caller — the STATE does.
+    let Ok(resolved) = repository.rev_parse_single(reference) else {
+        return Ok(BaseBlob::RefUnreachable {
+            reference: reference.to_owned(),
+        });
+    };
+    let commit = resolved.detach().to_string();
+    let tree = resolved
+        .object()
+        .map_err(|_| UsageError::raise(format!("cannot read the object {reference} names")))?
+        .peel_to_tree()
+        .map_err(|_| UsageError::raise(format!("cannot resolve {reference} to a tree")))?;
+
+    // State two: the ref is good and the path is not there. A caller can act on
+    // the difference — one is a mistyped or unfetched ref, the other a branch
+    // from before the config landed.
+    let Some(entry) = tree
+        .lookup_entry_by_path(path)
+        .map_err(|_| UsageError::raise(format!("cannot read {path} at {reference}")))?
+    else {
+        return Ok(BaseBlob::AbsentAtRef {
+            reference: reference.to_owned(),
+            path: path.to_owned(),
+        });
+    };
+
+    // A tree at that path is refused rather than rendered. `config::CONFIG_FILE`
+    // cannot reach this, but `[epoch] tracked` can, and the epoch would have
+    // hashed a directory listing as though it were the file's content.
+    if !entry.mode().is_blob() {
+        return Err(UsageError::raise(format!(
+            "{path} at {reference} is not a file"
+        )));
+    }
+
+    let object = entry
+        .object()
+        .map_err(|_| UsageError::raise(format!("cannot read {path} at {reference}")))?;
+    let text = String::from_utf8(object.data.clone())
+        .map_err(|_| UsageError::raise(format!("{path} at {reference} is not valid UTF-8")))?;
+    Ok(BaseBlob::Found { text, commit })
+}
+
+/// The unified hunks of `after` against `before`, 3 lines of context, as `git
+/// diff` writes them below its file headers.
+///
+/// `gix_diff`'s printer rather than `imara_diff` 0.2.0's (CLOUD-2507): that one
+/// starts its cursor at line 0, so a first hunk within six lines of the top
+/// printed its context from line 1 under a header naming `start - 3`, and
+/// cargo-mutants refused the patch.
+///
+/// # Errors
+///
+/// Never in practice: the printer fails only on hunk bytes that are not UTF-8,
+/// and both sides are `str`.
+pub fn unified_hunks(before: &str, after: &str) -> std::io::Result<String> {
+    use gix_diff::blob::unified_diff::{ConsumeBinaryHunk, ContextSize};
+    let input = gix_diff::blob::InternedInput::new(before, after);
+    let diff = gix_diff::blob::Diff::compute(gix_diff::blob::Algorithm::Histogram, &input);
+    gix_diff::blob::UnifiedDiff::new(
+        &diff,
+        &input,
+        ConsumeBinaryHunk::new(String::new(), "\n"),
+        ContextSize::symmetrical(3),
+    )
+    .consume()
+}
+
+/// The files directly inside `directory` at `reference`, as repo-relative paths.
+///
+/// [`show`]'s sibling, and it exists for the same reason (CLOUD-833): under
+/// `--config-from <ref>` a bundle's MEMBERSHIP has to come from the ref as
+/// surely as a module's bytes do. Listing the working tree instead would let an
+/// agent add a `.rego` file and change what the BASE policy decides — the
+/// influence that flag exists to exclude, arriving through the folder rather
+/// than through a file.
+///
+/// Non-recursive: it returns the blobs one level down, matching what a bundle
+/// is. Sub-trees are skipped rather than descended, so "which files am I
+/// enabling" stays a question a reader answers from the row.
+///
+/// It shares [`show`]'s whole boundary posture — no argv, so no path can be
+/// read as an option; [`gix::open::Options::isolated`], so an ambient `GIT_DIR`
+/// cannot redirect the answer.
+///
+/// `directory` is repo-relative and `/`-separated, as git addresses trees.
+///
+/// # Errors
+///
+/// Returns a [`UsageError`] (→ exit `1`) when the ref does not resolve, the
+/// path is absent at that ref, or the object there is not a directory — bad
+/// input naming config this binary cannot honour, never a policy verdict.
+pub fn list_tree(dir: &Path, reference: &str, directory: &str) -> Result<Vec<String>> {
+    if !dir.is_dir() {
+        return Err(UsageError::raise(format!(
+            "{} is not a directory",
+            dir.display()
+        )));
+    }
+    let repository = open(dir)?;
+    let resolved = repository
+        .rev_parse_single(reference)
+        .map_err(|_| UsageError::raise(format!("cannot resolve {reference} in this repository")))?;
+    let tree = resolved
+        .object()
+        .map_err(|_| UsageError::raise(format!("cannot read the object {reference} names")))?
+        .peel_to_tree()
+        .map_err(|_| UsageError::raise(format!("cannot resolve {reference} to a tree")))?;
+
+    let entry = tree
+        .lookup_entry_by_path(directory)
+        .map_err(|_| UsageError::raise(format!("cannot read {directory} at {reference}")))?
+        .ok_or_else(|| UsageError::raise(format!("{directory} is absent at {reference}")))?;
+    if !entry.mode().is_tree() {
+        return Err(UsageError::raise(format!(
+            "{directory} at {reference} is not a directory"
+        )));
+    }
+    let inner = entry
+        .object()
+        .map_err(|_| UsageError::raise(format!("cannot read {directory} at {reference}")))?
+        .peel_to_tree()
+        .map_err(|_| UsageError::raise(format!("cannot read {directory} at {reference}")))?;
+
+    let prefix = directory.trim_end_matches('/');
+    let mut paths: Vec<String> = inner
+        .iter()
+        .filter_map(std::result::Result::ok)
+        .filter(|entry| entry.mode().is_blob())
+        .map(|entry| format!("{prefix}/{}", entry.filename()))
+        .collect();
+    // Sorted for §6's byte-stability: git's own tree order is stable, but the
+    // caller composes these into one engine and a diagnostic naming them must
+    // not depend on which reader produced the list.
+    paths.sort();
+    Ok(paths)
+}
+
+/// How many entries the working tree reports as not committed.
+///
+/// A **count, not a list**, and deliberately so: the report this feeds says
+/// `uncommitted: N paths`, and a primitive that cannot return a path cannot leak
+/// one (non-negotiable rule 4). It also sidesteps `--porcelain`'s path quoting
+/// entirely, which is the only part of that format that is not trivially
+/// parseable.
+///
+/// Counts staged, unstaged, and untracked entries alike — every one of them is
+/// work that a reclaimed container would take with it.
+///
+/// # Errors
+///
+/// Raises a [`UsageError`] (exit `1`) when `dir` is not inside a repository.
+pub fn uncommitted(dir: &Path) -> Result<usize> {
+    // A COUNT, and the list it counts never leaves this module (non-negotiable
+    // rule 4). Sharing `working_tree_changes` with `changed_paths` is what keeps
+    // the two from disagreeing about what "changed" means — under the shell-out
+    // one counted `status --porcelain` lines and the other unioned `diff HEAD`
+    // with `ls-files --others`, which are nearly but not exactly the same set.
+    Ok(working_tree_changes(dir, Changes::All)?.len())
+}
+
+/// The git blob id `git hash-object` would give this text (CLOUD-1024).
+///
+/// **Here rather than at the caller, because `gix` lives here.**
+/// `gix_is_confined_to_this_module` is the gate, and it is right: a second
+/// module reaching for the git implementation is a second place that knows
+/// git's object format, and this crate keeps that knowledge in one file. The
+/// caller wants an answer about a blob, not a hash function, so what crosses the
+/// boundary is the id.
+///
+/// **The equality with `git hash-object` is the contract.** A gate one layer
+/// over recomputes this digest by piping the same text to that command, so any
+/// other value — a bare SHA-1 of the content, a SHA-256, a hand-written framing
+/// — is a field that exists and never matches. Asking `gix` is what makes the
+/// framing bytes, the object kind and the hash git's rather than ours.
+///
+/// **Takes no directory and opens no repository**, which is why it is not
+/// spelled as a method on one: an object id is a pure function of the bytes, so
+/// this reads no config, resolves no worktree and is safe on the mediated path.
+///
+/// `None` where the id cannot be computed, which a caller records as
+/// could-not-look rather than as a digest of nothing.
+#[must_use]
+pub fn blob_id(text: &str) -> Option<String> {
+    blob_id_of(text.as_bytes())
+}
+
+/// [`blob_id`] over bytes: a protected file need not be UTF-8 (CLOUD-2923).
+#[must_use]
+pub fn blob_id_of(bytes: &[u8]) -> Option<String> {
+    gix::objs::compute_hash(gix::hash::Kind::Sha1, gix::object::Kind::Blob, bytes)
+        .ok()
+        .map(|id| id.to_string())
+}
+
+/// The commit `name` resolves to, or `None` when the ref does not exist.
+///
+/// Built on [`query_optional`], for which a missing ref is an *answer* rather
+/// than a failure — and a caller owes the absent case its own reading:
+/// [`crate::baseline`]'s minting path asks for the landing target's commit, and
+/// `None` there is "no target resolved", never "clean".
+///
+/// It DOES carry `--end-of-options`, and the comment in the body says why —
+/// `name` is caller-influenced, so this is not the ref-PRINTING exception this
+/// module's doc records against `upstream_of_head`.
+///
+/// # Errors
+///
+/// Failing to run `git` at all is an internal error (exit `3`).
+pub fn resolve_ref(dir: &Path, name: &str) -> Result<Option<String>> {
+    // `--end-of-options`, because `name` is caller-influenced: `baseline`'s
+    // caller passes `must_land_on` straight from config, which a branch can edit
+    // when no `--config-from` is in play. `head_commit` three functions above
+    // carries the token with the same `--verify`; this did not, and the omission
+    // was an oversight rather than the documented ref-PRINTING exception, which
+    // applies to `--abbrev-ref`/`--symbolic-full-name` and not here.
+    //
+    // Measured before adding it, so the severity is stated honestly rather than
+    // implied: this was **latent, not live**. An option-shaped `name` IS parsed
+    // as an option — `--local-env-vars` printed env var names — but `--verify`
+    // exits non-zero for anything that is not a single rev, and
+    // `query_optional` reads non-zero as `None`, so the caller already got the
+    // safe answer. `rev-parse` also has no file-writing option, so there is no
+    // `show`-shaped write here (CLOUD-718). The token makes that hold by
+    // construction instead of by two other functions' behaviour.
+    let repo = open(dir)?;
+    // `--end-of-options` has nothing to be carried on: `name` is an argument to
+    // a resolver, never a token on a command line, so an option-shaped value is
+    // a ref that does not resolve rather than a flag. That is the difference
+    // between refusing an injection and it being unrepresentable (CLOUD-718).
+    Ok(repo
+        .rev_parse_single(name)
+        .ok()
+        .map(|id| id.detach().to_hex().to_string()))
+}
+
+/// The repo-relative paths the working tree has changed against `HEAD`.
+///
+/// The changed-scope set the advisory drain filters code-anchored findings
+/// against (CLOUD-79). **A list where [`uncommitted`] is deliberately a count**,
+/// and the difference is not an inconsistency: that report says `uncommitted: N
+/// paths`, so a primitive that could not return one could not leak one. A
+/// scope filter has to name the files it is scoping to, and a repo-relative path
+/// is a pointer — the shape rule 4 permits — never the content at it.
+///
+/// **NUL-delimited, never `--porcelain`.** The quoting in that format is the one
+/// part of it that is not trivially parseable, which is exactly what
+/// [`uncommitted`] sidesteps by counting lines. `-z` removes the problem instead
+/// of parsing around it: a pathname containing a quote, a newline or a non-UTF-8
+/// byte arrives verbatim between NULs. A path that is not UTF-8 is **dropped**
+/// rather than lossily converted — a mangled path would silently fail to match a
+/// stored finding's path and scope-filter it away, which is a false negative
+/// wearing a filter's clothes.
+///
+/// Tracked modifications and untracked files both count: an agent that has just
+/// written a new file has changed that scope as surely as one that edited an
+/// existing one. Staged and unstaged alike, since `diff HEAD` spans both.
+///
+/// # Errors
+///
+/// Raises a [`UsageError`] (exit `1`) when `dir` is not inside a repository, or
+/// is one with no commits.
+pub fn changed_paths(dir: &Path) -> Result<BTreeSet<String>> {
+    working_tree_changes(dir, Changes::All)
+}
+
+/// Every repo-relative path the INDEX holds differently from `HEAD` — the staged
+/// half alone, without the unstaged or untracked ones (CLOUD-519).
+///
+/// `batten check --staged` is the caller: a pre-commit hook judges what is about
+/// to be committed, and an unstaged edit beside it is explicitly not that. So
+/// this is a narrower question than [`changed_paths`] rather than a cheaper
+/// answer to the same one, which is why it is its own name.
+///
+/// It is the same walk, taking only its first comparison. Splitting it any other
+/// way would give the repository a second opinion on what "staged" means, and
+/// `working_tree_changes`'s header records why that walk is hand-rolled at all.
+///
+/// # Errors
+///
+/// As [`changed_paths`]: a [`UsageError`] (exit `1`) when `dir` is not inside a
+/// repository, or is one whose index or `HEAD` cannot be read.
+pub fn staged_paths(dir: &Path) -> Result<BTreeSet<String>> {
+    working_tree_changes(dir, Changes::Staged)
+}
+
+/// Which comparisons [`working_tree_changes`] folds in.
+///
+/// An enum rather than a `bool`, so a call site says which question it is asking
+/// instead of encoding it as a bare `true`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Changes {
+    /// Staged, unstaged and untracked — "is there uncommitted work".
+    All,
+    /// The index against `HEAD` alone — "what would this commit contain".
+    Staged,
+}
+
+/// Every repo-relative path that differs from `HEAD`, staged, unstaged or
+/// untracked.
+///
+/// The one walk behind [`uncommitted`]'s count and [`changed_paths`]' list.
+///
+/// # Why this is hand-rolled rather than gix's `status`
+///
+/// gix can answer this, and the feature that does is REFUSED for the reason
+/// CLOUD-739 refused `gix-diff/blob`: `status` pulls `blob-diff`, and `dirwalk`
+/// pulls `attributes`, which pulls `command`. That is the external-diff-driver,
+/// clean/smudge-filter and materialise-blobs-to-disk surface the previous slice
+/// declined — a runtime subshell and unmediated filesystem access, arriving
+/// through a dependency rather than through this crate's own source. Taking it
+/// to delete a spawn would be buying the thing the spawn was being deleted for.
+///
+/// So the three sources are read from what is already vendored: the INDEX (gix's
+/// `index` feature, already on via `revision`), the HEAD tree, and the `ignore`
+/// crate's walker for untracked files — the same walker
+/// [`crate::rules::tree_files`] uses, so untracked-and-ignored means here what it
+/// means there.
+///
+/// **The cost, stated rather than absorbed: clean/smudge filters are not
+/// applied.** A repository that rewrites content on checkout — CRLF conversion,
+/// an LFS pointer — can therefore show a file as modified whose committed content
+/// is unchanged. That is the OVER-reporting direction, and it is the safe one
+/// here: both callers ask "is there uncommitted work", where a false positive is
+/// noise and a false negative is work reported as safe to lose. `stop` and
+/// `baseline` both read this, and a container reclaim takes what they said was
+/// not there.
+///
+/// # Errors
+///
+/// Raises a [`UsageError`] (exit `1`) when `dir` is not inside a repository, or
+/// is one whose index or `HEAD` cannot be read.
+fn working_tree_changes(dir: &Path, want: Changes) -> Result<BTreeSet<String>> {
+    let repo = open(dir)?;
+    // THIS CHECKOUT'S OWN WORKDIR, never [`repo_root`]. That helper answers with
+    // the COMMON dir's parent on purpose (CLOUD-164), so every linked worktree
+    // resolves to ONE store — which is right for a store path and wrong for
+    // "which bytes are in the tree in front of me". Reading the files there
+    // compares THIS worktree's index against the MAIN checkout's working tree.
+    //
+    // MEASURED: a `git worktree add` checkout whose branch had committed a
+    // different `batten.toml` reported that file as uncommitted, on a tree `git
+    // status` called clean, and the count went to zero the moment the MAIN
+    // checkout's copy was made to match. That is the mis-rooting class this
+    // module's own header says it exists to kill, arriving through the helper
+    // written to prevent the other half of it.
+    let root = repo
+        .workdir()
+        .map(Path::to_path_buf)
+        .map_or_else(|| repo_root(dir), Ok)?;
+    let refusal = || {
+        UsageError::raise(
+            "cannot read the changed paths; this is not a git repository, or it has no commits"
+                .to_owned(),
+        )
+    };
+    let index = repo.index().map_err(|_| refusal())?;
+    let mut changed = BTreeSet::new();
+
+    // Staged: the index against `HEAD`'s tree. An unborn HEAD has no tree, so
+    // every index entry is staged — which is what it is.
+    //
+    // HEAD'S TREE IS WALKED ONCE, into a map, never looked up per index entry
+    // (CLOUD-2789). `peel_to_entry_by_path` re-decodes every tree on the path
+    // from the root for each of the index's entries, and that was 72% of the
+    // `commit-msg` step's 235 ms p50; one recorded walk decodes each tree once.
+    let committed_ids: BTreeMap<gix::bstr::BString, gix::ObjectId> = match repo
+        .head_commit()
+        .ok()
+        .and_then(|commit| commit.tree().ok())
+    {
+        Some(tree) => {
+            let mut recorder = gix::traverse::tree::Recorder::default();
+            tree.traverse()
+                .breadthfirst(&mut recorder)
+                .map_err(|_| refusal())?;
+            recorder
+                .records
+                .into_iter()
+                .filter(|entry| !entry.mode.is_tree())
+                .map(|entry| (entry.filepath, entry.oid))
+                .collect()
+        }
+        None => BTreeMap::new(),
+    };
+    let mut tracked = BTreeSet::new();
+    for entry in index.entries() {
+        // A path is bytes; one that is not UTF-8 is dropped rather than lossily
+        // converted, as the `-z` reading this replaces already did.
+        let raw = entry.path(&index);
+        let Ok(path) = std::str::from_utf8(raw) else {
+            continue;
+        };
+        tracked.insert(path.to_owned());
+        let committed = committed_ids.get(raw).copied();
+        if committed != Some(entry.id) {
+            changed.insert(path.to_owned());
+            continue;
+        }
+        // The staged question is answered by the comparison above and nothing
+        // below it: an unstaged edit and an untracked file are both work that
+        // would NOT be in the commit.
+        if want == Changes::Staged {
+            continue;
+        }
+        // A SUBMODULE IS NOT A BLOB, and everything below this line assumes one.
+        // A gitlink's index entry records a COMMIT id in another repository; the
+        // path on disk is a directory, so the read below fails and its arm reads
+        // that failure as a deletion. The result is one path reported as
+        // permanently uncommitted on a tree that has no uncommitted work.
+        //
+        // MEASURED, not reasoned: consumer #1 vendors bats at `tests/bats`, and
+        // `receipt clean` refused `verify` on a tree whose `git status
+        // --porcelain`, `git diff-files` and `git diff-index HEAD` were all
+        // empty -- one path, always that one. The walk has read gitlinks this way
+        // since it was written; the defect surfaced only when CLOUD-1753 added a
+        // caller that asks whether the tree IS `HEAD`, because every earlier
+        // caller wanted the wider "is there work here" set, where one spurious
+        // entry among many changed no answer.
+        //
+        // The comparison ABOVE already answers what a submodule can be asked at
+        // this layer: whether the pointer this commit records has moved. Whether
+        // the submodule's own worktree is dirty is a question about a different
+        // repository, which this walk does not open and must not guess at.
+        if entry.mode.contains(gix::index::entry::Mode::COMMIT) {
+            continue;
+        }
+        // Unstaged: the index entry against the file on disk. Compared by CONTENT
+        // hash rather than by stat, because a stat match is a cache hint and this
+        // is being asked whether work exists.
+        let absolute = root.join(path);
+        let Ok(metadata) = std::fs::symlink_metadata(&absolute) else {
+            // Tracked and gone is a deletion, which is a change.
+            changed.insert(path.to_owned());
+            continue;
+        };
+        let content = if metadata.is_symlink() {
+            std::fs::read_link(&absolute)
+                .map(|target| target.to_string_lossy().into_owned().into_bytes())
+        } else {
+            crate::fsio::read(&absolute)
+        };
+        let Ok(content) = content else {
+            changed.insert(path.to_owned());
+            continue;
+        };
+        let hashed = gix::objs::compute_hash(repo.object_hash(), gix::object::Kind::Blob, &content)
+            .map_err(|_| refusal())?;
+        if hashed != entry.id {
+            changed.insert(path.to_owned());
+        }
+    }
+
+    // Untracked: the crate's one tree walker, so "ignored" means here exactly
+    // what it means to every rule that reads the tree.
+    if want == Changes::All {
+        for path in tree_files(&root)? {
+            // `.git` IS NOT TREE CONTENT, and in a LINKED WORKTREE it is a
+            // regular FILE rather than the directory every walker skips by
+            // name. Measured: a `git worktree add` checkout reported exactly one
+            // uncommitted path on a tree `git status` called clean, and it was
+            // this. No commit can contain it, so it is never a difference from
+            // `HEAD`.
+            if path == ".git" {
+                continue;
+            }
+            if !tracked.contains(&path) {
+                changed.insert(path);
+            }
+        }
+    }
+    Ok(changed)
+}
+
+/// Every path the checkout TRACKS, as repo-relative `/`-separated strings
+/// (CLOUD-925).
+///
+/// **Tracked, not [`changed_paths`]' wider set**, and the difference is the point:
+/// this answers "is this a file the repository carries", which is the membership
+/// test a reading-manifest ceiling counts against. A token naming a path the tree
+/// does not track is naming nothing an agent can be made to read, so a URL, a
+/// branch name and a typo drop out by construction rather than through an
+/// allowlist somebody has to tune.
+///
+/// It is also the enumeration the shell guard this replaces used, and matching it
+/// is not incidental: CLOUD-312's differential obligation compares the two
+/// answers case by case, so a different membership test would diverge on exactly
+/// the paths a migration is supposed to preserve.
+///
+/// `-z` with the same non-UTF-8 handling [`changed_paths`] documents at length: a
+/// path is bytes, a name carrying a quote or a newline arrives verbatim between
+/// NULs, and one that is not UTF-8 is **dropped** rather than lossily converted —
+/// a mangled path would fail to match a tracked entry and silently lower a count,
+/// which is the permissive direction.
+///
+/// # Errors
+///
+/// Raises a [`UsageError`] (exit `1`) when `dir` is not inside a repository. Every
+/// caller reads that as could-not-look and allows, so a tree this cannot
+/// enumerate is never refused on the strength of a count nobody took.
+pub fn tracked_paths(dir: &Path) -> Result<BTreeSet<String>> {
+    let repo = open(dir)?;
+    // The INDEX is what `ls-files` printed, so this is the same membership test
+    // rather than a similar one — which CLOUD-312's differential obligation
+    // needs, since a different test would diverge on exactly the paths a
+    // migration is supposed to preserve.
+    //
+    // OR EMPTY, as `ls-files` answers it: a repository nothing was ever added to
+    // has no index file at all, and `ls-files` prints nothing and exits 0 there.
+    // `index()` refused it as "not a git repository", which it is (CLOUD-2059).
+    let index = repo.index_or_empty().map_err(|_| {
+        UsageError::raise("cannot read the tracked paths: the index will not read".to_owned())
+    })?;
+    Ok(index
+        .entries()
+        .iter()
+        // A path is bytes. One that is not UTF-8 is DROPPED rather than lossily
+        // converted, exactly as the `-z` reading was: a mangled path fails to
+        // match a tracked entry and silently lowers a count, and dropping it is
+        // the same permissive direction stated out loud.
+        .filter_map(|entry| std::str::from_utf8(entry.path(&index)).ok())
+        .filter(|path| !path.is_empty())
+        .map(ToOwned::to_owned)
+        .collect())
+}
+
+/// The branch `HEAD` is on, or `None` on a detached `HEAD`.
+///
+/// # Errors
+///
+/// Raises a [`UsageError`] (exit `1`) when `dir` is not inside a repository.
+pub fn current_branch(dir: &Path) -> Result<Option<String>> {
+    let repo = open(dir)?;
+    let head = repo.head().map_err(|_| {
+        UsageError::raise(
+            "cannot resolve HEAD; this is not a git repository, or it has no commits".to_owned(),
+        )
+    })?;
+    // A detached HEAD has no referent name at all, where `--abbrev-ref` spelled
+    // it as the literal `HEAD` and every caller had to know not to read that as
+    // a branch. `None` is the same answer with the trap removed.
+    Ok(head.referent_name().map(|name| name.shorten().to_string()))
+}
+
+/// The key a branch-scoped record is filed under: the branch, or on a detached
+/// `HEAD` the commit itself, spelled `detached-<sha12>`.
+///
+/// **One function for both halves.** A record's writer and its reader must agree
+/// on the key or the reader sees nothing, which a module reads as could-not-look.
+/// CI checks out a detached `HEAD` by design (CLOUD-1422 retired the step that
+/// named a branch there), so a producer and the gate reading it both run
+/// detached: keying on the commit lets them meet, and no other commit — no other
+/// attempt — can read the record, which is the partition a branch key gives.
+///
+/// # Errors
+///
+/// A usage error when `dir` is not inside a repository or has no commits.
+pub fn record_key(dir: &Path) -> Result<String> {
+    if let Some(branch) = current_branch(dir)? {
+        return Ok(branch);
+    }
+    let head = head_commit(dir)?;
+    Ok(format!("detached-{}", &head[..head.len().min(12)]))
+}
+
+/// Whether this checkout's history is truncated (CLOUD-446).
+///
+/// The one question that separates "the work names no key" from "I cannot see
+/// the work". A shallow clone holds a suffix of history — often a single
+/// grafted commit — so a predicate over *the commits on this branch* reads a
+/// partial view, and answering "none of them" from it is inferring absence from
+/// what was not fetched.
+///
+/// Measured, not hypothesised: `ci.yml` fetches its ratchet base with `git fetch
+/// --depth=1 origin main`, and `actions/checkout` takes the PR head at the same
+/// depth, so a `git log origin/main..HEAD` there sees a synthetic merge commit
+/// and none of the branch's own. A key check that trusted that view refused
+/// every PR in CI.
+///
+/// # Errors
+///
+/// Raises when `git` cannot be run at all, or its output is not UTF-8. A
+/// non-zero exit is not expected here — `--is-shallow-repository` answers for
+/// any repository — so it is read as the conservative `true`: unable to
+/// establish that history is complete is not the same as establishing that it
+/// is.
+pub fn is_shallow(dir: &Path) -> Result<bool> {
+    // A directory this cannot open is read as the conservative `true`, matching
+    // what an unreadable answer meant before: unable to establish that history
+    // is complete is not the same as establishing that it is.
+    let Ok(repo) = open(dir) else {
+        return Ok(true);
+    };
+    // gix 0.90 answers a `Result`: an unreadable shallow file is the same
+    // conservative `true` as an unopenable repository.
+    Ok(repo.is_shallow().unwrap_or(true))
+}
+
+/// The commit messages on `base..HEAD`, as one blob (CLOUD-446).
+///
+/// One string rather than a list because every caller asks the same question of
+/// it — does an expression match anywhere in the work's own commits — and a
+/// split would invite a caller to *report* an element. Nothing here is printable
+/// output: a commit message is content, and the refusal this feeds names the
+/// missing key, never the messages it searched (non-negotiable rule 4).
+///
+/// Built on [`query_optional`], whose absent case is exactly the one this owes a
+/// reading: a `base` git cannot resolve is **could not look**, and the mediated
+/// call it gates allows. That direction is deliberate and is the same fail-open
+/// posture every retiring guard has — a hook that refuses because it is outside
+/// a checkout is a hook that has become the reason work cannot proceed.
+///
+/// # Errors
+///
+/// Raises when `git` cannot be run at all, or its output is not UTF-8 — only the
+/// verdict is optional, never the mechanism.
+pub fn log_messages(dir: &Path, base: &str) -> Result<Option<String>> {
+    // A `base` this cannot resolve is COULD NOT LOOK, and the mediated call it
+    // gates allows — the same fail-open posture the shell-out's non-zero exit
+    // carried, now spelled as a value rather than as an exit status.
+    let Ok(repo) = open(dir) else {
+        return Ok(None);
+    };
+    let (Ok(base_id), Ok(head_id)) = (repo.rev_parse_single(base), repo.head_id()) else {
+        return Ok(None);
+    };
+    let Ok(walk) = repo
+        .rev_walk([head_id.detach()])
+        .with_hidden([base_id.detach()])
+        .all()
+    else {
+        return Ok(None);
+    };
+    let mut messages = String::new();
+    for info in walk.flatten() {
+        let Ok(commit) = repo.find_commit(info.id) else {
+            continue;
+        };
+        // `%B` is the raw body, and `git log --format=%B` separated records with
+        // a newline. Every caller asks whether an expression matches ANYWHERE in
+        // the work's own commits, so the join only has to keep two messages from
+        // running into one another.
+        messages.push_str(&commit.message_raw_sloppy().to_string());
+        messages.push('\n');
+    }
+    Ok(Some(messages))
+}
+
+/// Every commit message reachable from `tip`, as one blob (CLOUD-843, retiring
+/// `[tasks.in-progress-drain]`'s `git log --format=%B origin/main`).
+///
+/// [`log_messages`]' sibling over a whole history rather than a range: the
+/// abandonment drain asks which keys the TRUNK closes, and a range hidden behind
+/// some base would silently drop every landing older than it — a landed row then
+/// reads as live and, idle, as abandoned. Content, never output (rule 4).
+///
+/// `None` is could-not-look — no checkout, a `tip` that does not resolve, or a
+/// walk that FAILS PARTWAY — and never an empty or a shortened history, which
+/// the caller would read as "nothing (more) closes".
+///
+/// **A BROKEN WALK IS NOT A SHORTER HISTORY**, and this is where it differs from
+/// [`log_messages`], which skips what it cannot read. A missing object — a
+/// partial clone, a corrupted pack — would otherwise hand back every message
+/// ABOVE the break: each landing below it reads as live and, idle, as abandoned,
+/// which is the direction the paragraph above warns about. The retired
+/// `git log ... || true` swallowed the same failure; the port refuses it.
+#[must_use]
+pub fn messages_reachable_from(dir: &Path, tip: &str) -> Option<String> {
+    let repo = open(dir).ok()?;
+    let tip_id = repo.rev_parse_single(tip).ok()?;
+    let walk = repo.rev_walk([tip_id.detach()]).all().ok()?;
+    let mut messages = String::new();
+    for info in walk {
+        let info = info.ok()?;
+        let commit = repo.find_commit(info.id).ok()?;
+        messages.push_str(&commit.message_raw_sloppy().to_string());
+        messages.push('\n');
+    }
+    Some(messages)
+}
+
+/// `rev` resolved and peeled to the commit it names.
+///
+/// **An annotated tag is a TAG object, not a commit**, and a walk started from
+/// one fails: every release tag here is annotated, so `refs/tags/v0.0.204`
+/// handed straight to `rev_walk` refused every release (`record derive released`
+/// "could not walk the commit history" from v0.0.200 on).
+fn peeled(repo: &gix::Repository, rev: &str) -> Option<gix::ObjectId> {
+    repo.rev_parse_single(rev)
+        .ok()?
+        .object()
+        .ok()?
+        .peel_to_commit()
+        .ok()
+        .map(|commit| commit.id)
+}
+
+/// Every commit message reachable from any of `tips` and from none of `hidden`,
+/// newline-joined (CLOUD-843).
+///
+/// [`log_messages`]' walk with both ends supplied, which is what a question
+/// about RELEASES needs and a question about one branch does not: `git log
+/// --tags=<glob>` reads from every matching tag at once, and `git log <rev>
+/// --not --tags=<glob>` reads what one rev carries that no tag does. The tag
+/// selection is the caller's ([`tag_facts`] answers it), so this names no glob.
+///
+/// No tips is an empty answer rather than a walk from HEAD: a caller that
+/// selected nothing asked about nothing.
+///
+/// # Errors
+///
+/// A [`UsageError`] (exit `1`) when the repository cannot be opened, a tip or a
+/// hidden rev does not resolve, or a commit on the walk cannot be read — could
+/// not look, never an empty history standing in for one nobody read.
+pub fn messages_reachable(dir: &Path, tips: &[String], hidden: &[String]) -> Result<String> {
+    let repo = open(dir)?;
+    let refused = || UsageError::raise("could not walk the commit history".to_owned());
+    let mut from = Vec::new();
+    for tip in tips {
+        from.push(peeled(&repo, tip).ok_or_else(refused)?);
+    }
+    if from.is_empty() {
+        return Ok(String::new());
+    }
+    let mut excluded = Vec::new();
+    for rev in hidden {
+        excluded.push(peeled(&repo, rev).ok_or_else(refused)?);
+    }
+    let walk = repo
+        .rev_walk(from)
+        .with_hidden(excluded)
+        .all()
+        .map_err(|_| refused())?;
+    let mut messages = String::new();
+    for step in walk {
+        let info = step.map_err(|_| refused())?;
+        let commit = repo.find_commit(info.id).map_err(|_| refused())?;
+        messages.push_str(&commit.message_raw_sloppy().to_string());
+        messages.push('\n');
+    }
+    Ok(messages)
+}
+
+/// Every commit reachable from any of `tips` and from none of `hidden`, as full
+/// hex ids (CLOUD-260).
+///
+/// [`messages_reachable`]'s walk answering with identities rather than
+/// messages, for a caller asking whether one supplied commit is in a range:
+/// "reachable from the tip and from no hidden rev" is `merge-base --is-ancestor`
+/// against both ends, asked once for the whole range rather than per commit.
+///
+/// # Errors
+///
+/// As [`messages_reachable`]: could not look, never an empty range standing in
+/// for one nobody walked.
+pub fn commits_reachable(
+    dir: &Path,
+    tips: &[String],
+    hidden: &[String],
+) -> Result<BTreeSet<String>> {
+    let repo = open(dir)?;
+    let refused = || UsageError::raise("could not walk the commit history".to_owned());
+    let resolve = |rev: &String| peeled(&repo, rev).ok_or_else(refused);
+    let from = tips.iter().map(resolve).collect::<Result<Vec<_>>>()?;
+    if from.is_empty() {
+        return Ok(BTreeSet::new());
+    }
+    let excluded = hidden.iter().map(resolve).collect::<Result<Vec<_>>>()?;
+    let walk = repo
+        .rev_walk(from)
+        .with_hidden(excluded)
+        .all()
+        .map_err(|_| refused())?;
+    let mut commits = BTreeSet::new();
+    for step in walk {
+        commits.insert(step.map_err(|_| refused())?.id.to_hex().to_string());
+    }
+    Ok(commits)
+}
+
+/// The tag nearest to `tag`'s first parent: `git describe --tags --abbrev=0
+/// <tag>^` (CLOUD-174).
+///
+/// **The GRAPH decides the predecessor, never a date.** Creation order sorts
+/// tags cut seconds apart arbitrarily, so a release's range is measured back to
+/// whichever tag the commit graph reaches first — annotated or lightweight, as
+/// `--tags` has it.
+///
+/// `None` for a tag whose commit has no parent, or whose ancestry carries no
+/// tag: the range is then the tag's whole history, which is what a first
+/// release shipped.
+///
+/// # Errors
+///
+/// A [`UsageError`] when the repository cannot be opened, `refs/tags/<tag>`
+/// does not name a commit, or the graph walk fails — could not look.
+pub fn previous_tag(dir: &Path, tag: &str) -> Result<Option<String>> {
+    let repo = open(dir)?;
+    let refused = || UsageError::raise(format!("could not describe the tag before {tag}"));
+    let id = repo
+        .rev_parse_single(format!("refs/tags/{tag}^{{commit}}").as_str())
+        .map_err(|_| refused())?;
+    let commit = repo.find_commit(id.detach()).map_err(|_| refused())?;
+    let Some(parent) = commit.parent_ids().next() else {
+        return Ok(None);
+    };
+    let parent = repo.find_commit(parent.detach()).map_err(|_| refused())?;
+    let found = parent
+        .describe()
+        .names(gix::commit::describe::SelectRef::AllTags)
+        .try_resolve()
+        .map_err(|_| refused())?;
+    Ok(found
+        .and_then(|resolution| resolution.outcome.name)
+        .map(|name| name.to_string()))
+}
+
+/// The newest `v*` tag by VERSION order — `git tag --list 'v*'
+/// --sort=-v:refname`'s first line, in-process (#1276).
+///
+/// **VERSION ORDER, NEVER CREATION ORDER OR LEXICAL ORDER:** a re-cut tag must
+/// not reorder the baseline, and `v0.0.10` sorts above `v0.0.9`. Each name's
+/// numeric dot-separated components compare as numbers; a name that does not
+/// parse as one sorts below every one that does. `None` when the repository has
+/// no `v*` tag, which a caller must treat as could-not-look, never a pass.
+///
+/// # Errors
+///
+/// A [`UsageError`] when the repository or its references cannot be read.
+pub fn newest_version_tag(dir: &Path) -> Result<Option<String>> {
+    let repo = open(dir)?;
+    let refused = || UsageError::raise("could not list this repository's tags".to_owned());
+    let references = repo.references().map_err(|_| refused())?;
+    let tags = references.tags().map_err(|_| refused())?;
+    let key = |name: &str| -> Option<Vec<u64>> {
+        name.strip_prefix('v')?
+            .split(['.', '-', '+'])
+            .map(|part| part.parse::<u64>().ok())
+            .take_while(Option::is_some)
+            .collect::<Option<Vec<u64>>>()
+            .filter(|parts| !parts.is_empty())
+    };
+    Ok(tags
+        .filter_map(Result::ok)
+        .filter_map(|reference| {
+            let name = reference.name().shorten().to_string();
+            key(&name).map(|parts| (parts, name))
+        })
+        .max()
+        .map(|(_, name)| name))
+}
+
+/// One commit's attribution record: who wrote it, who committed it, what it
+/// trails, and what it says.
+///
+/// Four fields as a **struct, not a `splitn`**. The call site that used to do
+/// this took each part with `unwrap_or_default()`, so a record that arrived
+/// short answered with empty strings — an *answer*, on the module that decides
+/// commit attribution, where the honest response is a refusal (CLOUD-742).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommitRecord {
+    /// `%an <%ae>` — the author identity.
+    pub author: String,
+    /// `%cn <%ce>` — the committer identity.
+    pub committer: String,
+    /// `%(trailers:only,unfold)`, as whole `Key: value` lines with blanks
+    /// dropped.
+    pub trailers: Vec<String>,
+    /// `%B` — the raw message body.
+    pub body: String,
+}
+
+/// Read one commit's attribution record.
+///
+/// One `git show -s` with the four placeholders joined by [`RECORD_SEPARATOR`],
+/// and the split that undoes that join lives here, beside the format string it
+/// reverses — a caller holding one half of that pair is a caller that can get
+/// it wrong.
+///
+/// **Exact arity, and that is the behavioural change this carries.** A record
+/// that does not split into four fields is refused. Previously each part came
+/// off the iterator with `unwrap_or_default()`, so a body containing U+001E
+/// produced a shorter split and the missing fields became empty strings — which
+/// the attribution decision then judged as though they were what git said. The
+/// three surfaces the attribution decision record governs are decided from this
+/// value; a blank field is not a safe default there, it is a wrong answer.
+///
+/// # Errors
+///
+/// Raises a [`UsageError`] (exit `1`) when the commit cannot be read, or when
+/// its record does not carry all four fields — "could not look", never a
+/// verdict built out of blanks.
+pub fn commit_record(dir: &Path, commit: &str) -> Result<CommitRecord> {
+    let repo = open(dir)?;
+    let refusal = || UsageError::raise("could not read a commit in the range".to_owned());
+    let object = repo
+        .rev_parse_single(commit)
+        .map_err(|_| refusal())?
+        .object()
+        .map_err(|_| refusal())?;
+    let object = object.peel_to_commit().map_err(|_| refusal())?;
+    let author = object.author().map_err(|_| refusal())?;
+    let committer = object.committer().map_err(|_| refusal())?;
+    // The four fields are read as FIELDS now, so there is no separator to join
+    // them with and no record that can arrive short. `RECORD_SEPARATOR`,
+    // `record_from` and its arity refusal all existed because one `git show` had
+    // to carry four values through one stream, and a body containing U+001E
+    // mis-split it (CLOUD-742). Reading the commit object removes that channel
+    // rather than defending it, so the three go with it — a defect class with no
+    // channel left has nothing for a gate to discriminate (CLOUD-418), which is
+    // the same reasoning this row's own §7 used to strike its clauses over
+    // deleted functions. `trailer_lines` STAYS: `attribution.rs` reads a pending
+    // message's trailers through it, and one implementation is what keeps a
+    // committed record and a pending one agreeing on what a trailer line is.
+    let message = object.message().map_err(|_| refusal())?;
+    let trailers = message
+        .body()
+        .map(|body| {
+            body.trailers()
+                .map(|trailer| format!("{}: {}", trailer.token, trailer.value))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    Ok(CommitRecord {
+        author: format!("{} <{}>", author.name, author.email),
+        committer: format!("{} <{}>", committer.name, committer.email),
+        trailers,
+        body: object.message_raw_sloppy().to_string(),
+    })
+}
+
+/// Every non-merge commit in `base..head`, as full SHAs.
+///
+/// The enumeration half of an attribution run: [`commit_record`] is what reads
+/// each one. Split from it because the range resolving and a commit reading are
+/// different failures with different refusals.
+///
+/// # Errors
+///
+/// Raises a [`UsageError`] (exit `1`) when the range does not resolve — "could
+/// not look", never a clean pass over commits nobody read.
+pub fn commits_in_range(dir: &Path, base: &str, head: &str) -> Result<Vec<String>> {
+    let repo = open(dir)?;
+    let refused = || UsageError::raise("could not resolve the commit range".to_owned());
+    let (base_id, head_id) = (
+        repo.rev_parse_single(base).map_err(|_| refused())?,
+        repo.rev_parse_single(head).map_err(|_| refused())?,
+    );
+    let walk = repo
+        .rev_walk([head_id.detach()])
+        .with_hidden([base_id.detach()])
+        .all()
+        .map_err(|_| refused())?;
+    let mut out = Vec::new();
+    for step in walk {
+        let info = step.map_err(|_| refused())?;
+        // `--no-merges`: a merge has no patch of its own, and the commits it
+        // brings in are separately enumerated here.
+        if info.parent_ids().count() > 1 {
+            continue;
+        }
+        out.push(info.id().to_hex().to_string());
+    }
+    Ok(out)
+}
+
+/// The commits `<target>..HEAD` that are reachable from NO remote-tracking ref
+/// (CLOUD-462).
+///
+/// The predicate a destructive-reset gate is decided by, and it is deliberately
+/// **not** the verb's spelling. `git reset --hard` onto a ref whose commits are
+/// all on a remote loses nothing, and refusing that would be the false-positive
+/// rate that gets a guard switched off — the row says so in as many words. What
+/// can lose work is a commit that exists in this clone and nowhere else.
+///
+/// `git rev-list <target>..HEAD --not --remotes` is the shape, spelled here as a
+/// gix walk from `HEAD` hiding the target **and every `refs/remotes` tip**. That
+/// is one walk rather than a reachability test per commit, which matters because
+/// this runs on the mediated path.
+///
+/// # Merges are NOT skipped, unlike [`commits_in_range`]
+///
+/// That function drops merges because it is enumerating patches and a merge has
+/// none of its own. Here the question is what would become unreferenced, and a
+/// merge commit that exists only in this clone is exactly that. Skipping one
+/// would under-count the loss, which is the direction this gate must not fail in.
+///
+/// # Errors
+///
+/// A target that will not resolve, or a directory that is not a repository. Both
+/// are could-not-look at the boundary rather than a refusal: a gate that denies
+/// because it could not run its own query is the wall this class must not be.
+pub fn unpushed_in_range(dir: &Path, target: &str) -> Result<Vec<String>> {
+    let repo = open(dir)?;
+    let refused = || UsageError::raise("could not resolve the reset target".to_owned());
+    let target_id = repo.rev_parse_single(target).map_err(|_| refused())?;
+    unreachable_from_remotes(&repo, vec![target_id.detach()])
+}
+
+/// Whether `HEAD` is reachable from some remote-tracking ref — committed
+/// somewhere other than this clone (CLOUD-843, `turn mint ahead`).
+///
+/// The same walk [`unpushed_in_range`] takes with no target to hide: `HEAD`
+/// hiding every `refs/remotes` tip, so an empty walk is "on a remote". Any
+/// remote, not only the upstream, because the harm is a clone that holds the
+/// only copy, and a branch pushed under another name is not that.
+///
+/// `None` when it could not look — no repository, an unresolvable `HEAD`, a walk
+/// that failed. The caller decides which direction that reads.
+#[must_use]
+pub fn head_on_a_remote(dir: &Path) -> Option<bool> {
+    let repo = open(dir).ok()?;
+    unreachable_from_remotes(&repo, Vec::new())
+        .ok()
+        .map(|unpushed| unpushed.is_empty())
+}
+
+/// The commits reachable from `HEAD` and from neither `hidden` nor any
+/// `refs/remotes` tip, newest first.
+fn unreachable_from_remotes(
+    repo: &gix::Repository,
+    mut hidden: Vec<gix::ObjectId>,
+) -> Result<Vec<String>> {
+    let refused = || UsageError::raise("could not resolve the reset target".to_owned());
+    let head = repo.rev_parse_single("HEAD").map_err(|_| refused())?;
+    if let Ok(references) = repo.references()
+        && let Ok(remotes) = references.prefixed("refs/remotes")
+    {
+        for reference in remotes.flatten() {
+            if let Some(id) = reference.target().try_id() {
+                hidden.push(id.to_owned());
+            }
+        }
+    }
+    let walk = repo
+        .rev_walk([head.detach()])
+        .with_hidden(hidden)
+        .all()
+        .map_err(|_| refused())?;
+    let mut out = Vec::new();
+    for step in walk {
+        let info = step.map_err(|_| refused())?;
+        out.push(info.id().to_hex_with_len(12).to_string());
+    }
+    Ok(out)
+}
+
+/// Open the repository for a WRITE.
+///
+/// **A separate door from [`open`], and the difference is the point.** `open`
+/// takes `gix::open::Options::isolated`, which declines the ambient environment
+/// as a class — right for every read this module makes, because a `GIT_DIR` in
+/// the environment names a different repository and honouring one is the
+/// mis-rooting bug that isolation exists to kill.
+///
+/// A write needs the same isolation for the same reason. It exists as its own
+/// function so that `gitwrite`'s callers name their intent at the call site, and
+/// it is where the two have diverged: a write is always opened FRESH, never from
+/// a hook call's memo (CLOUD-2433), because a remembered handle is a clone that
+/// shares its index and packed-refs snapshots with every later read.
+///
+/// It also SPENDS the hook call's memo (CLOUD-2526): every remembered open is
+/// forgotten and none is made for the rest of the call, so no OPEN after this
+/// write is served a snapshot from before it. A handle a caller already holds
+/// keeps the snapshot it was opened with; re-open after writing. Spent AFTER the open, so the
+/// open itself is the fresh one this function promises even with a scope live.
+///
+/// # Errors
+///
+/// A directory that is not a repository, or one discovery cannot reach.
+pub fn open_for_write(dir: &Path) -> Result<gix::Repository> {
+    let repo = open_fresh(dir)?;
+    spend_scope();
+    Ok(repo)
+}
+
+/// A fresh, unshared handle for a READ that must not be answered from the hook
+/// call's memo — opened as [`open_for_write`] opens, but spending nothing, since
+/// nothing is written (CLOUD-2526). `gitwrite::carries` and `merges_in` take it:
+/// they ask about ancestry right after a child `git` (a fetch, a push) may have
+/// moved refs, which a remembered handle's shared packed-refs snapshot would not
+/// show — so a cheaper memoised [`open`] there would answer stale.
+///
+/// # Errors
+///
+/// A directory that is not a repository, or one discovery cannot reach.
+pub fn open_fresh(dir: &Path) -> Result<gix::Repository> {
+    open_isolated(dir, ceiling_dirs(), false)
+}
+
+/// Spend the hook call's memo for a write that opened its own handle rather than
+/// through [`open_for_write`] — `gitwrite::commit_paths` (CLOUD-2526).
+pub fn spend_scope() {
+    let _ = with_opens(Opens::spend);
+}
+
+/// Within a fresh scope: read `dir` through the memo (asserting it was
+/// remembered), run `act`, and answer how many opens the scope still remembers
+/// — for the write modules' cases, which cannot reach the memo themselves.
+///
+/// # Panics
+///
+/// When `dir` is not a repository, or the read was not remembered.
+#[cfg(test)]
+#[expect(
+    clippy::expect_used,
+    reason = "a test fixture that is not a repository is a broken test"
+)]
+pub fn memo_after(dir: &Path, act: impl FnOnce(&Path)) -> Option<usize> {
+    let _scope = open_scope();
+    open(dir).expect("a repository");
+    assert_eq!(
+        with_opens(|opens| opens.0.len()),
+        Some(1),
+        "the premise: the read was remembered"
+    );
+    act(dir);
+    with_opens(|opens| opens.0.len())
+}
+
+/// The one UTC stamp both committer signatures take (CLOUD-1486).
+///
+/// **Two git objects this binary writes carry a signature it builds itself, and
+/// they disagreed about the offset.** [`crate::lease::lease_object`] pinned
+/// `offset: 0` inline; [`crate::gitwrite`]'s replay took `repo.committer()` whole,
+/// whose time gix resolves through `gix_date::Time::now_local_or_utc()`
+/// (`gix/src/repository/identity.rs`). So a replayed commit's `+hhmm` was the
+/// landing host's, and two clones replaying one range minted different ids for
+/// identical content — which the lap's fast-forward and the lease's CAS both
+/// assume cannot happen.
+///
+/// **It takes the instant rather than reading a clock.** `lease_object`'s caller
+/// supplies `seconds` deliberately, so that a mint is reproducible from its inputs
+/// and its nonce contract is testable; a constructor that read the clock would be
+/// unusable at one of the two sites it exists to serve. Pinning only the offset
+/// also leaves an explicitly supplied committer date alone.
+///
+/// **Here rather than in `lib.rs`, and that is a gate rather than a preference.**
+/// [`gix_is_confined_to_the_git_modules`](tests) holds a closed list —
+/// `git.rs`, `gitwrite.rs`, `lease.rs` — and no other file under `src/` may name
+/// `gix::`. Both callers already reach this module, so this adds no edge to
+/// `policy/module-layering.rego`'s graph.
+#[must_use]
+pub const fn utc_at(seconds: i64) -> gix::date::Time {
+    gix::date::Time { seconds, offset: 0 }
+}
+
+/// Does the local odb already carry this object?
+///
+/// **A read, and a total one**: a repository that will not open answers `false`,
+/// which errs toward asking the remote for something already held — a wasted
+/// round trip, never a missing object.
+#[must_use]
+pub fn has_object(dir: &Path, id: &str) -> bool {
+    let Ok(repo) = open(dir) else {
+        return false;
+    };
+    let Ok(id) = gix::ObjectId::from_hex(id.as_bytes()) else {
+        return false;
+    };
+    repo.find_object(id).is_ok()
+}
+
+/// Up to `window` commit ids reachable from the local refs, newest first.
+///
+/// The `have` side of a fetch negotiation. **Bounded by a COUNT**, because a full
+/// history is unbounded and the server only needs enough to find a common
+/// ancestor; offering too few costs a bigger pack and never a wrong answer.
+///
+/// Total: a repository that will not open, or refs that will not resolve, yield
+/// an empty list — a negotiation with no `have` lines is correct and merely
+/// expensive, which is the right direction for a helper that cannot look.
+#[must_use]
+pub fn recent_commits(dir: &Path, window: usize) -> Vec<String> {
+    let Ok(repo) = open(dir) else {
+        return Vec::new();
+    };
+    // Every local tip, not just HEAD: a lap's branch and the trunk it is landing
+    // onto usually share an ancestor that neither one's own history reaches
+    // within a small window.
+    let mut tips: Vec<gix::ObjectId> = Vec::new();
+    if let Ok(head) = repo.head_id() {
+        tips.push(head.detach());
+    }
+    if let Ok(references) = repo.references()
+        && let Ok(all) = references.all()
+    {
+        for reference in all.flatten() {
+            if let Some(id) = reference.try_id() {
+                tips.push(id.detach());
+            }
+        }
+    }
+    if tips.is_empty() {
+        return Vec::new();
+    }
+    let Ok(walk) = repo.rev_walk(tips).all() else {
+        return Vec::new();
+    };
+    walk.take(window)
+        .filter_map(|step| step.ok().map(|info| info.id().to_hex().to_string()))
+        .collect()
+}
+
+/// A git object read straight out of the odb, ready to be packed.
+///
+/// **`body` is the payload with NO loose header**, which is what a packfile
+/// carries — the header is re-derived per member when the pack is written, and
+/// the id is taken over the loose form. Carrying the kind is what keeps those two
+/// agreeing: a tree hashed as a commit yields an id nothing on the remote has.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RawObject {
+    /// The object id, forty hex characters.
+    pub id: String,
+    /// What kind of object it is.
+    pub kind: gix::object::Kind,
+    /// The payload.
+    pub body: Vec<u8>,
+}
+
+/// Every object a push of `base..head` must carry.
+///
+/// # What the set is, and why it is not simply "everything reachable from head"
+///
+/// The full closure of `head` is the whole history and is unaffordable to send on
+/// every lap. The set here is the one a receiving end actually needs:
+///
+/// * the commits in `base..head` (or every commit, when `base` is `None`),
+/// * every tree and blob reachable from those commits' trees,
+/// * **minus** everything reachable from `base`'s own tree.
+///
+/// That subtraction is sound because the remote HAS `base` — it is the tip being
+/// pushed onto, or an ancestor of it — so everything reachable from `base` is
+/// already there. An object reachable from a new commit AND from `base` is
+/// excluded; one reachable only from a new commit is sent. Nothing an ancestor
+/// outside the range contributes can be missing, because those ancestors are
+/// themselves reachable from `base`.
+///
+/// **Sending too many is harmless and sending too few is a broken push**, so
+/// every uncertainty here resolves toward including the object.
+///
+/// # Errors
+///
+/// A repository that will not open, a rev that will not resolve, or an object the
+/// odb cannot produce. **A missing object is an error rather than a silent
+/// omission** — a pack quietly short one blob is a push the server rejects with a
+/// message about the wrong thing.
+pub fn objects_to_send(dir: &Path, base: Option<&str>, head: &str) -> Result<Vec<RawObject>> {
+    let repo = open(dir)?;
+    let refused = || UsageError::raise("could not resolve the push range".to_owned());
+    let head_id = repo.rev_parse_single(head).map_err(|_| refused())?;
+    // `None` is a ref the remote does not have yet, and it is a real state rather
+    // than a missing argument: nothing is hidden, nothing is subtracted, and the
+    // walk yields the branch's whole history. That is the one case where the pack
+    // is large, and it is correct — the remote genuinely has none of it.
+    let base_id = match base {
+        Some(base) => Some(repo.rev_parse_single(base).map_err(|_| refused())?.detach()),
+        None => None,
+    };
+    let mut walk = repo.rev_walk([head_id.detach()]);
+    if let Some(base_id) = base_id {
+        walk = walk.with_hidden([base_id]);
+    }
+    let walk = walk.all().map_err(|_| refused())?;
+
+    // The exclusion side FIRST, so a tree the base already carries is never even
+    // read on the send side.
+    let mut carried = std::collections::BTreeSet::new();
+    if let Some(base_id) = base_id
+        && let Ok(commit) = repo.find_commit(base_id)
+        && let Ok(tree) = commit.tree()
+    {
+        collect_tree(&repo, tree.id().detach(), &mut carried, None);
+    }
+
+    let mut seen = std::collections::BTreeSet::new();
+    let mut out = Vec::new();
+    for step in walk {
+        let Ok(info) = step else {
+            return Err(refused());
+        };
+        let id = info.id;
+        let commit = repo.find_commit(id).map_err(|_| refused())?;
+        // The commit object itself is always sent: it is by construction not in
+        // `base`'s closure, since the walk hid everything `base` reaches.
+        out.push(RawObject {
+            id: id.to_string(),
+            kind: gix::object::Kind::Commit,
+            body: commit.data.clone(),
+        });
+        let tree_id = commit.tree_id().map_err(|_| refused())?.detach();
+        collect_tree(&repo, tree_id, &mut seen, Some(&mut out));
+    }
+    // Subtract after collecting rather than checking during the walk, so the
+    // exclusion is one set operation a reader can see rather than a condition
+    // threaded through the recursion.
+    out.retain(|object| !carried.contains(object.id.as_str()));
+    Ok(out)
+}
+
+/// [`objects_to_send`]'s set as IDS alone, so a caller can read each body when
+/// it writes it rather than holding every one at once (CLOUD-2729).
+///
+/// The same set: the commits in `base..head`, then every tree and blob their
+/// trees reach, minus what `base`'s own tree reaches. Commits come first, in
+/// walk order; the rest is in id order, which a pack does not care about.
+///
+/// # Errors
+///
+/// As [`objects_to_send`].
+pub fn object_ids_to_send(dir: &Path, base: Option<&str>, head: &str) -> Result<Vec<String>> {
+    let repo = open(dir)?;
+    let refused = || UsageError::raise("could not resolve the push range".to_owned());
+    let head_id = repo.rev_parse_single(head).map_err(|_| refused())?;
+    let base_id = match base {
+        Some(base) => Some(repo.rev_parse_single(base).map_err(|_| refused())?.detach()),
+        None => None,
+    };
+    let mut walk = repo.rev_walk([head_id.detach()]);
+    if let Some(base_id) = base_id {
+        walk = walk.with_hidden([base_id]);
+    }
+    let walk = walk.all().map_err(|_| refused())?;
+
+    let mut carried = std::collections::BTreeSet::new();
+    if let Some(base_id) = base_id
+        && let Ok(commit) = repo.find_commit(base_id)
+        && let Ok(tree) = commit.tree()
+    {
+        collect_tree(&repo, tree.id().detach(), &mut carried, None);
+    }
+
+    let mut ids = Vec::new();
+    let mut reached = std::collections::BTreeSet::new();
+    for step in walk {
+        let Ok(info) = step else {
+            return Err(refused());
+        };
+        let commit = repo.find_commit(info.id).map_err(|_| refused())?;
+        ids.push(info.id.to_string());
+        let tree_id = commit.tree_id().map_err(|_| refused())?.detach();
+        collect_tree(&repo, tree_id, &mut reached, None);
+    }
+    ids.extend(reached.into_iter().filter(|id| !carried.contains(id)));
+    Ok(ids)
+}
+
+/// The ids a push of the one commit `head` adds when the remote already holds
+/// the commits `have` (CLOUD-2724): `head` itself, then every tree and blob its
+/// tree reaches, minus what the tree of each `have` commit that is present here
+/// reaches.
+///
+/// **No parent is walked.** `head` may name parents this repository does not
+/// hold — a rotation makes each archived session's tip a parent without
+/// fetching it — and the caller's claim is that the remote holds every one of
+/// them. A `have` id that is not here subtracts nothing, which errs toward
+/// sending.
+///
+/// # Errors
+///
+/// A usage error where `head` is not a commit this repository holds.
+pub fn commit_ids_to_send(dir: &Path, head: &str, have: &[String]) -> Result<Vec<String>> {
+    let repo = open(dir)?;
+    let refused = || UsageError::raise("could not resolve the push range".to_owned());
+    let head_id = gix::ObjectId::from_hex(head.as_bytes()).map_err(|_| refused())?;
+    let commit = repo.find_commit(head_id).map_err(|_| refused())?;
+    let mut carried = std::collections::BTreeSet::new();
+    for held in have {
+        if let Ok(id) = gix::ObjectId::from_hex(held.as_bytes())
+            && let Ok(held) = repo.find_commit(id)
+            && let Ok(tree) = held.tree_id()
+        {
+            collect_tree(&repo, tree.detach(), &mut carried, None);
+        }
+    }
+    let mut reached = std::collections::BTreeSet::new();
+    let tree = commit.tree_id().map_err(|_| refused())?.detach();
+    collect_tree(&repo, tree, &mut reached, None);
+    let mut ids = vec![head_id.to_string()];
+    ids.extend(reached.into_iter().filter(|id| !carried.contains(id)));
+    Ok(ids)
+}
+
+/// One open repository to read objects out of by id, one at a time
+/// (CLOUD-2729).
+///
+/// A handle rather than a function taking a directory, because a streamed pack
+/// reads every object it sends and reopening the repository per object would
+/// cost a discovery each.
+#[allow(missing_debug_implementations)]
+pub struct ObjectReader(gix::Repository);
+
+impl ObjectReader {
+    /// Open the repository at `dir`.
+    ///
+    /// # Errors
+    ///
+    /// A directory that is not a repository.
+    pub fn open(dir: &Path) -> Result<Self> {
+        Ok(ObjectReader(open(dir)?))
+    }
+
+    /// The object `id`, payload and kind.
+    ///
+    /// # Errors
+    ///
+    /// An id that will not parse, or an object the odb cannot produce. A missing
+    /// object is an error rather than an omission, for [`objects_to_send`]'s
+    /// reason.
+    pub fn read(&self, id: &str) -> Result<RawObject> {
+        let missing = || anyhow::anyhow!("git: object {id} cannot be read from the repository");
+        let named = gix::ObjectId::from_hex(id.as_bytes()).map_err(|_| missing())?;
+        let object = self.0.find_object(named).map_err(|_| missing())?;
+        Ok(RawObject {
+            id: id.to_owned(),
+            kind: object.kind,
+            body: object.data.clone(),
+        })
+    }
+}
+
+/// Walk a tree, recording every tree and blob under it that `seen` does not carry.
+///
+/// **`sink` is `None` for the EXCLUSION walk and `Some` for the send walk**, and
+/// it is an explicit mode rather than something inferred from the sink's state.
+/// An earlier draft told the two apart by whether the vector was already
+/// non-empty, which is the kind of implicit mode that reads fine and is wrong the
+/// first time a caller passes an empty send list.
+///
+/// The exclusion walk still reads each object — a tree has to be decoded to learn
+/// its children — but records no bodies, so the base's closure costs ids and not
+/// megabytes.
+fn collect_tree(
+    repo: &gix::Repository,
+    tree: gix::ObjectId,
+    seen: &mut std::collections::BTreeSet<String>,
+    mut sink: Option<&mut Vec<RawObject>>,
+) {
+    let mut pending = vec![tree];
+    while let Some(id) = pending.pop() {
+        if !seen.insert(id.to_string()) {
+            continue;
+        }
+        let Ok(object) = repo.find_object(id) else {
+            // An object the odb cannot produce on the EXCLUSION side is simply
+            // not excluded, which errs toward sending it — the safe direction,
+            // since an over-full pack is accepted and a short one is refused.
+            continue;
+        };
+        let kind = object.kind;
+        if let Some(out) = sink.as_deref_mut() {
+            out.push(RawObject {
+                id: id.to_string(),
+                kind,
+                body: object.data.clone(),
+            });
+        }
+        if kind != gix::object::Kind::Tree {
+            continue;
+        }
+        let Ok(tree) = object.try_into_tree() else {
+            continue;
+        };
+        for entry in tree.iter() {
+            let Ok(entry) = entry else { continue };
+            pending.push(entry.inner.oid.to_owned());
+        }
+    }
+}
+
+/// The trailers of a message that is on disk and not yet committed.
+///
+/// `git interpret-trailers --parse` applies git's own rules for where the
+/// trailer block starts, so nothing here re-derives them and this cannot
+/// disagree with what [`commit_record`] reports once the commit exists.
+///
+/// # Errors
+///
+/// Raises a [`UsageError`] (exit `1`) when the message cannot be parsed.
+pub fn message_trailers(dir: &Path, message: &Path) -> Result<Vec<String>> {
+    let _ = dir;
+    let body = crate::fsio::read(message).map_err(|_| {
+        UsageError::raise("could not parse the pending message's trailers".to_owned())
+    })?;
+    // The SAME parser `commit_record` reads a committed message with, which is
+    // what the `interpret-trailers` shell-out bought and what would otherwise be
+    // re-derived here: where a trailer block starts is git's rule, and a second
+    // implementation of it could disagree with what `commit_record` reports once
+    // the commit exists.
+    let message = gix::objs::commit::MessageRef::from_bytes(&body);
+    Ok(message.body().map_or_else(Vec::new, |body| {
+        body.trailers()
+            .map(|trailer| format!("{}: {}", trailer.token, trailer.value))
+            .collect()
+    }))
+}
+
+/// One config value as git *resolves* it, across every scope.
+///
+/// Resolved rather than `--local`, because the question a caller asks of this
+/// is "is there an identity here at all" — and an accountable one inherited
+/// from a wider scope is an answer, not an absence.
+///
+/// # Errors
+///
+/// Failing to run `git` at all is an internal error (exit `3`); an unset key is
+/// `None`, which is an answer.
+pub fn config_value(dir: &Path, key: &str) -> Result<Option<String>> {
+    let repo = open_configured(dir)?;
+    // RESOLVED across every scope, which is why this reads through
+    // `open_configured` rather than `open` — see that function on why the
+    // isolation is about which repository, never about whether config is
+    // readable.
+    Ok(repo
+        .config_snapshot()
+        .string(key)
+        .map(|value| value.to_string()))
+}
+
+/// Set one **repo-local** config value.
+///
+/// Repo-local and never `--global`: the wider scope covers a developer's own
+/// unrelated repositories, and nothing in this crate has the standing to change
+/// those. The narrowing is spelled here, once, rather than at each caller.
+///
+/// # Errors
+///
+/// Raises a [`UsageError`] (exit `1`) when the write fails.
+pub fn set_config_local(dir: &Path, key: &str, value: &str) -> Result<()> {
+    // A WRITE, so opened as one (CLOUD-2526): fresh, and spending the memo.
+    let repo = open_for_write(dir)?;
+    let refusal = || UsageError::raise("could not write the repo-local config value".to_owned());
+    // `user.name`, or `remote.origin.url` — section, an optional subsection, and
+    // the key. The shell-out handed git one dotted string and let it do this
+    // split; doing it here is what a typed API costs, and it is the same split.
+    let (section, rest) = key.split_once('.').ok_or_else(refusal)?;
+    let (subsection, name) = match rest.rsplit_once('.') {
+        Some((subsection, name)) => (Some(subsection), name),
+        None => (None, rest),
+    };
+    // THE REPOSITORY'S OWN CONFIG FILE, opened directly rather than through
+    // `config_snapshot_mut`. That snapshot spans every scope, and committing it
+    // did not REPLACE an existing local value — measured by
+    // `a_repo_local_config_write_replaces_an_existing_value`, which read back the
+    // value the write was supposed to overwrite. A write primitive that reports
+    // success while leaving the old value in place is the worst possible shape
+    // for this caller: `attribution identity` uses it to displace a denied
+    // committer, so a silent no-op leaves every later commit misattributed while
+    // the repair claims to have run.
+    //
+    // Repo-local is now structural rather than a flag: this is the local file, so
+    // there is no `--global` for a caller to reach and no wider scope reachable
+    // by omission.
+    //
+    // THE COMMON DIR, never `git_dir()`: in a linked worktree `git_dir()` is the
+    // private `.git/worktrees/<name>` directory, and git never reads a `config`
+    // file there. `git config --local` writes `$GIT_COMMON_DIR/config`, so a
+    // write keyed on `git_dir()` reported success from a worktree while git went
+    // on reading the old value — pinned by `git_state_facts.rs`'s
+    // `a_repo_local_config_write_from_a_linked_worktree_lands_where_git_reads_it`.
+    let path = repo.common_dir().join("config");
+    let mut file =
+        gix::config::File::from_path_no_includes(path.clone(), gix::config::Source::Local)
+            .map_err(|_| refusal())?;
+    file.set_raw_value_by(section, subsection.map(gix::bstr::BStr::new), name, value)
+        .map_err(|_| refusal())?;
+    // Serialized in memory, then replaced atomically: a crash mid-write must
+    // not leave the repository with a truncated `.git/config`.
+    let mut out = Vec::new();
+    file.write_to(&mut out).map_err(|_| refusal())?;
+    crate::durable::replace(&path, out).map_err(|_| refusal())?;
+    Ok(())
+}
+
+/// The identity git is about to stamp, without the timestamp it appends.
+///
+/// `git var` prints `Name <email> <epoch> <tz>`; the time is not identity, and
+/// the trim that removes it belongs beside the invocation that knows the format
+/// rather than at a caller that has to remember it.
+///
+/// # Errors
+///
+/// Raises a [`UsageError`] (exit `1`) when git cannot resolve an identity.
+pub fn stamped_identity(dir: &Path, var: &str) -> Result<String> {
+    let repo = open_configured(dir)?;
+    let refusal = || UsageError::raise("could not resolve the identity git would stamp".to_owned());
+    // `git var GIT_AUTHOR_IDENT` printed `Name <email> <epoch> <tz>` and the
+    // caller trimmed the time back off. The identity is read as an identity now,
+    // so there is no timestamp to append and none to remove — the trim that used
+    // to live beside the invocation has nothing left to do.
+    let identity = match var {
+        "GIT_AUTHOR_IDENT" => repo.author(),
+        "GIT_COMMITTER_IDENT" => repo.committer(),
+        _ => return Err(refusal()),
+    }
+    .ok_or_else(refusal)?
+    .map_err(|_| refusal())?;
+    Ok(format!("{} <{}>", identity.name, identity.email))
+}
+
+/// The absolute git directory for `dir` — **per-worktree**, not the common one.
+///
+/// The distinction is the whole reason both this and [`common_dir`] exist: a
+/// linked worktree has its own `HEAD`, its own index and its own
+/// `batten-receipts/`, so a receipt keyed through the common dir would answer
+/// about a different checkout than the one being judged.
+///
+/// A [`PathBuf`], not the text `rev-parse` prints: every caller of this
+/// immediately builds a path out of it, and each one of them was trimming the
+/// string again first (CLOUD-742).
+///
+/// # Errors
+///
+/// Raises a [`UsageError`] (exit `1`) when `dir` is not inside a repository —
+/// "could not look", never an answer about a repository that is not there.
+pub fn git_dir(dir: &Path) -> Result<PathBuf> {
+    let repo = open(dir)?;
+    // PER-WORKTREE, which is the whole reason this and `common_dir` both exist:
+    // `git_dir()` is the linked worktree's own directory where `common_dir()` is
+    // the shared one, and a receipt keyed through the wrong one answers about a
+    // different checkout than the one being judged.
+    let git_dir = repo.git_dir();
+    Ok(canonical(git_dir))
+}
+
+/// How many commits `range` selects.
+///
+/// **A count, and nothing about reachability.** CLOUD-36 forbids deciding
+/// merged-ness by ancestry — a rebased landing is invisible to it — and leaves
+/// range forms legal precisely because selecting which commits to count is a
+/// different act from concluding one commit contains another. This counts; it
+/// concludes nothing.
+///
+/// The `usize` is the point: `rev-list --count` prints a number, and a caller
+/// handed the text has to parse it, which is a place to get it wrong for no
+/// benefit (CLOUD-742).
+///
+/// # Errors
+///
+/// Raises a [`UsageError`] (exit `1`) when the range does not resolve, or when
+/// the output is not a number — the second cannot happen with `--count` and is
+/// therefore refused rather than defaulted, since it would mean git answered a
+/// different question.
+pub fn commit_count(dir: &Path, range: &str) -> Result<usize> {
+    let repo = open(dir)?;
+    let refused = || UsageError::raise("the commit range cannot be counted".to_owned());
+    let (exclude, include) = match range.split_once("..") {
+        Some((from, to)) => (Some(from), to),
+        None => (None, range),
+    };
+    let tip = repo.rev_parse_single(include).map_err(|_| refused())?;
+    let mut walk = repo.rev_walk([tip.detach()]);
+    if let Some(from) = exclude {
+        walk = walk.with_hidden([repo.rev_parse_single(from).map_err(|_| refused())?.detach()]);
+    }
+    // A COUNT, and nothing about reachability: selecting which commits to count
+    // is a different act from concluding one commit contains another (CLOUD-36).
+    // The parse that could answer a different question is gone with the text.
+    let mut counted = 0;
+    for step in walk.all().map_err(|_| refused())? {
+        step.map_err(|_| refused())?;
+        counted += 1;
+    }
+    Ok(counted)
+}
+
+/// One commit's subject line, keyed to the commit that carries it.
+///
+/// A pair rather than a `String` the caller re-splits: the subject is the part
+/// after the first space of a `%H %s` line, and a caller that has to know that
+/// is a caller that can get it wrong (CLOUD-742).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommitSubject {
+    /// The commit's full SHA.
+    pub commit: String,
+    /// Its subject line — git's `%s`, which cannot contain a newline.
+    pub subject: String,
+}
+
+/// Every non-merge commit's subject in `base..head`.
+///
+/// One `git log` rather than a `rev-list` followed by a `show` per commit: the
+/// subject is available from the same walk that enumerates the range, so the
+/// second pass buys nothing.
+///
+/// `%H %s`, split on the FIRST space: the SHA is fixed-width hex and a subject
+/// cannot contain a newline, so one line per commit parses unambiguously. That
+/// reading lives here and not at the call site — the format string and the
+/// parse that undoes it are one decision, and `commit.rs` held half of it.
+///
+/// `--end-of-options`, because `base` and `head` are caller-influenced in the
+/// same way [`resolve_ref`]'s `name` is.
+///
+/// # Errors
+///
+/// Raises a [`UsageError`] (exit `1`) when the range does not resolve — "could
+/// not look", never a clean pass over commits nobody read. A line git emits
+/// that carries no space is refused rather than read as a subject-less commit:
+/// `%H %s` cannot produce one, so seeing one means the walk answered something
+/// other than the question asked.
+pub fn subjects_in_range(dir: &Path, base: &str, head: &str) -> Result<Vec<CommitSubject>> {
+    let repo = open(dir)?;
+    let refused = || UsageError::raise("could not resolve the commit range".to_owned());
+    let (base_id, head_id) = (
+        repo.rev_parse_single(base).map_err(|_| refused())?,
+        repo.rev_parse_single(head).map_err(|_| refused())?,
+    );
+    let walk = repo
+        .rev_walk([head_id.detach()])
+        .with_hidden([base_id.detach()])
+        .all()
+        .map_err(|_| refused())?;
+    let mut out = Vec::new();
+    for step in walk {
+        let info = step.map_err(|_| refused())?;
+        if info.parent_ids().count() > 1 {
+            continue;
+        }
+        let commit = repo.find_commit(info.id).map_err(|_| refused())?;
+        // The `%H %s` line and the split that undid it are both gone: the
+        // subject is a field of the message, so there is no first-space rule to
+        // hold half of and no line-without-a-space to refuse. `summary()` is
+        // git's own `%s` — the message up to the first blank line, folded.
+        out.push(CommitSubject {
+            commit: info.id().to_hex().to_string(),
+            subject: commit
+                .message()
+                .map_err(|_| refused())?
+                .summary()
+                .to_string(),
+        });
+    }
+    Ok(out)
+}
+
+/// Whether this repository ignores `path` — the scratch-work question
+/// (CLOUD-444).
+///
+/// # One implementation, and which one (CLOUD-740 §7(e))
+///
+/// This crate must not carry two answers to "is this path ignored", and it was
+/// about to: `ignore` is already vendored and owns the question for
+/// [`crate::rules::tree_files`]'s walk, `git check-ignore` owned it here, and
+/// gix's own exclude machinery would have been a third. **`ignore` owns it**,
+/// for two reasons that both point the same way. It is the implementation whose
+/// answers a consumer already depends on, since the walk decides which files
+/// every `forbid`, `budget` and marker rule even sees. And gix's excludes arrive
+/// only through the `excludes` feature, which pulls `gix-worktree` — part of the
+/// same materialise-blobs-to-disk surface CLOUD-739 declined, so taking it here
+/// would buy a third answer with the dependency the previous slice refused.
+///
+/// **The posture is the walk's, deliberately, and it is NARROWER than
+/// `check-ignore` was.** `tree_files` sets `git_global(false)` because a
+/// developer's global excludes are a property of their machine and a gate whose
+/// file set varies per workstation is not one gate. `git check-ignore` consulted
+/// `core.excludesFile` and so could answer differently on two machines for the
+/// same commit. Matching the walk is what makes the two agree; the cost is that a
+/// path ignored ONLY by a developer's global excludes now reads as not ignored,
+/// which is the judgeable direction and the same one the walk already took.
+///
+/// The layering is the repository's own, applied in git's precedence order:
+/// `.git/info/exclude` first, then each `.gitignore` from the root down to the
+/// path's own directory, so a nearer file overrides a farther one.
+///
+/// # Errors
+///
+/// Raises when the repository cannot be opened or its ignore files cannot be
+/// read — only the VERDICT is optional, never the mechanism. `false` here means
+/// "not ignored", which makes the path judgeable, so an unreadable ignore
+/// surface must never quietly produce one.
+pub fn check_ignore(dir: &Path, path: &str) -> Result<bool> {
+    let repo = open(dir)?;
+    let root = repo_root(dir)?;
+    let refusal = || UsageError::raise("cannot read the repository's ignore rules".to_owned());
+    let mut builder = ignore::gitignore::GitignoreBuilder::new(&root);
+    // `.git/info/exclude` first: git's lowest-precedence repository source, and
+    // `ignore`'s builder takes later additions as higher precedence.
+    let excludes = repo.git_dir().join("info").join("exclude");
+    if excludes.is_file() {
+        builder.add(&excludes);
+    }
+    // Then root-down, so a `.gitignore` nearer the path overrides a farther one.
+    let mut walked = root.clone();
+    builder.add(walked.join(".gitignore"));
+    for component in Path::new(path).parent().into_iter().flatten() {
+        walked.push(component);
+        builder.add(walked.join(".gitignore"));
+    }
+    let matcher = builder.build().map_err(|_| refusal())?;
+    // A path is judged as a FILE unless the caller's own path says otherwise; the
+    // matcher needs to know, because a `foo/` rule matches a directory only.
+    let is_dir = root.join(path).is_dir();
+    Ok(matcher
+        .matched_path_or_any_parents(path, is_dir)
+        .is_ignore())
+}
+
+/// The commit `HEAD` points at, as a full SHA.
+///
+/// Recorded beside every observation so a stored count says *which tree* it
+/// counted, rather than being a number with no anchor.
+///
+/// # Errors
+///
+/// Raises a [`UsageError`] (exit `1`) when `dir` is not inside a repository or
+/// has no commits.
+/// Append `body` to the note on `commit` under `refs/notes/<name>`.
+///
+/// # APPENDING RATHER THAN REPLACING
+///
+/// A commit sampled twice — a re-dispatched schedule, a manual run — keeps both
+/// readings instead of the second silently overwriting the first. Two readings
+/// of one commit is itself the noise measurement a threshold wants, and a
+/// replace would destroy exactly the samples that establish it.
+///
+/// # THE TREE IS THE WHOLE NOTES TREE, not just this entry
+///
+/// A notes ref is a commit whose tree maps `<commit-sha> -> blob`. Writing a
+/// tree containing only the new entry would DROP every other commit's note,
+/// which is a silent history loss that reads as a successful append. The
+/// existing tree is read and the one entry replaced.
+///
+/// # Errors
+///
+/// A repository that will not open, an odb that refuses an object, or a ref the
+/// backend will not move. A note that did not land is one a later read will not
+/// find, so every failure is an error rather than a skip.
+pub fn append_note(dir: &Path, name: &str, commit: &str, body: &str) -> Result<()> {
+    // A write: never a hook call's remembered handle (CLOUD-2433).
+    let repo = open_for_write(dir)?;
+    let reference = format!("refs/notes/{name}");
+    // Parsed for its REFUSAL rather than its value: a caller handing this a
+    // branch name or a short sha would otherwise write a note under a tree entry
+    // nothing resolves, and the loss would read as a successful append.
+    gix::ObjectId::from_hex(commit.as_bytes())
+        .map_err(|_| UsageError::raise(format!("{commit} is not an object id")))?;
+
+    // What the note already says, so this appends to it rather than over it.
+    let existing = repo
+        .find_reference(reference.as_str())
+        .ok()
+        .and_then(|mut found| found.peel_to_id().ok())
+        .and_then(|id| repo.find_commit(id.detach()).ok());
+    let previous: Option<String> = existing.as_ref().and_then(|parent| {
+        let tree = parent.tree().ok()?;
+        let entry = tree.lookup_entry_by_path(commit).ok()??;
+        let blob = repo.find_object(entry.object_id()).ok()?;
+        Some(String::from_utf8_lossy(&blob.data).into_owned())
+    });
+
+    let mut text = previous.unwrap_or_default();
+    if !text.is_empty() && !text.ends_with('\n') {
+        text.push('\n');
+    }
+    text.push_str(body);
+    if !text.ends_with('\n') {
+        text.push('\n');
+    }
+
+    let blob = repo
+        .write_blob(text.as_bytes())
+        .map_err(|err| UsageError::raise(format!("could not write the note blob: {err}")))?;
+
+    // Every OTHER entry is carried over; only this commit's is replaced.
+    let mut entries: std::collections::BTreeMap<String, gix::ObjectId> =
+        std::collections::BTreeMap::new();
+    if let Some(Ok(tree)) = existing.as_ref().map(gix::Commit::tree) {
+        for entry in tree.iter().filter_map(std::result::Result::ok) {
+            entries.insert(entry.filename().to_string(), entry.object_id());
+        }
+    }
+    entries.insert(commit.to_owned(), blob.detach());
+
+    let mut tree = gix::objs::Tree::empty();
+    for (filename, id) in entries {
+        tree.entries.push(gix::objs::tree::Entry {
+            mode: gix::objs::tree::EntryKind::Blob.into(),
+            filename: filename.into(),
+            oid: id,
+        });
+    }
+    tree.entries.sort();
+    let tree_id = repo
+        .write_object(&tree)
+        .map_err(|err| UsageError::raise(format!("could not write the notes tree: {err}")))?;
+
+    let parents: Vec<gix::ObjectId> = existing.iter().map(|parent| parent.id).collect();
+
+    // THE SIGNATURE FALLS BACK RATHER THAN REFUSING, and a note is the one place
+    // that is right. A work commit carries the identity of whoever authored it,
+    // and `[attribution] identity_deny` is about exactly that; a notes commit is
+    // bookkeeping written BY THE TOOL, so a checkout with no configured identity
+    // — a fresh fixture, a CI runner before its config step — must still be able
+    // to record a measurement. A configured identity is honoured where there is
+    // one, so nothing is overridden.
+    let signature = repo.committer().transpose().ok().flatten().map_or_else(
+        || gix::actor::Signature {
+            name: "batten".into(),
+            email: "batten@localhost".into(),
+            time: gix::date::Time::now_utc(),
+        },
+        |found| gix::actor::Signature {
+            name: found.name.to_owned(),
+            email: found.email.to_owned(),
+            // NOW, not the configured signature's instant. A note records when
+            // the measurement was filed; carrying a stamp from elsewhere would
+            // make two appends to one commit unorderable.
+            time: gix::date::Time::now_utc(),
+        },
+    );
+
+    repo.commit_as(
+        signature.to_ref(&mut gix::date::parse::TimeBuf::default()),
+        signature.to_ref(&mut gix::date::parse::TimeBuf::default()),
+        reference.as_str(),
+        format!("Notes added by 'batten perf record' for {commit}"),
+        tree_id,
+        parents,
+    )
+    .map_err(|err| UsageError::raise(format!("could not commit the note: {err}")))?;
+    Ok(())
+}
+
+/// The full object id `HEAD` resolves to in the repository at `dir`.
+///
+/// # Errors
+///
+/// A usage error when `dir` is not inside a git repository, or when the
+/// repository carries no commit for `HEAD` to name.
+pub fn head_commit(dir: &Path) -> Result<String> {
+    let repo = open(dir)?;
+    let refusal = || {
+        UsageError::raise(
+            "cannot resolve HEAD; this is not a git repository, or it has no commits".to_owned(),
+        )
+    };
+    Ok(repo
+        .head_id()
+        .map_err(|_| refusal())?
+        .detach()
+        .to_hex()
+        .to_string())
+}
+
+/// Every local branch and remote-tracking ref, as full ref names.
+///
+/// The liveness set instance GC is computed against. **Ref existence, never
+/// reachability**: these consumers land by rebase and fast-forward, so a landed
+/// branch's commits are ancestors of nothing and a reachability test would
+/// collect live work. Listing what exists asks a question that has an honest
+/// answer.
+///
+/// # Errors
+///
+/// Raises a [`UsageError`] (exit `1`) when `dir` is not inside a repository.
+pub fn refs(dir: &Path) -> Result<Vec<String>> {
+    let repo = open(dir)?;
+    let refusal = || UsageError::raise("cannot list refs; this is not a git repository".to_owned());
+    let references = repo.references().map_err(|_| refusal())?;
+    // REF EXISTENCE, never reachability: these consumers land by rebase and
+    // fast-forward, so a landed branch's commits are ancestors of nothing and a
+    // reachability test would collect live work.
+    let mut found: Vec<String> = Vec::new();
+    for prefix in ["refs/heads", "refs/remotes"] {
+        for reference in references
+            .prefixed(prefix)
+            .map_err(|_| refusal())?
+            .flatten()
+        {
+            found.push(reference.name().as_bstr().to_string());
+        }
+    }
+    found.sort();
+    found.dedup();
+    Ok(found)
+}
+
+/// The upstream `HEAD` tracks, as a full ref name, or `None` when it tracks
+/// nothing (including on a detached `HEAD`).
+///
+/// Two deliberate spellings, both learned the hard way:
+///
+/// * **`@{upstream}`, not `<branch>@{upstream}`.** The question is only ever
+///   asked about the current branch, so interpolating a branch name would put a
+///   caller-influenced token in the argv for no gain. There is nothing here to
+///   quote wrongly.
+/// * **No `--end-of-options`.** Every other query in this module carries it, and
+///   this one must not: in ref-printing mode `rev-parse` does not consume the
+///   flag, it **echoes it as an output line**, so the answer comes back as
+///   `"--end-of-options\nrefs/remotes/origin/main"` and every downstream ref
+///   lookup fails on a target nobody configured. It is safe to omit precisely
+///   because the argument is a fixed literal.
+///
+/// # Errors
+///
+/// Internal only — no upstream is `None`, not a failure.
+pub fn upstream_of_head(dir: &Path) -> Result<Option<String>> {
+    let Ok(repo) = open(dir) else {
+        return Ok(None);
+    };
+    // The `--end-of-options` trap this function's doc records is GONE with the
+    // argv: in ref-printing mode `rev-parse` echoed the token as an output line
+    // rather than consuming it, so carrying it here returned the flag itself as
+    // the upstream. A resolver takes no flags, so there is nothing to echo.
+    let Some(name) = repo
+        .head()
+        .ok()
+        .and_then(|head| head.referent_name().map(std::borrow::ToOwned::to_owned))
+    else {
+        // A detached HEAD tracks nothing, and neither does a branch with no
+        // upstream — both are `None` rather than a failure.
+        return Ok(None);
+    };
+    Ok(repo
+        .branch_remote_tracking_ref_name(name.as_ref(), gix::remote::Direction::Fetch)
+        .and_then(std::result::Result::ok)
+        .map(|tracking| tracking.as_bstr().to_string()))
+}
+
+/// Count occurrences of `pattern` across files matching `glob` at `rev`
+/// (CLOUD-55).
+///
+/// The base half of a ratchet. Paths come from `ls-tree`, bytes from `show` —
+/// both through this module's one invoker, so a ratchet adds no second way to
+/// read git. The working-tree half is the caller's, using the crate's one tree
+/// walker; neither side re-implements the other's glob matching.
+///
+/// **A gitlink is skipped, which is this side's reading of the one selection
+/// rule [`crate::rules::tree_files`] states** (CLOUD-328): the walker stops at a
+/// nested repository, so this half must not count one either, and the two
+/// select the same set for any glob. Skipped *explicitly* rather than by
+/// accident — `git show <rev>:<gitlink>` fails with `bad object`, so the
+/// read-failure path below already swallowed it, and a silent skip that happens
+/// to land on the right answer is the same shape as the defect this fixes.
+///
+/// `ls-tree`'s long form is read rather than `--name-only`, because the mode is
+/// what distinguishes a gitlink from a file and `--name-only` discards it. The
+/// long form over `--format`, because it needs no git version floor; path
+/// quoting is exactly as `--name-only` had it.
+///
+/// Byte-level and case-sensitive, matching `forbid`'s discipline: the pattern is
+/// a literal a consumer wrote, and a count that silently normalized it would be
+/// counting something else.
+///
+/// A file at `rev` whose bytes are not UTF-8 contributes zero rather than
+/// failing the run: a binary blob matching a text pattern is not a fact anyone
+/// is asserting, and refusing the whole gate over one would make an unrelated
+/// asset able to disable it.
+///
+/// # Errors
+///
+/// Returns a [`UsageError`] (→ exit `1`) when `rev` does not resolve — never a
+/// pass. A ratchet that cannot see its baseline has not established that the
+/// count held, and reporting zero would read as "nothing was deleted" having
+/// looked at nothing.
+pub fn count_at_rev(dir: &Path, rev: &str, glob: &str, pattern: &str) -> Result<usize> {
+    let mut total = 0;
+    for_each_blob_at_rev(dir, rev, glob, |_, text| {
+        total += text.matches(pattern).count();
+    })?;
+    Ok(total)
+}
+
+/// Which of `paths` name a blob at `rev` (CLOUD-807).
+///
+/// The base-side half of `retires_with`'s admission. A declared subject is only
+/// evidence that something DIED if it was alive at the base rev: without this,
+/// a header naming a path that never existed would report "absent from the
+/// working tree" and admit the deletion it was supposed to justify. That is the
+/// header rotting into a lie, and it is the case the row's §7(d) names.
+///
+/// Looked up entry-by-entry rather than by walking the tree, because the caller
+/// asks about a handful of declared paths and a subject is a path a consumer
+/// typed, never a glob. A path naming a tree rather than a blob answers `false`:
+/// a directory is not a subject a suite can be said to cover.
+///
+/// # Errors
+///
+/// Returns a [`UsageError`] (→ exit `1`) when `rev` does not resolve, matching
+/// [`count_at_rev`] — a lookup that could not see the baseline must not answer
+/// "absent", which is the admitting direction.
+pub fn paths_present_at_rev(
+    dir: &Path,
+    rev: &str,
+    paths: &BTreeSet<String>,
+) -> Result<BTreeSet<String>> {
+    let repository = open(dir)?;
+    let unresolved = || {
+        UsageError::raise(format!(
+            "ratchet base {rev:?} does not resolve to a tree in this repository"
+        ))
+    };
+    let resolved = repository.rev_parse_single(rev).map_err(|_| unresolved())?;
+    let tree = resolved
+        .object()
+        .map_err(|_| unresolved())?
+        .peel_to_tree()
+        .map_err(|_| unresolved())?;
+
+    let mut present = BTreeSet::new();
+    for path in paths {
+        // A lookup that fails to read is "not present", the REFUSING direction
+        // for an admission: the caller denies a decrease it cannot justify.
+        let Ok(Some(entry)) = tree.lookup_entry_by_path(path.as_str()) else {
+            continue;
+        };
+        if entry.mode().is_blob() {
+            present.insert(path.clone());
+        }
+    }
+    Ok(present)
+}
+
+/// Visit every glob-matching blob at `rev`, handing the callback its path and
+/// its UTF-8 text (CLOUD-807).
+///
+/// The base-tree walk [`count_at_rev`] is a sum over — extracted rather than
+/// copied, so the two halves of a ratchet keep ONE authority on which blobs a
+/// glob selects at a rev. `retires_with` needs the same walk to read a
+/// per-file count and a declared-subject header out of the same pass, and a
+/// second traversal beside this one is exactly how the gitlink and
+/// `core.quotePath` skews below got in.
+///
+/// Every selection and skip rule is documented at the site it applies; see
+/// [`count_at_rev`] for why each one is a correctness property rather than a
+/// convenience.
+///
+/// # Errors
+///
+/// Returns a [`UsageError`] (→ exit `1`) when `rev` does not resolve, for the
+/// reason [`count_at_rev`] gives: a baseline that could not be read is never a
+/// pass.
+pub fn for_each_blob_at_rev(
+    dir: &Path,
+    rev: &str,
+    glob: &str,
+    mut visit: impl FnMut(&str, &str),
+) -> Result<()> {
+    let repository = open(dir)?;
+    walk_blob_ids(&repository, rev, glob, |path, id| {
+        // A read that fails is treated as an empty file rather than aborting,
+        // for the same reason non-UTF-8 content is: an unrelated asset must not
+        // be able to disable the gate.
+        let Ok(object) = repository.find_object(id) else {
+            return;
+        };
+        let Ok(text) = std::str::from_utf8(&object.data) else {
+            return;
+        };
+        visit(path, text);
+    })
+}
+
+/// The walk [`for_each_blob_at_rev`] and [`base_delta`] share, handing back each
+/// selected blob's path and its **object id** without decompressing it
+/// (CLOUD-1051).
+///
+/// Extracted rather than copied for the reason [`for_each_blob_at_rev`] itself
+/// was extracted from [`count_at_rev`]: every skip below — the gitlink, the
+/// non-blob mode, the non-UTF-8 path, the `core.quotePath`-proof byte recorder —
+/// is a correctness property that keeps two halves of a comparison selecting the
+/// same set, and a second traversal beside this one is how CLOUD-328 and
+/// CLOUD-749 got in.
+///
+/// **The id is the cheap half and that is the point.** A tree traversal reads
+/// tree objects only; `find_object` is what pays zlib for a blob's bytes. A
+/// caller that only needs to know *whether* a blob changed never has to spend
+/// that — see [`base_delta`], which is why this split exists.
+fn walk_blob_ids(
+    repository: &gix::Repository,
+    rev: &str,
+    glob: &str,
+    mut visit: impl FnMut(&str, gix::ObjectId),
+) -> Result<()> {
+    let unresolved = || {
+        UsageError::raise(format!(
+            "ratchet base {rev:?} does not resolve to a tree in this repository"
+        ))
+    };
+    let resolved = repository.rev_parse_single(rev).map_err(|_| unresolved())?;
+    let tree = resolved
+        .object()
+        .map_err(|_| unresolved())?
+        .peel_to_tree()
+        .map_err(|_| unresolved())?;
+
+    // The same compiled matcher the working-tree half uses, built once for the
+    // whole listing rather than re-parsed per entry (CLOUD-214). Sharing the
+    // type is what keeps the two halves' answer to "does this glob select this
+    // path" a single implementation.
+    let selector = crate::selector::Selector::new(glob)?;
+
+    // A recorded traversal rather than parsed `ls-tree` output, which is what
+    // fixes CLOUD-749: the recorder hands back the path as BYTES, so
+    // `core.quotePath` — git's default, and a legal local setting either way —
+    // cannot reach the answer. Under the old read a non-ASCII path arrived as
+    // `"caf\303\251.rs"`, quotes and octal escapes included, and the glob
+    // silently failed to match it. The working-tree half walks with `ignore` and
+    // sees the real path, so the two halves selected different files and the
+    // ratchet reported a delta nobody made — CLOUD-328's failure class on a
+    // second axis, in the same function.
+    let mut recorder = gix::traverse::tree::Recorder::default();
+    tree.traverse()
+        .breadthfirst(&mut recorder)
+        .map_err(|_| UsageError::raise(format!("cannot walk the tree at {rev:?}")))?;
+
+    for entry in recorder.records {
+        // A gitlink is skipped, explicitly. `crate::rules::tree_files` stops at a
+        // nested repository, so this half must not count one either or the two
+        // sides select different sets (CLOUD-328). The mode is a typed value
+        // here rather than a string compared against `160000`.
+        if entry.mode.is_commit() {
+            continue;
+        }
+        if !entry.mode.is_blob() {
+            continue;
+        }
+        // A path that is not UTF-8 cannot be matched by a glob a consumer wrote
+        // as a Rust string, so it contributes zero — the same reading
+        // `changed_paths` already gives such a path, rather than a lossy
+        // conversion that would match something nobody named.
+        let Ok(path) = std::str::from_utf8(&entry.filepath) else {
+            continue;
+        };
+        if !selector.matches(path) {
+            continue;
+        }
+        visit(path, entry.oid);
+    }
+    Ok(())
+}
+
+/// One commit, its whole message, and which of `globs`' paths it moved
+/// (CLOUD-1278).
+///
+/// The message rather than the subject, which is the difference from
+/// [`CommitSubject`]: `commit::judge`'s question is about the subject line and
+/// this one's is about a block in the body.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommitWrite {
+    /// The full hex object id.
+    pub commit: String,
+    /// Every byte of the commit message.
+    pub message: String,
+    /// Repo-relative paths this commit changed that at least one glob selects —
+    /// added, edited or deleted alike, because a protected path DELETED is as much
+    /// a write to it as one edited.
+    pub paths: BTreeSet<String>,
+}
+
+/// Every non-merge commit in `base..head`, with its message and the paths it
+/// moved under `globs` (CLOUD-1278).
+///
+/// # Why the glob narrows the walk rather than the result
+///
+/// [`walk_blob_ids`] is a tree traversal reading tree objects only, and the
+/// selector is applied inside it — so a commit that touched nothing under `globs`
+/// costs two tree walks and no blob reads. The alternative, a full diff per
+/// commit, prices every commit at the size of its whole change for an answer that
+/// is almost always empty. The range this runs over is a branch, so "almost
+/// always empty" is the case to make cheap.
+///
+/// # Comparison is by BLOB ID, and a merge is skipped
+///
+/// The same reading [`base_delta`] takes one function up: an id settles whether a
+/// path moved without decompressing either side. A merge commit has no single
+/// parent to compare against and introduces no change of its own on a
+/// fast-forward-only trunk, so it is skipped exactly as [`subjects_in_range`]
+/// skips it — one rule about what a commit IS, not two.
+///
+/// A ROOT COMMIT COMPARES AGAINST THE EMPTY TREE, so every path it carries under
+/// `globs` counts as written. Treating it as "no parent, therefore nothing
+/// changed" would make the first commit of a repository the one place a protected
+/// path could be introduced unarticulated.
+///
+/// # Errors
+///
+/// Raises a [`UsageError`] (exit `1`) when the range does not resolve or a tree
+/// cannot be walked — "could not look", never a clean pass over commits nobody
+/// read.
+pub fn writes_in_range(
+    dir: &Path,
+    base: &str,
+    head: &str,
+    globs: &[String],
+) -> Result<Vec<CommitWrite>> {
+    let repo = open(dir)?;
+    let refused = || UsageError::raise("could not resolve the commit range".to_owned());
+    let (base_id, head_id) = (
+        repo.rev_parse_single(base).map_err(|_| refused())?,
+        repo.rev_parse_single(head).map_err(|_| refused())?,
+    );
+    let walk = repo
+        .rev_walk([head_id.detach()])
+        .with_hidden([base_id.detach()])
+        .all()
+        .map_err(|_| refused())?;
+
+    let ids_at = |rev: &str| -> Result<BTreeMap<String, gix::ObjectId>> {
+        let mut found = BTreeMap::new();
+        for glob in globs {
+            walk_blob_ids(&repo, rev, glob, |path, id| {
+                found.insert(path.to_owned(), id);
+            })?;
+        }
+        Ok(found)
+    };
+
+    let mut out = Vec::new();
+    for step in walk {
+        let info = step.map_err(|_| refused())?;
+        if info.parent_ids().count() > 1 {
+            continue;
+        }
+        let commit = repo.find_commit(info.id).map_err(|_| refused())?;
+        let sha = info.id().to_hex().to_string();
+        let now = ids_at(&sha)?;
+        // A root commit has no parent, so its whole tree is the change. An empty
+        // map is exactly that comparison and needs no special case below.
+        let was = match info.parent_ids().next() {
+            Some(parent) => ids_at(&parent.to_hex().to_string())?,
+            None => BTreeMap::new(),
+        };
+        let mut paths: BTreeSet<String> = BTreeSet::new();
+        for (path, id) in &now {
+            if was.get(path) != Some(id) {
+                paths.insert(path.clone());
+            }
+        }
+        for path in was.keys() {
+            if !now.contains_key(path) {
+                paths.insert(path.clone());
+            }
+        }
+        out.push(CommitWrite {
+            commit: sha,
+            message: commit.message_raw().map_err(|_| refused())?.to_string(),
+            paths,
+        });
+    }
+    Ok(out)
+}
+
+/// How a declared glob's paths differ between a base rev and the working tree
+/// (CLOUD-1059).
+///
+/// Three disjoint sets of repo-relative paths, never a hunk and never a line —
+/// non-negotiable rule 4, the same bound [`changed_paths`] and
+/// [`Fact::GitStatus`](crate::facts::Fact::GitStatus) already hold to.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
+pub struct BaseDelta {
+    /// Present now, absent at the base rev.
+    pub added: Vec<String>,
+    /// Present in both, with different content.
+    pub edited: Vec<String>,
+    /// Present at the base rev, absent now.
+    pub deleted: Vec<String>,
+    /// Of the paths above, the ones whose **non-comment content** differs
+    /// (CLOUD-1051).
+    ///
+    /// # Why the engine computes this and not the module
+    ///
+    /// "Which lines of this file are comments" is a lexical fact about the file,
+    /// the same class as [`Fact::Uses`](crate::facts::Fact::Uses) — the engine
+    /// resolves it, and the module decides over it. The predicate that consumes
+    /// it ("nothing but comments moved, and no test did") stays in Rego, where it
+    /// can be read and tested.
+    ///
+    /// # It compares REMAINDERS, not diff lines, and that is the repair
+    ///
+    /// The shell gate this replaces classified `git diff --unified=0`'s `+`/`-`
+    /// lines one at a time. That reads a moved block of code as changed lines on
+    /// both sides and a reflowed comment as a code change whenever a line
+    /// straddles the boundary. Comparing the two remainders answers the question
+    /// directly: strip every comment and blank line from each side and ask
+    /// whether what is left is byte-identical.
+    ///
+    /// A side that does not exist is the empty remainder, which is what makes
+    /// added and deleted paths classifiable at all. That is a deliberate
+    /// improvement on the shell, which dropped deletions wholesale
+    /// (`--diff-filter=d`) because it could not classify them: deleting a module
+    /// now differs (its remainder was not empty) while deleting a pure-prose file
+    /// does not, where the shell's blanket exclusion had to treat both alike.
+    #[serde(rename = "code-changed")]
+    pub code_changed: Vec<String>,
+    /// When the base rev was committed, as strict ISO-8601 UTC (CLOUD-1051).
+    ///
+    /// **A property of the base, so it belongs to the fact that resolved one.**
+    /// The predicate that needs it asks whether a record predates the branch —
+    /// *a deferral of work in the diff you are holding open cannot be a row
+    /// written before that diff existed* — which is a question about this
+    /// comparison, not a new fact about the repository.
+    ///
+    /// Fixed-width UTC, deliberately, so a consumer compares it lexicographically
+    /// rather than parsing a date. That is the same reading the shell gate needed
+    /// `date -d` to avoid, and Rego has no date type to reach for either.
+    ///
+    /// `None` when the rev resolves to something with no commit time — a tag
+    /// object pointing at a tree, say. The three path lists are still answered in
+    /// that case, because they were computable and this was not; collapsing the
+    /// whole fact to could-not-look over one unreadable field would be the
+    /// opposite error.
+    #[serde(rename = "base-date")]
+    pub base_date: Option<String>,
+    /// The lines each EDITED path had at the base rev (CLOUD-1051).
+    ///
+    /// # The one question the head side cannot answer
+    ///
+    /// `input.tree.lines` is what a file says NOW. A predicate asking *what did
+    /// this edit remove* needs the other side, and nothing else in the input
+    /// carries it — so `shell-retirement` could only ever refuse an edit, never
+    /// admit one, and the campaign could not delete a retired program's row from
+    /// a sibling's declaration table without tripping its own gate.
+    ///
+    /// # Bounded to `edited`, which is what keeps it affordable
+    ///
+    /// Not `added` (there is no base side, save for a MOVED file, which carries
+    /// its old path's lines under its new one), not `deleted` (the head side is
+    /// gone), and not every declared path — only the handful a branch actually
+    /// moved. That is the same bound the remainder comparison above already
+    /// pays: the blob is fetched for a path that changed, and this reuses the
+    /// read rather than adding one.
+    ///
+    /// A path absent from this map is could-not-look — a non-UTF-8 blob, or one
+    /// the object database would not yield — and a consumer must read it as
+    /// *cannot tell what was removed* rather than as *nothing was removed*. That
+    /// is the difference between admitting an edit and refusing it, so the two
+    /// must not collapse.
+    #[serde(rename = "base-lines")]
+    pub base_lines: BTreeMap<String, Vec<String>>,
+    /// The identity of the branch's whole CHANGE against the base
+    /// (CLOUD-1484) — [`branch_patch_id`], as a bare hex string.
+    ///
+    /// # Why a receipt-shaped value belongs on this fact
+    ///
+    /// A module asking *was this change reviewed* has to name the change, and a
+    /// digest is the only spelling of it that fits non-negotiable rule 4: the
+    /// three path lists above already say WHICH files moved, and a module that
+    /// re-derived an identity from them would be a second notion of *the same
+    /// change* — free to disagree with [`landing`]'s about a rebase, which is
+    /// the one property such a receipt turns on.
+    ///
+    /// # It answers a DIFFERENT question from the lists beside it, deliberately
+    ///
+    /// The path lists are a tip diff over the WORKING TREE. This is a merge-base
+    /// diff over COMMITTED bytes. They disagree on a stale branch and on a dirty
+    /// one, and that is not a defect in either: a module asking which files this
+    /// branch touched wants the first, and one asking which change was attested
+    /// wants the second, because an attestation must not move when somebody
+    /// saves a file.
+    ///
+    /// `None` is could-not-look and covers the empty diff too — a branch that
+    /// changed nothing has no identity, and [`cumulative_patch_id`] refuses to
+    /// mint one so two empty changes cannot compare equal. A predicate must not
+    /// read that as *unreviewed*; there is nothing to review.
+    #[serde(rename = "patch-id")]
+    pub patch_id: Option<String>,
+}
+
+/// A file's content with its comment and blank lines removed.
+///
+/// **An unrecognised extension has no comments**, so its remainder is the whole
+/// file and any change to it is a code change. The failure direction is
+/// deliberate and is the shell gate's: a rule over this ADMITS a branch when it
+/// is wrong in one direction and blocks correct work when it is wrong in the
+/// other, and only the second is unrecoverable by waiting.
+///
+/// Block comments are deliberately NOT recognised. A `/* */` run cannot be
+/// classified line-by-line without tracking state, and guessing fails in the
+/// refusing direction — so a file using them reads as code, which is the safe
+/// half.
+pub fn without_comments(path: &str, text: &str) -> String {
+    let prefix = match path.rsplit_once('.').map(|(_, ext)| ext) {
+        // Markdown is prose end to end; there is no non-comment remainder.
+        Some("md") => return String::new(),
+        // `pkl` SITS WITH RUST RATHER THAN WITH THE OTHER DECLARATION
+        // LANGUAGES: it is Java-family, and `#` is not a comment marker there at
+        // all. One table for everything that merely looks `#`-ish is how a
+        // remainder silently keeps its real code and drops a commented line.
+        //
+        // The two `//` and the four `#` groups are one arm each because
+        // `clippy::match_same_arms` refuses a table that repeats a body, so the
+        // grouping a reader wants lives in these comments rather than in the
+        // arms.
+        Some("rs" | "pkl") => "//",
+        // The shell family, and THE DECLARATION LANGUAGES beside it — policy
+        // modules, config, pipeline and workflow documents. Only the shell half
+        // was in CLOUD-827's original table, which named the languages a
+        // consumer writes PROGRAMS in. A declarative consumer keeps most of its
+        // prose in the other half, and every one of those took the fall-through
+        // below, so a comment-only change to one read as a code change and the
+        // whole prose-only class could not fire over them.
+        //
+        // The fall-through's direction is still right for a genuinely unknown
+        // extension — it admits rather than blocks, and only blocking is
+        // unrecoverable by waiting. What was wrong is calling these unknown.
+        Some("sh" | "bash" | "bats" | "rego" | "toml" | "yml" | "yaml") => "#",
+        // `mise-tasks/` programs carry no extension (CLOUD-865 renamed most to
+        // `.sh`, but the pattern stays so a re-added extensionless task is still
+        // read). The check is on the DIRECTORY, so it cannot claim a file
+        // elsewhere that happens to lack a dot.
+        _ if path.starts_with("mise-tasks/") => "#",
+        _ => return text.to_owned(),
+    };
+    text.lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with(prefix))
+        .collect::<Vec<&str>>()
+        .join("\n")
+}
+
+/// Write the tree at `rev` into `dest`, blob by blob (CLOUD-1050).
+///
+/// **This exists because `git worktree add` is a git spawn and there is no
+/// longer anywhere in this crate for one to live.** CLOUD-740's terminal
+/// assertion — `no_second_git_invoker_exists` — forbids naming `git` as a
+/// literal program anywhere under `src/`, and the `semver` adapter's baseline
+/// build needs a source tree at a rev. A traversal that writes what it reads is
+/// the whole of what the worktree was providing, and it is strictly better here
+/// for two reasons the spawn version paid for in bugs: there is no registration
+/// kept elsewhere, so removing the directory cannot strand a stale entry that
+/// the next run reports as "already registered"; and the destination is a plain
+/// directory rather than a linked worktree, so nothing about the baseline can
+/// reach back into the repository it came from.
+///
+/// **Modes are not reproduced, and that is a stated bound.** Every entry lands
+/// as an ordinary file: the one consumer is a `cargo doc` build, which reads
+/// manifests and sources and executes nothing out of the tree. A caller needing
+/// an executable bit needs a different primitive, not an extra argument here.
+///
+/// # Errors
+///
+/// Raises when the repository cannot be opened, when `rev` does not resolve to a
+/// tree, when a blob cannot be read, when a write fails — and, deliberately,
+/// when the traversal selected **nothing**. An empty destination is the vacuous
+/// shape: a doc build over it would fail with a message about a missing
+/// manifest, which is a true statement about the wrong question.
+pub fn materialize_rev(dir: &Path, rev: &str, dest: &Path) -> Result<()> {
+    let repository = open(dir)?;
+
+    // COLLECTED FIRST, because the visitor is `FnMut` and writing inside it
+    // would make every filesystem error a value the traversal cannot carry out.
+    // The ids are cheap — that is the split `walk_blob_ids` exists for — so
+    // holding them costs a map of the tree rather than the tree's contents.
+    let mut blobs: Vec<(String, gix::ObjectId)> = Vec::new();
+    walk_blob_ids(&repository, rev, "**", |path, id| {
+        blobs.push((path.to_owned(), id));
+    })?;
+    if blobs.is_empty() {
+        return Err(UsageError::raise(format!(
+            "the tree at {rev:?} selected no file to materialize"
+        )));
+    }
+
+    for (path, id) in blobs {
+        let out = dest.join(&path);
+        if let Some(parent) = out.parent() {
+            std::fs::create_dir_all(parent).map_err(|err| {
+                UsageError::raise(format!("cannot create {}: {err}", parent.display()))
+            })?;
+        }
+        let object = repository.find_object(id).map_err(|err| {
+            UsageError::raise(format!("cannot read the blob behind {path:?}: {err}"))
+        })?;
+        crate::durable::replace(&out, &object.data)
+            .map_err(|err| UsageError::raise(format!("cannot write {}: {err}", out.display())))?;
+    }
+    Ok(())
+}
+
+/// The part of `path` below its last `src/`, which a file keeps when it moves
+/// between crates (`crates/a/src/x.rs` and `crates/b/src/x.rs` share `x.rs`):
+/// the one key [`base_delta`] and the test replay pair a move by (CLOUD-2789).
+#[must_use]
+pub fn below_src(path: &str) -> Option<&str> {
+    path.rfind("src/").map(|at| &path[at + "src/".len()..])
+}
+
+/// Each deleted path paired with the added path it MOVED to: the two share
+/// [`below_src`]'s tail, and each is the only one on its side with it
+/// (CLOUD-2789). Two new homes for one old file, or two old files for one new
+/// home, pair nothing: a copy or a merge is not a move.
+///
+/// The one pairing rule the test replay, [`base_delta`] and `config lint`'s
+/// move-aware comparison share, so the three gates cannot disagree about
+/// which file went where.
+#[must_use]
+pub fn pair_moves<'a>(
+    deleted: impl IntoIterator<Item = &'a String>,
+    added: impl IntoIterator<Item = &'a String>,
+) -> BTreeMap<String, String> {
+    let by_tail = |paths: &mut dyn Iterator<Item = &'a String>| {
+        let mut tails: BTreeMap<&'a str, Vec<&'a String>> = BTreeMap::new();
+        for path in paths {
+            if let Some(tail) = below_src(path) {
+                tails.entry(tail).or_default().push(path);
+            }
+        }
+        tails
+    };
+    let gone = by_tail(&mut deleted.into_iter());
+    let fresh = by_tail(&mut added.into_iter());
+    gone.iter()
+        .filter_map(
+            |(tail, olds)| match (olds.as_slice(), fresh.get(tail)?.as_slice()) {
+                ([old], [new]) => Some(((*old).clone(), (*new).clone())),
+                _ => None,
+            },
+        )
+        .collect()
+}
+
+/// Every file moved between `rev` and the working tree's tracked set, old path
+/// to new, by [`pair_moves`].
+///
+/// # Errors
+///
+/// `dir` is not a repository, or `rev` does not resolve.
+pub fn moves_since(dir: &Path, rev: &str) -> Result<BTreeMap<String, String>> {
+    let repository = open(dir)?;
+    let mut at_base: BTreeSet<String> = BTreeSet::new();
+    walk_blob_ids(&repository, rev, "**", |path, _| {
+        at_base.insert(path.to_owned());
+    })?;
+    let now = tracked_paths(dir)?;
+    Ok(pair_moves(
+        at_base.difference(&now),
+        now.difference(&at_base),
+    ))
+}
+
+/// `path` as it was spelled before `moves`: its old path when it moved, else
+/// the same path under the old directory where every move into its directory
+/// came from one directory (a file ADDED beside moved ones, like a new module
+/// in a crate cut out of another), else `path` itself.
+#[must_use]
+pub fn unmoved(path: &str, moves: &BTreeMap<String, String>) -> String {
+    if let Some((old, _)) = moves.iter().find(|(_, new)| new.as_str() == path) {
+        return old.clone();
+    }
+    let prefix = |full: &str| -> Option<String> {
+        let tail = below_src(full)?;
+        Some(full[..full.len() - tail.len()].to_owned())
+    };
+    let Some(here) = prefix(path) else {
+        return path.to_owned();
+    };
+    let sources: BTreeSet<String> = moves
+        .iter()
+        .filter(|(_, new)| prefix(new).as_deref() == Some(here.as_str()))
+        .filter_map(|(old, _)| prefix(old))
+        .collect();
+    match sources.into_iter().collect::<Vec<_>>().as_slice() {
+        [only] => format!("{only}{}", &path[here.len()..]),
+        _ => path.to_owned(),
+    }
+}
+
+/// Classify every path a declared glob selects as added, edited or deleted
+/// against `base` (CLOUD-1059).
+///
+/// **Built from [`for_each_blob_at_rev`] and the working tree, never from a
+/// spawned `git diff`.** CLOUD-740 is taking the crate to zero `git` spawns, so a
+/// new one here would be a regression the same release is removing elsewhere.
+/// Every primitive this needs is already gix-backed.
+///
+/// **The base is a REF, so this is a tip diff rather than a merge-base diff.**
+/// Stated as a bound rather than left to be discovered: `mise run verify` asserts
+/// the branch is rebased on the current `origin/main`, so on the path that
+/// matters the tip and the merge base are the same commit. On a stale branch they
+/// are not, and this reports paths `main` moved as though this branch moved them.
+/// That is the same reading [`Rule::retires_with`](crate::rules::Rule::retires_with)
+/// already takes from its own `base` column, and sharing it is deliberate: two
+/// answers to "what did this branch change" is the drift a single column exists
+/// to prevent.
+///
+/// Absent — `None` — when the base rev does not resolve, never an empty delta.
+/// "This branch changed nothing" and "I could not read the base" are the two
+/// answers a migration gate must keep apart, and Rego reads an undefined path as
+/// *does not hold*, so a fabricated empty set would pass the gate on ignorance.
+///
+/// # Errors
+///
+/// Raises only when the repository cannot be opened at all.
+pub fn base_delta(
+    dir: &Path,
+    base: &str,
+    globs: &[String],
+    wants_patch_id: bool,
+) -> Result<Option<BaseDelta>> {
+    base_delta_within(dir, base, globs, wants_patch_id, None)
+}
+
+/// [`base_delta`] over a CHANGE-SET: only the paths in `within` are read, hashed
+/// and compared on the working side (CLOUD-2789).
+///
+/// `check --staged` judges a commit, and the commit is what is staged. The
+/// unnarrowed delta reads and hashes every selected working file to find the
+/// handful that moved, which under `delta_sources = ["**"]` is the whole tree:
+/// 60% of the commit-time cfg-gated-test step. Narrowed, `added`, `edited`,
+/// `base-lines` and `code_changed` name only change-set paths.
+///
+/// **The base side is still walked whole, and `deleted` still answers for the
+/// whole branch**, on purpose: a staged deletion is in no index entry, so the
+/// change-set cannot name it, and a moved file's new home is paired with its
+/// old one through `deleted` — without it a moved platform-gated test reads as
+/// born whole and the commit that moves it is refused.
+///
+/// # Errors
+///
+/// As [`base_delta`].
+pub fn base_delta_within(
+    dir: &Path,
+    base: &str,
+    globs: &[String],
+    wants_patch_id: bool,
+    within: Option<&BTreeSet<String>>,
+) -> Result<Option<BaseDelta>> {
+    let repository = open(dir)?;
+    let hash = repository.object_hash();
+
+    // IDS, NOT TEXT, and that is the whole cost of this function (CLOUD-1051).
+    // The first version stored every selected blob's decompressed text here. With
+    // `delta_sources = ["**"]` — which `prose-only` declares, because a
+    // prose-only change is a claim about the whole diff — that is the entire
+    // repository inflated into a map on every `check`: measured at ~3 min to
+    // ~11 min for `mise run batten-check` on a debug build. An id costs a tree
+    // read; the blob behind it is fetched below only for a path that actually
+    // moved, which is a handful per branch rather than every tracked file.
+    let mut at_base: BTreeMap<String, gix::ObjectId> = BTreeMap::new();
+    for glob in globs {
+        // A base that does not resolve is could-not-look for the WHOLE fact, not
+        // for one glob: a partial answer here would report every path the
+        // unresolvable glob would have covered as added.
+        match walk_blob_ids(&repository, base, glob, |path, id| {
+            at_base.insert(path.to_owned(), id);
+        }) {
+            Ok(()) => {}
+            Err(_) => return Ok(None),
+        }
+    }
+
+    // The base side of a comparison, paid for one path at a time. Unreadable and
+    // non-UTF-8 blobs answer with the empty remainder, which is the same reading
+    // the text-mapped version gave them by skipping them.
+    let base_text = |id: gix::ObjectId| -> String {
+        repository
+            .find_object(id)
+            .ok()
+            .and_then(|object| std::str::from_utf8(&object.data).map(str::to_owned).ok())
+            .unwrap_or_default()
+    };
+
+    // ONE walk for every declared glob, matched against all of them, rather than
+    // a walk per glob: the working-tree half is the expensive side and the
+    // selectors are cheap, so re-walking would charge the tree once per
+    // declaration for an answer that does not change.
+    let selectors = globs
+        .iter()
+        .map(|glob| crate::selector::Selector::new(glob))
+        .collect::<Result<Vec<_>>>()?;
+    let selects = |path: &str| selectors.iter().any(|selector| selector.matches(path));
+
+    let mut delta = BaseDelta::default();
+    let mut present: BTreeSet<String> = BTreeSet::new();
+    for path in tree_files(dir)? {
+        if !selects(&path) {
+            continue;
+        }
+        present.insert(path.clone());
+        // Outside the change-set: present, so not deleted, and not read.
+        if within.is_some_and(|within| !within.contains(&path)) {
+            continue;
+        }
+        let was = at_base.get(&path).copied();
+
+        // CLASSIFY BY BLOB ID, and read nothing further when it matches.
+        //
+        // The working-tree bytes are hashed as git would hash them, so an
+        // unchanged path is settled without decompressing its base blob and
+        // without either `without_comments` pass. That is the case for almost
+        // every selected file on almost every branch.
+        //
+        // **Filters are not applied, and the failure direction is the safe one.**
+        // `.gitattributes` here is `* text=auto eol=lf`, so the checkout and the
+        // index hold identical bytes on every platform and the hashes agree.
+        // Where a checkout ever did convert line endings, the ids would differ
+        // and the path would fall through to the text comparison below — which is
+        // exactly what the previous, always-reading version concluded for it too.
+        // So this can cost an extra read; it cannot manufacture a verdict.
+        let now = crate::fsio::read(dir.join(&path)).unwrap_or_default();
+        let unchanged = was.is_some_and(|was| {
+            gix::objs::compute_hash(hash, gix::object::Kind::Blob, &now).is_ok_and(|now| now == was)
+        });
+        if unchanged {
+            continue;
+        }
+
+        let edited = was.is_some();
+        if edited {
+            delta.edited.push(path.clone());
+        } else {
+            delta.added.push(path.clone());
+        }
+        // Only a path this branch touched can have moved its remainder, so the
+        // comparison is charged to those alone rather than to every selected
+        // file — and the base blob is fetched here, at the one point it is worth
+        // paying for. A non-UTF-8 working file reads as the empty remainder, the
+        // same lens `base_text` applies to the other side.
+        let now = String::from_utf8(now).unwrap_or_default();
+        let was = was.map(base_text).unwrap_or_default();
+        // THE BASE SIDE, KEPT (CLOUD-1051), and only for a path that moved. The
+        // blob was fetched a line above for the remainder comparison, so this is
+        // a clone of text already in hand rather than a second read.
+        //
+        // Only `edited`: an added path has no base side and a deleted one has no
+        // head side, so neither can answer *what did this edit remove*.
+        if edited {
+            delta
+                .base_lines
+                .insert(path.clone(), was.lines().map(str::to_owned).collect());
+        }
+        if without_comments(&path, &was) != without_comments(&path, &now) {
+            delta.code_changed.push(path.clone());
+        }
+    }
+    // Deleted is decided against the WALK, not against `Path::exists`: the walk
+    // honours `.gitignore`, so a path the base tracked and the head ignores is a
+    // deletion from the selected set even though a file is still on disk.
+    delta.deleted = at_base
+        .keys()
+        .filter(|path| selects(path) && !present.contains(*path))
+        .cloned()
+        .collect();
+    // A MOVED path keeps its base side (CLOUD-2789). An added path that is the
+    // one new home of a deleted one (the same path below its last `src/`, as a
+    // file moved between crates is) carries that file's base lines under its new
+    // path. Without them a module asking whether an edit GREW something reads a
+    // moved file as born whole: the `batten-base` cut moved a platform-gated
+    // test, and `test cover unseen` refused it as added.
+    for (source, path) in pair_moves(&delta.deleted, &delta.added) {
+        if let Some(id) = at_base.get(&source).copied() {
+            delta
+                .base_lines
+                .insert(path, base_text(id).lines().map(str::to_owned).collect());
+        }
+    }
+    // A deleted path's head remainder is the empty one, which is what lets a
+    // pure-prose deletion differ from a module deletion — see `code_changed`.
+    for path in &delta.deleted {
+        let was = at_base
+            .get(path)
+            .copied()
+            .map(base_text)
+            .unwrap_or_default();
+        if !without_comments(path, &was).is_empty() {
+            delta.code_changed.push(path.clone());
+        }
+    }
+
+    delta.added.sort();
+    delta.edited.sort();
+    delta.deleted.sort();
+    delta.code_changed.sort();
+    // THE CHANGE'S OWN IDENTITY (CLOUD-1484), resolved here because this is the
+    // function that already holds the base. Failure leaves `None` — the field is
+    // could-not-look and the three path lists above are still answered, which is
+    // `base_date`'s posture one field down and for its reason: collapsing the
+    // whole fact over one unreadable field is the opposite error.
+    //
+    // PAID ONLY WHERE A ROW ASKED, which is the economy every other git fact in
+    // `resolve_git_facts` already keeps and which `mint_receipts` states one
+    // module over: a caller must not pay a git invocation for a question it
+    // never asks. This one is not cheap — a second repository open, a merge-base
+    // walk and a tree diff — and `base_delta` runs on every `check` that declares
+    // any `delta_sources`, which is most of them. Ungated it charged the whole
+    // tree for a field one module reads.
+    if wants_patch_id {
+        delta.patch_id = branch_patch_id(dir, base).ok().flatten();
+    }
+    // THE BASE'S OWN TIMESTAMP, resolved here because this is where the base rev
+    // has already been resolved. Every failure leaves `None` rather than a
+    // fabricated instant: a consumer comparing against could-not-look must skip
+    // the comparison, and a zero epoch would silently exempt nothing while
+    // reading as an answer.
+    delta.base_date = repository
+        .rev_parse_single(base)
+        .ok()
+        .and_then(|resolved| repository.find_object(resolved).ok())
+        .and_then(|object| object.try_into_commit().ok())
+        .and_then(|commit| commit.time().ok())
+        .map(|time| iso_utc(time.seconds));
+    Ok(Some(delta))
+}
+
+/// An epoch second as FIXED-WIDTH ISO-8601 UTC — `2026-09-28T12:34:56Z`.
+///
+/// Fixed width is what makes a lexicographic compare downstream equal a
+/// chronological one, so a module orders two of these with `<` and never parses
+/// a date. The offset a signature was written in is discarded on purpose: two
+/// commits written in different zones must still order correctly, and rendering
+/// the local offset would break exactly that.
+///
+/// One renderer for every date this module projects (`base-date`, and the tag and
+/// commit dates CLOUD-843 added), so the family cannot grow two spellings of one
+/// instant that compare unequal.
+fn iso_utc(seconds: i64) -> String {
+    let days = seconds.div_euclid(86_400);
+    let rest = seconds.rem_euclid(86_400);
+    let (year, month, day) = civil_from_days(days);
+    format!(
+        "{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}Z",
+        rest / 3600,
+        (rest % 3600) / 60,
+        rest % 60,
+    )
+}
+
+/// The civil date a count of days since the Unix epoch names.
+///
+/// Howard Hinnant's `civil_from_days`, which is the algorithm every date library
+/// uses for this and is thirty lines rather than a dependency. Vendored instead
+/// of reached for because the one caller wants a fixed-width UTC string and
+/// nothing else — no parsing, no zones, no formatting vocabulary — and
+/// `no-source-built-tool`'s sibling reasoning applies to a crate too: a
+/// dependency is worth its supply chain when it answers a question this cannot.
+fn civil_from_days(days: i64) -> (i64, u32, u32) {
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let year = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = u32::try_from(doy - (153 * mp + 2) / 5 + 1).unwrap_or(1);
+    let month = u32::try_from(if mp < 10 { mp + 3 } else { mp - 9 }).unwrap_or(1);
+    (if month <= 2 { year + 1 } else { year }, month, day)
+}
+
+/// The remote's default branch, as a full remote-tracking ref.
+///
+/// The fallback landing target when a consumer declares no `must_land_on`
+/// (CLOUD-51): work lands on the trunk unless told otherwise, and making every
+/// consumer spell that out is a config tax that buys nothing.
+///
+/// Read from `refs/remotes/<remote>/HEAD`, which is what `git clone` and
+/// `git remote set-head` maintain. **Not** guessed from a hardcoded `main` or
+/// `master`: a guess that resolves to a ref that happens to exist would answer
+/// "not landed" against the wrong trunk, silently, which is the failure mode
+/// `landing` was built to avoid on the ancestry axis.
+///
+/// `None` when the remote has no recorded HEAD, or there is no remote at all —
+/// both are ordinary states (a fresh local repository has neither), and the
+/// caller owes the absent case its own reading rather than a pass.
+///
+/// # Errors
+///
+/// Internal only — an unresolvable default is `None`, not a failure.
+pub fn remote_default_branch(dir: &Path) -> Result<Option<String>> {
+    let remotes = remotes(dir)?;
+    // `origin` when it exists, else the first configured remote in the sorted
+    // listing — deterministic, so the answer is byte-stable for a given repo.
+    let remote = if remotes.iter().any(|(name, _)| name == "origin") {
+        "origin".to_owned()
+    } else {
+        let Some((name, _)) = remotes.first() else {
+            return Ok(None);
+        };
+        name.clone()
+    };
+    // A missing HEAD is an absent ref rather than a non-zero exit now, which is
+    // the same answer arriving as a value instead of as an exit status.
+    let Ok(repo) = open(dir) else {
+        return Ok(None);
+    };
+    let Ok(reference) = repo.find_reference(&format!("refs/remotes/{remote}/HEAD")) else {
+        return Ok(None);
+    };
+    // The SYMBOLIC target, which is what `symbolic-ref` printed: a remote HEAD
+    // records which branch is the trunk, and peeling it to an object would answer
+    // a different question.
+    Ok(match reference.target() {
+        gix::refs::TargetRef::Symbolic(name) => Some(name.as_bstr().to_string()),
+        gix::refs::TargetRef::Object(_) => None,
+    }
+    .filter(|found| !found.is_empty()))
+}
+
+/// Resolve `rev` to the full SHA of a commit.
+///
+/// Peeled to a commit deliberately: a tag, tree or blob is refused here rather
+/// than going on to diff something meaningless. Reads through
+/// [`open`]'s isolated handle, so an ambient `GIT_DIR` cannot redirect it.
+fn resolve_commit(dir: &Path, rev: &str, role: &str) -> Result<String> {
+    let repo = open(dir)?;
+    let refused = || {
+        UsageError::raise(format!(
+            "{role} {rev:?} does not resolve to a commit in this repository"
+        ))
+    };
+    let object = repo.rev_parse_single(rev).map_err(|_| refused())?;
+    let commit = object
+        .object()
+        .map_err(|_| refused())?
+        .peel_to_commit()
+        .map_err(|_| refused())?;
+    Ok(commit.id().to_string())
+}
+
+/// Enumerate commits, newest first, under the fixed selection this module uses
+/// everywhere: topological order (commit-date order can reorder commits that
+/// share a timestamp), no merges, capped by the window.
+///
+/// Merges are excluded deliberately, not incidentally: a merge has no patch of
+/// its own, and the commits it brings in are separately enumerated here. That
+/// stays true only while this stays a full walk — a first-parent walk would make
+/// everything merged in invisible, which is a silent false *not landed*.
+///
+/// `range` is either a single commit (everything reachable from it) or
+/// `a..b` (reachable from `b`, not from `a`). **That is range SELECTION, not a
+/// reachability answer** — the distinction `no_ancestry_decides_merged_ness`
+/// draws, and the reason this is allowed to walk parents at all while nothing
+/// here may ask whether one commit contains another.
+fn rev_list(dir: &Path, window: Window, range: &str) -> Result<Vec<String>> {
+    let repo = open(dir)?;
+    let refused = || UsageError::raise(format!("cannot enumerate commits for {range:?}"));
+    let (exclude, include) = match range.split_once("..") {
+        Some((from, to)) => (Some(from), to),
+        None => (None, range),
+    };
+    let tip = repo
+        .rev_parse_single(include)
+        .map_err(|_| refused())?
+        .detach();
+    let mut hidden = Vec::new();
+    if let Some(from) = exclude {
+        hidden.push(repo.rev_parse_single(from).map_err(|_| refused())?.detach());
+    }
+    let mut walk = repo
+        .rev_walk([tip])
+        .sorting(gix::revision::walk::Sorting::BreadthFirst);
+    if !hidden.is_empty() {
+        walk = walk.with_hidden(hidden);
+    }
+    let mut out = Vec::new();
+    for step in walk.all().map_err(|_| refused())? {
+        let info = step.map_err(|_| refused())?;
+        // A merge has no patch of its own; its contents are enumerated through
+        // the commits it brings in.
+        if info.parent_ids().count() > 1 {
+            continue;
+        }
+        out.push(info.id().to_string());
+        if out.len() >= window.commits() {
+            break;
+        }
+    }
+    Ok(out)
+}
+
+/// The changes one commit makes against its first parent, in the canonical form
+/// [`crate::patch`] hashes.
+///
+/// A root commit is diffed against the empty tree, which is what makes its whole
+/// content its change rather than leaving it identity-less.
+fn commit_changes(repo: &gix::Repository, id: &gix::ObjectId) -> Result<Vec<crate::patch::Change>> {
+    let commit = repo.find_object(*id)?.peel_to_commit()?;
+    let new_tree = commit.tree()?;
+    let old_tree = match commit.parent_ids().next() {
+        Some(parent) => repo
+            .find_object(parent.detach())?
+            .peel_to_commit()?
+            .tree()?,
+        None => repo.empty_tree(),
+    };
+    tree_changes(repo, &old_tree, &new_tree)
+}
+
+/// The changes between two trees, with no rename detection.
+///
+/// Rename detection is refused rather than merely unconfigured — see
+/// [`crate::patch`]'s module doc: a similarity heuristic inside an identity lets
+/// two runs disagree about what counts as the same change.
+fn tree_changes(
+    repo: &gix::Repository,
+    old_tree: &gix::Tree<'_>,
+    new_tree: &gix::Tree<'_>,
+) -> Result<Vec<crate::patch::Change>> {
+    use gix_diff::tree::recorder::Change as Recorded;
+
+    let hash = repo.object_hash();
+    let mut recorder = gix_diff::tree::Recorder::default();
+    gix_diff::tree(
+        gix::objs::TreeRefIter::from_bytes(&old_tree.data, hash),
+        gix::objs::TreeRefIter::from_bytes(&new_tree.data, hash),
+        gix_diff::tree::State::default(),
+        &repo.objects,
+        &mut recorder,
+    )?;
+
+    let mut out = Vec::new();
+    for change in recorder.records {
+        // DIRECTORY ENTRIES ARE NOT CHANGES, and skipping them is load-bearing
+        // rather than tidy. `gix_diff::tree` records a changed subtree as well as
+        // the blobs inside it, and a tree object's id encodes ALL of its
+        // siblings — so `src/` has one id on a branch that added `src/b.rs` and a
+        // different one on a `main` that also gained `src/other.rs`. Hashing that
+        // id makes the identity depend on the base the change sits on, which is
+        // the single property patch identity exists NOT to have: the same change
+        // replayed elsewhere stops being recognisable, and `completion.unlanded`
+        // raises against work that is already on the trunk.
+        //
+        // The recursion still delivers every blob underneath with its full path,
+        // so nothing is lost by dropping the tree row — only the base-dependence
+        // is. CLOUD-739's own §7 corpus missed this because every fixture path in
+        // it sat at the repository ROOT, where the only tree in the diff is the
+        // one being diffed and is never emitted as a change.
+        let mode = match &change {
+            Recorded::Addition { entry_mode, .. } | Recorded::Deletion { entry_mode, .. } => {
+                *entry_mode
+            }
+            Recorded::Modification { entry_mode, .. } => *entry_mode,
+        };
+        if mode.is_tree() {
+            continue;
+        }
+        let (path, kind) = match change {
+            // `relation` is submodule/rewrite bookkeeping and is deliberately
+            // ignored: this identity does no rename tracking, so a rewrite pair
+            // is a deletion and an addition, which is what the target either has
+            // or does not.
+            Recorded::Addition {
+                entry_mode,
+                oid,
+                path,
+                relation: _,
+            } => (
+                path,
+                crate::patch::Kind::Added {
+                    blob: blob_side(repo, &oid, entry_mode),
+                },
+            ),
+            Recorded::Deletion {
+                entry_mode,
+                oid,
+                path,
+                relation: _,
+            } => (
+                path,
+                crate::patch::Kind::Removed {
+                    blob: blob_side(repo, &oid, entry_mode),
+                },
+            ),
+            Recorded::Modification {
+                previous_entry_mode,
+                previous_oid,
+                entry_mode,
+                oid,
+                path,
+            } => (
+                path,
+                crate::patch::Kind::Modified {
+                    before: blob_side(repo, &previous_oid, previous_entry_mode),
+                    after: blob_side(repo, &oid, entry_mode),
+                },
+            ),
+        };
+        out.push(crate::patch::Change {
+            path: path.to_string().into_bytes(),
+            kind,
+        });
+    }
+    Ok(out)
+}
+
+/// One side of a change, with its content read only when it is a text blob.
+///
+/// A tree entry (a submodule, or a directory the recorder surfaced) carries no
+/// content to diff and is identified by its id alone, which is exact.
+fn blob_side(
+    repo: &gix::Repository,
+    oid: &gix::ObjectId,
+    mode: gix::objs::tree::EntryMode,
+) -> crate::patch::Blob {
+    // A read that fails leaves `text` absent, which falls back to identifying
+    // the side by its object id — exact, and never a silent empty content that
+    // would let two unreadable blobs compare equal.
+    let text = if mode.is_blob() {
+        repo.find_object(*oid)
+            .ok()
+            .map(|object| object.data.clone())
+            .filter(|bytes| crate::patch::is_text(bytes))
+    } else {
+        None
+    };
+    crate::patch::Blob {
+        oid: oid.to_string(),
+        mode: u32::from(mode.value()),
+        text,
+    }
+}
+
+/// The patch identity of every commit reachable by `range`, keyed for lookup.
+///
+/// When two commits share an identity — a revert and a re-apply, a change
+/// cherry-picked twice — the **oldest** wins, so the evidence names the actual
+/// landing rather than a later copy of it. The walk is newest-first, so
+/// overwriting on each insert leaves the oldest in place.
+///
+/// No process, and therefore no host configuration: the twenty `-c` keys and six
+/// flags this used to pin existed solely to stop the user's `git config` shaping
+/// the diff, and [`open`]'s isolated handle declines that configuration
+/// outright.
+///
+/// The caller holds `memo` across both sides of a landing and saves it once, so
+/// the store is read and rewritten once per call rather than once per side.
+fn patch_id_index(
+    dir: &Path,
+    memo: &mut IdentityMemo,
+    window: Window,
+    range: &str,
+) -> Result<BTreeMap<PatchId, String>> {
+    let repo = open(dir)?;
+    let mut index = BTreeMap::new();
+    for commit in rev_list(dir, window, range)? {
+        let id = gix::ObjectId::from_hex(commit.as_bytes())
+            .map_err(|_| UsageError::raise(format!("cannot read commits for {range:?}")))?;
+        if let Some(hex) = memo.identity(&repo, &commit, &id)? {
+            index.insert(PatchId::parse(&hex)?, commit);
+        }
+    }
+    Ok(index)
+}
+
+/// The format of an [`IdentityMemo`] entry, through [`crate::cache::key`]: bump
+/// it when the body's encoding changes. The identity's own algorithm needs no
+/// bump — the key already carries the running binary.
+const IDENTITY_MEMO_FORMAT: &str = "patch-identity-memo-1";
+
+/// The most commits an [`IdentityMemo`] keeps after a landing. Past it, a
+/// landing's save keeps only the commits it asked about, which is one window.
+/// A replay's save never prunes, so replays alone can carry the entry past
+/// this until the next landing cuts it back.
+const IDENTITY_MEMO_BOUND: usize = 20_000;
+
+/// Each commit's patch identity, remembered across processes (CLOUD-1480).
+///
+/// An identity is a pure function of the commit, which an oid names immutably,
+/// and of the binary computing it, which the cache key carries — so a remembered
+/// answer is the computed one, never an approximation of it. Recomputing it for
+/// every commit in the target's window was 71% of a Stop's instructions in this
+/// repository. Only computed answers are remembered: a commit that will not read
+/// raises as it did, and is asked again next time.
+struct IdentityMemo {
+    entry: Option<(PathBuf, String)>,
+    known: std::collections::HashMap<String, Option<String>>,
+    asked: std::collections::HashSet<String>,
+    grown: bool,
+}
+
+/// The spelling of a commit that changes nothing, which has no identity.
+const NO_IDENTITY: &str = "-";
+
+impl IdentityMemo {
+    /// The memo for the repository at `dir`, empty where none is stored or the
+    /// state directory cannot be named.
+    fn load(dir: &Path) -> Self {
+        let entry = crate::state::repo_state_dir(&canonical(dir))
+            .ok()
+            .and_then(|state| crate::cache::root_under(&state))
+            .map(|root| {
+                (
+                    root.join("patch-identity"),
+                    crate::cache::key(IDENTITY_MEMO_FORMAT, &[]),
+                )
+            });
+        let mut known = std::collections::HashMap::new();
+        if let Some(body) = entry
+            .as_ref()
+            .and_then(|(path, key)| crate::cache::read(path, key))
+            && let Ok(body) = std::str::from_utf8(&body)
+        {
+            for line in body.lines() {
+                // A line that is not a well-formed identity is not remembered,
+                // so it costs a recomputation rather than failing the caller's
+                // `PatchId::parse`.
+                if let Some((oid, identity)) = line.split_once(' ') {
+                    if identity == NO_IDENTITY {
+                        known.insert(oid.to_owned(), None);
+                    } else if PatchId::parse(identity).is_ok() {
+                        known.insert(oid.to_owned(), Some(identity.to_owned()));
+                    }
+                }
+            }
+        }
+        Self {
+            entry,
+            known,
+            asked: std::collections::HashSet::new(),
+            grown: false,
+        }
+    }
+
+    /// `commit`'s identity, remembered or computed.
+    fn identity(
+        &mut self,
+        repo: &gix::Repository,
+        commit: &str,
+        id: &gix::ObjectId,
+    ) -> Result<Option<String>> {
+        self.asked.insert(commit.to_owned());
+        if let Some(identity) = self.known.get(commit) {
+            return Ok(identity.clone());
+        }
+        let mut changes = commit_changes(repo, id)?;
+        let identity = crate::patch::identity(&mut changes);
+        self.known.insert(commit.to_owned(), identity.clone());
+        self.grown = true;
+        Ok(identity)
+    }
+
+    /// Store what was learned, where anything was, pruned to what this process
+    /// asked once past [`IDENTITY_MEMO_BOUND`]. Only a caller that asked a whole
+    /// window may prune: one that asked a narrow range would cut the memo to
+    /// that range, and the next Stop recomputes the window it dropped.
+    /// Best-effort: a failed write costs the next process a recomputation,
+    /// never a wrong answer.
+    fn save(self) {
+        self.write(true);
+    }
+
+    /// [`IdentityMemo::save`] without the prune, for a caller that asked only a
+    /// narrow range.
+    fn save_unpruned(self) {
+        self.write(false);
+    }
+
+    fn write(mut self, prune: bool) {
+        let Some((path, key)) = self.entry.take().filter(|_| self.grown) else {
+            return;
+        };
+        if prune && self.known.len() > IDENTITY_MEMO_BOUND {
+            self.known.retain(|commit, _| self.asked.contains(commit));
+        }
+        let mut body = String::new();
+        for (commit, identity) in &self.known {
+            body.push_str(commit);
+            body.push(' ');
+            body.push_str(identity.as_deref().unwrap_or(NO_IDENTITY));
+            body.push('\n');
+        }
+        crate::cache::write(&path, &key, body.as_bytes());
+    }
+}
+
+/// One commit's patch identity, or `None` where it changes nothing.
+///
+/// The single-commit half of [`patch_id_index`], exposed because
+/// [`crate::gitwrite::replay_onto`] asks the question one commit at a time as it
+/// walks — building the whole index for the head side would compute an identity
+/// for every commit in the range when the replay may stop at the second.
+///
+/// `None` for a commit whose diff is empty, which is [`crate::patch::identity`]'s
+/// own answer and must never be matched against another absent identity: two
+/// commits that change nothing are not the same change.
+///
+/// Swallows a read failure as `None` rather than raising. The one caller is
+/// deciding whether to SKIP a commit, so the fail-closed direction is to replay
+/// it — a commit whose identity could not be computed gets the ordinary
+/// three-way merge, which is exactly the behaviour that existed before this.
+pub fn commit_identity(repo: &gix::Repository, id: &gix::ObjectId) -> Option<String> {
+    let mut changes = commit_changes(repo, id).ok()?;
+    crate::patch::identity(&mut changes)
+}
+
+/// The patch identities present on `range`, as a set.
+///
+/// [`patch_id_index`] without the commit it came from: the replay asks only
+/// whether a change is ALREADY THERE, and carrying which commit carries it would
+/// be an answer nothing reads.
+///
+/// # Errors
+///
+/// As [`rev_list`]: a range that will not resolve or a commit that will not read.
+pub fn patch_identities(
+    dir: &Path,
+    window: Window,
+    range: &str,
+) -> Result<std::collections::BTreeSet<String>> {
+    let repo = open(dir)?;
+    let mut memo = IdentityMemo::load(dir);
+    let mut found = std::collections::BTreeSet::new();
+    for commit in rev_list(dir, window, range)? {
+        let id = gix::ObjectId::from_hex(commit.as_bytes())
+            .map_err(|_| UsageError::raise(format!("cannot read commits for {range:?}")))?;
+        // As [`commit_identity`]: a commit that will not read has no identity.
+        if let Ok(Some(hex)) = memo.identity(&repo, &commit, &id) {
+            found.insert(hex);
+        }
+    }
+    // A replay asks one range, never the target's window, so it may not prune.
+    memo.save_unpruned();
+    Ok(found)
+}
+
+/// Whether every commit `other` carries beyond `tip` is, by patch identity, a
+/// change `tip` already carries (CLOUD-2089).
+///
+/// The question a lease asks of a remote value it did not itself write: is any
+/// of it work this clone never saw? A branch pushed by hand and then replayed
+/// carries the same changes under new shas, so reachability says "unseen" and
+/// patch identity says "already here" — and patch identity is the one this
+/// repository decides merged-ness by (CLOUD-36).
+///
+/// **A commit with no identity is never contained.** An empty commit, or one
+/// whose identity could not be computed, proves nothing about what it carried,
+/// so the answer is `false` — the direction that keeps a sibling's work from
+/// being overwritten. So is any range that will not resolve, including an
+/// `other` this clone has not fetched.
+#[must_use]
+pub fn patches_contained(dir: &Path, tip: &str, other: &str) -> bool {
+    let Ok(repo) = open(dir) else {
+        return false;
+    };
+    let (Ok(theirs), Ok(ours)) = (
+        rev_list(dir, Window::DEFAULT, &format!("{tip}..{other}")),
+        patch_identities(dir, Window::DEFAULT, &format!("{other}..{tip}")),
+    ) else {
+        return false;
+    };
+    for commit in theirs {
+        let Ok(id) = gix::ObjectId::from_hex(commit.as_bytes()) else {
+            return false;
+        };
+        let Some(identity) = commit_identity(&repo, &id) else {
+            return false;
+        };
+        if !ours.contains(&identity) {
+            return false;
+        }
+    }
+    true
+}
+
+/// Where this branch and `base_ref` diverged, for RANGE SELECTION.
+///
+/// The same line [`cumulative_patch_id`] draws, and the reason this is here at
+/// all rather than in its caller: `perf::pair` needs the commit to BUILD the
+/// comparison arm from, and a shelled-out reachability verb is what
+/// `ancestry-decides-nothing` refuses — correctly, since a spawned argv is the
+/// surface a merged-ness answer would hide in. Selecting which commit to build
+/// is not deciding whether anything landed, and going through `gix` keeps that
+/// distinction structural instead of a claim in a comment.
+///
+/// `None` when the ref does not resolve or the two share no history: both are
+/// could-not-look, and the caller says so rather than measuring something else.
+///
+/// # Errors
+///
+/// When the repository cannot be opened.
+pub fn merge_base(dir: &Path, base_ref: &str) -> Result<Option<String>> {
+    let repo = open(dir)?;
+    let Some(base) = resolve_ref(dir, base_ref)? else {
+        return Ok(None);
+    };
+    let Ok(base_id) = gix::ObjectId::from_hex(base.as_bytes()) else {
+        return Ok(None);
+    };
+    let Ok(head_id) = gix::ObjectId::from_hex(head_commit(dir)?.as_bytes()) else {
+        return Ok(None);
+    };
+    Ok(repo
+        .merge_base(base_id, head_id)
+        .ok()
+        .flatten()
+        .map(|found| found.detach().to_string()))
+}
+
+/// Where two named revisions diverged, or `None` when either does not resolve
+/// or they share no history (CLOUD-2033 G2). [`merge_base`] with an explicit
+/// head, because `release path` grades a SHA it is handed, never `HEAD`.
+///
+/// # Errors
+///
+/// When the repository cannot be opened.
+pub fn merge_base_of(dir: &Path, one: &str, other: &str) -> Result<Option<String>> {
+    let repo = open(dir)?;
+    let (Ok(one), Ok(other)) = (repo.rev_parse_single(one), repo.rev_parse_single(other)) else {
+        return Ok(None);
+    };
+    Ok(repo
+        .merge_base(one.detach(), other.detach())
+        .ok()
+        .flatten()
+        .map(|found| found.detach().to_string()))
+}
+
+/// Whether `ancestor` is `descendant` or reachable from it (CLOUD-2033 G2), or
+/// `None` when `ancestor` is not in this clone.
+///
+/// **Not a merged-ness answer.** It asks whether a release's tag commit is in
+/// the history of the head that pins it — a burned release, built from a commit
+/// that never reached this head, is the one it exists to refuse. An absent
+/// object is `None`, which the caller reads as could-not-look.
+///
+/// # Errors
+///
+/// When the repository cannot be opened.
+pub fn is_ancestor(dir: &Path, ancestor: &str, descendant: &str) -> Result<Option<bool>> {
+    let repo = open(dir)?;
+    let (Ok(ancestor), Ok(descendant)) = (
+        repo.rev_parse_single(ancestor),
+        repo.rev_parse_single(descendant),
+    ) else {
+        return Ok(None);
+    };
+    let ancestor = ancestor.detach();
+    Ok(Some(
+        repo.merge_base(ancestor, descendant.detach())
+            .is_ok_and(|found| found.is_some_and(|found| found.detach() == ancestor)),
+    ))
+}
+
+/// The paths whose blob differs between two revisions, added and removed
+/// included (CLOUD-2033 G2), over the same tree walk [`base_delta`] uses.
+///
+/// # Errors
+///
+/// When the repository cannot be opened or either revision is not a tree.
+pub fn paths_changed_between(dir: &Path, from: &str, to: &str) -> Result<BTreeSet<String>> {
+    Ok(blobs_changed_between(dir, from, to, "**")?
+        .into_iter()
+        .map(|(path, _, _)| path)
+        .collect())
+}
+
+/// One changed path and its blob id at each revision, `None` where the path is
+/// absent there.
+pub type ChangedBlob = (String, Option<String>, Option<String>);
+
+/// [`paths_changed_between`] with each path's blob id at both revs (`None`
+/// where it is absent), restricted to `glob` (CLOUD-2692).
+///
+/// The ids are what lets a count be cached by CONTENT: a blob's count under a
+/// given counter never changes, so a caller keyed on the id reads and counts a
+/// blob once, ever, rather than once per commit, rebase or row.
+///
+/// # Errors
+///
+/// When the repository cannot be opened or either revision is not a tree.
+pub fn blobs_changed_between(
+    dir: &Path,
+    from: &str,
+    to: &str,
+    glob: &str,
+) -> Result<Vec<ChangedBlob>> {
+    let repository = open(dir)?;
+    let mut before: BTreeMap<String, gix::ObjectId> = BTreeMap::new();
+    walk_blob_ids(&repository, from, glob, |path, id| {
+        before.insert(path.to_owned(), id);
+    })?;
+    let mut changed = Vec::new();
+    walk_blob_ids(&repository, to, glob, |path, id| {
+        let was = before.remove(path);
+        if was != Some(id) {
+            changed.push((
+                path.to_owned(),
+                was.map(|id| id.to_string()),
+                Some(id.to_string()),
+            ));
+        }
+    })?;
+    changed.extend(
+        before
+            .into_iter()
+            .map(|(path, id)| (path, Some(id.to_string()), None)),
+    );
+    changed.sort();
+    Ok(changed)
+}
+
+/// The commit every remote-tracking ref pointed at BEFORE `at` (seconds since
+/// the epoch), sorted and deduplicated (CLOUD-2923): the history this clone
+/// already knew to exist elsewhere when a call began.
+///
+/// READ BACK THROUGH EACH REF'S REFLOG, AND ONLY WHEN ASKED. Recording every
+/// tip before each checked shell call measured 2.1 ms a call in release (192
+/// loose refs), paid on every call to excuse a rare one; the reflog answers
+/// the same question after the fact, so it is read only once a protected path
+/// actually changed. An entry stamped at or after `at` is a move the call may
+/// have made, so the ref counts at that entry's previous value — the stamps
+/// are whole seconds, and the ambiguous second is read the way that excuses
+/// less. A ref with no reflog, or one the call created, counts as no tip.
+///
+/// Empty when the repository cannot be opened or holds no such ref, which
+/// reads as "nothing was pushed" — the direction that excuses nothing. Opened
+/// fresh, because the call may have moved the refs after any memo was filled.
+#[must_use]
+pub fn remote_tips_before(dir: &Path, at: i64) -> Vec<String> {
+    let Ok(repo) = open_fresh(dir) else {
+        return Vec::new();
+    };
+    let mut tips = Vec::new();
+    if let Ok(references) = repo.references()
+        && let Ok(remotes) = references.prefixed("refs/remotes")
+    {
+        for reference in remotes.flatten() {
+            if let Some(id) = tip_before(&reference, at) {
+                tips.push(id.to_hex().to_string());
+            }
+        }
+    }
+    tips.sort();
+    tips.dedup();
+    tips
+}
+
+/// One ref's value before `at`, from its reflog read newest first: the newest
+/// entry stamped before `at` names it; otherwise the oldest entry's previous
+/// value does, unless that is null (the ref did not exist).
+fn tip_before(reference: &gix::Reference<'_>, at: i64) -> Option<gix::ObjectId> {
+    let mut log = reference.log_iter();
+    let lines = log.rev().ok()??;
+    let mut earliest_previous = None;
+    for line in lines {
+        let line = line.ok()?;
+        if line.signature.time.seconds < at {
+            return Some(line.new_oid);
+        }
+        earliest_previous = Some(line.previous_oid);
+    }
+    earliest_previous.filter(|id| !id.is_null())
+}
+
+/// Whether the CURRENT `HEAD` moved only FORWARD onto history `tips` already
+/// reached (CLOUD-2923): it strictly descends from `before`, and it is one of
+/// `tips` or an ancestor of one.
+///
+/// `before` and `tips` are what the caller recorded EARLIER, never the refs as
+/// they stand: the question is whether `HEAD` was already history before some
+/// act, and a ref that act moved must not answer it. Forward-only, because a
+/// move back to an older pushed commit rolls a file back to content nobody
+/// wrote in this act, and that is still a change to it. And a MOVE: a `HEAD`
+/// equal to `before` answers `false`, because an act that left `HEAD` where it
+/// was brought no history in, so nothing it did to a file is history's doing —
+/// `git checkout .` on a pushed `HEAD` rolls an edit back all the same.
+///
+/// Opened fresh: the act may have moved `HEAD` after this process's memo was
+/// filled. `None` when it could not look; the caller reads that as "no".
+#[must_use]
+pub fn head_moved_onto(dir: &Path, before: &str, tips: &[String]) -> Option<bool> {
+    let repo = open_fresh(dir).ok()?;
+    let head = repo.head_id().ok()?.detach();
+    let before = gix::ObjectId::from_hex(before.as_bytes()).ok()?;
+    let mut hidden = Vec::with_capacity(tips.len());
+    for tip in tips {
+        hidden.push(gix::ObjectId::from_hex(tip.as_bytes()).ok()?);
+    }
+    let forward = head != before
+        && repo
+            .merge_base(before, head)
+            .is_ok_and(|base| base.is_some_and(|base| base.detach() == before));
+    if !forward || hidden.is_empty() {
+        return Some(false);
+    }
+    if hidden.contains(&head) {
+        return Some(true);
+    }
+    // HEAD HIDING EVERY TIP: a walk that yields nothing is a HEAD some tip
+    // already reaches, and the first commit it yields proves none does.
+    let mut walk = repo.rev_walk([head]).with_hidden(hidden).all().ok()?;
+    match walk.next() {
+        None => Some(true),
+        Some(Ok(_)) => Some(false),
+        Some(Err(_)) => None,
+    }
+}
+
+/// The blob id of each of `paths` at `HEAD`, read through a FRESH handle
+/// (CLOUD-2923): a post-call reader asks after a child `git` may have moved
+/// `HEAD`, which a remembered handle would not show. A path absent at `HEAD`
+/// is absent from the map; `None` when `HEAD` does not resolve to a tree.
+#[must_use]
+pub fn head_blob_ids(dir: &Path, paths: &[&str]) -> Option<BTreeMap<String, String>> {
+    let repo = open_fresh(dir).ok()?;
+    let tree = repo.head_commit().ok()?.tree().ok()?;
+    let mut ids = BTreeMap::new();
+    for path in paths {
+        if let Ok(Some(entry)) = tree.lookup_entry_by_path(path)
+            && entry.mode().is_blob()
+        {
+            ids.insert((*path).to_owned(), entry.object_id().to_string());
+        }
+    }
+    Some(ids)
+}
+
+/// The blob id of each of `paths` at `reference`, where present.
+///
+/// # Errors
+///
+/// When the repository cannot be opened or `reference` is not a tree.
+pub fn blob_ids_at(
+    dir: &Path,
+    reference: &str,
+    paths: &[&str],
+) -> Result<BTreeMap<String, String>> {
+    let repository = open(dir)?;
+    let tree = repository
+        .rev_parse_single(reference)
+        .map_err(|_| UsageError::raise(format!("{reference} does not resolve")))?
+        .object()
+        .map_err(|_| UsageError::raise(format!("cannot read the object {reference} names")))?
+        .peel_to_tree()
+        .map_err(|_| UsageError::raise(format!("cannot resolve {reference} to a tree")))?;
+    let mut ids = BTreeMap::new();
+    for path in paths {
+        if let Ok(Some(entry)) = tree.lookup_entry_by_path(path)
+            && entry.mode().is_blob()
+        {
+            ids.insert((*path).to_owned(), entry.object_id().to_string());
+        }
+    }
+    Ok(ids)
+}
+
+/// The commit id each of `revs` names, through one repository open; `None`
+/// where a rev does not resolve (CLOUD-2692).
+///
+/// What a cache keyed on "the same HEAD against the same base" reads: two
+/// lookups at ~0.1 ms, where the merge base itself is a graph walk.
+///
+/// # Errors
+///
+/// When the repository cannot be opened.
+pub fn rev_ids(dir: &Path, revs: &[&str]) -> Result<Vec<Option<String>>> {
+    let repository = open(dir)?;
+    Ok(revs
+        .iter()
+        .map(|rev| {
+            repository
+                .rev_parse_single(*rev)
+                .ok()
+                .map(|id| id.detach().to_string())
+        })
+        .collect())
+}
+
+/// Submit readahead for the whole of `path` and return at once (CLOUD-2692).
+///
+/// `POSIX_FADV_WILLNEED` queues the IO without waiting for it, so a caller that
+/// hints every file it will read before reading any of them keeps the device's
+/// queue full on a cold page cache. A hint only: any failure is ignored, and
+/// off Linux this is a no-op.
+pub fn will_need(path: &Path) {
+    #[cfg(target_os = "linux")]
+    if let Ok(file) = std::fs::File::open(path) {
+        let _ = rustix::fs::fadvise(&file, 0, None, rustix::fs::Advice::WillNeed);
+    }
+    #[cfg(not(target_os = "linux"))]
+    let _ = path;
+}
+
+/// Ask the kernel to start reading this repository's pack files now
+/// (CLOUD-2692), so a cold page cache serves the blob reads that follow from
+/// IO already in flight rather than one page fault at a time.
+///
+/// `POSIX_FADV_WILLNEED` submits readahead and returns at once, so every pack
+/// is queued in one pass before any object is read. A hint only: a failure is
+/// ignored, and off Linux it is a no-op. Answers how many pack and index files
+/// it hinted, the one thing a hint can be checked by.
+#[must_use]
+pub fn prefetch_packs(dir: &Path) -> usize {
+    let Ok(repository) = open(dir) else {
+        return 0;
+    };
+    let Ok(entries) = std::fs::read_dir(repository.objects.store_ref().path().join("pack")) else {
+        return 0;
+    };
+    let mut hinted = 0;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path
+            .extension()
+            .is_some_and(|ext| ext == "pack" || ext == "idx")
+        {
+            will_need(&path);
+            hinted += 1;
+        }
+    }
+    hinted
+}
+
+/// `each` over the UTF-8 text of every blob in `ids`, in parallel, keyed by id
+/// (CLOUD-2692); an id that does not resolve to UTF-8 text is left out.
+///
+/// **Inflation is CPU work, so the win is cores**: measured on this repository,
+/// 442 blobs (32 MB) read in 47 ms on one thread and 27 ms on four. Each worker
+/// opens its own repository, because this crate's gix is built without
+/// `parallel` and a `Repository` is not `Sync`; an open costs ~1 ms against a
+/// chunk's tens. `each` runs inside the worker over the borrowed bytes, so no
+/// blob is copied into an owned string and the set is never held at once. A
+/// set too small to repay a thread is read on this one.
+///
+/// # Errors
+///
+/// When a worker cannot open the repository.
+pub fn map_blobs<R: Send>(
+    dir: &Path,
+    ids: &[&str],
+    each: &(dyn Fn(&str) -> R + Sync),
+) -> Result<BTreeMap<String, R>> {
+    const PER_WORKER: usize = 32;
+    let read = |chunk: &[&str]| -> Result<Vec<(String, R)>> {
+        let repository = open(dir)?;
+        let mut out = Vec::with_capacity(chunk.len());
+        for id in chunk {
+            let Ok(oid) = gix::ObjectId::from_hex(id.as_bytes()) else {
+                continue;
+            };
+            let Ok(object) = repository.find_object(oid) else {
+                continue;
+            };
+            if let Ok(text) = std::str::from_utf8(&object.data) {
+                out.push(((*id).to_owned(), each(text)));
+            }
+        }
+        Ok(out)
+    };
+    let workers = std::thread::available_parallelism()
+        .map_or(1, std::num::NonZeroUsize::get)
+        .min(ids.len().div_ceil(PER_WORKER))
+        .max(1);
+    if workers == 1 {
+        return Ok(read(ids)?.into_iter().collect());
+    }
+    let chunks: Vec<&[&str]> = ids.chunks(ids.len().div_ceil(workers)).collect();
+    let results: Vec<Result<Vec<(String, R)>>> = std::thread::scope(|scope| {
+        let handles: Vec<_> = chunks
+            .iter()
+            .map(|chunk| scope.spawn(|| read(chunk)))
+            .collect();
+        handles
+            .into_iter()
+            .map(|handle| {
+                handle
+                    .join()
+                    .unwrap_or_else(|_| Err(UsageError::raise("a blob reader panicked")))
+            })
+            .collect()
+    });
+    let mut all = BTreeMap::new();
+    for result in results {
+        all.extend(result?);
+    }
+    Ok(all)
+}
+
+/// The patch identity of the branch's whole change against a declared base REF
+/// (CLOUD-1484), as a bare hex string.
+///
+/// **A wrapper over [`cumulative_patch_id`] and deliberately not a second
+/// computation.** What a review-dispatch receipt is keyed by has to be *the same
+/// change* in exactly the sense the rest of this module already means it: line
+/// numbers excluded, so a rebase onto a moved base still matches, and the merge
+/// base used for RANGE SELECTION rather than as a merged-ness answer
+/// (`no_ancestry_decides_merged_ness`). A digest computed here over a diff of
+/// this function's own devising would be a second notion of *the same change*,
+/// free to disagree with [`landing`]'s about a rebase — which is the one property
+/// the receipt turns on.
+///
+/// `None` for every could-not-look: a base ref that does not resolve, a HEAD that
+/// does not, two histories that share none, and — the one worth naming — an
+/// **empty diff**. A branch that changed nothing has no identity, and
+/// [`cumulative_patch_id`] refuses to mint one precisely so two empty changes
+/// cannot compare equal. A caller must not read that `None` as *not reviewed*;
+/// there is nothing to review.
+///
+/// The value is over COMMITTED bytes — `HEAD` against the merge base — so an
+/// uncommitted edit cannot move it. That is what makes the key stable, and it is
+/// also why a caller that cares whether the reviewed bytes are the ones that will
+/// land must ask [`uncommitted`] separately: this function cannot see the working
+/// tree at all.
+///
+/// # Errors
+///
+/// When the repository cannot be opened.
+pub fn branch_patch_id(dir: &Path, base_ref: &str) -> Result<Option<String>> {
+    let Some(base) = resolve_ref(dir, base_ref)? else {
+        return Ok(None);
+    };
+    // `None` RATHER THAN `?`, so the doc above is true of the body. `head_commit`
+    // raises on an unresolvable HEAD — an empty repository, a broken ref — and
+    // propagating that would make this function raise where it promises
+    // could-not-look. Latent while both callers swallow the error, and a trap for
+    // the next one that follows the doc instead of reading the code.
+    let Ok(head) = head_commit(dir) else {
+        return Ok(None);
+    };
+    Ok(cumulative_patch_id(dir, &base, &head)
+        .ok()
+        .flatten()
+        .map(|id| id.as_str().to_owned()))
+}
+
+/// The patch identity of the branch's whole change: the diff from where the two
+/// histories diverged to `head`.
+///
+/// The merge base is used for RANGE SELECTION and never as a merged-ness answer,
+/// which is the line `no_ancestry_decides_merged_ness` draws. Diffing `head`
+/// against `target` directly would also carry the *inverse* of everything that
+/// landed on the target since the branch left it, so it could never equal a
+/// squashed commit no matter how faithfully the work landed.
+///
+/// `None` when the diff is empty — an absent identity must never compare equal
+/// to another absent identity.
+fn cumulative_patch_id(dir: &Path, target: &str, head: &str) -> Result<Option<PatchId>> {
+    let repo = open(dir)?;
+    let refused = || UsageError::raise(format!("cannot diff {target:?} against {head:?}"));
+    let target_id = gix::ObjectId::from_hex(target.as_bytes()).map_err(|_| refused())?;
+    let head_id = gix::ObjectId::from_hex(head.as_bytes()).map_err(|_| refused())?;
+    let base = repo
+        .merge_base(target_id, head_id)
+        .ok()
+        .flatten()
+        .ok_or_else(|| UsageError::raise(format!("{target:?} and {head:?} share no history")))?;
+    let old_tree = repo
+        .find_object(base.detach())
+        .map_err(|_| refused())?
+        .peel_to_commit()
+        .map_err(|_| refused())?
+        .tree()
+        .map_err(|_| refused())?;
+    let new_tree = repo
+        .find_object(head_id)
+        .map_err(|_| refused())?
+        .peel_to_commit()
+        .map_err(|_| refused())?
+        .tree()
+        .map_err(|_| refused())?;
+    let mut changes = tree_changes(&repo, &old_tree, &new_tree)?;
+    crate::patch::identity(&mut changes)
+        .map(|hex| PatchId::parse(&hex))
+        .transpose()
+}
+
+/// Decide whether the work on `head` has landed on `target`, by the identity of
+/// the *changes* rather than by reachability.
+///
+/// A rebased-and-landed branch, a squash-merged branch, and a cherry-picked
+/// commit are all reported as landed, because all three leave the same change
+/// on the target under a different SHA with no reachability path back to the
+/// original. See the module documentation for why the opposite answer is the
+/// one that has to be got right.
+///
+/// Deterministic and byte-stable for a fixed repository state, target, head,
+/// and window: fixed command lines with every diff knob pinned, fixed ordering,
+/// no dependence on ambient environment or user config. Reads refs as they are
+/// on disk — it writes nothing, prints nothing, and fetches nothing, so a stale
+/// `origin/main` is the caller's problem to refresh (agents fetch, gates
+/// decide).
+///
+/// # Errors
+///
+/// Raises a [`UsageError`] (exit `1` at a consumer boundary) when `target` or
+/// `head` does not resolve to a commit, when `repo` is not inside a repository,
+/// or when the two commits share no history. Returns an internal error when
+/// `git` cannot be run or prints output this module cannot parse.
+pub fn landing(repo: &Path, target: &str, head: &str, window: Window) -> Result<Landing> {
+    let target_commit = resolve_commit(repo, target, "target")?;
+    let head_commit = resolve_commit(repo, head, "head")?;
+
+    let target_commits = rev_list(repo, window, &target_commit)?;
+    let mut memo = IdentityMemo::load(repo);
+    let target_index = patch_id_index(repo, &mut memo, window, &target_commit)?;
+
+    let range = format!("{target_commit}..{head_commit}");
+    let head_commits = rev_list(repo, window, &range)?;
+    let head_index = patch_id_index(repo, &mut memo, window, &range)?;
+    memo.save();
+    // `patch_id_index` is keyed by identity for target lookups; the head side
+    // needs the inverse, and building it here keeps one pipeline per side.
+    let head_ids: BTreeMap<&str, &PatchId> = head_index
+        .iter()
+        .map(|(id, commit)| (commit.as_str(), id))
+        .collect();
+
+    // Oldest first: the reporting order is fixed, and `rev-list` walks newest
+    // first.
+    let commits: Vec<CommitLanding> = head_commits
+        .iter()
+        .rev()
+        .map(|commit| {
+            let patch_id = head_ids.get(commit.as_str()).map(|id| (*id).clone());
+            let evidence = match &patch_id {
+                // An empty diff has nothing to land, and — critically — no
+                // identity to match, so it can never pair with another empty
+                // commit on the target.
+                None => Some(Evidence::NoContent),
+                Some(id) => target_index.get(id).map(|target_commit| Evidence::PatchId {
+                    target_commit: target_commit.clone(),
+                    patch_id: id.clone(),
+                }),
+            };
+            CommitLanding {
+                commit: commit.clone(),
+                patch_id,
+                evidence,
+            }
+        })
+        .collect();
+
+    // Computed unconditionally, never short-circuited: a field whose presence
+    // depends on an early return is not byte-stable for identical input.
+    let cumulative = cumulative_patch_id(repo, &target_commit, &head_commit)?;
+    let cumulative_evidence = cumulative.as_ref().and_then(|id| {
+        target_index.get(id).map(|target_commit| Evidence::Squash {
+            target_commit: target_commit.clone(),
+            patch_id: id.clone(),
+        })
+    });
+
+    let verdict = verdict(&commits, cumulative.as_ref(), cumulative_evidence.as_ref());
+    Ok(Landing {
+        verdict,
+        commits,
+        cumulative,
+        cumulative_evidence,
+        scanned: Scan {
+            target_commit,
+            head_commit,
+            target_commits_scanned: target_commits.len(),
+            target_truncated: target_commits.len() >= window.commits(),
+            head_truncated: head_commits.len() >= window.commits(),
+            window,
+        },
+    })
+}
+
+/// Derive the verdict from the evidence and nothing else.
+///
+/// This is the only place a [`Verdict`] is constructed, which is what makes the
+/// module-level promise structural rather than aspirational: a landed verdict
+/// cannot be reached without an [`Evidence`] value, and every `Evidence` that
+/// means landed carries the target commit that proves it.
+fn verdict(
+    commits: &[CommitLanding],
+    cumulative: Option<&PatchId>,
+    cumulative_evidence: Option<&Evidence>,
+) -> Verdict {
+    // Checked first: a branch whose net change is empty has no unlanded work,
+    // whether that is an empty commit, a change and its revert, or a branch the
+    // target already contains outright.
+    if cumulative.is_none() {
+        return Verdict::NothingToLand;
+    }
+    let accounted = commits
+        .iter()
+        .filter(|commit| commit.evidence.is_some())
+        .count();
+    if accounted == commits.len() {
+        Verdict::Landed
+    } else if cumulative_evidence.is_some() {
+        // No individual commit survived the merge, but the branch's whole
+        // change is on the target as one commit. Per-commit evidence stays
+        // `None`, because none of them individually landed — the report must
+        // not lie about how.
+        Verdict::Landed
+    } else if accounted > 0 {
+        Verdict::PartiallyLanded
+    } else {
+        Verdict::NotLandedWithinWindow
+    }
+}
+
+// --- The git fact family (CLOUD-907) -----------------------------------------
+//
+// `crates/batten/src/facts.rs` owns WHICH git facts exist and what each costs;
+// this section owns HOW each is acquired. Both halves are stated in one place
+// each, because the defect the row is named for is a fact that is documented on
+// one side and never built on the other (CLOUD-845).
+//
+// Every function here reuses `query`/`query_optional` above. That is the whole
+// of "in-process, not a spawn" in this tree: `no_second_git_invoker` keeps the
+// crate to one git entry point, each surviving `std::process::Command` site
+// carries its verdict in an `#[expect]` (CLOUD-743), and a new fact family that
+// opened its own would be an inventory row nobody decided.
+//
+// COULD-NOT-LOOK IS NEVER AN EMPTY ANSWER, and the types below are shaped so it
+// cannot be written as one. An unresolvable ref is absent from `refs`, not
+// present with a `false`; a range whose endpoints do not resolve is absent from
+// `ranges`, not present with an empty list; HEAD in an empty repository has
+// `commit: None`, not `""`. Rego reads an undefined path as "does not hold", so
+// each collapse would be a gate that is silently off — CLOUD-845's measured
+// class and CLOUD-251's before it.
+
+/// [`crate::facts::Fact::GitHead`] — where HEAD is.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct HeadFact {
+    /// HEAD's commit, or `None` in a repository with no commits.
+    pub commit: Option<String>,
+    /// The branch HEAD is on, or `None` when it is detached.
+    pub branch: Option<String>,
+    /// Whether HEAD is detached. Stated rather than inferred from `branch`
+    /// being `None`: an empty repository also has no branch, and a gate asking
+    /// "is this a detached checkout" must not answer yes to it.
+    pub detached: bool,
+}
+
+/// [`crate::facts::Fact::GitStatus`] — how the working tree differs from HEAD.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct StatusFact {
+    /// Repository-relative paths that differ from HEAD, tracked and untracked.
+    pub changed: Vec<String>,
+    /// How many entries `git status --porcelain` reports.
+    pub uncommitted: usize,
+}
+
+/// [`crate::facts::Fact::GitRemote`] — what this checkout is connected to.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct RemoteFact {
+    /// Remote name -> URL, as `.git/config` holds it. Never asked over the
+    /// network: that would be `Cost::Effect` and a different fact.
+    pub remotes: BTreeMap<String, String>,
+    /// HEAD's tracking ref, or `None` when it has no upstream.
+    pub upstream: Option<String>,
+}
+
+/// One linked worktree's REGISTRATION, as [`crate::facts::Fact::GitWorktrees`]
+/// carries it.
+///
+/// **There is no path field, and the omission is the design rather than an
+/// oversight.** A linked worktree may live anywhere on the machine, so its
+/// recorded base is an absolute path outside the repository — exactly what
+/// [`crate::facts::Fact::External`] keys by a declared id to keep off the policy
+/// input, one family over. [`worktree_fact`] READS the base to decide `present`
+/// and then drops it; what reaches a module is the registration's own name, which
+/// is a pointer in non-negotiable rule 4's sense and names a machine's home
+/// directory in nobody's.
+///
+/// `id` is enough to act on: it is the directory under the common dir's
+/// `worktrees/` that carries the registration, so it is what a reader looks for
+/// and what the one-command remedy clears.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct WorktreeRegistration {
+    /// The registration's own name — the entry under the common dir's
+    /// `worktrees/` directory.
+    pub id: String,
+    /// Whether the directory the registration records still exists.
+    ///
+    /// `false` is the finding this fact exists for: the registration outlives the
+    /// checkout, so it is state git keeps and nothing on disk answers for. What
+    /// makes it worth a fact is where it surfaces — not here, but in the next
+    /// unrelated command that resolves the registry and refuses over a path no
+    /// reader recognises.
+    pub present: bool,
+    /// Whether the registration is locked.
+    ///
+    /// Read so a predicate can EXCLUDE it: a lock is the recorded statement that
+    /// this worktree is deliberately unavailable — git's own documented case is a
+    /// checkout on removable storage — so an absent directory under a lock is an
+    /// answer somebody already gave, not a stranded row.
+    pub locked: bool,
+}
+
+/// [`crate::facts::Fact::GitWorktrees`] — the linked worktree registrations.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct WorktreeFact {
+    /// Every LINKED registration, ordered by `id`.
+    ///
+    /// Linked only, which is git's own boundary rather than a filter: the main
+    /// checkout keeps no registration, so it has nothing here to be absent from.
+    /// An empty list is therefore a real answer — this repository has no linked
+    /// worktrees — and is not the could-not-look shape, which is the whole fact
+    /// being `None`.
+    pub linked: Vec<WorktreeRegistration>,
+}
+
+/// One commit of a [`crate::facts::Fact::GitRange`], as a pointer.
+///
+/// A sha and a subject, and nothing else. A message body or a diff would put
+/// tracked content on the policy input, which non-negotiable rule 4 refuses at
+/// the boundary rather than at the report.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct RangeCommit {
+    /// The commit's sha.
+    pub commit: String,
+    /// Its subject line.
+    pub subject: String,
+}
+
+/// One commit's identity fields, for the policy input (CLOUD-1187).
+///
+/// **[`CommitRecord`] minus `body`, and the omission is the whole design.**
+/// That type carries `%B` because `attribution.rs` judges the message itself;
+/// this one reaches Rego, where non-negotiable rule 4 refuses tracked content at
+/// the boundary rather than at the report. There is no body FIELD here, so a
+/// module cannot read one and a future projection cannot leak one by accident —
+/// the guarantee is structural rather than a comment on a serializer.
+///
+/// What is admissible is stated by shape: an author and a committer are identity
+/// strings, and a trailer is a `Key: value` line — the same shape
+/// `input.tree.records` already claims. A message body is prose the author wrote
+/// and is not.
+///
+/// **Widened by CLOUD-843, and every added field is a pointer, a date or a
+/// bit.** The retiring bash read a range for five more things than identity: the
+/// subject (`%s`, which [`RangeCommit`] already admits as the log's own pointer),
+/// the two dates, whether the commit HEADER carries a signature (`cat-file
+/// commit | sed '/^$/q'` matched for `gpgsig`), and which paths it touched
+/// (`show --name-only`). None of those is prose, so none moves rule 4; the body
+/// is still structurally absent.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct CommitMeta {
+    /// The commit's sha.
+    pub commit: String,
+    /// Its subject line — git's `%s`, the pointer the log itself renders.
+    pub subject: String,
+    /// `%an <%ae>` — the author identity.
+    pub author: String,
+    /// `%cn <%ce>` — the committer identity.
+    pub committer: String,
+    /// `%aI`, rendered by [`iso_utc`] so it orders lexicographically.
+    pub authored: String,
+    /// `%cI`, rendered the same way.
+    pub committed: String,
+    /// Whether the commit header carries a signature (`gpgsig`, or
+    /// `gpgsig-sha256` in an object-format-sha256 repository).
+    ///
+    /// **Presence, never validity.** Verifying a signature needs a keyring and a
+    /// program, which is `Cost::Effect` and a different fact; the gate this exists
+    /// for asks whether a commit carries a key NOBODY can check, and presence is
+    /// the whole of that question.
+    pub signed: bool,
+    /// The repo-relative paths the commit changed against its FIRST parent —
+    /// `show --name-only` — sorted. A root commit is diffed against the empty
+    /// tree, so every path it carries is a change.
+    ///
+    /// Paths, never hunks: which files moved is a pointer, what they say is not.
+    pub paths: Vec<String>,
+    /// `%(trailers:only,unfold)`, as whole `Key: value` lines.
+    pub trailers: Vec<String>,
+}
+
+/// The git fact family as one bundle, each member `None` until a rule declares
+/// it (CLOUD-907).
+///
+/// **`None` is the could-not-look shape, and it covers two conditions on
+/// purpose: nobody asked, and the boundary asked and could not see.** That is
+/// [`crate::hook::Facts::receipts`]'s existing shape rather than a new one — a
+/// rule that did not declare a fact has established nothing about it, which is
+/// the same standing as a rule whose read failed. The projection writes `null`
+/// for both, so a module reads `input.tree["git-head"] == null` rather than
+/// finding the key absent, and CLOUD-251's vacuous pass stays out.
+///
+/// What must NOT collapse is one level down, and the member types are what keep
+/// it apart: an unresolvable ref is absent from `refs`, a detached HEAD has
+/// `branch: None` beside `detached: true`, and a range that could not be read is
+/// absent from `ranges`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
+pub struct GitFacts {
+    /// [`HeadFact`], if a rule declared `git = ["head"]`.
+    pub head: Option<HeadFact>,
+    /// [`StatusFact`], if a rule declared `git = ["status"]`.
+    pub status: Option<StatusFact>,
+    /// [`RemoteFact`], if a rule declared `git = ["remote"]`.
+    pub remote: Option<RemoteFact>,
+    /// [`WorktreeFact`], if a rule declared `git = ["worktrees"]`. An EMPTY
+    /// `linked` list is an answer — no linked worktrees — where `None` is
+    /// could-not-look, which is the family's standing distinction one level up.
+    pub worktrees: Option<WorktreeFact>,
+    /// The declared refs resolved to the commit each names, if any row declared
+    /// one. A ref that does not resolve is ABSENT from the map.
+    pub refs: Option<BTreeMap<String, String>>,
+    /// The declared ranges, if any row declared one.
+    pub ranges: Option<BTreeMap<String, Vec<RangeCommit>>>,
+    /// The declared history patterns' matching sets, if any row declared one
+    /// (CLOUD-1200). `None` is could-not-look and covers a shallow clone.
+    pub history: Option<BTreeMap<String, Vec<HistoryCommit>>>,
+    /// The STAGED bytes of the declared paths, if any row declared one
+    /// (CLOUD-1203). A path with no staged entry is ABSENT from the map.
+    pub staged: Option<BTreeMap<String, String>>,
+    /// The declared metadata ranges, if any row declared one (CLOUD-1187). A
+    /// SEPARATE declaration from `ranges`, so a row wanting subjects does not pay
+    /// for a per-commit object peel it never asked for. A range that does not
+    /// resolve is ABSENT from the map.
+    pub metadata: Option<BTreeMap<String, Vec<CommitMeta>>>,
+    /// The declared landing targets, if any row declared one (CLOUD-880). A
+    /// target that could not be scanned is ABSENT from the map.
+    pub landing: Option<BTreeMap<String, LandingFact>>,
+    /// How the declared globs differ from the declared base rev, if any row
+    /// declared both (CLOUD-1059). `None` when nobody asked AND when the base
+    /// did not resolve — the family's own could-not-look shape, one level up
+    /// from a range that is absent from `ranges`.
+    pub base_delta: Option<BaseDelta>,
+    /// The declared tag globs' matching tags, with their dates (CLOUD-843). A
+    /// glob that matched nothing is present with an EMPTY list — an answer —
+    /// where `None` is the references that could not be read.
+    pub tags: Option<BTreeMap<String, Vec<TagFact>>>,
+    /// The declared config keys, as git resolves them and per scope
+    /// (CLOUD-843). A declared key set nowhere is PRESENT with a null
+    /// `effective` — an answer — where `None` is the config that could not be
+    /// opened.
+    pub config: Option<BTreeMap<String, ConfigFact>>,
+    /// The declared pathspecs' index entries, divergence and untracked paths
+    /// (CLOUD-843). `None` is the index that could not be read.
+    pub index: Option<BTreeMap<String, IndexFact>>,
+}
+
+/// Acquire [`HeadFact`].
+///
+/// # Errors
+///
+/// Raises when `dir` is not inside a repository. A repository with no commits is
+/// an ANSWER (`commit: None`), never an error: an empty checkout is a state a
+/// gate may legitimately decide about.
+pub fn head_fact(dir: &Path) -> Result<HeadFact> {
+    // REPO-NESS FIRST, because the reads below cannot tell it apart from an
+    // answer (CLOUD-480, found on review of #660). This mattered more under the
+    // shell-out, where every non-zero git exit became `None` and an out-of-repo
+    // call returned a FABRICATED `detached: false` for `git_facts` to project as
+    // a real fact. In process the reads below cannot even be attempted without a
+    // repository, but the call stays: the doc promises this raises, and the
+    // promise should not rest on a later line happening to fail.
+    repo_root(dir)?;
+    let repo = open(dir)?;
+    let head = repo
+        .head()
+        .map_err(|_| UsageError::raise(format!("{} is not a git repository", dir.display())))?;
+    // An unborn HEAD is an ANSWER (`commit: None`), which is the distinction
+    // worth keeping: an empty checkout is a state a gate may decide about.
+    let commit = head.id().map(|id| id.detach().to_hex().to_string());
+    // A detached HEAD has no referent name at all. Under `--abbrev-ref` it was
+    // the literal string `HEAD`, and a repository with no commits still answered
+    // with the unborn branch's name — which is why `detached` was read off that
+    // rather than off `commit`, and why it is read off the referent here.
+    let branch = head.referent_name().map(|name| name.shorten().to_string());
+    let detached = branch.is_none();
+    Ok(HeadFact {
+        commit,
+        branch,
+        detached,
+    })
+}
+
+/// Acquire [`StatusFact`].
+///
+/// # Errors
+///
+/// Raises when the working tree cannot be compared against HEAD.
+pub fn status_fact(dir: &Path) -> Result<StatusFact> {
+    let changed = changed_paths(dir)?;
+    let uncommitted = uncommitted(dir)?;
+    Ok(StatusFact {
+        changed: changed.into_iter().collect(),
+        uncommitted,
+    })
+}
+
+/// Acquire [`RemoteFact`].
+///
+/// # Errors
+///
+/// Raises when the repository's config cannot be read.
+pub fn remote_fact(dir: &Path) -> Result<RemoteFact> {
+    // The same reason as `head_fact` (CLOUD-480): `remotes` reads a `--get-regexp`
+    // failure as "no remotes configured", which is sound INSIDE a repository —
+    // the invocation is a fixed literal, so no-match is the only reachable cause
+    // there — and outside one it fabricated an empty map that reads as a real
+    // answer about a repository nobody looked at. A repository with no remotes
+    // stays a valid value.
+    repo_root(dir)?;
+    Ok(RemoteFact {
+        remotes: remotes(dir)?.into_iter().collect(),
+        upstream: upstream_of_head(dir)?,
+    })
+}
+
+/// Acquire [`WorktreeFact`] — the linked worktree registrations, and for each
+/// whether the directory it records is still there.
+///
+/// **In process, and that is what makes this a fact rather than a reinstated
+/// spawn.** CLOUD-780 dropped this module's worktree listing because it was a
+/// `git worktree list` shell-out gix had no API for, and the standing strategy
+/// there is *gix for everything gix can do; where it cannot, implement LESS*. gix
+/// answers it now, so the listing comes back on the side of that rule rather than
+/// against it: no spawn, and `no_second_git_invoker_exists` stays terminal. What
+/// stays retired is the DESTRUCTIVE half CLOUD-780 priced — this reports, and the
+/// remedy is the reader's to run.
+///
+/// A registration whose own record cannot be read is skipped rather than reported
+/// with `present: false`. Those are two different answers — the directory is gone
+/// versus this run could not tell — and only the first is a finding; collapsing
+/// them would manufacture one out of an unreadable file.
+///
+/// # Errors
+///
+/// Raises when `dir` is not inside a repository, for [`head_fact`]'s reason
+/// (CLOUD-480): a checkout with no linked worktrees and a path that is not a
+/// checkout at all both have an empty list to offer, and only one of them is an
+/// answer.
+pub fn worktree_fact(dir: &Path) -> Result<WorktreeFact> {
+    repo_root(dir)?;
+    let repo = open(dir)?;
+    let mut linked: Vec<WorktreeRegistration> = Vec::new();
+    for proxy in repo.worktrees()? {
+        let id = proxy.id()?.to_string();
+        // Read, decide, drop — the base never leaves this scope, which is what
+        // `WorktreeRegistration`'s missing path field is enforcing.
+        let Ok(base) = proxy.base() else { continue };
+        linked.push(WorktreeRegistration {
+            id,
+            present: base.is_dir(),
+            locked: proxy.is_locked(),
+        });
+    }
+    // gix orders by the registration's directory path; ordering by the id this
+    // fact actually carries is what makes the projection byte-stable under §6 for
+    // identical repository state.
+    linked.sort_by(|left, right| left.id.cmp(&right.id));
+    Ok(WorktreeFact { linked })
+}
+
+/// The directories of this repository's linked worktrees that are still present
+/// (CLOUD-2197), in process through gix as [`worktree_fact`] reads them: the disk
+/// collector ranks every worktree's `target/` with the checkout's, because a
+/// sibling worktree's build filled a volume nothing in the checkout could see.
+///
+/// Empty outside a repository, or where none is linked: the collector's caller
+/// then ranks the checkout's tree alone, which is the answer for both.
+#[must_use]
+pub fn linked_worktree_dirs(dir: &Path) -> Vec<PathBuf> {
+    let Ok(repo) = open(dir) else {
+        return Vec::new();
+    };
+    let Ok(worktrees) = repo.worktrees() else {
+        return Vec::new();
+    };
+    let mut dirs: Vec<PathBuf> = worktrees
+        .into_iter()
+        .filter_map(|proxy| proxy.base().ok())
+        .filter(|base| base.is_dir())
+        .collect();
+    dirs.sort();
+    dirs
+}
+
+/// Acquire the DECLARED refs, skipping every one that does not resolve.
+///
+/// Skipping is the could-not-look channel and is the whole point: a ref absent
+/// from the returned map is one the run could not see, and a module reading
+/// `input.tree["git-refs"]["origin/main"]` gets undefined rather than a
+/// fabricated answer. `origin/main` missing in a shallow clone is not a fact
+/// about where HEAD stands relative to it.
+///
+/// **THE COMMIT, AND DELIBERATELY NOT WHETHER HEAD DESCENDS FROM IT.** The first
+/// version carried an `ancestor_of_head` beside the sha and
+/// `no_ancestry_decides_merged_ness` refused it, correctly: CLOUD-36's rule is
+/// that merged-ness is decided by PATCH IDENTITY, never by reachability, because
+/// a rebased landing is invisible to ancestry. Putting a reachability answer on
+/// the policy input would have handed every migrating gate the wrong primitive
+/// with the right-sounding name — and the census says exactly one gate-described
+/// task asks that question today — `linear-check`, which computes the merge base
+/// of `origin/main` and HEAD — so the temptation is real and small. The landing question has an answer
+/// already: [`landing`], on patch identity, and CLOUD-880 is the row that makes
+/// it a fact family.
+///
+/// # Errors
+///
+/// Raises only when `git` cannot be run at all. An unresolvable ref is an
+/// answer, not a failure.
+pub fn ref_facts(dir: &Path, declared: &[String]) -> Result<BTreeMap<String, String>> {
+    let mut facts = BTreeMap::new();
+    for name in declared {
+        if let Some(commit) = resolve_ref(dir, name)? {
+            facts.insert(name.clone(), commit);
+        }
+    }
+    Ok(facts)
+}
+
+/// Acquire the DECLARED ranges, skipping every one whose endpoints do not
+/// resolve.
+///
+/// Absent rather than empty, for [`ref_facts`]'s reason one level up: "no
+/// commits landed in this range" and "I could not read this range" are the two
+/// answers a migration gate most needs kept apart.
+///
+/// # Errors
+///
+/// Raises only when `git` cannot be run at all.
+pub fn range_facts(dir: &Path, declared: &[String]) -> Result<BTreeMap<String, Vec<RangeCommit>>> {
+    let mut facts = BTreeMap::new();
+    for range in declared {
+        let Some((base, head)) = range.split_once("..") else {
+            continue;
+        };
+        if resolve_ref(dir, base)?.is_none() || resolve_ref(dir, head)?.is_none() {
+            continue;
+        }
+        let commits = subjects_in_range(dir, base, head)?
+            .into_iter()
+            .map(|subject| RangeCommit {
+                commit: subject.commit,
+                subject: subject.subject,
+            })
+            .collect();
+        facts.insert(range.clone(), commits);
+    }
+    Ok(facts)
+}
+
+/// The STAGED bytes of the paths a rule set declared (CLOUD-1203, unit A).
+///
+/// **`git show :<path>` — which [`crate::facts::Fact::Tracked`] explicitly is
+/// NOT.** That fact is a `.gitignore`-honouring walk of the WORKING TREE, and
+/// its own doc names the trap this function exists to close: a module author
+/// writes a predicate about the index and gets an answer about the checkout.
+/// `Fact::GitStatus` is no help either — it carries the paths that differ and a
+/// count, never the staged content.
+///
+/// The distinction is load-bearing rather than pedantic. `lock-complete` is the
+/// pure "committed bytes only, no network, no write" gate: it judges THE COMMIT,
+/// not the developer's working copy, so a successor reading the worktree would
+/// answer a different question and pass over a staged-but-unsaved edit. That is
+/// a silent wrong answer rather than a missing feature.
+///
+/// In process via `gix` under the same isolated open the rest of this module
+/// uses, so there is no spawn — and deliberately so here rather than through the
+/// shelled reader, because the argv would carry a caller-supplied path, which is
+/// the class CLOUD-718 moved `show` in-process for.
+///
+/// A path with no staged entry is ABSENT from the map rather than present with
+/// an empty string: "this path is not staged" and "this path is staged empty"
+/// are different answers, and a module handed the second for the first decides
+/// over a file that is not there.
+///
+/// # Errors
+///
+/// Raises when the repository cannot be opened or its index cannot be read —
+/// which is could-not-look about the whole family rather than about any one
+/// path, and so is the caller's to project as `null`.
+pub fn staged_facts(dir: &Path, declared: &[String]) -> Result<BTreeMap<String, String>> {
+    let repo = open(dir)?;
+    let index = repo
+        .index_or_empty()
+        .map_err(|_| UsageError::raise("could not read the git index".to_owned()))?;
+    let mut facts = BTreeMap::new();
+    for path in declared {
+        let Some(entry) = index.entry_by_path(path.as_str().into()) else {
+            continue;
+        };
+        let Ok(object) = repo.find_object(entry.id) else {
+            continue;
+        };
+        // NOT UTF-8 IS NOT AN EMPTY FILE. A staged binary blob is skipped, so it
+        // is absent rather than present as a lossy string a predicate would then
+        // decide over.
+        let Ok(text) = String::from_utf8(object.data.clone()) else {
+            continue;
+        };
+        facts.insert(path.clone(), text);
+    }
+    Ok(facts)
+}
+
+/// One commit a declared history pattern matched (CLOUD-1200).
+///
+/// A sha and a subject, plus the tag NAME when the pattern was a tag glob — the
+/// same bound [`RangeCommit`] states and for the same reason. A history fact
+/// widens WHICH commits are visible, never WHAT a commit carries: a message body
+/// or a diff hunk would put tracked content on the policy input, which
+/// non-negotiable rule 4 refuses at the boundary rather than at the report. A
+/// `--diff-filter` answer is a path and a sha, never a hunk.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct HistoryCommit {
+    /// The commit's sha.
+    pub commit: String,
+    /// Its subject line.
+    pub subject: String,
+    /// The tag that names it, for a tag-glob query. `None` for a path query.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tag: Option<String>,
+}
+
+/// Resolve the history patterns a rule set declared (CLOUD-1200).
+///
+/// **The undeclarable half.** [`ref_facts`] and [`range_facts`] resolve what a
+/// rule NAMES; this resolves what a rule DESCRIBES, because the answer set is not
+/// knowable at declaration time — every tag matching a glob, the commit that
+/// deleted a path.
+///
+/// What stays declared is the PATTERN, and that is the safety property: a pattern
+/// no row names resolves nothing, so this is a projection rather than a git
+/// shell.
+///
+/// # A shallow clone is could-not-look, and it is the live case
+///
+/// `linear-check` already deepens a shallow clone before it can answer, so this
+/// is not hypothetical. A shallow repository cannot see the history a path query
+/// walks and may not carry the tags a glob would match, so the WHOLE family
+/// resolves could-not-look rather than a partial answer — and the caller projects
+/// that as `null`. A truncated walk reported as a result is a gate deciding over
+/// history it could not see, which is worse than one that says so.
+///
+/// # Errors
+///
+/// Raises when the repository cannot be opened, and when it is shallow — the
+/// could-not-look above, carried as an error so the caller's existing
+/// `.ok().flatten()` shape projects `null` without a second channel.
+pub fn history_facts(
+    dir: &Path,
+    declared: &[crate::facts::HistoryQuery],
+) -> Result<BTreeMap<String, Vec<HistoryCommit>>> {
+    let repo = open(dir)?;
+    // SHALLOW IS COULD-NOT-LOOK, decided once for the family rather than per
+    // query: a shallow clone's missing history is missing for every pattern, and
+    // answering some of them would be a partial result nothing marks as partial.
+    if repo.is_shallow().unwrap_or(true) {
+        return Err(UsageError::raise(
+            "the repository is shallow, so its history cannot be resolved".to_owned(),
+        ));
+    }
+    let mut facts = BTreeMap::new();
+    for query in declared {
+        // A row declaring neither shape or both is refused at load, so reaching
+        // here with `None` is a row this surface does not own rather than a
+        // failed look — skipped, leaving the id absent.
+        let Some(shape) = query.shape() else {
+            continue;
+        };
+        let found = match shape {
+            crate::facts::HistoryShape::Tags => tags_matching(&repo, query.tags.as_deref())?,
+            crate::facts::HistoryShape::PathAdded => {
+                path_transitions(&repo, query.path.as_deref(), true)?
+            }
+            crate::facts::HistoryShape::PathDeleted => {
+                path_transitions(&repo, query.path.as_deref(), false)?
+            }
+        };
+        facts.insert(query.id.clone(), found);
+    }
+    Ok(facts)
+}
+
+/// Every tag whose name matches `glob`, with the commit it names.
+///
+/// A tag that does not peel to a commit is SKIPPED rather than reported with an
+/// empty sha: a tag on a blob is a real thing in git and is not an answer to
+/// "which commit shipped".
+fn tags_matching(repo: &gix::Repository, glob: Option<&str>) -> Result<Vec<HistoryCommit>> {
+    let Some(glob) = glob else {
+        return Ok(Vec::new());
+    };
+    let selector = crate::selector::Selector::new(glob)
+        .map_err(|_| UsageError::raise("the declared tag glob does not compile".to_owned()))?;
+    let platform = repo
+        .references()
+        .map_err(|_| UsageError::raise("could not read this repository's references".to_owned()))?;
+    let iter = platform
+        .tags()
+        .map_err(|_| UsageError::raise("could not read this repository's tags".to_owned()))?;
+    let mut found = Vec::new();
+    for reference in iter.flatten() {
+        let name = reference.name().shorten().to_string();
+        if !selector.matches(&name) {
+            continue;
+        }
+        let Ok(peeled) = reference.into_fully_peeled_id() else {
+            continue;
+        };
+        let Ok(object) = peeled.object() else {
+            continue;
+        };
+        let Ok(commit) = object.peel_to_commit() else {
+            continue;
+        };
+        found.push(HistoryCommit {
+            commit: commit.id().to_string(),
+            subject: subject_of(&commit),
+            tag: Some(name),
+        });
+    }
+    // Sorted by tag name, so the projection is byte-stable across runs where the
+    // reference iterator's order is not a promise.
+    found.sort_by(|left, right| left.tag.cmp(&right.tag));
+    Ok(found)
+}
+
+/// Who cut an annotated tag, as git renders a signature.
+///
+/// THREE OUTCOMES AND THEY DO NOT COLLAPSE. A tag object carrying a `tagger`
+/// header is the ordinary case. A tag object *without* one and a lightweight tag
+/// both leave nothing to read, and they are still different things: the first is a
+/// malformed annotation, the second is a ref pointing straight at a commit, which
+/// is a normal thing to create. Folding either into the other would report "nobody
+/// cut this" where the truth is "this was never annotated".
+///
+/// Errors are the fourth outcome and stay errors — could-not-look, never
+/// [`Tagger::Unsigned`]. A repository that will not open is not a tag nobody
+/// signed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Tagger {
+    /// An annotated tag whose header carries a tagger, rendered `Name <email>`.
+    Signed(String),
+    /// An annotated tag object whose header carries no tagger line.
+    Unsigned,
+    /// A lightweight tag: the ref names a commit directly, so no tag object
+    /// exists and there is no tagger.
+    Lightweight,
+}
+
+/// Read `refs/tags/<tag>`'s tagger without peeling the tag object away.
+///
+/// **[`tags_matching`]'s `into_fully_peeled_id` is the door this deliberately does
+/// not use.** Peeling is what lets the history fact answer "which commit did this
+/// tag ship", and it is the same act that makes the fact unable to answer this
+/// one: it discards the tag object, and with it the only record of who created
+/// the tag. An annotated tag's tagger and its commit's committer are different
+/// identities — `release-plz` cuts both, and in the CLOUD-1789 outage they
+/// disagreed — so a reader that peels answers a question nobody asked here.
+///
+/// Reads the tag object directly, so it answers on a shallow clone that carries
+/// the ref. [`history_facts`] refuses the whole family when the repository is
+/// shallow; this does not have to, which is why the gate above it can live on the
+/// landing path rather than on a clock.
+///
+/// # Errors
+///
+/// Returns a [`UsageError`] (→ exit `1`) when the repository will not open, the
+/// ref does not resolve, or the object will not read. Every one of those is "could
+/// not look", and none is an answer about who cut the tag.
+pub fn tagger_of(dir: &Path, tag: &str) -> Result<Tagger> {
+    let repo = open(dir)?;
+    let reference = repo
+        .find_reference(&format!("refs/tags/{tag}"))
+        .map_err(|_| UsageError::raise(format!("no tag named `{tag}` in this repository")))?;
+    let id = reference
+        .target()
+        .try_id()
+        .ok_or_else(|| UsageError::raise(format!("tag `{tag}` is symbolic and names no object")))?
+        .to_owned();
+    let object = repo.find_object(id).map_err(|_| {
+        UsageError::raise(format!("tag `{tag}` names an object that will not read"))
+    })?;
+    if object.kind != gix::object::Kind::Tag {
+        // The ref points straight at a commit: a lightweight tag. This is a
+        // `Kind` discrimination rather than a missing field, which is exactly why
+        // it is not the same answer as `Unsigned`.
+        return Ok(Tagger::Lightweight);
+    }
+    let annotated = object
+        .try_into_tag()
+        .map_err(|_| UsageError::raise(format!("tag `{tag}` will not read as a tag object")))?;
+    let decoded = annotated
+        .decode()
+        .map_err(|_| UsageError::raise(format!("tag `{tag}`'s header will not decode")))?;
+    let Some(line) = decoded.tagger else {
+        return Ok(Tagger::Unsigned);
+    };
+    // `tagger` is the RAW header line, not a parsed signature: `Name <email>
+    // <timestamp> <tz>`. The identity is everything up to and including the
+    // closing bracket, and git forbids `<` and `>` inside both halves, so that
+    // bracket is unambiguous rather than a guess about the name.
+    //
+    // The timestamp is deliberately dropped. It is not identity, and carrying it
+    // would make the judged value differ between two tags the same person cut —
+    // which is the comparison this exists to make.
+    //
+    // A header with no bracket is malformed, and that is could-not-look: a line
+    // this reader cannot parse is not evidence that nobody signed the tag.
+    let rendered = String::from_utf8_lossy(line.as_ref());
+    let close = rendered.rfind('>').ok_or_else(|| {
+        UsageError::raise(format!("tag `{tag}`'s tagger header carries no identity"))
+    })?;
+    Ok(Tagger::Signed(rendered[..=close].to_owned()))
+}
+
+/// The commits at which `path` appeared (`added`) or vanished (`!added`).
+///
+/// Compares the path's presence in each commit's tree against its FIRST parent's,
+/// which is the transition a `--diff-filter=A`/`D` reports. A root commit has no
+/// parent, so a path present there is an addition.
+///
+/// Pointer-only by construction: the answer is a sha and a subject. What the path
+/// CONTAINED at either side is not read, so there is no hunk for rule 4 to have
+/// to exclude.
+fn path_transitions(
+    repo: &gix::Repository,
+    path: Option<&str>,
+    added: bool,
+) -> Result<Vec<HistoryCommit>> {
+    let Some(path) = path else {
+        return Ok(Vec::new());
+    };
+    let Ok(head) = repo.head_commit() else {
+        // An empty repository has no history to walk, which is an ANSWER rather
+        // than a failure: nothing has been added or deleted yet.
+        return Ok(Vec::new());
+    };
+    let walk = repo
+        .rev_walk([head.id()])
+        .all()
+        .map_err(|_| UsageError::raise("could not walk this repository's history".to_owned()))?;
+    let mut found = Vec::new();
+    for info in walk.flatten() {
+        let Ok(commit) = repo.find_commit(info.id) else {
+            continue;
+        };
+        let here = holds(repo, &commit, path);
+        // FIRST PARENT ONLY, which is what a `--diff-filter` over a linear
+        // history reports — and this repository lands by fast-forward, so the
+        // history it is aimed at is linear by construction.
+        let before = commit
+            .parent_ids()
+            .next()
+            .and_then(|parent| repo.find_commit(parent).ok())
+            .is_some_and(|parent| holds(repo, &parent, path));
+        if here != before && here == added {
+            found.push(HistoryCommit {
+                commit: commit.id().to_string(),
+                subject: subject_of(&commit),
+                tag: None,
+            });
+        }
+    }
+    Ok(found)
+}
+
+/// Whether an ancestor of `HEAD` DELETED `path` (CLOUD-920), or `None` where
+/// history cannot answer.
+///
+/// The one question `batten board check --cites` asks of history, and it asks it
+/// only to REFUTE: a Ready block marking a cited path prospective is claiming the
+/// file was never written, and a path some ancestor deleted was present, so the
+/// claim is false. History is never asked to GRANT a marker.
+///
+/// **Shallow is `None`, never `Some(false)`.** A shallow clone cannot see the
+/// commit that deleted a path, so "no deletion found" there is the same bytes as
+/// "never existed" — and reading it as the second would forgive exactly the
+/// stale citation the marker is not allowed to buy. The caller says so instead.
+///
+/// # Errors
+///
+/// Raises when `dir` is not a repository.
+pub fn path_was_deleted(dir: &Path, path: &str) -> Result<Option<bool>> {
+    let repo = open(dir)?;
+    if repo.is_shallow().unwrap_or(true) {
+        return Ok(None);
+    }
+    Ok(Some(
+        !path_transitions(&repo, Some(path), false)?.is_empty(),
+    ))
+}
+
+/// The first-parent commits from `HEAD` at which `path`'s blob changed, newest
+/// first, as `(sha, subject)` (CLOUD-2144).
+///
+/// The walk `batten policy explain --history` reads a row's past through: a
+/// commit that left the file's blob unchanged cannot have changed any row in it,
+/// so only these are worth reading. First parent only, for
+/// [`path_transitions`]' reason: this repository lands by fast-forward.
+///
+/// # Errors
+///
+/// Raises when `dir` is not a repository, or is shallow — a truncated walk is
+/// could-not-look, never a short history.
+pub fn path_changes(dir: &Path, path: &str) -> Result<Vec<(String, String)>> {
+    let repo = open(dir)?;
+    if repo.is_shallow().unwrap_or(true) {
+        return Err(UsageError::raise(
+            "the repository is shallow, so a path's history cannot be walked".to_owned(),
+        ));
+    }
+    let blob_of = |commit: &gix::Commit<'_>| {
+        commit
+            .tree()
+            .ok()
+            .and_then(|tree| tree.lookup_entry_by_path(path).ok().flatten())
+            .map(|entry| entry.object_id())
+    };
+    let Ok(mut commit) = repo.head_commit() else {
+        return Ok(Vec::new());
+    };
+    let mut found = Vec::new();
+    loop {
+        let parent = commit
+            .parent_ids()
+            .next()
+            .and_then(|id| repo.find_commit(id).ok());
+        let here = blob_of(&commit);
+        let before = parent.as_ref().and_then(blob_of);
+        if here.is_some() && here != before {
+            found.push((commit.id().to_string(), subject_of(&commit)));
+        }
+        match parent {
+            Some(parent) => commit = parent,
+            None => break,
+        }
+    }
+    Ok(found)
+}
+
+/// A commit's full message, for the newest entries a history read prints.
+///
+/// # Errors
+///
+/// Raises when `dir` is not a repository or `sha` names no commit.
+pub fn message_of(dir: &Path, sha: &str) -> Result<String> {
+    let repo = open(dir)?;
+    let id = gix::ObjectId::from_hex(sha.as_bytes())
+        .map_err(|_| UsageError::raise(format!("`{sha}` is not a commit id")))?;
+    let commit = repo
+        .find_commit(id)
+        .map_err(|_| UsageError::raise(format!("no commit `{sha}`")))?;
+    Ok(commit
+        .message_raw()
+        .map(|raw| String::from_utf8_lossy(raw.as_ref()).into_owned())
+        .unwrap_or_default())
+}
+
+/// Whether `commit`'s tree carries `path`.
+fn holds(repo: &gix::Repository, commit: &gix::Commit<'_>, path: &str) -> bool {
+    let _ = repo;
+    commit
+        .tree()
+        .ok()
+        .and_then(|tree| tree.lookup_entry_by_path(path).ok().flatten())
+        .is_some()
+}
+
+/// A commit's subject — the first line of its message, and nothing after it.
+fn subject_of(commit: &gix::Commit<'_>) -> String {
+    commit
+        .message()
+        .ok()
+        .map(|message| message.summary().to_string())
+        .unwrap_or_default()
+}
+
+/// The commit-metadata facts for the ranges a rule set declared (CLOUD-1187).
+///
+/// [`range_facts`]' sibling on a separate declaration, deliberately: a row that
+/// wants subjects must not be made to pay for a per-commit object peel it never
+/// asked for. Same bound as every other git fact — the ranges are declared, and a
+/// range no row names resolves nothing.
+///
+/// **No body reaches this map**, and [`CommitMeta`] is what enforces it: the
+/// field does not exist, so rule 4 is decided by the type rather than by this
+/// function remembering to drop something.
+///
+/// A range whose endpoints do not resolve is ABSENT rather than an empty list,
+/// matching [`range_facts`]: "no commits in this range" and "I could not read
+/// this range" are the two answers a gate over history must keep apart. A single
+/// commit the object database cannot peel is skipped rather than failing the
+/// whole range — one unreadable commit is not evidence about the others.
+///
+/// # Errors
+///
+/// Propagates a ref resolution failure, exactly as [`range_facts`] does.
+pub fn metadata_facts(
+    dir: &Path,
+    declared: &[String],
+) -> Result<BTreeMap<String, Vec<CommitMeta>>> {
+    let mut facts = BTreeMap::new();
+    for range in declared {
+        let Some((base, head)) = range.split_once("..") else {
+            continue;
+        };
+        if resolve_ref(dir, base)?.is_none() || resolve_ref(dir, head)?.is_none() {
+            continue;
+        }
+        // ONE open for the range, where this used to open the repository once per
+        // commit through `commit_record`. The widening (CLOUD-843) added a tree
+        // diff per commit, and paying a repository open on top of it for every
+        // commit in an unbounded range is the cost `COMMIT_META`'s doc says to
+        // measure rather than quote.
+        let repo = open(dir)?;
+        let mut commits = Vec::new();
+        for subject in subjects_in_range(dir, base, head)? {
+            // Skipped rather than fatal, and skipped rather than fabricated: a
+            // commit whose object cannot be peeled contributes nothing, where an
+            // entry with empty identity fields would read to a module as a commit
+            // authored by nobody.
+            if let Some(meta) = commit_meta(&repo, &subject.commit) {
+                commits.push(meta);
+            }
+        }
+        facts.insert(range.clone(), commits);
+    }
+    Ok(facts)
+}
+
+/// One commit's [`CommitMeta`], or `None` when any field cannot be read.
+///
+/// All-or-nothing, for [`metadata_facts`]' reason: an entry with a field quietly
+/// defaulted is a commit a module decides over as though git had said it. The
+/// identity strings are rendered exactly as [`commit_record`] renders them, so the
+/// attribution verb and a module reading this fact agree on who authored a commit.
+fn commit_meta(repo: &gix::Repository, sha: &str) -> Option<CommitMeta> {
+    let id = gix::ObjectId::from_hex(sha.as_bytes()).ok()?;
+    let commit = repo.find_commit(id).ok()?;
+    let author = commit.author().ok()?;
+    let committer = commit.committer().ok()?;
+    let message = commit.message().ok()?;
+    let trailers = message
+        .body()
+        .map(|body| {
+            body.trailers()
+                .map(|trailer| format!("{}: {}", trailer.token, trailer.value))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    // THE HEADER, never the message: a `gpgsig` line in a BODY is prose somebody
+    // typed, and the bash this ports matched only up to the first blank line for
+    // exactly that reason.
+    let signed = commit
+        .decode()
+        .ok()?
+        .extra_headers
+        .iter()
+        .any(|(name, _)| *name == "gpgsig" || *name == "gpgsig-sha256");
+    Some(CommitMeta {
+        commit: sha.to_owned(),
+        subject: message.summary().to_string(),
+        author: format!("{} <{}>", author.name, author.email),
+        committer: format!("{} <{}>", committer.name, committer.email),
+        authored: iso_utc(author.seconds()),
+        committed: iso_utc(committer.seconds()),
+        signed,
+        paths: commit_paths(repo, &commit)?,
+        trailers,
+    })
+}
+
+/// The paths `commit` changed against its first parent, sorted — `show
+/// --name-only`, in process.
+///
+/// Its own walk rather than [`commit_changes`], deliberately: that one reads
+/// every changed blob's content for the patch identity, and a name list needs
+/// none of it. Tree rows are dropped for `tree_changes`' reason — the recursion
+/// already delivers every blob beneath with its full path — and a gitlink is
+/// kept, because `--name-only` names a moved submodule pointer too.
+fn commit_paths(repo: &gix::Repository, commit: &gix::Commit<'_>) -> Option<Vec<String>> {
+    use gix_diff::tree::recorder::Change as Recorded;
+
+    let new_tree = commit.tree().ok()?;
+    let old_tree = match commit.parent_ids().next() {
+        Some(parent) => repo.find_commit(parent.detach()).ok()?.tree().ok()?,
+        None => repo.empty_tree(),
+    };
+    let hash = repo.object_hash();
+    let mut recorder = gix_diff::tree::Recorder::default();
+    gix_diff::tree(
+        gix::objs::TreeRefIter::from_bytes(&old_tree.data, hash),
+        gix::objs::TreeRefIter::from_bytes(&new_tree.data, hash),
+        gix_diff::tree::State::default(),
+        &repo.objects,
+        &mut recorder,
+    )
+    .ok()?;
+    let mut paths: Vec<String> = recorder
+        .records
+        .into_iter()
+        .filter_map(|change| match change {
+            Recorded::Addition {
+                entry_mode, path, ..
+            }
+            | Recorded::Deletion {
+                entry_mode, path, ..
+            }
+            | Recorded::Modification {
+                entry_mode, path, ..
+            } => (!entry_mode.is_tree()).then(|| path.to_string()),
+        })
+        .collect();
+    paths.sort();
+    paths.dedup();
+    Some(paths)
+}
+
+/// What one declared target's landing scan answered, projected for a rule to read
+/// (CLOUD-880).
+///
+/// A narrowing of [`Landing`], not a second computation of it. The full struct
+/// carries per-commit patch identities and the evidence behind each one, which is
+/// what a human diagnosing a landing needs and far more than a predicate does —
+/// and putting it all on the policy input would make every landing rule depend on
+/// a shape built for a different reader. Three fields answer every landing
+/// question a gate has asked so far.
+///
+/// **ONE FACT, ONE FIELD (CLOUD-2247).** It carried the verdict as a string and
+/// a `landed` bool beside it, which is true for `nothing_to_land` too — a trap
+/// any reader of the bool fell into, as the landing module once did. The policy
+/// input still carries all three keys, derived here, so its bytes are unchanged.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LandingFact {
+    /// The verdict.
+    pub verdict: Verdict,
+    /// The head-side commits with no proof on the target. Shas only: the subject
+    /// belongs to [`RangeCommit`] and a body belongs nowhere on this input.
+    pub unlanded: Vec<String>,
+}
+
+impl LandingFact {
+    /// Whether there is no unlanded content: `landed` or `nothing_to_land`,
+    /// because a branch with nothing to land is not outstanding work.
+    #[must_use]
+    pub const fn is_landed(&self) -> bool {
+        matches!(self.verdict, Verdict::Landed | Verdict::NothingToLand)
+    }
+}
+
+impl serde::Serialize for LandingFact {
+    fn serialize<S: serde::Serializer>(
+        &self,
+        serializer: S,
+    ) -> std::result::Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct as _;
+        let verdict = match self.verdict {
+            Verdict::Landed => "landed",
+            Verdict::PartiallyLanded => "partially_landed",
+            Verdict::NothingToLand => "nothing_to_land",
+            Verdict::NotLandedWithinWindow => "not_landed_within_window",
+        };
+        let mut fact = serializer.serialize_struct("LandingFact", 3)?;
+        fact.serialize_field("verdict", verdict)?;
+        fact.serialize_field("landed", &self.is_landed())?;
+        fact.serialize_field("unlanded", &self.unlanded)?;
+        fact.end()
+    }
+}
+
+/// Acquire the DECLARED landing targets, skipping every one that cannot be
+/// scanned (CLOUD-880).
+///
+/// **Absent rather than a negative**, and this is the sharpest instance of the
+/// rule [`ref_facts`] and [`range_facts`] already follow. A target that does not
+/// resolve, a repository with no commits, and two histories with no merge base all
+/// leave the target out of the map — because the alternative is reporting
+/// `landed: false`, which a gate reads as *this work is outstanding* with full
+/// confidence. Of the two directions that is the one that acts on ignorance.
+///
+/// The head side is `HEAD`, deliberately not a parameter: a rule asks whether THIS
+/// checkout's work is on a target, and a fact that could be pointed at an
+/// arbitrary head would let config ask a question about somebody else's branch.
+///
+/// # Errors
+///
+/// Raises only when `git` cannot be run at all. Every per-target failure is
+/// absence, which is the whole point above.
+pub fn landing_facts(dir: &Path, declared: &[String]) -> Result<BTreeMap<String, LandingFact>> {
+    let mut facts = BTreeMap::new();
+    for target in declared {
+        // `landing` raises a UsageError for an unresolvable endpoint or an
+        // unrelated history. That is the right shape for a CLI verb, whose caller
+        // asked about one target and wants to be told it could not be read — and
+        // the wrong shape here, where one bad declaration must not take the whole
+        // fact set down with it.
+        let Ok(scan) = landing(dir, target, "HEAD", Window::DEFAULT) else {
+            continue;
+        };
+        facts.insert(
+            target.clone(),
+            LandingFact {
+                verdict: scan.verdict,
+                unlanded: scan.unlanded().into_iter().map(ToOwned::to_owned).collect(),
+            },
+        );
+    }
+    Ok(facts)
+}
+
+// ---------------------------------------------------------------------------
+// The retirement's git projections (CLOUD-843, package a-git).
+//
+// Forty-five task-runner bodies spawn `git` to READ a fact and then decide over
+// it in shell: which tags exist and when each was cut, what a range's commits
+// carry, how the checkout's config resolves a signing key, and what the index
+// holds under a set of paths. Every one of those is a read gix answers in
+// process, so each is a declared projection here and the decision moves to a
+// module — no spawn, no second git invoker, and the family's standing rule held
+// at the boundary: a declaration bounds the read, and could-not-look is `None`
+// one level up, never an empty answer.
+
+/// One tag a declared glob matched, with its dates (CLOUD-843).
+///
+/// The tag's short NAME, the commit it peels to, and two instants — never the
+/// tag message, which is prose its author wrote, for the reason [`CommitMeta`]
+/// has no body.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct TagFact {
+    /// The tag's short name — `v1.2.3`, never `refs/tags/v1.2.3`.
+    pub tag: String,
+    /// The commit it peels to, through any chain of tag objects.
+    pub commit: String,
+    /// Whether a tag OBJECT exists, or the ref names the commit directly.
+    pub annotated: bool,
+    /// When the tag was cut, as git's `creatordate` reads it: the TAGGER's time
+    /// for an annotated tag, the commit's committer time for a lightweight one —
+    /// fixed-width UTC by [`iso_utc`].
+    ///
+    /// `None` for an annotated tag whose header carries no tagger, which git
+    /// renders as an empty date. A fabricated instant there would order a
+    /// malformed tag among real ones; could-not-look keeps it out of every
+    /// comparison a module makes.
+    pub created: Option<String>,
+    /// The peeled commit's committer date, fixed-width UTC.
+    pub committed: String,
+}
+
+/// Every tag each DECLARED glob matches, with its dates (CLOUD-843).
+///
+/// **`git tag --list <glob>`'s matching, by git's own implementation.** The glob
+/// is applied to the short name with `wildmatch` and no flags — the call
+/// `ref-filter` makes for a tag listing — so `v[0-9]*` here selects exactly what
+/// it selects there. [`history_facts`]' tag queries match through the crate's
+/// path selector instead, whose `*` stops at `/`; the two are different questions
+/// (a history pattern versus a listing) and this one is the listing the retiring
+/// bodies ran.
+///
+/// A glob that matched nothing is PRESENT with an empty list: `no release tags
+/// exist` is an answer a release gate decides on. A tag whose target does not
+/// peel to a commit is skipped rather than reported with an empty sha — a tag on
+/// a blob is a real thing in git and is not an answer to "which commit shipped".
+///
+/// Sorted by tag name, byte order, so the projection is byte-stable where the
+/// reference iterator's order is not a promise. Version order is a DECISION about
+/// the names and belongs to the module reading them.
+///
+/// # Errors
+///
+/// Raises when the repository cannot be opened or its references cannot be read —
+/// could-not-look about the whole family, which the caller projects as `null`.
+pub fn tag_facts(dir: &Path, declared: &[String]) -> Result<BTreeMap<String, Vec<TagFact>>> {
+    let repo = open(dir)?;
+    let refusal = || UsageError::raise("could not read this repository's tags".to_owned());
+    let platform = repo.references().map_err(|_| refusal())?;
+    let mut every: Vec<TagFact> = Vec::new();
+    for reference in platform.tags().map_err(|_| refusal())?.flatten() {
+        let name = reference.name().shorten().to_string();
+        if let Some(fact) = tag_fact(&repo, &reference, name) {
+            every.push(fact);
+        }
+    }
+    every.sort_by(|left, right| left.tag.cmp(&right.tag));
+    let mut facts = BTreeMap::new();
+    for glob in declared {
+        let matched: Vec<TagFact> = every
+            .iter()
+            .filter(|fact| tag_glob_matches(glob, &fact.tag))
+            .cloned()
+            .collect();
+        facts.insert(glob.clone(), matched);
+    }
+    Ok(facts)
+}
+
+/// Whether `glob` selects `tag` the way `git tag --list` does.
+///
+/// `pub(crate)` for `release backfill` (CLOUD-843): an explicitly named tag is
+/// held to the same glob the listing selects by, so the two routes to a tag
+/// list cannot disagree about what a release tag is.
+#[must_use]
+pub fn tag_glob_matches(glob: &str, tag: &str) -> bool {
+    gix::glob::wildmatch(glob.into(), tag.into(), gix::glob::wildmatch::Mode::empty())
+}
+
+/// One tag ref's [`TagFact`], or `None` when it does not name a commit.
+fn tag_fact(
+    repo: &gix::Repository,
+    reference: &gix::Reference<'_>,
+    tag: String,
+) -> Option<TagFact> {
+    // The ref's OWN target first, before any peel: whether a tag object exists,
+    // and who cut it, are properties of that object and a peel discards it —
+    // `tagger_of`'s reason, one function over.
+    let direct = reference.target().try_id()?.to_owned();
+    let object = repo.find_object(direct).ok()?;
+    let annotated = object.kind == gix::object::Kind::Tag;
+    let tagged = if annotated {
+        object
+            .try_to_tag_ref()
+            .ok()?
+            .tagger()
+            .ok()
+            .flatten()
+            .map(|signature| signature.seconds())
+    } else {
+        None
+    };
+    let commit = object.peel_to_commit().ok()?;
+    let committed = commit.time().ok()?.seconds;
+    Some(TagFact {
+        tag,
+        commit: commit.id().to_string(),
+        annotated,
+        created: if annotated {
+            tagged.map(iso_utc)
+        } else {
+            Some(iso_utc(committed))
+        },
+        committed: iso_utc(committed),
+    })
+}
+
+/// One config value as a scope sets it (CLOUD-843).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct ConfigValue {
+    /// The raw value, or `None` for an IMPLICIT one — a key written with no `=`,
+    /// which git reads as boolean true and which has no string to report.
+    pub value: Option<String>,
+    /// git's boolean reading of it — `--type=bool` — or `None` when the value is
+    /// not a boolean git accepts.
+    ///
+    /// **Normalised here because the retiring body proved it has to be.**
+    /// `git config --get` returns the stored text, git accepts `1`, `on`, `yes`,
+    /// `0`, `off`, `no` and the empty string as booleans, and a comparison against
+    /// the literals `true`/`false` was wrong in BOTH directions until that body
+    /// added `--type=bool`. A module handed only the raw text would have to carry
+    /// git's boolean grammar a second time; this is git's parser, once.
+    pub boolean: Option<bool>,
+}
+
+/// One declared config key, resolved and per scope (CLOUD-843).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct ConfigFact {
+    /// The value in force — git's last-one-wins across every scope — or `None`
+    /// when no scope sets the key. `None` here is an ANSWER (unset), because the
+    /// config was read; could-not-look is the whole fact being `None`.
+    pub effective: Option<ConfigValue>,
+    /// Scope -> the value THAT scope sets (its last), keyed by git's own scope
+    /// names: `system`, `global`, `local`, `worktree`, `command`. A scope that does
+    /// not set the key is ABSENT, never present with a null.
+    ///
+    /// Per scope because the retiring signing gate's whole question is a
+    /// CONFLICT between scopes — something outside the checkout turns signing on
+    /// and nothing local answers it — which the effective value alone cannot
+    /// express.
+    pub scopes: BTreeMap<String, ConfigValue>,
+}
+
+/// The DECLARED config keys as git resolves them, per scope (CLOUD-843).
+///
+/// Read through [`open_configured`] for [`config_value`]'s reason: the subject IS
+/// the resolved configuration, and an isolated handle would report every
+/// globally-set key as unset. Discovery still runs isolated, so the environment
+/// picks neither the repository nor the answer — only the scopes git itself
+/// consults contribute, and `GIT_CONFIG_GLOBAL` / `GIT_CONFIG_NOSYSTEM` move them
+/// exactly as they move git.
+///
+/// **The declaration is the bound, and here it is also the secrecy bound.** A
+/// config file can carry a credential helper's argument or a URL with a token in
+/// it; only a key a row names is read, so no module sees a value nobody asked
+/// for. What a module does with a value is non-negotiable rule 4's business at the
+/// report: a key name is a pointer, a value may not be.
+///
+/// # Errors
+///
+/// Raises when `dir` is not inside a repository this binary can open.
+pub fn config_facts(dir: &Path, declared: &[String]) -> Result<BTreeMap<String, ConfigFact>> {
+    let repo = open_configured(dir)?;
+    let snapshot = repo.config_snapshot();
+    let file = snapshot.plumbing();
+    Ok(declared
+        .iter()
+        .map(|key| (key.clone(), config_fact(file, key)))
+        .collect())
+}
+
+/// Whether `key` is a config key git could address — `section.name` or
+/// `section.subsection.name` — so a row naming anything else is refused at load
+/// rather than resolving to a permanent `unset`.
+#[must_use]
+pub fn config_key_parses(key: &str) -> bool {
+    gix::config::KeyRef::parse_unvalidated(key.into()).is_some_and(|parsed| {
+        !parsed.section_name.is_empty()
+            && !parsed.value_name.is_empty()
+            && parsed
+                .subsection_name
+                .is_none_or(|subsection| !subsection.is_empty())
+    })
+}
+
+/// One key's [`ConfigFact`], walking the sections in git's precedence order.
+///
+/// Walked by hand rather than through gix's `string()`, and the difference is a
+/// defect in the other direction: that accessor skips an IMPLICIT value and falls
+/// back to an earlier scope's, where git's last-one-wins counts the implicit one.
+/// A local `[commit] gpgsign` with no `=` would then report a global value — the
+/// conflict the signing gate exists to see, hidden by the reader.
+fn config_fact(file: &gix::config::File, key: &str) -> ConfigFact {
+    let mut fact = ConfigFact {
+        effective: None,
+        scopes: BTreeMap::new(),
+    };
+    let Some(parsed) = gix::config::KeyRef::parse_unvalidated(key.into()) else {
+        return fact;
+    };
+    let Some(sections) = file.sections_by_name(parsed.section_name) else {
+        return fact;
+    };
+    for section in sections {
+        if section.header().subsection_name() != parsed.subsection_name {
+            continue;
+        }
+        let Some(raw) = section.value_implicit(parsed.value_name) else {
+            continue;
+        };
+        let value = ConfigValue {
+            boolean: match raw.as_ref() {
+                // Implicit: git reads a bare key as true.
+                None => Some(true),
+                Some(text) => gix::config::Boolean::try_from(gix::bstr::BStr::new(text))
+                    .ok()
+                    .map(|boolean| boolean.0),
+            },
+            value: raw.map(|text| text.to_string()),
+        };
+        fact.scopes.insert(
+            config_scope(section.meta().source).to_owned(),
+            value.clone(),
+        );
+        fact.effective = Some(value);
+    }
+    fact
+}
+
+/// git's own name for the scope a config source belongs to — the word `git
+/// config --show-scope` prints.
+///
+/// Exhaustive over [`gix::config::Source`] with no wildcard, so a source gix adds
+/// later fails to compile here rather than reporting under a guessed scope.
+const fn config_scope(source: gix::config::Source) -> &'static str {
+    match source {
+        gix::config::Source::GitInstallation | gix::config::Source::System => "system",
+        gix::config::Source::Git | gix::config::Source::User => "global",
+        gix::config::Source::Local => "local",
+        gix::config::Source::Worktree => "worktree",
+        gix::config::Source::Env
+        | gix::config::Source::Cli
+        | gix::config::Source::Api
+        | gix::config::Source::EnvOverride => "command",
+    }
+}
+
+/// One index entry under a declared pathspec — `git ls-files -s`'s columns
+/// (CLOUD-843).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct IndexEntry {
+    /// The repo-relative path.
+    pub path: String,
+    /// The mode, six octal digits as git prints it — `100644`, `100755`,
+    /// `120000`, `160000`.
+    pub mode: String,
+    /// The object id the index records.
+    pub oid: String,
+    /// The merge stage: `0` for an ordinary entry, `1`–`3` for a conflict's
+    /// sides.
+    pub stage: u32,
+}
+
+/// One declared pathspec's view of the index and the working tree (CLOUD-843).
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
+pub struct IndexFact {
+    /// Every index entry the pathspec selects, in index order (path, then
+    /// stage) — `git ls-files -s -- <spec>`.
+    pub entries: Vec<IndexEntry>,
+    /// The selected TRACKED paths whose working-tree state differs from the index
+    /// — `git diff --name-only -- <spec>`: edited, deleted, re-typed, a flipped
+    /// executable bit where `core.fileMode` is on, and every unmerged path.
+    pub diverged: Vec<String>,
+    /// The selected paths the index does not carry and the repository does not
+    /// ignore — `git ls-files --others --exclude-standard -- <spec>`, on the
+    /// crate's one tree walker so "ignored" means what it means to every rule.
+    pub untracked: Vec<String>,
+}
+
+/// The index and working-tree state under each DECLARED pathspec (CLOUD-843).
+///
+/// The three reads a content-keyed step cache makes before it trusts a key —
+/// `diff --quiet`, `ls-files --others` and `ls-files -s`, each `-- <specs>` —
+/// as one projection, so the cache and any module asking the same question read
+/// one answer. Keyed by the pathspec as declared; a multi-spec question is the
+/// union of its specs' answers, which the reader composes.
+///
+/// **Pathspecs are git's, without magic.** A spec with no wildcard selects itself
+/// and everything beneath it as a directory; one with a wildcard is matched by
+/// git's own `wildmatch` with no flags, so `*` crosses `/` exactly as it does in
+/// `git ls-files '*.toml'`. `.` selects everything. A `:`-magic spec is refused
+/// at load ([`pathspec_is_supported`]) rather than read as a literal.
+///
+/// # What is compared, and the direction it errs in
+///
+/// Content by hash, for [`working_tree_changes`]' reason, and with its stated
+/// cost: clean/smudge filters are not applied, so a repository that rewrites
+/// content on checkout can show a path as diverged whose committed content is
+/// unchanged. That is the OVER-reporting direction, and for a cache key it is the
+/// safe one: a false divergence re-runs a step, a missed one skips a step that
+/// had to run. A gitlink is skipped for that function's reason too — whether a
+/// submodule's own worktree moved is a question about another repository — and
+/// an entry flagged assume-unchanged or skip-worktree is not compared, because
+/// git does not compare it either.
+///
+/// # Errors
+///
+/// Raises when the repository cannot be opened, its index cannot be read, or the
+/// working tree cannot be walked — could-not-look for the whole family.
+pub fn index_facts(dir: &Path, declared: &[String]) -> Result<BTreeMap<String, IndexFact>> {
+    let repo = open(dir)?;
+    // THIS CHECKOUT'S OWN WORKDIR, for `working_tree_changes`' measured reason:
+    // `repo_root` answers with the common dir's parent, so a linked worktree
+    // would compare its own index against the MAIN checkout's files.
+    let root = repo
+        .workdir()
+        .map(Path::to_path_buf)
+        .map_or_else(|| repo_root(dir), Ok)?;
+    let index = repo
+        .index_or_empty()
+        .map_err(|_| UsageError::raise("could not read the git index".to_owned()))?;
+    // `core.fileMode` decides whether a flipped executable bit is a divergence,
+    // exactly as it decides it for git. Read from the repository's own config —
+    // `git init` writes it there — with git's default when absent.
+    let filemode = repo
+        .config_snapshot()
+        .boolean("core.filemode")
+        .unwrap_or(true);
+    let hash = repo.object_hash();
+    let mut facts: BTreeMap<String, IndexFact> = declared
+        .iter()
+        .map(|spec| (spec.clone(), IndexFact::default()))
+        .collect();
+    let mut tracked: BTreeSet<String> = BTreeSet::new();
+    for entry in index.entries() {
+        // A path is bytes; one that is not UTF-8 is dropped rather than lossily
+        // converted, which is this module's standing rule.
+        let Ok(path) = std::str::from_utf8(entry.path(&index)) else {
+            continue;
+        };
+        tracked.insert(path.to_owned());
+        let selecting: Vec<&String> = declared
+            .iter()
+            .filter(|spec| pathspec_matches(spec, path))
+            .collect();
+        // Nothing selected it, so nothing is hashed: the declaration bounds the
+        // content reads, and only the index listing itself is whole-tree.
+        if selecting.is_empty() {
+            continue;
+        }
+        let row = IndexEntry {
+            path: path.to_owned(),
+            mode: format!("{:06o}", entry.mode.bits()),
+            oid: entry.id.to_string(),
+            stage: entry.stage_raw(),
+        };
+        let diverged = entry_diverges(&root, path, entry, hash, filemode);
+        for spec in selecting {
+            let Some(fact) = facts.get_mut(spec) else {
+                continue;
+            };
+            fact.entries.push(row.clone());
+            // One path per conflict's three stages, not three.
+            if diverged && fact.diverged.last().is_none_or(|last| last != path) {
+                fact.diverged.push(path.to_owned());
+            }
+        }
+    }
+    for path in tree_files(&root)? {
+        // `.git` in a LINKED worktree is a regular file, and it is never tree
+        // content — `working_tree_changes` measured the same false entry.
+        if path == ".git" || tracked.contains(&path) {
+            continue;
+        }
+        for spec in declared {
+            if pathspec_matches(spec, &path)
+                && let Some(fact) = facts.get_mut(spec)
+            {
+                fact.untracked.push(path.clone());
+            }
+        }
+    }
+    Ok(facts)
+}
+
+/// Whether the working tree's copy of an index entry differs from it — one
+/// path's `git diff --name-only`.
+fn entry_diverges(
+    root: &Path,
+    path: &str,
+    entry: &gix::index::Entry,
+    hash: gix::hash::Kind,
+    filemode: bool,
+) -> bool {
+    use gix::index::entry::{Flags, Mode};
+    // AN UNMERGED PATH IS A DIFFERENCE, whatever the file holds: `git diff`
+    // reports it and exits non-zero, and a step cache trusting a conflicted tree
+    // would record a verdict over bytes nobody resolved.
+    if entry.stage_raw() != 0 {
+        return true;
+    }
+    if entry
+        .flags
+        .intersects(Flags::ASSUME_VALID.union(Flags::SKIP_WORKTREE))
+    {
+        return false;
+    }
+    if entry.mode == Mode::COMMIT {
+        return false;
+    }
+    let absolute = root.join(path);
+    let Ok(metadata) = std::fs::symlink_metadata(&absolute) else {
+        // Tracked and gone is a deletion.
+        return true;
+    };
+    let want_link = entry.mode == Mode::SYMLINK;
+    let content = if metadata.is_symlink() {
+        if !want_link {
+            return true;
+        }
+        std::fs::read_link(&absolute)
+            .map(|target| target.to_string_lossy().into_owned().into_bytes())
+    } else if metadata.is_file() {
+        if want_link {
+            return true;
+        }
+        crate::fsio::read(&absolute)
+    } else {
+        // A directory where the index records a file is a type change.
+        return true;
+    };
+    let Ok(content) = content else {
+        return true;
+    };
+    let Ok(hashed) = gix::objs::compute_hash(hash, gix::object::Kind::Blob, &content) else {
+        return true;
+    };
+    if hashed != entry.id {
+        return true;
+    }
+    // The executable bit, where the platform has one and the repository asks for
+    // it to count. A symlink carries no mode of its own.
+    filemode && !want_link && mode_diverges(&metadata, entry.mode == Mode::FILE_EXECUTABLE)
+}
+
+/// Whether the file's executable bit disagrees with what the index records.
+///
+/// Where the platform has no executable bit there is nothing to compare: git on
+/// such a platform runs with `core.fileMode = false` for the same reason.
+fn mode_diverges(metadata: &std::fs::Metadata, recorded_executable: bool) -> bool {
+    executable_bit_or(metadata, recorded_executable) != recorded_executable
+}
+
+/// Whether any execute bit stands on `meta`, or `elsewhere` where the platform
+/// has no such bit to read.
+///
+/// The one platform read behind every executable-bit reader (CLOUD-2509): each
+/// caller states its off-unix answer as `elsewhere`, an argument every leg
+/// compiles and tests, where a `#[cfg(not(unix))]` twin was code no unix sweep
+/// could build.
+#[must_use]
+pub fn executable_bit_or(meta: &std::fs::Metadata, elsewhere: bool) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        let _ = elsewhere;
+        meta.permissions().mode() & 0o111 != 0
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = meta;
+        elsewhere
+    }
+}
+
+/// Whether a git pathspec — without magic — selects `path` (CLOUD-843).
+///
+/// git's `match_pathspec_item`, the two arms that apply to a file: the spec as a
+/// LITERAL, selecting itself and everything beneath it as a directory, and — when
+/// it carries a wildcard — `wildmatch` with no flags over the whole path, so `*`
+/// crosses `/`. A trailing `/` selects only beneath. `.` and a leading `./` are
+/// the root, as git reads them relative to it.
+#[must_use]
+pub fn pathspec_matches(spec: &str, path: &str) -> bool {
+    let spec = spec.strip_prefix("./").unwrap_or(spec);
+    if spec.is_empty() || spec == "." {
+        return true;
+    }
+    let (literal, beneath_only) = match spec.strip_suffix('/') {
+        Some(directory) => (directory, true),
+        None => (spec, false),
+    };
+    if (!beneath_only && path == literal)
+        || path
+            .strip_prefix(literal)
+            .is_some_and(|rest| rest.starts_with('/'))
+    {
+        return true;
+    }
+    spec.contains(['*', '?', '[', '\\'])
+        && gix::glob::wildmatch(
+            spec.into(),
+            path.into(),
+            gix::glob::wildmatch::Mode::empty(),
+        )
+}
+
+/// Whether this build reads `spec` as git would — refused at load otherwise.
+///
+/// Empty is not a pathspec (git refuses it), and a leading `:` is pathspec MAGIC
+/// — `:(exclude)`, `:!`, `:/` — which [`pathspec_matches`] does not implement. Read
+/// as a literal it would select nothing and report a clean tree over paths the
+/// spec meant; refusing it keeps that from being a silent answer.
+#[must_use]
+pub fn pathspec_is_supported(spec: &str) -> bool {
+    !spec.is_empty() && !spec.starts_with(':')
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod tests {
+    use std::fs;
+
+    use super::*;
+
+    /// CLOUD-2509: the execute bit is read where the platform has one, and the
+    /// caller's stated answer is returned where it does not. Fails by: a
+    /// constant reading, the fallback read on unix, or a mask that sees a read or
+    /// write bit as an execute bit. A created file never carries an execute bit
+    /// (creation's mode is `0o666` under any umask), and this test binary does.
+    #[test]
+    fn the_execute_bit_is_read_where_the_platform_has_one() {
+        let plain = crate::scratch::scratch("git-execute-bit").join("plain");
+        crate::durable::replace(&plain, "text").unwrap();
+        let program = std::env::current_exe().unwrap();
+        for (path, bit) in [(&plain, false), (&program, true)] {
+            let meta = fs::metadata(path).unwrap();
+            for elsewhere in [false, true] {
+                let reading = if cfg!(unix) { bit } else { elsewhere };
+                assert_eq!(
+                    executable_bit_or(&meta, elsewhere),
+                    reading,
+                    "{} elsewhere={elsewhere}",
+                    path.display()
+                );
+            }
+        }
+    }
+
+    /// A hunk near the top carries its own start line (CLOUD-2507): line 7 of
+    /// 12 changed is `@@ -4,7 +4,7 @@` over lines 4-10, as `git diff` writes it.
+    #[test]
+    fn a_hunk_near_the_top_names_its_own_lines() {
+        let before = (1..=12)
+            .map(|n| format!("l{n}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+            + "\n";
+        let after = before.replace("l7\n", "L7\n");
+        assert_eq!(
+            unified_hunks(&before, &after).unwrap(),
+            "@@ -4,7 +4,7 @@\n l4\n l5\n l6\n-l7\n+L7\n l8\n l9\n l10\n"
+        );
+        assert_eq!(unified_hunks(&before, &before).unwrap(), "");
+    }
+
+    /// A repository nothing was ever added to has no index file, and `ls-files`
+    /// answers it with nothing and exit 0 — so this does too, rather than calling
+    /// it "not a git repository" (CLOUD-2059).
+    #[test]
+    fn a_repository_nothing_was_added_to_tracks_nothing() {
+        let dir = crate::scratch::scratch("git-tracked-fresh");
+        crate::gitwrite::init_on_main(&dir).expect("init");
+        assert!(
+            !dir.join(".git/index").exists(),
+            "the premise: a fresh repository has no index file yet"
+        );
+        assert_eq!(
+            tracked_paths(&dir).expect("an empty answer, as ls-files gives"),
+            BTreeSet::new()
+        );
+    }
+
+    /// Every pack and index file is hinted, and nothing else in the pack
+    /// directory.
+    #[test]
+    fn every_pack_and_index_is_prefetched() {
+        let repo = crate::scratch::scratch("git-prefetch-packs");
+        crate::gitwrite::init_on_main(&repo).expect("init");
+        let packs = repo.join(".git/objects/pack");
+        std::fs::create_dir_all(&packs).unwrap();
+        for name in ["p.pack", "p.idx", "p.keep", "p.rev"] {
+            std::fs::write(packs.join(name), "x").unwrap();
+        }
+        assert_eq!(prefetch_packs(&repo), 2);
+        assert_eq!(prefetch_packs(&repo.join("nowhere")), 0);
+    }
+
+    /// A ceiling that contains nothing here fences nothing, which is how git reads
+    /// it; gix's default refused the repository instead (CLOUD-2064).
+    #[test]
+    fn an_unrelated_ceiling_does_not_refuse_a_valid_repository() {
+        let repo = crate::scratch::scratch("git-ceiling-unrelated");
+        crate::gitwrite::init_on_main(&repo).expect("init");
+        let elsewhere = crate::scratch::scratch("git-ceiling-elsewhere");
+        assert!(
+            open_upwards(&repo, vec![elsewhere]).is_ok(),
+            "a ceiling that does not contain the search directory fences nothing"
+        );
+    }
+
+    /// A fresh repository at `name`, opened as [`open_upwards`] opens one, and the
+    /// key it would be remembered under.
+    fn opened(name: &str) -> (PathBuf, OpenKey, gix::Repository) {
+        let dir = crate::scratch::scratch(name);
+        crate::gitwrite::init_on_main(&dir).expect("init");
+        let repo =
+            gix::discover_opts(&dir, discovery(&[]), gix::open::Options::isolated()).expect("open");
+        let key = OpenKey {
+            git_dir: repo.git_dir().to_path_buf(),
+            worktree: repo.workdir().map(Path::to_path_buf),
+            trust: gix::sec::Trust::Full,
+            cwd: None,
+        };
+        (dir, key, repo)
+    }
+
+    /// An open whose files are unchanged is served again (CLOUD-2433) — at once,
+    /// with no window after the repository was written.
+    #[test]
+    fn a_repository_opened_twice_is_opened_once() {
+        let (_, key, repo) = opened("git-memo-hit");
+        let mut opens = Opens::default();
+        opens.remember(key.clone(), &repo, read_by_open(&key.git_dir));
+        assert!(opens.get(&key).is_some(), "an unchanged open is remembered");
+    }
+
+    /// A config written after the open is read again, not served stale — even
+    /// one the same length, written in the same timestamp tick.
+    #[test]
+    fn a_config_edited_after_open_is_read_again() {
+        let (dir, key, repo) = opened("git-memo-edited");
+        let mut opens = Opens::default();
+        opens.remember(key.clone(), &repo, read_by_open(&key.git_dir));
+        assert!(opens.get(&key).is_some(), "the premise: it was remembered");
+        let config = dir.join(".git/config");
+        let text = crate::fsio::read_to_string(&config).expect("config");
+        let edited = text.replacen("bare = false", "bare = fals0", 1);
+        assert_ne!(text, edited, "the premise: the edit changes a byte");
+        fs::write(&config, edited).expect("edit");
+        assert!(opens.get(&key).is_none(), "an edited config is a miss");
+    }
+
+    /// Swap the one remembered handle for `other`'s, so a read served from the
+    /// memo answers about `other` and a fresh open about the directory read.
+    fn plant(other: &Path) {
+        let planted = gix::discover_opts(other, discovery(&[]), gix::open::Options::isolated())
+            .expect("open");
+        with_opens(|opens| {
+            let (_, opened) = opens.0.iter_mut().next().expect("one remembered open");
+            opened.repo = planted;
+        })
+        .expect("a scope is open");
+    }
+
+    /// The working tree a handle is about, canonical.
+    fn tree(repo: &gix::Repository) -> PathBuf {
+        canonical(repo.workdir().expect("a working tree"))
+    }
+
+    /// The real path: within a hook call's scope, `open_upwards` remembers what
+    /// it opened, and the NEXT read of the repository is served from the memo —
+    /// shown by planting another repository's handle in it.
+    #[test]
+    fn a_repository_read_twice_in_one_scope_is_opened_once() {
+        let dir = crate::scratch::scratch("git-memo-scoped");
+        crate::gitwrite::init_on_main(&dir).expect("init");
+        let other = crate::scratch::scratch("git-memo-scoped-other");
+        crate::gitwrite::init_on_main(&other).expect("init other");
+        let _scope = open_scope();
+        open_upwards(&dir, Vec::new()).expect("first read");
+        plant(&other);
+        let second = open_upwards(&dir, Vec::new()).expect("second read");
+        assert_eq!(
+            tree(&second),
+            canonical(&other),
+            "the second read came from the memo, not a fresh open"
+        );
+    }
+
+    /// A write is opened fresh even inside a scope: a remembered handle shares
+    /// its index and packed-refs snapshots with every later read.
+    #[test]
+    fn a_write_is_never_served_from_the_memo() {
+        let dir = crate::scratch::scratch("git-memo-write");
+        crate::gitwrite::init_on_main(&dir).expect("init");
+        let other = crate::scratch::scratch("git-memo-write-other");
+        crate::gitwrite::init_on_main(&other).expect("init other");
+        let _scope = open_scope();
+        open_upwards(&dir, Vec::new()).expect("read");
+        plant(&other);
+        let written = open_for_write(&dir).expect("write open");
+        assert_eq!(
+            tree(&written),
+            canonical(&dir),
+            "a write opens the repository itself"
+        );
+    }
+
+    /// A scope opened inside another shares the outer memo and leaves it
+    /// standing when it drops.
+    #[test]
+    fn a_nested_scope_does_not_end_the_outer_one() {
+        let dir = crate::scratch::scratch("git-memo-nested");
+        crate::gitwrite::init_on_main(&dir).expect("init");
+        let _outer = open_scope();
+        open_upwards(&dir, Vec::new()).expect("read");
+        {
+            let _inner = open_scope();
+        }
+        assert_eq!(
+            with_opens(|opens| opens.0.len()),
+            Some(1),
+            "the outer call's memo survives an inner scope"
+        );
+    }
+
+    /// A linked worktree is remembered too: its discovered git dir and the one
+    /// the open reports must agree, or the memo would silently never fill.
+    #[test]
+    fn a_linked_worktree_is_remembered() {
+        let dir = crate::scratch::scratch("git-memo-linked");
+        crate::gitwrite::init_on_main(&dir).expect("init");
+        git(&dir, &["commit", "-q", "--allow-empty", "-m", "root"]);
+        let linked = dir.join("linked");
+        git(
+            &dir,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                linked.to_str().expect("utf-8"),
+                "-b",
+                "side",
+            ],
+        );
+        let _scope = open_scope();
+        open_upwards(&linked, Vec::new()).expect("read");
+        assert_eq!(
+            with_opens(|opens| opens.0.len()),
+            Some(1),
+            "the linked worktree's open is remembered"
+        );
+        // The COMMON config is the one a linked worktree's open parses, and an
+        // edit to it — not to the worktree's own git dir — must be a miss.
+        let key = with_opens(|opens| opens.0.keys().next().cloned())
+            .flatten()
+            .expect("one key");
+        let config = dir.join(".git/config");
+        let text = crate::fsio::read_to_string(&config).expect("config");
+        let edited = text.replacen("bare = false", "bare = fals0", 1);
+        assert_ne!(text, edited, "the premise: the edit changes a byte");
+        fs::write(&config, edited).expect("edit");
+        assert!(
+            with_opens(|opens| opens.get(&key)).flatten().is_none(),
+            "an edited common config is a miss for the linked worktree"
+        );
+    }
+
+    /// Outside a scope nothing is remembered, so a long-lived process never
+    /// reads an index or packed-refs snapshot a shared handle held stale.
+    #[test]
+    fn outside_a_scope_no_open_is_remembered() {
+        let dir = crate::scratch::scratch("git-memo-unscoped");
+        crate::gitwrite::init_on_main(&dir).expect("init");
+        {
+            let _scope = open_scope();
+        }
+        open_upwards(&dir, Vec::new()).expect("read");
+        assert_eq!(
+            with_opens(|opens| opens.0.len()),
+            None,
+            "a dropped scope leaves no memo behind"
+        );
+    }
+
+    /// Within a scope: a read is remembered, `write` runs, and a read after it
+    /// finds the memo empty — forgotten (`write-keeps-the-memo`), and not
+    /// refilled by that read (`spent-scope-still-remembers`) (CLOUD-2526).
+    /// Answers the post-write read's handle, for a case to check it sees the write.
+    fn assert_write_spends(name: &str, write: impl FnOnce(&Path)) -> gix::Repository {
+        let dir = crate::scratch::scratch(name);
+        crate::gitwrite::init_on_main(&dir).expect("init");
+        let _scope = open_scope();
+        open_upwards(&dir, Vec::new()).expect("read");
+        assert_eq!(
+            with_opens(|opens| opens.0.len()),
+            Some(1),
+            "the premise: the read was remembered"
+        );
+        write(&dir);
+        let after = open_upwards(&dir, Vec::new()).expect("read after the write");
+        assert_eq!(
+            with_opens(|opens| opens.0.len()),
+            Some(0),
+            "a spent scope forgets and remembers nothing more"
+        );
+        after
+    }
+
+    /// A write open spends the scope: the read remembered before it is
+    /// forgotten, and the read after it is not remembered. Kills
+    /// `write-keeps-the-memo` and `spent-scope-still-remembers`.
+    #[test]
+    fn a_write_spends_the_scopes_memo() {
+        let _ = assert_write_spends("git-memo-spent", |dir| {
+            open_for_write(dir).expect("write open");
+        });
+    }
+
+    /// A repo-local config write is a write: it spends the scope too, and the
+    /// read after it sees the value written. Kills `config-write-from-the-memo`.
+    #[test]
+    fn a_config_write_spends_the_scopes_memo() {
+        let after = assert_write_spends("git-memo-config-spent", |dir| {
+            set_config_local(dir, "user.name", "spent").expect("config write");
+        });
+        assert_eq!(
+            after
+                .config_snapshot()
+                .string("user.name")
+                .map(|name| name.to_string()),
+            Some("spent".to_owned()),
+            "the read after the write sees it"
+        );
+    }
+
+    /// The working directory is part of what an open depends on, so a read of
+    /// the same repository from another one is a separate entry. Safe to move
+    /// the process's directory: nextest runs each case in its own process.
+    #[test]
+    fn a_read_from_another_working_directory_is_opened_again() {
+        let dir = crate::scratch::scratch("git-memo-cwd");
+        crate::gitwrite::init_on_main(&dir).expect("init");
+        let elsewhere = crate::scratch::scratch("git-memo-cwd-elsewhere");
+        let home = std::env::current_dir().expect("cwd");
+        let _scope = open_scope();
+        open_upwards(&dir, Vec::new()).expect("read");
+        std::env::set_current_dir(&elsewhere).expect("move");
+        let second = open_upwards(&dir, Vec::new());
+        std::env::set_current_dir(&home).expect("move back");
+        second.expect("read from elsewhere");
+        assert_eq!(
+            with_opens(|opens| opens.0.len()),
+            Some(2),
+            "each working directory keys its own open"
+        );
+    }
+
+    /// `read_by_open`'s list holds only for the gix it was audited against.
+    #[test]
+    fn the_memos_read_list_was_audited_against_this_gix() {
+        let lock = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../Cargo.lock");
+        let lock: toml::Value =
+            toml::from_str(&crate::fsio::read_to_string(lock).expect("Cargo.lock")).expect("toml");
+        let packages = lock
+            .get("package")
+            .and_then(toml::Value::as_array)
+            .expect("[[package]]");
+        for (name, audited) in AUDITED_GIX {
+            let versions: Vec<&str> = packages
+                .iter()
+                .filter(|package| package.get("name").and_then(toml::Value::as_str) == Some(*name))
+                .filter_map(|package| package.get("version").and_then(toml::Value::as_str))
+                .collect();
+            assert_eq!(
+                versions,
+                vec![*audited],
+                "{name} moved: re-audit read_by_open's list against its isolated open, then move AUDITED_GIX"
+            );
+        }
+    }
+
+    /// The fence still holds where it applies: a directory below a ceiling, with no
+    /// repository of its own, does not walk past the ceiling to the one above.
+    #[test]
+    fn a_ceiling_between_a_directory_and_its_repository_still_refuses() {
+        let repo = crate::scratch::scratch("git-ceiling-fenced");
+        crate::gitwrite::init_on_main(&repo).expect("init");
+        let nested = repo.join("a").join("b");
+        fs::create_dir_all(&nested).expect("nested");
+        assert!(
+            open_upwards(&nested, Vec::new()).is_ok(),
+            "the premise: unfenced, the nested directory resolves to the repository"
+        );
+        assert!(
+            open_upwards(&nested, vec![repo.join("a")]).is_err(),
+            "a ceiling between the directory and its repository fences the walk"
+        );
+    }
+
+    /// The declaration languages have their comments stripped, so a rule over
+    /// the remainder can see a comment-only change to one of them.
+    ///
+    /// This is the case CLOUD-827's table was missing: `.rego`, `.toml`,
+    /// `.yml`/`.yaml` and `.pkl` all took the unrecognised-extension
+    /// fall-through, whose remainder is the whole file, so every prose change to
+    /// a policy module, a config document or a workflow read as a code change.
+    ///
+    /// Fails by: removing an extension token from `without_comments`'s table.
+    /// Each assertion below reddens for exactly the token that went, which is
+    /// what stops one extension's presence standing in for its neighbours' —
+    /// they share two arms, so a per-extension case is the only granularity the
+    /// table itself does not provide.
+    #[test]
+    fn a_declaration_language_has_its_comments_stripped() {
+        for path in ["a/x.rego", "x.toml", "a/x.yml", "a/x.yaml"] {
+            assert_eq!(
+                without_comments(path, "# a comment\nreal = 1\n"),
+                "real = 1",
+                "`#` is the comment marker for {path}, so a comment-only change \
+                 must leave the remainder identical"
+            );
+        }
+        // pkl is Java-family: `//`, and `#` is not a comment marker there at all.
+        // Reading it with the `#` table would keep a commented line in the
+        // remainder and drop a real one.
+        assert_eq!(
+            without_comments("x.pkl", "// a comment\nreal = 1\n"),
+            "real = 1",
+            "pkl comments are `//`, so the `#` table would misread every line"
+        );
+        // An extensionless task is read by its directory, and only there.
+        assert_eq!(
+            without_comments("mise-tasks/land", "# a comment\nreal\n"),
+            "real"
+        );
+        assert_eq!(
+            without_comments("bin/land", "# a comment\nreal\n"),
+            "# a comment\nreal\n"
+        );
+    }
+
+    /// Fails by: any step of the civil-date arithmetic off — each date sits on
+    /// a boundary one of them decides: the epoch, the day before it, a leap
+    /// day, the month after it, a century that is not a leap year, and the
+    /// start of the era.
+    #[test]
+    fn a_day_count_names_its_civil_date() {
+        for (days, date) in [
+            (0, (1970, 1, 1)),
+            (-1, (1969, 12, 31)),
+            (59, (1970, 3, 1)),
+            (10_957, (2000, 1, 1)),
+            (11_016, (2000, 2, 29)),
+            (11_017, (2000, 3, 1)),
+            (47_540, (2100, 2, 28)),
+            (47_541, (2100, 3, 1)),
+            (-719_468, (0, 3, 1)),
+        ] {
+            assert_eq!(civil_from_days(days), date, "day {days}");
+        }
+        assert_eq!(iso_utc(951_782_400 + 3_661), "2000-02-29T01:01:01Z");
+    }
+
+    /// `items` as the owned declarations a fact family is asked for.
+    fn names(items: &[&str]) -> Vec<String> {
+        items.iter().map(|item| (*item).to_owned()).collect()
+    }
+
+    /// Point `name` at `target` as a loose ref file. `Repository::reference`,
+    /// like `gitwrite::set_ref`, also writes a reflog, and a reflog needs a
+    /// committer identity a CI container does not have.
+    fn fixture_ref(dir: &Path, name: &str, target: &str) {
+        let path = dir.join(".git").join(name);
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).expect("the ref's directory");
+        }
+        fs::write(path, format!("{target}\n")).expect("a ref");
+    }
+
+    /// Fails by: an answer that is not the newest `v*` tag by version order —
+    /// `v0.0.10` above `v0.0.9` and a later-created `v0.0.2`, a name that does
+    /// not parse as a version never chosen — or `None` while one exists.
+    #[test]
+    fn the_newest_version_tag_is_chosen_by_version_order() {
+        let dir = crate::scratch::scratch("git-newest-version-tag");
+        crate::gitwrite::init_on_main(&dir).expect("init");
+        fs::write(dir.join("a.txt"), "a\n").expect("write");
+        crate::gitwrite::commit_paths(&dir, &["a.txt".to_owned()], "a\n").expect("commit");
+        assert_eq!(newest_version_tag(&dir).expect("readable"), None);
+        let head = head_commit(&dir).expect("head");
+        for name in ["v0.0.9", "v0.0.10", "v0.0.2", "vnext", "w9.9.9"] {
+            fixture_ref(&dir, &format!("refs/tags/{name}"), &head);
+        }
+        assert_eq!(
+            newest_version_tag(&dir).expect("readable").as_deref(),
+            Some("v0.0.10")
+        );
+    }
+
+    /// A three-commit history on `main`: `a.txt` and `b.txt`, then `a.txt`
+    /// rewritten and `c.txt` added, then `b.txt` deleted. Tagged `v1` at the
+    /// first and `v2` at the third; `origin/main` at the second, which is also
+    /// the remote's HEAD. Returns the directory and the three commits.
+    fn history(name: &str) -> (PathBuf, [String; 3]) {
+        let dir = scratch(name);
+        crate::gitwrite::init_on_main(&dir).expect("init");
+        let commit = |files: &[(&str, &str)], message: &str| {
+            for (path, text) in files {
+                fs::write(dir.join(path), text).expect("write");
+            }
+            let paths: Vec<String> = files.iter().map(|(path, _)| (*path).to_owned()).collect();
+            crate::gitwrite::commit_paths(&dir, &paths, message).expect("commit");
+            head_commit(&dir).expect("head")
+        };
+        let first = commit(
+            &[("a.txt", "one\n"), ("b.txt", "b\n")],
+            "first\n\nThe body.\n",
+        );
+        let second = commit(
+            &[("a.txt", "two\n"), ("b.txt", "b\n"), ("c.txt", "c\n")],
+            "second\n",
+        );
+        fs::remove_file(dir.join("b.txt")).expect("delete");
+        let third = commit(
+            &[("a.txt", "two\n"), ("c.txt", "c\n")],
+            "third\n\nTrailer: x\n",
+        );
+        for (name, target) in [
+            ("refs/tags/v1", &first),
+            ("refs/tags/v2", &third),
+            ("refs/remotes/origin/main", &second),
+        ] {
+            fixture_ref(&dir, name, target);
+        }
+        fs::write(
+            dir.join(".git/refs/remotes/origin/HEAD"),
+            "ref: refs/remotes/origin/main\n",
+        )
+        .expect("the remote HEAD");
+        set_config_local(&dir, "remote.origin.url", "https://example.invalid/r.git")
+            .expect("the remote");
+        (dir, [first, second, third])
+    }
+
+    /// Fails by: the call's root-commit memo answering from a stale tip set — a
+    /// root added under a new ref mid-scope not reported — or two calls over
+    /// unchanged tips disagreeing (CLOUD-2813).
+    #[test]
+    fn a_root_added_mid_scope_is_seen_by_the_next_read() {
+        let (dir, [first, _, _]) = history("roots-memo");
+        let _scope = open_scope();
+        assert_eq!(root_commits(&dir).unwrap(), std::slice::from_ref(&first));
+        assert_eq!(root_commits(&dir).unwrap(), std::slice::from_ref(&first));
+        set_config_local(&dir, "user.name", "Fixture").expect("name");
+        set_config_local(&dir, "user.email", "fixture@example.invalid").expect("email");
+        let repo = gix::open(&dir).expect("open");
+        let tree = repo.empty_tree().id;
+        let orphan = repo
+            .commit("refs/heads/orphan", "orphan\n", tree, None::<gix::ObjectId>)
+            .expect("an orphan commit")
+            .detach()
+            .to_hex()
+            .to_string();
+        let mut both = vec![first, orphan];
+        both.sort();
+        assert_eq!(root_commits(&dir).unwrap(), both);
+    }
+
+    /// Fails by: the cross-call root cache answering other than a full walk
+    /// would — after a fast-forward (the incremental path), after a new orphan
+    /// root (added), and after a rewind plus a deleted ref (the fallback, where
+    /// a root must disappear) (CLOUD-2813).
+    #[test]
+    fn the_root_cache_agrees_with_a_full_walk_across_ref_changes() {
+        let (dir, [first, _, third]) = history("roots-cache");
+        set_config_local(&dir, "user.name", "Fixture").expect("name");
+        set_config_local(&dir, "user.email", "fixture@example.invalid").expect("email");
+        let full = |dir: &Path| {
+            let repo = open_fresh(dir).expect("open");
+            let mut tips: Vec<gix::ObjectId> = repo
+                .references()
+                .unwrap()
+                .all()
+                .unwrap()
+                .filter_map(std::result::Result::ok)
+                .filter_map(|r| r.into_fully_peeled_id().ok())
+                .map(gix::Id::detach)
+                .collect();
+            tips.sort_unstable();
+            tips.dedup();
+            all_roots(&repo, &tips)
+        };
+        let tips_now = |dir: &Path| -> Vec<gix::ObjectId> {
+            let repo = open_fresh(dir).expect("open");
+            let mut tips: Vec<gix::ObjectId> = repo
+                .references()
+                .unwrap()
+                .all()
+                .unwrap()
+                .filter_map(std::result::Result::ok)
+                .filter_map(|r| r.into_fully_peeled_id().ok())
+                .map(gix::Id::detach)
+                .collect();
+            tips.sort_unstable();
+            tips.dedup();
+            tips
+        };
+        // A first answer is written to the cache, which must exist: a cache
+        // that silently never writes would pass every equality below.
+        assert_eq!(root_commits(&dir).unwrap(), std::slice::from_ref(&first));
+        let (entry, _) = roots_entry(&open_fresh(&dir).unwrap()).expect("a cache entry path");
+        assert!(entry.exists(), "the roots cache was never written");
+        let repo = gix::open(&dir).expect("open");
+        let tree = repo.empty_tree().id;
+        let tip = gix::ObjectId::from_hex(third.as_bytes()).unwrap();
+        let before = tips_now(&dir);
+        // Fast-forward: HEAD gains a child of its old tip — the incremental path.
+        repo.commit("HEAD", "fourth\n", tree, [tip])
+            .expect("a child commit");
+        let after = tips_now(&dir);
+        assert_eq!(
+            roots_since(&repo, &after, &before, std::slice::from_ref(&first)),
+            Some(full(&dir))
+        );
+        assert_eq!(root_commits(&dir).unwrap(), full(&dir));
+        // A new orphan root under a new ref.
+        let orphan = repo
+            .commit("refs/heads/orphan", "orphan\n", tree, None::<gix::ObjectId>)
+            .expect("an orphan")
+            .detach();
+        let with_orphan = root_commits(&dir).unwrap();
+        assert!(with_orphan.contains(&orphan.to_hex().to_string()));
+        assert_eq!(with_orphan, full(&dir));
+        // A deleted ref: the orphan's root is unreachable and must go. The
+        // extension cannot show itself exact, so it declines.
+        let with_ref = tips_now(&dir);
+        fs::remove_file(dir.join(".git/refs/heads/orphan")).expect("delete the ref");
+        assert_eq!(
+            roots_since(&repo, &tips_now(&dir), &with_ref, &with_orphan),
+            None
+        );
+        assert_eq!(root_commits(&dir).unwrap(), std::slice::from_ref(&first));
+        assert_eq!(root_commits(&dir).unwrap(), full(&dir));
+    }
+
+    /// Fails by: any history walk answering other than git does over the
+    /// fixture — a range, a count, a reachable set, a message, an ancestry or a
+    /// merge base — or answering nothing.
+    #[test]
+    fn the_history_reads_answer_as_git_does() {
+        let (dir, [first, second, third]) = history("history-reads");
+        let range = format!("{first}..{third}");
+        assert_eq!(root_commits(&dir).unwrap(), std::slice::from_ref(&first));
+        assert_eq!(
+            commits_in_range(&dir, &first, &third).unwrap(),
+            [third.clone(), second.clone()]
+        );
+        assert_eq!(
+            rev_list(&dir, Window::DEFAULT, &range).unwrap(),
+            [third.clone(), second.clone()]
+        );
+        assert_eq!(commit_count(&dir, &range).unwrap(), 2);
+        assert_eq!(recent_commits(&dir, 2), [third.clone(), second.clone()]);
+        let subjects: Vec<(String, String)> = subjects_in_range(&dir, &first, &third)
+            .unwrap()
+            .into_iter()
+            .map(|subject| (subject.commit, subject.subject))
+            .collect();
+        assert_eq!(
+            subjects,
+            [
+                (third.clone(), "third".to_owned()),
+                (second.clone(), "second".to_owned())
+            ]
+        );
+        assert_eq!(
+            commits_reachable(
+                &dir,
+                std::slice::from_ref(&third),
+                std::slice::from_ref(&first)
+            )
+            .unwrap(),
+            BTreeSet::from([second.clone(), third.clone()])
+        );
+        assert_eq!(
+            messages_reachable(
+                &dir,
+                std::slice::from_ref(&third),
+                std::slice::from_ref(&first)
+            )
+            .unwrap(),
+            "third\n\nTrailer: x\n\nsecond\n\n"
+        );
+        assert_eq!(
+            messages_reachable_from(&dir, "HEAD").as_deref(),
+            Some("third\n\nTrailer: x\n\nsecond\n\nfirst\n\nThe body.\n\n")
+        );
+        assert_eq!(
+            log_messages(&dir, &first).unwrap().as_deref(),
+            Some("third\n\nTrailer: x\n\nsecond\n\n")
+        );
+        assert_eq!(message_of(&dir, &third).unwrap(), "third\n\nTrailer: x\n");
+        assert_eq!(previous_tag(&dir, "v2").unwrap().as_deref(), Some("v1"));
+        assert!(has_object(&dir, &first));
+        assert!(!has_object(&dir, &"0".repeat(40)));
+        assert_eq!(resolve_commit(&dir, "HEAD", "head").unwrap(), third);
+        assert_eq!(is_ancestor(&dir, &first, &third).unwrap(), Some(true));
+        assert_eq!(is_ancestor(&dir, &third, &first).unwrap(), Some(false));
+        assert_eq!(
+            merge_base_of(&dir, &third, &second).unwrap(),
+            Some(second.clone())
+        );
+        assert_eq!(
+            merge_base(&dir, "refs/remotes/origin/main").unwrap(),
+            Some(second)
+        );
+    }
+
+    /// Fails by: a path history, a tree read at a revision, or a write set
+    /// answering other than the fixture's commits made, or nothing.
+    #[test]
+    fn the_change_reads_name_what_each_commit_did() {
+        let (dir, [first, second, third]) = history("change-reads");
+        let set = |items: &[&str]| {
+            items
+                .iter()
+                .map(|item| (*item).to_owned())
+                .collect::<BTreeSet<String>>()
+        };
+        assert_eq!(
+            paths_changed_between(&dir, &first, &third).unwrap(),
+            set(&["a.txt", "b.txt", "c.txt"])
+        );
+        assert_eq!(path_was_deleted(&dir, "b.txt").unwrap(), Some(true));
+        assert_eq!(path_was_deleted(&dir, "a.txt").unwrap(), Some(false));
+        assert_eq!(
+            path_changes(&dir, "a.txt").unwrap(),
+            [
+                (second.clone(), "second".to_owned()),
+                (first.clone(), "first".to_owned())
+            ]
+        );
+        assert_eq!(
+            paths_present_at_rev(&dir, &first, &set(&["a.txt", "b.txt", "c.txt"])).unwrap(),
+            set(&["a.txt", "b.txt"])
+        );
+        assert_eq!(count_at_rev(&dir, "HEAD", "*.txt", "two").unwrap(), 1);
+        assert_eq!(count_at_rev(&dir, &second, "*.txt", "\n").unwrap(), 3);
+        let writes: Vec<(String, BTreeSet<String>)> =
+            writes_in_range(&dir, &first, &third, &["*.txt".to_owned()])
+                .unwrap()
+                .into_iter()
+                .map(|write| (write.commit, write.paths))
+                .collect();
+        assert_eq!(
+            writes,
+            [
+                (third.clone(), set(&["b.txt"])),
+                (second, set(&["a.txt", "c.txt"]))
+            ]
+        );
+        let cumulative = branch_patch_id(&dir, "refs/remotes/origin/main").unwrap();
+        assert!(cumulative.is_some());
+        let delta = base_delta(
+            &dir,
+            "refs/remotes/origin/main",
+            &["*.txt".to_owned()],
+            true,
+        )
+        .unwrap()
+        .expect("a delta");
+        assert_eq!(delta.deleted, ["b.txt"]);
+        assert_eq!(delta.patch_id, cumulative);
+        let identities =
+            patch_identities(&dir, Window::DEFAULT, &format!("{first}..{third}")).unwrap();
+        assert_eq!(identities.len(), 2);
+        assert!(identities.contains(cumulative.as_deref().unwrap()));
+        let landed = landing(&dir, "refs/remotes/origin/main", "HEAD", Window::DEFAULT).unwrap();
+        assert!(!landed.is_landed());
+        assert_eq!(landed.unlanded(), [third.as_str()]);
+        assert!(!landed.scanned.target_truncated && !landed.scanned.head_truncated);
+        let narrow = landing(
+            &dir,
+            "refs/remotes/origin/main",
+            "HEAD",
+            Window::of(NonZeroUsize::MIN),
+        )
+        .unwrap();
+        assert!(narrow.scanned.target_truncated && narrow.scanned.head_truncated);
+        assert_eq!(
+            landed.cumulative.as_ref().map(PatchId::as_str),
+            cumulative.as_deref()
+        );
+        assert_eq!(
+            landed.cumulative.as_ref().map(ToString::to_string),
+            cumulative
+        );
+        assert!(
+            landing(&dir, "HEAD", "HEAD", Window::DEFAULT)
+                .unwrap()
+                .is_landed()
+        );
+    }
+
+    /// Fails by: a remembered identity never served, so every Stop recomputes
+    /// the target's whole window (CLOUD-1480) — or a remembered "changes
+    /// nothing" read back as an identity.
+    #[test]
+    fn a_remembered_identity_is_served_in_place_of_a_recomputation() {
+        let (dir, [first, second, third]) = history("identity-memo");
+        crate::testing::contain_state(&dir.join(".git").join("batten-state"));
+        let range = format!("{first}..{third}");
+        let computed = patch_identities(&dir, Window::DEFAULT, &range).unwrap();
+        assert_eq!(computed.len(), 2);
+        let mut memo = IdentityMemo::load(&dir);
+        assert_eq!(memo.known.len(), 2, "both commits were remembered");
+        let forged = "0".repeat(64);
+        memo.known.insert(third, Some(forged.clone()));
+        memo.known.insert(second, None);
+        memo.grown = true;
+        memo.save();
+        let served = patch_identities(&dir, Window::DEFAULT, &range).unwrap();
+        assert_eq!(served, BTreeSet::from([forged]));
+    }
+
+    /// Fails by: a malformed remembered identity served, so `landing` raises
+    /// on a cache line where a recomputation was owed.
+    #[test]
+    fn a_malformed_remembered_identity_is_recomputed() {
+        let (dir, [first, _, third]) = history("identity-memo-malformed");
+        crate::testing::contain_state(&dir.join(".git").join("batten-state"));
+        let range = format!("{first}..{third}");
+        let computed = patch_identities(&dir, Window::DEFAULT, &range).unwrap();
+        let mut memo = IdentityMemo::load(&dir);
+        memo.known.insert(third, Some("not-an-identity".to_owned()));
+        memo.grown = true;
+        memo.save();
+        let index =
+            patch_id_index(&dir, &mut IdentityMemo::load(&dir), Window::DEFAULT, &range).unwrap();
+        let served: BTreeSet<String> = index.keys().map(|id| id.as_str().to_owned()).collect();
+        assert_eq!(served, computed);
+    }
+
+    /// Fails by: a replay's narrow range pruning a full memo to that range, so
+    /// the next Stop recomputes the target's whole window (CLOUD-1480).
+    #[test]
+    fn a_narrow_range_never_prunes_a_full_memo() {
+        let (dir, [first, _, third]) = history("identity-memo-narrow");
+        crate::testing::contain_state(&dir.join(".git").join("batten-state"));
+        let mut memo = IdentityMemo::load(&dir);
+        memo.known = (0..=IDENTITY_MEMO_BOUND)
+            .map(|n| (format!("{n:040x}"), None))
+            .collect();
+        memo.grown = true;
+        memo.save_unpruned();
+        patch_identities(&dir, Window::DEFAULT, &format!("{first}..{third}")).unwrap();
+        assert!(IdentityMemo::load(&dir).known.len() > IDENTITY_MEMO_BOUND);
+    }
+
+    /// Fails by: the memo pruned at its bound rather than past it, or never
+    /// pruned, so it grows with every commit any window ever named.
+    #[test]
+    fn a_memo_past_its_bound_keeps_only_what_was_asked() {
+        let (dir, _) = history("identity-memo-bound");
+        crate::testing::contain_state(&dir.join(".git").join("batten-state"));
+        let fill = |count: usize| {
+            let mut memo = IdentityMemo::load(&dir);
+            memo.known = (0..count).map(|n| (format!("{n:040x}"), None)).collect();
+            memo.asked.insert(format!("{:040x}", 0));
+            memo.grown = true;
+            memo.save();
+            IdentityMemo::load(&dir).known.len()
+        };
+        assert_eq!(fill(IDENTITY_MEMO_BOUND), IDENTITY_MEMO_BOUND);
+        assert_eq!(fill(IDENTITY_MEMO_BOUND + 1), 1);
+    }
+
+    /// Fails by: a remote whose url or name is blank listed as though it named
+    /// one.
+    #[test]
+    fn a_remote_with_a_blank_url_is_not_listed() {
+        let (dir, _) = history("blank-remote");
+        set_config_local(&dir, "remote.blank.url", "").expect("write a blank url");
+        // And a remote with no name at all, which no config key can spell.
+        let mut config = crate::fsio::read_to_string(dir.join(".git/config")).expect("config");
+        config.push_str("[remote \"\"]\n\turl = https://example.invalid/unnamed.git\n");
+        fs::write(dir.join(".git/config"), config).expect("config");
+        assert_eq!(
+            remotes(&dir).unwrap(),
+            [(
+                "origin".to_owned(),
+                "https://example.invalid/r.git".to_owned()
+            )]
+        );
+    }
+
+    /// Fails by: a materialised tree missing a file, holding a deleted one, or
+    /// carrying other bytes than the rev's blobs.
+    #[test]
+    fn a_materialised_rev_holds_exactly_its_tree() {
+        let (dir, [first, ..]) = history("materialize");
+        let dest = scratch("materialize-dest");
+        materialize_rev(&dir, &first, &dest).expect("materialise");
+        assert_eq!(
+            crate::fsio::read_to_string(dest.join("a.txt")).unwrap(),
+            "one\n"
+        );
+        assert_eq!(
+            crate::fsio::read_to_string(dest.join("b.txt")).unwrap(),
+            "b\n"
+        );
+        assert!(!dest.join("c.txt").exists());
+    }
+
+    /// Fails by: a present linked worktree missing from the list, or one whose
+    /// directory is gone listed.
+    #[test]
+    fn only_a_present_linked_worktree_is_listed() {
+        let (dir, _) = history("linked-worktrees");
+        let present = scratch("linked-worktrees-present");
+        let gone = scratch("linked-worktrees-gone").join("never-made");
+        for (id, base) in [("present", &present), ("gone", &gone)] {
+            let admin = dir.join(".git/worktrees").join(id);
+            fs::create_dir_all(&admin).unwrap();
+            fs::write(
+                admin.join("gitdir"),
+                format!("{}\n", base.join(".git").display()),
+            )
+            .unwrap();
+            fs::write(admin.join("commondir"), "../..\n").unwrap();
+            fs::write(admin.join("HEAD"), "ref: refs/heads/main\n").unwrap();
+        }
+        fs::write(
+            present.join(".git"),
+            format!("gitdir: {}\n", dir.join(".git/worktrees/present").display()),
+        )
+        .unwrap();
+        let listed = linked_worktree_dirs(&dir);
+        assert_eq!(listed.len(), 1, "{listed:?}");
+        assert_same_dir(&listed[0], &present);
+    }
+
+    /// Fails by: a signature header of either name missed, or another header
+    /// read as one.
+    #[test]
+    fn either_signature_header_signs_a_commit_and_nothing_else_does() {
+        let (dir, [first, ..]) = history("signed");
+        let repo = gix::open(&dir).expect("open");
+        let parent = gix::ObjectId::from_hex(first.as_bytes()).expect("an id");
+        let tree = repo
+            .find_commit(parent)
+            .expect("the parent")
+            .tree_id()
+            .expect("its tree")
+            .detach();
+        let who = gix::actor::Signature {
+            name: "S".into(),
+            email: "s@x".into(),
+            time: utc_at(1_700_000_000),
+        };
+        let signed = |header: &str| {
+            let id = repo
+                .write_object(gix::objs::Commit {
+                    tree,
+                    parents: std::iter::once(parent).collect(),
+                    author: who.clone(),
+                    committer: who.clone(),
+                    encoding: None,
+                    message: "m\n".into(),
+                    extra_headers: vec![(header.into(), "value".into())],
+                })
+                .expect("a commit")
+                .to_string();
+            commit_meta(&repo, &id).expect("its meta").signed
+        };
+        assert!(signed("gpgsig"));
+        assert!(signed("gpgsig-sha256"));
+        assert!(!signed("mergetag"));
+    }
+
+    /// Fails by: a clean entry reported, a flipped executable bit or a file
+    /// turned symlink missed, an assume-valid entry compared, or the mode
+    /// counted when `core.filemode` says it does not. Off unix there is no
+    /// executable bit and no symlink, so the expected divergence is what the
+    /// platform can make.
+    #[test]
+    fn an_entry_diverges_on_content_type_and_mode_alone() {
+        let dir = scratch("entry-diverges");
+        crate::gitwrite::init_on_main(&dir).expect("init");
+        let files = [
+            ("clean.txt", "clean\n"),
+            ("dirty.txt", "dirty\n"),
+            ("link.txt", "clean.txt"),
+            ("plain.sh", "plain\n"),
+            ("run.sh", "run\n"),
+        ];
+        for (path, text) in files {
+            fs::write(dir.join(path), text).unwrap();
+        }
+        let tracked: Vec<String> = files.iter().map(|(path, _)| (*path).to_owned()).collect();
+        crate::gitwrite::commit_paths(&dir, &tracked, "m\n").expect("commit");
+        // `dirty.txt` is edited under assume-valid, so it is never compared.
+        let repo = gix::open(&dir).expect("open");
+        let mut index = repo.open_index().expect("the index");
+        for (entry, path) in index.entries_mut_with_paths() {
+            if path == "dirty.txt" {
+                entry.flags |= gix::index::entry::Flags::ASSUME_VALID;
+            }
+        }
+        index
+            .write(gix::index::write::Options::default())
+            .expect("write the index");
+        fs::write(dir.join("dirty.txt"), "edited\n").unwrap();
+        // `link.txt` becomes a symlink whose target spells the blob it was.
+        fs::remove_file(dir.join("link.txt")).unwrap();
+        // Off unix this is git's `core.symlinks=false` file, the same bytes.
+        crate::gitwrite::link("clean.txt", &dir.join("link.txt")).unwrap();
+        // `run.sh` was committed plain; its bit flips on where there is one.
+        crate::durable::make_executable(&dir.join("run.sh")).unwrap();
+        let diverged = |dir: &Path| {
+            index_facts(dir, &["*".to_owned()]).unwrap()["*"]
+                .diverged
+                .clone()
+        };
+        // Off unix neither a symlink nor an executable bit exists to diverge.
+        let (both, link): (&[&str], &[&str]) = if cfg!(unix) {
+            (&["link.txt", "run.sh"], &["link.txt"])
+        } else {
+            (&[], &[])
+        };
+        assert_eq!(diverged(&dir), both);
+        set_config_local(&dir, "core.filemode", "false").unwrap();
+        assert_eq!(diverged(&dir), link);
+    }
+
+    /// Fails by: a repository-level read answering other than the fixture's
+    /// remote, branch, refs, directories, ignore rules, shallowness or worktree.
+    #[test]
+    fn the_repository_reads_name_its_own_state() {
+        let (dir, [_, _, third]) = history("repository-reads");
+        assert_eq!(
+            remotes(&dir).unwrap(),
+            [(
+                "origin".to_owned(),
+                "https://example.invalid/r.git".to_owned()
+            )]
+        );
+        assert_eq!(
+            remote_default_branch(&dir).unwrap().as_deref(),
+            Some("refs/remotes/origin/main")
+        );
+        assert_eq!(current_branch(&dir).unwrap().as_deref(), Some("main"));
+        assert_eq!(record_key(&dir).unwrap(), "main");
+        assert_eq!(
+            refs(&dir).unwrap(),
+            [
+                "refs/heads/main",
+                "refs/remotes/origin/HEAD",
+                "refs/remotes/origin/main"
+            ]
+        );
+        assert_eq!(head_on_a_remote(&dir), Some(false));
+        assert_eq!(
+            unpushed_in_range(&dir, "refs/remotes/origin/main").unwrap(),
+            [third[..12].to_owned()]
+        );
+        assert_same_dir(&git_dir(&dir).unwrap(), &dir.join(".git"));
+        assert_same_dir(&PathBuf::from(common_dir(&dir).unwrap()), &dir.join(".git"));
+        assert_same_dir(&worktree_root(&dir).unwrap(), &dir);
+        assert_eq!(
+            blob_id("x").as_deref(),
+            Some("c1b0730e0133447badcfd47fd144e254807b06e1")
+        );
+        assert_eq!(tagger_of(&dir, "v1").unwrap(), Tagger::Lightweight);
+        assert_eq!(
+            tracked_paths(&dir).unwrap(),
+            BTreeSet::from(["a.txt".to_owned(), "c.txt".to_owned()])
+        );
+        assert_eq!(uncommitted(&dir).unwrap(), 0);
+        fs::write(dir.join("a.txt"), "dirty\n").unwrap();
+        assert_eq!(uncommitted(&dir).unwrap(), 1);
+        assert_eq!(
+            changed_paths(&dir).unwrap(),
+            BTreeSet::from(["a.txt".to_owned()])
+        );
+        fs::write(dir.join(".gitignore"), "*.log\n").unwrap();
+        assert!(check_ignore(&dir, "x.log").unwrap());
+        assert!(!check_ignore(&dir, "a.txt").unwrap());
+        assert!(!is_shallow(&dir).unwrap());
+        fs::write(dir.join(".git/shallow"), format!("{third}\n")).unwrap();
+        assert!(is_shallow(&dir).unwrap());
+    }
+
+    /// Fails by: a declared fact resolving other than git does over the
+    /// fixture, an undeclared or unresolvable declaration present, or a family
+    /// answering nothing.
+    #[test]
+    fn each_declared_fact_family_resolves_what_its_rows_name() {
+        let (dir, [first, second, third]) = history("fact-families");
+        assert_eq!(
+            ref_facts(&dir, &names(&["HEAD", "refs/tags/v1", "refs/tags/nope"])).unwrap(),
+            BTreeMap::from([
+                ("HEAD".to_owned(), third.clone()),
+                ("refs/tags/v1".to_owned(), first.clone()),
+            ])
+        );
+        let ranges = range_facts(
+            &dir,
+            &names(&["v1..HEAD", "nope..HEAD", "v1..nope", "bare"]),
+        )
+        .unwrap();
+        let subjects: Vec<(&str, &str)> = ranges["v1..HEAD"]
+            .iter()
+            .map(|commit| (commit.commit.as_str(), commit.subject.as_str()))
+            .collect();
+        assert_eq!(
+            ranges.len(),
+            1,
+            "an unresolvable or malformed range is absent"
+        );
+        assert_eq!(
+            subjects,
+            [(third.as_str(), "third"), (second.as_str(), "second")]
+        );
+        let metadata = metadata_facts(&dir, &names(&["v1..HEAD", "v1..nope"])).unwrap();
+        assert_eq!(metadata.len(), 1);
+        let latest = &metadata["v1..HEAD"][0];
+        assert_eq!(
+            (
+                latest.commit.as_str(),
+                latest.subject.as_str(),
+                latest.signed
+            ),
+            (third.as_str(), "third", false)
+        );
+        assert_eq!(latest.paths, ["b.txt"]);
+        assert_eq!(latest.trailers, ["Trailer: x"]);
+        assert_eq!(latest.author, "batten <batten@localhost>");
+        assert_eq!(metadata["v1..HEAD"][1].paths, ["a.txt", "c.txt"]);
+        assert_eq!(
+            staged_facts(&dir, &names(&["a.txt", "b.txt"])).unwrap(),
+            BTreeMap::from([("a.txt".to_owned(), "two\n".to_owned())])
+        );
+        let query = |id: &str, tags: Option<&str>, path: Option<&str>, filter: Option<&str>| {
+            crate::facts::HistoryQuery {
+                id: id.to_owned(),
+                tags: tags.map(str::to_owned),
+                path: path.map(str::to_owned),
+                filter: filter.map(str::to_owned),
+            }
+        };
+        let history = history_facts(
+            &dir,
+            &[
+                query("tags", Some("v*"), None, None),
+                query("deleted", None, Some("b.txt"), Some("D")),
+                query("added", None, Some("c.txt"), Some("A")),
+            ],
+        )
+        .unwrap();
+        let commits = |id: &str| -> Vec<(String, Option<String>)> {
+            history[id]
+                .iter()
+                .map(|commit| (commit.commit.clone(), commit.tag.clone()))
+                .collect()
+        };
+        assert_eq!(
+            commits("tags"),
+            [
+                (first.clone(), Some("v1".to_owned())),
+                (third.clone(), Some("v2".to_owned()))
+            ]
+        );
+        assert_eq!(commits("deleted"), [(third.clone(), None)]);
+        assert_eq!(commits("added"), [(second.clone(), None)]);
+        let landed = landing_facts(
+            &dir,
+            &names(&["refs/remotes/origin/main", "refs/tags/nope"]),
+        )
+        .unwrap();
+        assert_eq!(landed.len(), 1);
+        assert_eq!(
+            landed["refs/remotes/origin/main"].unlanded,
+            std::slice::from_ref(&third)
+        );
+        assert!(!landed["refs/remotes/origin/main"].is_landed());
+    }
+
+    /// Fails by: the tag, config or index family answering other than git
+    /// over the fixture, or an undeclared key present.
+    #[test]
+    fn the_tag_config_and_index_families_resolve_what_their_rows_name() {
+        let (dir, [first, _, third]) = history("fact-families-tree");
+        let tags = tag_facts(&dir, &names(&["v*"])).unwrap();
+        let cut: Vec<(&str, &str, bool)> = tags["v*"]
+            .iter()
+            .map(|tag| (tag.tag.as_str(), tag.commit.as_str(), tag.annotated))
+            .collect();
+        assert_eq!(
+            cut,
+            [("v1", first.as_str(), false), ("v2", third.as_str(), false)]
+        );
+        assert_eq!(
+            tags["v*"][0].created.as_deref(),
+            Some(tags["v*"][0].committed.as_str())
+        );
+        let config = config_facts(&dir, &names(&["remote.origin.url", "nope.key"])).unwrap();
+        let url = &config["remote.origin.url"];
+        assert_eq!(
+            url.effective
+                .as_ref()
+                .and_then(|value| value.value.as_deref()),
+            Some("https://example.invalid/r.git")
+        );
+        assert_eq!(
+            url.scopes.keys().map(String::as_str).collect::<Vec<_>>(),
+            ["local"]
+        );
+        assert_eq!(config["nope.key"].effective, None);
+        fs::write(dir.join("a.txt"), "dirty\n").unwrap();
+        fs::remove_file(dir.join("c.txt")).unwrap();
+        fs::write(dir.join("new.txt"), "new\n").unwrap();
+        let index = index_facts(&dir, &names(&["*.txt", "a.txt"])).unwrap();
+        let paths = |fact: &IndexFact| -> Vec<String> {
+            fact.entries
+                .iter()
+                .map(|entry| entry.path.clone())
+                .collect()
+        };
+        assert_eq!(paths(&index["*.txt"]), ["a.txt", "c.txt"]);
+        assert_eq!(index["*.txt"].entries[0].mode, "100644");
+        assert_eq!(index["*.txt"].diverged, ["a.txt", "c.txt"]);
+        assert_eq!(index["*.txt"].untracked, ["new.txt"]);
+        assert_eq!(paths(&index["a.txt"]), ["a.txt"]);
+        assert!(index["a.txt"].untracked.is_empty());
+    }
+
+    /// Fails by: a staged change missed, an untracked file reported as staged
+    /// or missed as uncommitted, or a staged question answered with the
+    /// working tree's.
+    #[test]
+    fn staged_and_uncommitted_work_are_told_apart() {
+        let (dir, [first, ..]) = history("staged");
+        // The index stays at the third commit's tree while HEAD moves back to
+        // the first, so `a.txt` (rewritten) and `c.txt` (added) are staged.
+        fixture_ref(&dir, "refs/heads/main", &first);
+        fs::write(dir.join("u.txt"), "untracked\n").unwrap();
+        let set = |items: &[&str]| {
+            items
+                .iter()
+                .map(|item| (*item).to_owned())
+                .collect::<BTreeSet<String>>()
+        };
+        assert_eq!(staged_paths(&dir).unwrap(), set(&["a.txt", "c.txt"]));
+        assert_eq!(
+            changed_paths(&dir).unwrap(),
+            set(&["a.txt", "c.txt", "u.txt"])
+        );
+        assert_eq!(uncommitted(&dir).unwrap(), 3);
+    }
+
+    /// Fails by: a directory's listing answering other than its entries, or a
+    /// file, an absent path or a non-directory root listed rather than refused.
+    #[test]
+    fn a_tree_lists_a_directory_and_refuses_anything_else() {
+        let dir = scratch("list-tree");
+        crate::gitwrite::init_on_main(&dir).expect("init");
+        fs::create_dir_all(dir.join("d")).unwrap();
+        fs::write(dir.join("d/e.txt"), "e\n").unwrap();
+        fs::write(dir.join("top.txt"), "t\n").unwrap();
+        crate::gitwrite::commit_paths(&dir, &["d/e.txt".to_owned(), "top.txt".to_owned()], "tree")
+            .expect("commit");
+        let listed = list_tree(&dir, "HEAD", "d").unwrap();
+        assert!(listed.iter().any(|path| path == "d/e.txt"), "{listed:?}");
+        assert!(
+            listed.iter().all(|path| path.starts_with("d/")),
+            "{listed:?}"
+        );
+        assert!(
+            list_tree(&dir, "HEAD", "top.txt").is_err(),
+            "a file is not a directory"
+        );
+        assert!(list_tree(&dir, "HEAD", "absent").is_err());
+        assert!(list_tree(&dir.join("top.txt"), "HEAD", "d").is_err());
+    }
+
+    /// Fails by: a pending message's trailers misread, or the identity git
+    /// would stamp read from the wrong role or not at all.
+    #[test]
+    fn a_pending_commit_reads_its_trailers_and_each_roles_identity() {
+        let (dir, _) = history("pending");
+        let message = dir.join("MESSAGE");
+        fs::write(&message, "subject\n\nA body.\n\nSigned-off-by: a <b@c>\n").unwrap();
+        assert_eq!(
+            message_trailers(&dir, &message).unwrap(),
+            ["Signed-off-by: a <b@c>"]
+        );
+        set_config_local(&dir, "user.name", "U").unwrap();
+        set_config_local(&dir, "user.email", "u@x").unwrap();
+        set_config_local(&dir, "committer.name", "C").unwrap();
+        // The `GIT_*` identity variables outrank config, as they do for git,
+        // so a runner that exports them (perf.yml does) is expected to win.
+        let spelled = |name: &str, email: &str, role: &str| {
+            let var = |field: &str, default: &str| {
+                std::env::var(format!("GIT_{role}_{field}")).unwrap_or_else(|_| default.to_owned())
+            };
+            format!("{} <{}>", var("NAME", name), var("EMAIL", email))
+        };
+        assert_eq!(
+            stamped_identity(&dir, "GIT_AUTHOR_IDENT").unwrap(),
+            spelled("U", "u@x", "AUTHOR")
+        );
+        assert_eq!(
+            stamped_identity(&dir, "GIT_COMMITTER_IDENT").unwrap(),
+            spelled("C", "u@x", "COMMITTER")
+        );
+        assert!(stamped_identity(&dir, "GIT_OTHER_IDENT").is_err());
+    }
+
+    /// The note `name` carries for `commit`, read back through gix.
+    fn note(dir: &Path, name: &str, commit: &str) -> Option<String> {
+        let repo = gix::open(dir).ok()?;
+        let mut found = repo
+            .find_reference(format!("refs/notes/{name}").as_str())
+            .ok()?;
+        let tree = repo
+            .find_commit(found.peel_to_id().ok()?.detach())
+            .ok()?
+            .tree()
+            .ok()?;
+        let entry = tree.lookup_entry_by_path(commit).ok()??;
+        let blob = repo.find_object(entry.object_id()).ok()?;
+        Some(String::from_utf8_lossy(&blob.data).into_owned())
+    }
+
+    /// Fails by: a note replaced rather than appended to, its lines run
+    /// together, another commit's note dropped, or a name that is not an id
+    /// written under.
+    #[test]
+    fn a_note_appends_and_keeps_every_other_commits() {
+        let (dir, [first, second, _]) = history("notes");
+        append_note(&dir, "perf", &first, "one").unwrap();
+        append_note(&dir, "perf", &first, "two\n").unwrap();
+        append_note(&dir, "perf", &second, "other").unwrap();
+        assert_eq!(note(&dir, "perf", &first).as_deref(), Some("one\ntwo\n"));
+        assert_eq!(note(&dir, "perf", &second).as_deref(), Some("other\n"));
+        assert!(append_note(&dir, "perf", "main", "x").is_err());
+    }
+
+    /// Fails by: a push sending an object the base already carries, missing one
+    /// it does not, or sending any object twice.
+    #[test]
+    fn a_push_sends_exactly_what_the_base_lacks() {
+        let (dir, [_, second, third]) = history("objects-to-send");
+        let kinds = |objects: &[RawObject]| {
+            let count = |kind| objects.iter().filter(|object| object.kind == kind).count();
+            (
+                count(gix::object::Kind::Commit),
+                count(gix::object::Kind::Tree),
+                count(gix::object::Kind::Blob),
+            )
+        };
+        let onto_second = objects_to_send(&dir, Some(&second), "HEAD").unwrap();
+        assert_eq!(
+            kinds(&onto_second),
+            (1, 1, 0),
+            "the third commit and its new tree"
+        );
+        assert_eq!(onto_second[0].id, third);
+        let everything = objects_to_send(&dir, None, "HEAD").unwrap();
+        assert_eq!(
+            kinds(&everything),
+            (3, 3, 4),
+            "every commit, tree and blob, once"
+        );
+    }
+
+    /// Fails by: a selected path classified as added, edited or deleted when it
+    /// was not, an unselected one classified at all, a comment-only edit or a
+    /// prose deletion read as a code change, or an edit's base lines not kept.
+    #[test]
+    fn a_base_delta_classifies_each_selected_path() {
+        let dir = scratch("base-delta");
+        crate::gitwrite::init_on_main(&dir).expect("init");
+        for (path, text) in [
+            ("x.sh", "# c1\necho\n"),
+            ("y.md", "prose\n"),
+            ("u.txt", "same\n"),
+        ] {
+            fs::write(dir.join(path), text).unwrap();
+        }
+        let base = ["x.sh", "y.md", "u.txt"].map(str::to_owned);
+        crate::gitwrite::commit_paths(&dir, &base, "base").expect("commit");
+        fs::write(dir.join("x.sh"), "# c2\necho\n").unwrap();
+        fs::remove_file(dir.join("y.md")).unwrap();
+        fs::write(dir.join("z.txt"), "new\n").unwrap();
+        fs::write(dir.join("other.rs"), "fn f() {}\n").unwrap();
+        let globs = ["*.sh", "*.md", "*.txt"].map(str::to_owned);
+        let delta = base_delta(&dir, "HEAD", &globs, false)
+            .unwrap()
+            .expect("a delta");
+        assert_eq!(delta.added, ["z.txt"]);
+        assert_eq!(delta.edited, ["x.sh"]);
+        assert_eq!(delta.deleted, ["y.md"]);
+        assert_eq!(delta.code_changed, ["z.txt"]);
+        assert_eq!(
+            delta.base_lines,
+            BTreeMap::from([(
+                "x.sh".to_owned(),
+                vec!["# c1".to_owned(), "echo".to_owned()]
+            )])
+        );
+        assert_eq!(delta.patch_id, None, "not asked for");
+        assert!(delta.base_date.is_some());
+        assert!(base_delta(&dir, "nope", &globs, false).unwrap().is_none());
+    }
+
+    /// Fails by: a move left unpaired, a copy or a merge paired as a move, or a
+    /// file added beside moved ones not traced to the directory they came from.
+    #[test]
+    fn a_move_pairs_one_to_one_and_an_added_neighbour_follows_its_directory() {
+        let own = |paths: &[&str]| paths.iter().map(|p| (*p).to_owned()).collect::<Vec<_>>();
+        let deleted = own(&[
+            "crates/a/src/x.rs",
+            "crates/a/src/split.rs",
+            "crates/a/src/m1.rs",
+        ]);
+        let added = own(&[
+            "crates/b/src/x.rs",
+            "crates/b/src/split.rs",
+            "crates/c/src/split.rs",
+            "crates/b/src/new.rs",
+        ]);
+        let moves = pair_moves(&deleted, &added);
+        assert_eq!(
+            moves,
+            BTreeMap::from([(
+                "crates/a/src/x.rs".to_owned(),
+                "crates/b/src/x.rs".to_owned()
+            )])
+        );
+        assert_eq!(unmoved("crates/b/src/x.rs", &moves), "crates/a/src/x.rs");
+        assert_eq!(
+            unmoved("crates/b/src/new.rs", &moves),
+            "crates/a/src/new.rs"
+        );
+        assert_eq!(
+            unmoved("crates/c/src/split.rs", &moves),
+            "crates/c/src/split.rs"
+        );
+        assert_eq!(unmoved("README.md", &moves), "README.md");
+    }
+
+    /// Fails by: a file moved between crates read as born whole (no base
+    /// lines), or a deletion two new files could explain paired with one.
+    #[test]
+    fn a_moved_file_carries_its_base_lines_under_its_new_path() {
+        let dir = scratch("base-delta-moved");
+        crate::gitwrite::init_on_main(&dir).expect("init");
+        for path in ["a/src/x.rs", "a/src/twice.rs"] {
+            fs::create_dir_all(dir.join(path).parent().unwrap()).unwrap();
+            fs::write(dir.join(path), "#[cfg(unix)]\n#[test]\nfn t() {}\n").unwrap();
+        }
+        let base = ["a/src/x.rs", "a/src/twice.rs"].map(str::to_owned);
+        crate::gitwrite::commit_paths(&dir, &base, "base").expect("commit");
+        for path in ["a/src/x.rs", "a/src/twice.rs"] {
+            fs::remove_file(dir.join(path)).unwrap();
+        }
+        for path in ["b/src/x.rs", "b/src/twice.rs", "c/src/twice.rs"] {
+            fs::create_dir_all(dir.join(path).parent().unwrap()).unwrap();
+            fs::write(dir.join(path), "#[cfg(unix)]\n#[test]\nfn t() {}\n").unwrap();
+        }
+        let delta = base_delta(&dir, "HEAD", &["**/*.rs".to_owned()], false)
+            .unwrap()
+            .expect("a delta");
+        assert_eq!(
+            delta.base_lines.get("b/src/x.rs").map(Vec::len),
+            Some(3),
+            "the one new home of a deleted file carries its base lines"
+        );
+        assert!(!delta.base_lines.contains_key("b/src/twice.rs"));
+        assert!(!delta.base_lines.contains_key("c/src/twice.rs"));
+        assert_eq!(
+            below_src("crates/batten/src/forge/mod.rs"),
+            Some("forge/mod.rs")
+        );
+        assert_eq!(below_src("README.md"), None);
+    }
+
+    /// Fails by: a repository with no `origin` asked about `origin` rather than
+    /// its own remote.
+    #[test]
+    fn the_default_branch_is_read_off_the_one_remote_there_is() {
+        let dir = scratch("upstream-only");
+        crate::gitwrite::init_on_main(&dir).expect("init");
+        set_config_local(&dir, "remote.upstream.url", "https://example.invalid/u.git").unwrap();
+        fs::create_dir_all(dir.join(".git/refs/remotes/upstream")).unwrap();
+        fs::write(
+            dir.join(".git/refs/remotes/upstream/HEAD"),
+            "ref: refs/remotes/upstream/main\n",
+        )
+        .unwrap();
+        assert_eq!(
+            remote_default_branch(&dir).unwrap().as_deref(),
+            Some("refs/remotes/upstream/main")
+        );
+    }
+
+    /// Fails by: an annotated tag read as lightweight, its tagger or its cut
+    /// time lost, or a tag object with no tagger read as signed.
+    #[test]
+    fn an_annotated_tag_carries_its_tagger_and_when_it_was_cut() {
+        let (dir, [first, ..]) = history("annotated");
+        let repo = gix::open(&dir).expect("open");
+        let tag = |name: &str, tagger: Option<gix::actor::Signature>| {
+            let id = repo
+                .write_object(gix::objs::Tag {
+                    target: gix::ObjectId::from_hex(first.as_bytes()).expect("an id"),
+                    target_kind: gix::object::Kind::Commit,
+                    name: name.into(),
+                    tagger,
+                    message: "cut\n".into(),
+                    signature: None,
+                })
+                .expect("a tag object")
+                .detach();
+            fixture_ref(&dir, &format!("refs/tags/{name}"), &id.to_string());
+        };
+        tag(
+            "v3",
+            Some(gix::actor::Signature {
+                name: "batten".into(),
+                email: "batten@localhost".into(),
+                time: gix::date::Time {
+                    seconds: 1_700_000_000,
+                    offset: 0,
+                },
+            }),
+        );
+        tag("v4", None);
+        assert_eq!(
+            tagger_of(&dir, "v3").unwrap(),
+            Tagger::Signed("batten <batten@localhost>".to_owned())
+        );
+        assert_eq!(tagger_of(&dir, "v4").unwrap(), Tagger::Unsigned);
+        let facts = tag_facts(&dir, &["v3".to_owned()]).unwrap();
+        let cut = &facts["v3"][0];
+        assert_eq!(
+            (cut.commit.as_str(), cut.annotated, cut.created.as_deref()),
+            (first.as_str(), true, Some("2023-11-14T22:13:20Z"))
+        );
+    }
+
+    /// Fails by: a branch's configured upstream not read, or a `HEAD` a remote
+    /// already carries read as held only here.
+    #[test]
+    fn a_tracked_head_on_its_remote_is_pushed() {
+        let (dir, [.., third]) = history("tracked");
+        for (key, value) in [
+            ("remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*"),
+            ("branch.main.remote", "origin"),
+            ("branch.main.merge", "refs/heads/main"),
+        ] {
+            set_config_local(&dir, key, value).unwrap();
+        }
+        assert_eq!(
+            upstream_of_head(&dir).unwrap().as_deref(),
+            Some("refs/remotes/origin/main")
+        );
+        fixture_ref(&dir, "refs/remotes/origin/main", &third);
+        assert_eq!(head_on_a_remote(&dir), Some(true));
+        assert!(unpushed_in_range(&dir, &third).unwrap().is_empty());
+    }
+
+    /// Commit a merge of `parents` on `HEAD`, carrying the first parent's tree.
+    fn merge(dir: &Path, parents: [&str; 2]) -> String {
+        let repo = gix::open(dir).expect("open");
+        let id = |hex: &str| gix::ObjectId::from_hex(hex.as_bytes()).expect("an id");
+        let tree = repo
+            .find_commit(id(parents[0]))
+            .expect("the first parent")
+            .tree_id()
+            .expect("its tree")
+            .detach();
+        let signature = gix::actor::Signature {
+            name: "batten".into(),
+            email: "batten@localhost".into(),
+            time: gix::date::Time::now_utc(),
+        };
+        let (mut author, mut committer) = (
+            gix::date::parse::TimeBuf::default(),
+            gix::date::parse::TimeBuf::default(),
+        );
+        repo.commit_as(
+            signature.to_ref(&mut committer),
+            signature.to_ref(&mut author),
+            "HEAD",
+            "merge\n",
+            tree,
+            parents.map(id),
+        )
+        .expect("the merge")
+        .to_string()
+    }
+
+    /// Fails by: a merge commit counted as a commit of the range, which has no
+    /// patch of its own, or a walk running past its window.
+    #[test]
+    fn a_range_skips_its_merges_and_a_walk_stops_at_its_window() {
+        let (dir, [first, second, third]) = history("merges");
+        let merged = merge(&dir, [&third, &second]);
+        let sorted = |mut commits: Vec<String>| {
+            commits.sort();
+            commits
+        };
+        let expected = sorted(vec![second.clone(), third.clone()]);
+        assert_eq!(
+            sorted(commits_in_range(&dir, &first, &merged).unwrap()),
+            expected
+        );
+        let range = format!("{first}..{merged}");
+        assert_eq!(
+            sorted(rev_list(&dir, Window::DEFAULT, &range).unwrap()),
+            expected
+        );
+        let one = Window::of(NonZeroUsize::MIN);
+        assert_eq!(rev_list(&dir, one, &range).unwrap().len(), 1);
+        let subjects = subjects_in_range(&dir, &first, &merged).unwrap();
+        assert_eq!(
+            sorted(subjects.into_iter().map(|subject| subject.commit).collect()),
+            expected
+        );
+        let writes = writes_in_range(&dir, &first, &merged, &["*.txt".to_owned()]).unwrap();
+        assert_eq!(
+            sorted(writes.into_iter().map(|write| write.commit).collect()),
+            expected
+        );
+    }
+
+    /// Fails by: markdown read as anything but prose, which would make every
+    /// prose edit to it a code change.
+    #[test]
+    fn markdown_has_no_code_remainder() {
+        assert_eq!(without_comments("README.md", "# A heading\nprose\n"), "");
+    }
+
+    /// And a genuinely unknown extension still takes the admitting direction.
+    ///
+    /// The paired half of the case above: widening the table must not turn the
+    /// fall-through into a guess. An extension nobody has classified has no
+    /// comments, so its whole content is the remainder and any change to it is a
+    /// code change — which ADMITS the branch rather than blocking it, and only
+    /// blocking is unrecoverable by waiting.
+    ///
+    /// Fails by: making the fall-through strip `#`, which would read a `.conf`
+    /// or `.ini` prose change as prose-only on a guess.
+    #[test]
+    fn an_unclassified_extension_still_reads_as_code() {
+        assert_eq!(
+            without_comments("thing.conf", "# a comment\nreal = 1\n"),
+            "# a comment\nreal = 1\n",
+            "an unrecognised extension has no comments, so the remainder is the \
+             whole file and the gate admits rather than blocks"
+        );
+    }
+
+    /// THE WINDOWS REGRESSION, TESTED AS A DECISION RATHER THAN A CONDITION.
+    ///
+    /// The failing condition — `canonicalize` returning a verbatim path — is one
+    /// this sandbox structurally cannot produce, so asserting over a real
+    /// `repo_root` here would assert its own premise and pass for the wrong
+    /// reason (`rules/rust.md`, CLOUD-249). The decision is `plain`, and
+    /// it takes a literal, so it is testable on every platform.
+    ///
+    /// Fails by: making `plain` the identity, which is what the tree carried when
+    /// CI went red on Windows and green on the other three.
+    #[test]
+    fn a_canonicalised_root_is_comparable_with_an_absolute_path() {
+        assert_eq!(
+            plain(PathBuf::from(r"\\?\D:\a\batten\batten")),
+            PathBuf::from(r"D:\a\batten\batten"),
+            "a verbatim root never shares a prefix with `std::path::absolute`, \
+             so every path reads as outside the repository"
+        );
+        // A UNC verbatim path keeps its prefix: the plain spelling resolves
+        // differently, so rewriting it would trade a comparison bug for a worse
+        // one.
+        let unc = PathBuf::from(r"\\?\UNC\server\share\repo");
+        assert_eq!(plain(unc.clone()), unc);
+        // And the identity everywhere else, including the platform this runs on.
+        let ordinary = PathBuf::from("/home/user/batten");
+        assert_eq!(plain(ordinary.clone()), ordinary);
+    }
+
+    /// A fresh scratch directory under the system temp dir. Unit tests cannot
+    /// use `CARGO_TARGET_TMPDIR` (integration-only), and the wipe clears a
+    /// crashed prior run.
+    ///
+    /// **The process id is what keeps two RUNS apart, and the test name only
+    /// keeps two tests apart** (CLOUD-717). This used to be the name alone, and
+    /// its comment claimed "per-test names keep parallel tests apart" — true of
+    /// parallel tests inside one binary, false of parallel `cargo test`
+    /// processes, which both execute `a_snapshot_captures_a_dirty_tree_and_
+    /// nothing_else` and both resolve one path. Whichever reached
+    /// `remove_dir_all` second deleted the `.git` the first had just created,
+    /// and the red that produced points into production code with no hint that
+    /// another process is the cause. Measured twice on 2026-08-19, from both
+    /// sides of one collision, when the hk gate's `test:cargo` overlapped an
+    /// author's own run.
+    ///
+    /// `journal.rs` and `findings.rs` already build their scratch names this
+    /// way; this adopts their spelling rather than inventing a second.
+    fn scratch(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir()
+            .join("batten-git-tests")
+            .join(format!("{name}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// Fails by: the version key dropped for every tag, or tags compared as
+    /// text, which ranks `v1.9.0` above `v1.10.0`; a tag that is no version
+    /// (`release`, `vnext`) is never the answer.
+    #[test]
+    fn the_newest_version_tag_is_compared_numerically() {
+        let dir = scratch("newest-version-tag");
+        git(&dir, &["init", "-q"]);
+        git(&dir, &["commit", "-q", "--allow-empty", "-m", "first"]);
+        for tag in ["v1.9.0", "v1.10.0", "v0.99", "release", "vnext"] {
+            git(&dir, &["tag", tag]);
+        }
+        assert_eq!(
+            newest_version_tag(&dir).unwrap().as_deref(),
+            Some("v1.10.0")
+        );
+    }
+
+    #[test]
+    fn two_test_processes_do_not_share_one_fixture_directory() {
+        // CLOUD-717's premise, shown able to fail: a case pinning only that one
+        // derivation is stable passes against the defect unchanged, because the
+        // defect WAS stable — stably the same path in every process. What has to
+        // hold is that the process is in the name, so two runs cannot collide.
+        let here = scratch("collision-probe");
+        let leaf = here
+            .file_name()
+            .and_then(|name| name.to_str())
+            .expect("a scratch leaf");
+        assert!(
+            leaf.starts_with("collision-probe-"),
+            "the test name still leads the leaf, so a human can find it: {leaf}"
+        );
+        assert_eq!(
+            leaf,
+            format!("collision-probe-{}", std::process::id()),
+            "the process id is the half that separates two concurrent runs"
+        );
+        // And it is still stable within one process, or every call would mint a
+        // new directory and a fixture built across two calls would vanish.
+        assert_eq!(here, scratch("collision-probe"));
+    }
+
+    /// Run git in `dir`, hermetically: no global or system config (a dev
+    /// machine's `commit.gpgsign` or `core.hooksPath` must not break a
+    /// fixture) and the same discovery scrub the resolver applies.
+    #[expect(
+        clippy::disallowed_types,
+        reason = "stays, and test-only: fixtures are built by the reference implementation on purpose — building them with gix would test this module's backend against itself"
+    )]
+    fn git(dir: &Path, args: &[&str]) {
+        let mut command = std::process::Command::new("git");
+        command
+            .arg("-C")
+            .arg(dir)
+            .args(["-c", "user.email=t@t", "-c", "user.name=t"])
+            .args(args)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_SYSTEM", "/dev/null");
+        // The discovery scrub, inlined now that the module carries no constants
+        // for it: `open`'s isolated handle declines the environment structurally,
+        // so the only place a NAMED list is still needed is here, where a real
+        // `git` process is deliberately being built.
+        for var in [
+            "GIT_DIR",
+            "GIT_COMMON_DIR",
+            "GIT_WORK_TREE",
+            "GIT_CEILING_DIRECTORIES",
+            "GIT_DISCOVERY_ACROSS_FILESYSTEM",
+        ] {
+            command.env_remove(var);
+        }
+        // STATUS, NOT A CAPTURE: git's own stderr reaches the test's, which
+        // the runner shows on failure, and `git` keeps no edge onto `exec`
+        // (module_closure's plumbing ceiling).
+        let status = command.status().expect("run git");
+        assert!(status.success(), "git {args:?} failed in {}", dir.display());
+    }
+
+    /// Compare directories after canonicalizing both sides: the system temp
+    /// dir may sit behind a symlink (macOS `/tmp`), and git reports resolved
+    /// paths.
+    fn assert_same_dir(actual: &Path, expected: &Path) {
+        assert_eq!(
+            fs::canonicalize(actual).unwrap(),
+            fs::canonicalize(expected).unwrap()
+        );
+    }
+
+    #[test]
+    fn a_repo_local_config_write_replaces_an_existing_value() {
+        // The one write primitive in this module, and it had no round-trip case
+        // before CLOUD-740 moved it in process. `attribution identity` is its
+        // caller, so a write that silently fails to REPLACE leaves a denied
+        // committer in place while reporting success.
+        let repo = scratch("config-write");
+        git(&repo, &["init", "-q"]);
+        git(&repo, &["config", "--local", "user.name", "Vendorbot"]);
+
+        set_config_local(&repo, "user.name", "Accountable Human").expect("write the local value");
+        assert_eq!(
+            config_value(&repo, "user.name")
+                .expect("read it back")
+                .as_deref(),
+            Some("Accountable Human"),
+            "an existing value must be REPLACED, not shadowed or appended"
+        );
+
+        // And a subsectioned key, which is the other shape callers use.
+        set_config_local(&repo, "remote.origin.url", "https://example.test/x")
+            .expect("write a subsectioned value");
+        assert_eq!(
+            config_value(&repo, "remote.origin.url")
+                .expect("read it back")
+                .as_deref(),
+            Some("https://example.test/x")
+        );
+    }
+
+    #[test]
+    fn resolves_the_root_from_a_nested_subdirectory() {
+        let repo = scratch("nested");
+        git(&repo, &["init", "-q"]);
+        let sub = repo.join("sub").join("dir");
+        fs::create_dir_all(&sub).unwrap();
+        let root = repo_root(&sub).expect("resolve from a nested subdirectory");
+        assert!(root.is_absolute(), "the root must come back absolute");
+        assert_same_dir(&root, &repo);
+        // The root itself resolves to itself.
+        assert_same_dir(&repo_root(&repo).expect("resolve at the root"), &repo);
+    }
+
+    #[test]
+    fn a_linked_worktree_resolves_to_the_main_repository_root() {
+        let repo = scratch("worktree");
+        git(&repo, &["init", "-q"]);
+        git(
+            &repo,
+            &["commit", "-q", "--allow-empty", "-m", "chore: init"],
+        );
+        // The worktree lives *inside* the main working tree, mirroring the
+        // `.claude/worktrees/` layout this primitive exists to get right.
+        let worktree = repo.join("wt").join("agent");
+        git(
+            &repo,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                "--detach",
+                worktree.to_str().unwrap(),
+                "HEAD",
+            ],
+        );
+        let nested = worktree.join("nested");
+        fs::create_dir_all(&nested).unwrap();
+        let root = repo_root(&nested).expect("resolve from inside a linked worktree");
+        // The main root, via the shared common dir — never the worktree's own
+        // toplevel, so state and config stay stable across worktrees.
+        assert_same_dir(&root, &repo);
+    }
+
+    #[test]
+    fn an_option_shaped_ref_name_is_not_parsed_as_an_option() {
+        // `resolve_ref`'s `name` reaches it from config (`must_land_on`), which a
+        // branch can edit when no `--config-from` is in play. Without
+        // `--end-of-options` git parses an option-shaped name AS AN OPTION —
+        // measured: `--local-env-vars` printed environment variable names rather
+        // than being read as a rev.
+        //
+        // That was latent rather than live, and the case says so by asserting the
+        // property that makes it latent as well as the token that closes it:
+        // `--verify` exits non-zero for anything that is not a single rev, and
+        // `query_optional` reads non-zero as `None`. Both halves are pinned, so
+        // dropping the token alone does not make this go red — losing the `None`
+        // reading does, and that is the one that would actually hurt.
+        let repo = show_fixture("resolve-ref-option", "tracked.txt", b"x\n");
+        for name in ["--local-env-vars", "--git-dir", "--all", "--show-toplevel"] {
+            assert_eq!(
+                resolve_ref(&repo, name).unwrap(),
+                None,
+                "an option-shaped ref resolves to nothing, never to an option's output"
+            );
+        }
+        // And an ordinary ref still resolves, so the token did not break the
+        // read it protects.
+        let head = head_commit(&repo).unwrap();
+        assert_eq!(resolve_ref(&repo, "HEAD").unwrap().as_deref(), Some(&*head));
+    }
+
+    #[test]
+    fn a_path_outside_any_repository_is_a_usage_error() {
+        // Rests on nothing above the system temp dir being a repository — the
+        // same assumption every bats fixture makes.
+        let dir = scratch("outside");
+        let err = repo_root(&dir).unwrap_err();
+        assert!(
+            err.downcast_ref::<UsageError>().is_some(),
+            "outside a repository is bad input, not an internal failure"
+        );
+        let err = repo_root(&dir.join("does-not-exist")).unwrap_err();
+        assert!(
+            err.downcast_ref::<UsageError>().is_some(),
+            "a missing path is bad input, not an internal failure"
+        );
+    }
+
+    #[test]
+    fn a_bare_repository_is_a_usage_error() {
+        let dir = scratch("bare");
+        git(&dir, &["init", "-q", "--bare"]);
+        let err = repo_root(&dir).unwrap_err();
+        assert!(
+            err.downcast_ref::<UsageError>().is_some(),
+            "a bare repository has no working tree to root"
+        );
+    }
+
+    #[test]
+    fn a_separate_git_dir_layout_is_refused_not_mis_rooted() {
+        let base = scratch("separate");
+        let tree = base.join("tree");
+        fs::create_dir_all(&tree).unwrap();
+        git(
+            &tree,
+            &[
+                "init",
+                "-q",
+                "--separate-git-dir",
+                base.join("gitdir").to_str().unwrap(),
+            ],
+        );
+        let err = repo_root(&tree).unwrap_err();
+        assert!(
+            err.downcast_ref::<UsageError>().is_some(),
+            "a common dir that is not `<root>/.git` must refuse, not mis-root"
+        );
+    }
+
+    #[test]
+    fn no_second_repo_root_resolver_exists() {
+        // The single-implementation assertion (CLOUD-34), in the spirit of
+        // state.rs's no-baked-literal grep test: the crate contains exactly
+        // one repo-root resolver — this module. Shell launcher preambles under
+        // mise-tasks/ are process bootstrap owned elsewhere, not the library
+        // primitive, so the scan covers the crate's Rust sources only.
+        //
+        // What is forbidden is *root resolution*, not git access: a module may
+        // ask git for a SHA or the git dir (receipt.rs does), and collapsing
+        // those onto shared primitives is CLOUD-36's charter. The tokens below
+        // are the ways a second root finder gets written — `--show-toplevel`
+        // above all, which answers with a linked worktree's own toplevel and
+        // is the divergence this issue exists to eliminate.
+        //
+        // Two predicates with different scopes:
+        // - the resolver tokens are forbidden in src/*.rs outside this file
+        //   (tests/*.rs may spawn git to build fixtures; a fixture is not a
+        //   resolver);
+        // - the resolver is defined exactly once across src AND tests (a
+        //   test-helper reimplementation is still a second implementation).
+        // Built by concatenation so this test's own source does not count as
+        // a definition (the same trick state.rs plays with its baked literal).
+        let needle = ["fn repo", "_root"].concat();
+        // `gix::discover` RATHER THAN `gix::`, and the narrowing is this gate
+        // being made to enforce what it already says (CLOUD-1274). The comment
+        // above states the subject outright — "what is forbidden is *root
+        // resolution*, not git access" — and the token list then forbade every
+        // reach for the library, which is git access. The two were the same
+        // predicate only while one module held all of it.
+        //
+        // `gix::discover` is the resolver's own spelling and it still matches
+        // both forms this crate could use (`gix::discover_opts` at the call site
+        // below, and `gix::discover::upwards::Options` beside it), so the teeth
+        // are on the actual second resolver. Who may reach the BACKEND at all is
+        // `gix_is_confined_to_the_git_modules`'s question, not this one, and
+        // holding it here too meant a fix to either had to be argued twice.
+        let forbidden = [
+            "show-toplevel",
+            "show-cdup",
+            "git-common-dir",
+            "git_common_dir",
+            "git2::",
+            "gix::discover",
+        ];
+        //
+        // EVERY WORKSPACE CRATE'S `src/` AND `tests/` (CLOUD-2789): "the crate"
+        // was the product until the split, and a resolver in `batten-base` or
+        // in `crates/batten/tests` is the second implementation this forbids.
+        let mut definitions = 0;
+        for (dir, scan_tokens) in [("src", true), ("tests", false)] {
+            for (path, source) in workspace_sources(dir) {
+                definitions += source.matches(needle.as_str()).count();
+                if !scan_tokens || is_own_module(&path, "git.rs") {
+                    continue;
+                }
+                for token in forbidden {
+                    assert!(
+                        !source.contains(token),
+                        "{}: contains {token:?}; repo-root resolution lives only in git.rs — \
+                         call git::repo_root instead (CLOUD-34)",
+                        path.display()
+                    );
+                }
+            }
+        }
+        assert_eq!(
+            definitions, 1,
+            "exactly one repo_root implementation may exist (git.rs)"
+        );
+    }
+
+    /// Every `.rs` under `dir` (`src` or `tests`) of EVERY workspace crate,
+    /// recursively.
+    ///
+    /// THE PRODUCT, NOT THIS CRATE (CLOUD-2789). These gates were written over
+    /// `crates/batten/src`, which was the whole product; the split moved them
+    /// here and their `src/` walk silently narrowed to `batten-core`, so
+    /// `propose::diff3` reached gix from `batten-base` and nothing saw it. The
+    /// crates are ENUMERATED from the workspace root rather than listed, so the
+    /// next crate cut lands inside the census by construction.
+    fn workspace_sources(dir: &str) -> Vec<(PathBuf, String)> {
+        let crates = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("a workspace member sits under `crates/`");
+        let mut pending: Vec<PathBuf> = fs::read_dir(crates)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|member| member.join("Cargo.toml").is_file())
+            .map(|member| member.join(dir))
+            .filter(|root| root.is_dir())
+            .collect();
+        let mut sources = Vec::new();
+        while let Some(at) = pending.pop() {
+            for entry in fs::read_dir(&at).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    pending.push(path);
+                } else if path.extension() == Some(OsStr::new("rs")) {
+                    let source = crate::fsio::read_to_string(&path).unwrap();
+                    sources.push((path, source));
+                }
+            }
+        }
+        // `read_dir` order is filesystem-defined; a gate's failure message must
+        // not depend on it.
+        sources.sort_by(|a, b| a.0.cmp(&b.0));
+        // ANTI-VACUITY: the binary crate and this one are both in the census, so
+        // a walk rooted in the wrong place fails here rather than passing empty.
+        if dir == "src" {
+            for member in ["batten", "batten-core"] {
+                let root = crates.join(member).join("src");
+                assert!(
+                    sources.iter().any(|(path, _)| path.starts_with(&root)),
+                    "the workspace walk found nothing under {}",
+                    root.display()
+                );
+            }
+        }
+        sources
+    }
+
+    /// Whether `path` is this crate's own `src/<name>`.
+    fn is_own_module(path: &Path, name: &str) -> bool {
+        path == Path::new(env!("CARGO_MANIFEST_DIR")).join("src").join(name)
+    }
+
+    // `no_ancestry_decides_merged_ness` MOVED HERE (CLOUD-756), and the property
+    // it held is now `policy/ancestry-decides-nothing.rego` — a registered Rego
+    // module over `Fact::Invocations`, deleted from this file in the same change
+    // so the rule is never held twice and never by nobody.
+    //
+    // The migration is a fidelity UPGRADE rather than a relocation: the scan
+    // matched the token anywhere in a source file, and fired four times on prose
+    // in one session — a doc comment describing the gate, and three comments
+    // naming an example. Each was "fixed" by rewording English until the scanner
+    // stopped noticing, which is the tell that the instrument was wrong. The
+    // module reads command position, so a comment is not a decision. The
+    // `.concat()` needle obfuscation this file still uses elsewhere exists only
+    // because a substring scan is its own corpus; the module needs none.
+    //
+    // What the module does NOT see, stated so the trade is not silent: a literal
+    // bound to a variable before it is passed. The scan's own text already
+    // conceded smuggling — "hand-writing a graph walk, which is a different and
+    // far more visible change" — so this narrows an evasion rather than opening
+    // one.
+
+    /// A repository carrying one committed file, for the `show` cases below.
+    fn show_fixture(name: &str, path: &str, contents: &[u8]) -> PathBuf {
+        let repo = scratch(name);
+        git(&repo, &["init", "-q"]);
+        fs::write(repo.join(path), contents).unwrap();
+        git(&repo, &["add", "-A"]);
+        git(&repo, &["commit", "-q", "-m", "fixture"]);
+        repo
+    }
+
+    #[test]
+    fn an_option_shaped_reference_reads_nothing_and_writes_nothing() {
+        // CLOUD-718's measurement, inverted into a gate. As a shell-out this
+        // spelled `git show --output=<path>:batten.toml`, which git read as its
+        // own `--output` flag: exit 0, empty stdout, and the file CREATED. The
+        // caller is `--config-from`, which is `global: true` and reaches every
+        // `read`-effect verb, so this wrote a caller-chosen path from inside the
+        // derived read-only allowlist.
+        let repo = show_fixture("show-injection", "batten.toml", b"version = 1\n");
+        let reference = format!("--output={}", repo.join("pwned.toml").display());
+
+        let before = listing(&repo);
+        let err = show(&repo, &reference, "batten.toml").unwrap_err();
+        assert!(
+            err.downcast_ref::<UsageError>().is_some(),
+            "a ref this binary cannot honour is bad input, not an internal failure"
+        );
+
+        // The companion assertion is a directory listing, not a judgement: the
+        // defect was a WRITE, so the test that matters asks the filesystem.
+        //
+        // It compares the WHOLE listing rather than probing one expected name,
+        // and that is the difference between a gate and a false green. The old
+        // shell-out formatted `{reference}:{path}` into a single token, so the
+        // file git created was `pwned.toml:batten.toml` — a probe for
+        // `pwned.toml` passes against the very defect this pins. Measured on the
+        // old shape, 2026-08-20: rc=0, empty stdout, one new directory entry.
+        assert_eq!(
+            listing(&repo),
+            before,
+            "a read-effect call must leave the tree byte-identical"
+        );
+    }
+
+    /// Every entry in `dir`, sorted — the filesystem's own answer to "did
+    /// anything appear", with no guess about what it would have been called.
+    fn listing(dir: &Path) -> Vec<String> {
+        let mut names: Vec<String> = fs::read_dir(dir)
+            .expect("read the fixture directory")
+            .map(|entry| entry.expect("a directory entry").file_name())
+            .map(|name| name.to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        names
+    }
+
+    #[test]
+    fn the_two_unreadable_states_are_distinct() {
+        // CLOUD-720 builds last-known-good on this distinction, so it is pinned
+        // here rather than promised: an unresolvable ref and a resolvable ref
+        // carrying no such path must not produce the same error value. The
+        // shelled-out form emitted one message for both, deliberately, because
+        // git's own stderr told them apart only in version-dependent prose.
+        let repo = show_fixture("show-two-states", "batten.toml", b"version = 1\n");
+
+        let no_ref = show(&repo, "refs/heads/does-not-exist", "batten.toml")
+            .unwrap_err()
+            .to_string();
+        let no_path = show(&repo, "HEAD", "absent.toml").unwrap_err().to_string();
+
+        assert_ne!(
+            no_ref, no_path,
+            "the two states must be separable by the caller"
+        );
+
+        // Differing strings are NOT the property — the old shell-out emitted one
+        // template for both states and interpolated the caller's own ref and
+        // path into it, so the two rendered differently while saying the same
+        // undecidable thing ("no such ref, or the path is absent there"). A test
+        // asserting only inequality passes against that. What has to hold is
+        // that each message commits to ONE state: an unresolvable ref is not
+        // discussed in terms of the path, which is not the problem and may be
+        // perfectly present.
+        assert!(
+            no_ref.contains("does-not-exist"),
+            "the refusal names the ref: {no_ref}"
+        );
+        assert!(
+            !no_ref.contains("batten.toml"),
+            "an unresolvable ref must not hedge about the path: {no_ref}"
+        );
+        assert!(
+            no_path.contains("absent.toml") && no_path.contains("HEAD"),
+            "the refusal names the path and the ref it looked at: {no_path}"
+        );
+
+        // And the property CLOUD-720 actually consumes: the states are values,
+        // not two spellings of one error. A message a caller has to string-match
+        // is the distinction surviving for a human reading stderr and being
+        // destroyed for the code that has to branch on it.
+        assert!(
+            matches!(
+                read_at(&repo, "refs/heads/does-not-exist", "batten.toml").unwrap(),
+                BaseBlob::RefUnreachable { ref reference } if reference == "refs/heads/does-not-exist"
+            ),
+            "an unresolvable ref is `RefUnreachable`, carrying the ref it could not resolve"
+        );
+        assert!(
+            matches!(
+                read_at(&repo, "HEAD", "absent.toml").unwrap(),
+                BaseBlob::AbsentAtRef { ref path, .. } if path == "absent.toml"
+            ),
+            "a resolvable ref with no such path is `AbsentAtRef`, carrying the path"
+        );
+        let found = read_at(&repo, "HEAD", "batten.toml").unwrap();
+        let BaseBlob::Found { text, commit } = found else {
+            panic!("a readable file at a resolvable ref is `Found`");
+        };
+        assert_eq!(text, "version = 1\n");
+        assert_eq!(
+            commit.len(),
+            40,
+            "`Found` carries the resolved commit, which is a pin's evidence: {commit}"
+        );
+        assert!(
+            !no_path.contains("resolve"),
+            "an absent path must not hedge about the ref, which resolved: {no_path}"
+        );
+        // And the ordinary read still works, or the two refusals above prove
+        // only that everything fails.
+        assert_eq!(show(&repo, "HEAD", "batten.toml").unwrap(), "version = 1\n");
+    }
+
+    #[test]
+    fn a_directory_at_the_ref_is_refused_rather_than_listed() {
+        // `git show <ref>:<dir>` prints a TREE LISTING. Unreachable through
+        // `config::CONFIG_FILE`, reachable through `[epoch] tracked`, where the
+        // listing would have been hashed as though it were the file's content —
+        // a stable epoch over a surface nobody had read.
+        let repo = show_fixture("show-tree", "batten.toml", b"version = 1\n");
+        fs::create_dir_all(repo.join("nested")).unwrap();
+        fs::write(repo.join("nested/inner.toml"), "version = 1\n").unwrap();
+        git(&repo, &["add", "-A"]);
+        git(&repo, &["commit", "-q", "-m", "a directory"]);
+
+        let err = show(&repo, "HEAD", "nested").unwrap_err();
+        assert!(err.downcast_ref::<UsageError>().is_some());
+        let text = err.to_string();
+        assert!(
+            !text.contains("inner.toml"),
+            "a refusal must not render the listing it refused: {text}"
+        );
+        // The file inside it still reads, so the refusal is about the KIND of
+        // object and not about the path being unreachable.
+        assert_eq!(
+            show(&repo, "HEAD", "nested/inner.toml").unwrap(),
+            "version = 1\n"
+        );
+    }
+
+    #[test]
+    fn non_utf8_content_at_the_ref_is_a_usage_error() {
+        // §7 routes unreadable *config* to exit 1; this was the internal 3,
+        // which a harness reads as "batten broke" rather than "your config is
+        // not readable". `epoch.rs` already cites this function as the
+        // precedent for the 1, so the code and the citation now agree.
+        let repo = show_fixture("show-non-utf8", "batten.toml", &[0xff, 0xfe, 0x00, 0x9f]);
+        let err = show(&repo, "HEAD", "batten.toml").unwrap_err();
+        assert!(
+            err.downcast_ref::<UsageError>().is_some(),
+            "unreadable config is exit 1, never the internal 3"
+        );
+        let text = err.to_string();
+        assert!(
+            !text.contains('\u{fffd}'),
+            "a refusal is a pointer, never the bytes it could not decode: {text}"
+        );
+    }
+
+    /// The modules that may reach the git backend, and there are exactly three.
+    ///
+    /// **A CLOSED LIST, not an exemption** — a fourth module still fails, which
+    /// is the whole of what this gate is for.
+    const GIT_MODULES: [&str; 3] = ["git.rs", "gitwrite.rs", "lease.rs"];
+
+    #[test]
+    fn gix_is_confined_to_the_git_modules() {
+        // WIDENED FROM ONE MODULE TO THREE (CLOUD-1274), and the premise that
+        // said one is expired rather than merely inconvenient. It read: "two git
+        // backends coexist here ON PURPOSE and in ONE module, so the in-process
+        // half cannot spread across the crate." CLOUD-740 ended that — this
+        // module's own header says NOTHING HERE SPAWNS `git` ANY MORE, and
+        // `no_second_git_invoker_exists` is terminal over the whole of `src/`.
+        // There is one backend now, so "do not let the new half spread while the
+        // old half is still here" is a rule about a state the tree left.
+        //
+        // WHAT REPLACED IT IS NOT NOTHING, and that is why this is a widening
+        // rather than a deletion. Two properties survive the premise:
+        //
+        //   * git access stays enumerable. This list is closed, so a module that
+        //     reaches for the backend is a change somebody has to make here and
+        //     justify, which is what the original assertion actually bought.
+        //   * the EFFECT split is `policy/module-layering.rego`'s, and it is
+        //     strictly stronger than confinement ever was: `hook -> gitwrite`,
+        //     `check -> gitwrite`, `hook -> lease` and `check -> lease` are
+        //     forbidden over the resolved use graph, so a gate declared `read`
+        //     cannot reach a write however many modules exist.
+        //
+        // AND MERGING THEM INTO THIS FILE WOULD HAVE BEEN WORSE, which is the
+        // argument that decided it. `check` and `hook` legitimately reach
+        // `git.rs`; folding the remote-write half in here would make those four
+        // forbidden edges unspellable and hand every read-effect gate transitive
+        // reach to a push. The gate that was refusing pointed at the safer of two
+        // designs only by accident of its wording.
+        //
+        // EVERY WORKSPACE CRATE (CLOUD-2789): a module is a git module by its
+        // PATH in this crate, never by its file name, so a `git.rs` cut into
+        // another crate is a fourth module like any other.
+        for (path, source) in workspace_sources("src") {
+            if GIT_MODULES.iter().any(|name| is_own_module(&path, name)) {
+                continue;
+            }
+            assert!(
+                !source.contains("gix::"),
+                "{}: reaches gix directly; the git backend belongs to {GIT_MODULES:?} \
+                 and a fourth module is a decision to record beside that list \
+                 (CLOUD-718, widened by CLOUD-1274)",
+                path.display()
+            );
+        }
+    }
+
+    #[test]
+    fn every_declared_git_module_exists_and_reaches_gix() {
+        // ANTI-VACUITY, both directions. A name in the list that no file carries
+        // would silently exempt nothing while reading as coverage; a name whose
+        // file never reaches gix is an exemption nobody needs, and leaving it
+        // there is how the list grows into an allowlist that means nothing.
+        let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        for name in GIT_MODULES {
+            let path = src.join(name);
+            let source = crate::fsio::read_to_string(&path)
+                .unwrap_or_else(|_| panic!("{name} is declared a git module and does not exist"));
+            assert!(
+                source.contains("gix::"),
+                "{name} is declared a git module and reaches gix nowhere, so its \
+                 entry exempts nothing and should be dropped"
+            );
+        }
+    }
+
+    /// The tokens a build of `source` compiles into production, space-joined:
+    /// every non-trivia token outside an item carrying `#[cfg(test)]`. Comments
+    /// and whitespace are trivia, so prose never reaches the scan.
+    fn production_code(source: &str) -> String {
+        use ra_ap_syntax::{AstNode as _, NodeOrToken, ast, ast::HasAttrs as _};
+        let root = batten_facts::source::rust_parse(source, ra_ap_syntax::Edition::Edition2024)
+            .syntax_node();
+        let test_only: Vec<ra_ap_syntax::TextRange> = root
+            .descendants()
+            .filter_map(ast::Item::cast)
+            .filter(|item| {
+                item.attrs().any(|attr| {
+                    attr.syntax()
+                        .text()
+                        .to_string()
+                        .split_whitespace()
+                        .collect::<String>()
+                        == "#[cfg(test)]"
+                })
+            })
+            .map(|item| item.syntax().text_range())
+            .collect();
+        root.descendants_with_tokens()
+            .filter_map(NodeOrToken::into_token)
+            // Comments by their LEXEME as well as by trivia: a doc comment does
+            // not reach this walk as trivia in this parser (it documents the
+            // item), and it is still prose. Only a comment's text starts `//` or
+            // `/*`; a string literal's starts with its quote.
+            .filter(|token| {
+                let text = token.text();
+                !token.kind().is_trivia() && !text.starts_with("//") && !text.starts_with("/*")
+            })
+            .filter(|token| {
+                !test_only
+                    .iter()
+                    .any(|range| range.contains_range(token.text_range()))
+            })
+            .map(|token| token.text().to_owned())
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+
+    /// Fails by: the scan reading prose or a test fixture again, so a comment
+    /// naming `git stash push` refuses the crate; or skipping production code,
+    /// so a reinstated primitive passes.
+    #[test]
+    fn the_primitive_scan_reads_production_code_only() {
+        let word = ["sta", "sh"].concat();
+        let prose = format!(
+            "// `git {word} push` is not a push\n/// and `git {word} push` in a doc\nfn f() {{}}\n#[cfg(test)]\nmod tests {{ const C: &str = \"git {word} push\"; }}\n"
+        );
+        assert!(
+            !production_code(&prose).contains(&word),
+            "prose and tests are skipped"
+        );
+        let spawn = format!("fn f() {{ run(&[\"{word}\", \"push\"]); }}\n");
+        assert!(
+            production_code(&spawn).contains(&word),
+            "a spawn argument is code"
+        );
+        let primitive = format!("pub fn {word}_save() {{}}\n");
+        assert!(
+            production_code(&primitive).contains(&word),
+            "an identifier is code"
+        );
+    }
+
+    #[test]
+    fn no_gix_gap_primitive_survives() {
+        // CLOUD-780's rule, shipped with its mechanism. Two primitives used to
+        // live here for one reason — a concept the in-process backend has no
+        // API for — and the standing strategy retired them rather than keep a
+        // spawn path nothing could ever replace. What that buys is a property
+        // about the whole module (the doc above states it): every remaining
+        // spawn is *unported*, never *unportable*. Reinstating one of the two
+        // silently would take the property back, and nothing else would notice.
+        //
+        // Scope is `src/` and includes THIS file, for `no_ancestry_decides_
+        // merged_ness`'s reason: the decision lives here, so exempting the
+        // decision's home would gut the gate. Tokens are assembled by
+        // concatenation so this test's own source is not a match — which is
+        // also why the doc above points at the issue for what was dropped
+        // instead of re-typing the vocabulary it forbids.
+        //
+        // CODE, NOT PROSE OR FIXTURES. The scan matched the token anywhere in a
+        // file, so it fired on a comment and a test naming `git stash push` as
+        // the operand a command row must NOT read as `git push` (CLOUD-2666) —
+        // and the "fix" was renaming the command until the scanner stopped
+        // noticing, `no_ancestry_decides_merged_ness`'s failure over again. A
+        // primitive is a production identifier or a spawn's string argument, so
+        // that is all this reads: comments and `#[cfg(test)]` items are skipped
+        // on the syntax tree, never by rewording.
+        //
+        // Every workspace crate's `src/`, which is what `src/` meant before the
+        // split (CLOUD-2789). The production-code narrowing above stays: it has
+        // a concrete reason (920ded1b), and it narrows WHAT is read in a file,
+        // never WHICH files.
+        let forbidden = [
+            ["sta", "sh"].concat(),
+            ["prun", "able"].concat(),
+            ["worktree", "_remove"].concat(),
+        ];
+        for (path, source) in workspace_sources("src") {
+            let code = production_code(&source);
+            for token in &forbidden {
+                let at = code.find(token.as_str());
+                assert!(
+                    at.is_none(),
+                    "{}: names {token:?} in `{}`; that vocabulary retired with the \
+                     primitives built on it, and re-deriving either would put a spawn \
+                     back that exists only because gix has no equivalent (CLOUD-780)",
+                    path.display(),
+                    at.map_or("", |at| &code
+                        [at.saturating_sub(60)..(at + 40).min(code.len())])
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn no_second_git_invoker_exists() {
+        // THE TERMINAL ASSERTION (CLOUD-740). This forbade a git spawn OUTSIDE
+        // this module, so that the discovery scrub, the pinned diff config and
+        // the usage-vs-internal split were decided in one place. There is now no
+        // such place to protect: nothing in the crate spawns `git` at all, and
+        // the claim is strictly stronger and much simpler for it.
+        //
+        // Exempting nothing is the change that makes it terminal: THIS module
+        // was exempt while `git.rs` held the one invoker, and the whole point is
+        // that it no longer is.
+        //
+        // SHOWN ABLE TO FAIL (CLOUD-418) by reintroducing a spawn anywhere under
+        // `src/`, including here.
+        //
+        // Precise by construction: rules.rs and hook.rs spawn *user-configured*
+        // programs through a variable program name and are untouched by this —
+        // what is forbidden is naming `git` as a literal program.
+        //
+        // SCANNED UP TO `#[cfg(test)]` AND NO FURTHER, which is a real limit and
+        // not a convenience. The test module below builds its fixtures with a
+        // real `git` on purpose — building them with gix would test this module's
+        // backend against itself, so the reference implementation is the only
+        // honest fixture builder — and that helper carries its own `#[expect]`
+        // saying so. The claim being made is about what the SHIPPED crate does,
+        // and truncating here states that scope instead of quietly assembling the
+        // needle to dodge a match, which would make the gate lie about its reach.
+        //
+        // Over every workspace crate's `src/` (CLOUD-2789): "nothing in the
+        // crate" meant the product while the product was one crate.
+        let needle = ["Command::new(\"", "git\")"].concat();
+        for (path, source) in workspace_sources("src") {
+            let source = source
+                .split_once("\n#[cfg(test)]\n")
+                .map_or(source.as_str(), |(shipped, _)| shipped);
+            assert!(
+                !source.contains(needle.as_str()),
+                "{}: spawns `git`. Nothing in this crate does any more (CLOUD-740) — ask gix \
+                 through `open`, whose isolated handle declines the ambient environment \
+                 structurally rather than by scrubbing a list of variable names",
+                path.display()
+            );
+        }
+    }
+
+    #[test]
+    fn every_stays_shelled_out_claim_names_its_price() {
+        // CLOUD-320's THIRD ACCEPTANCE CLAUSE, made runnable: "where a verdict is
+        // 'stays' for a reason that is a cost rather than a constraint, it says
+        // so in those words." Prose until now, and unmet in the one file §1 names
+        // as its durable home — invisibly, for a day, in the file every reader of
+        // this module starts from.
+        //
+        // What that cost: the doc recorded only the capability half — the two
+        // concepts CLOUD-780 retired, which gix has no equivalent for — so a
+        // session read it, concluded the split was
+        // permanent, and wrote that into CLOUD-742 and a milestone. A false
+        // constraint reads exactly like a true one, which is why this is a gate
+        // and not a convention.
+        //
+        // The predicate is deliberately narrow — a claim that a spawn STAYS must
+        // appear alongside the issue that owns its price. It cannot check that
+        // the reason given is true; it can check that a reason with an owner is
+        // present, which is the failure that actually happened.
+        let doc: String = crate::fsio::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("src")
+                .join("git.rs"),
+        )
+        .unwrap()
+        .lines()
+        .take_while(|line| line.starts_with("//!"))
+        .collect::<Vec<_>>()
+        .join("\n");
+        // CONDITIONAL ON THERE BEING A SPAWN TO PRICE (CLOUD-740, resolution 3),
+        // in the same commit as the terminal assertion above because the two are
+        // one decision. This gate and that one contradicted each other outright:
+        // this demanded the doc keep naming a spawn that stays, and that one
+        // requires none to remain. Deleting this gate was the cheap answer and a
+        // lossy one — it exists because a session read the module doc, concluded
+        // the split was permanent, and wrote that into an issue and a milestone,
+        // and a false constraint reads exactly like a true one.
+        //
+        // So the SUBJECT narrows rather than the predicate: *if* the doc claims a
+        // spawn stays, it must name `git2` and the rows that own the price.
+        // Vacuously true now, live again the day anything here spawns — which is
+        // the resolution that survives the migration instead of being spent by
+        // it.
+        //
+        // Asserted as the implication it is, on every run, rather than returned
+        // from when the premise is absent (CLOUD-2059).
+        let claims_a_spawn = doc.contains("Still spawning");
+        for owner in ["CLOUD-737", "CLOUD-585"] {
+            assert!(
+                !claims_a_spawn || doc.contains(owner),
+                "the module doc explains which half of this module spawns, but not what that \
+                 costs or who re-decides it: name {owner} beside the claim, so a reader learns \
+                 the split is priced rather than fixed (CLOUD-320)"
+            );
+        }
+        assert!(
+            !claims_a_spawn || doc.contains("git2"),
+            "the module doc must name `git2` as capable-but-barred rather than leaving a reader \
+             to infer no library can do this — that inference is the defect CLOUD-320's own \
+             correction of 2026-08-19 records (CLOUD-320)"
+        );
+    }
+
+    #[test]
+    fn no_module_assembles_its_own_git_argv() {
+        // The gate that ships with CLOUD-742's rule: every git question the
+        // crate asks has a NAME, so the argv and the parse that undoes its
+        // output are one decision in one place. Sixteen call sites outside this
+        // module used to hold both halves — `attribution.rs` split four fields
+        // with `unwrap_or_default()`, which turned a short record into an
+        // answer on the module that decides commit attribution.
+        //
+        // Belt to the suspenders `query`/`query_bytes`/`query_optional` being
+        // private already provides: a nineteenth ad-hoc caller inside this
+        // crate is a compile error rather than a failing test —
+        // unrepresentable beats refused — and this states the rule in words
+        // for whoever proposes re-widening them.
+        //
+        // The removal is `function_missing` to `semver`, so the commit that
+        // makes it declares the break. That costs the release nothing here:
+        // below 0.1.0 every type collapses to a patch, `!` included, which is
+        // the bump this row was priced at.
+        //
+        // `::`-PREFIXED, and that is load-bearing: `defects.rs` has a
+        // `run_defects_query(` that shares the spelling and is not a git call —
+        // the two-programs-one-spelling trap CLOUD-757 records for `Command`.
+        // Assembled by concatenation so this assertion's own source is not a
+        // match for the gate it states.
+        let forbidden = [
+            ["::que", "ry("].concat(),
+            ["::que", "ry_bytes("].concat(),
+            ["::que", "ry_optional("].concat(),
+        ];
+        // Every workspace crate but this module (CLOUD-2789), for
+        // `workspace_sources`'s reason.
+        for (path, source) in workspace_sources("src") {
+            if is_own_module(&path, "git.rs") {
+                continue;
+            }
+            for token in &forbidden {
+                assert!(
+                    !source.contains(token.as_str()),
+                    "{}: assembles its own git argv; give the question a name in git.rs and \
+                     return a typed answer, so the parse lives beside the format string it \
+                     reverses (CLOUD-742)",
+                    path.display()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_patch_id_is_hex_of_a_hash_length() {
+        // CLOUD-739 §7(c). The refusal is the point and is unchanged: a parsing
+        // slip must never manufacture an equality between two truncated or
+        // non-hex ids. What changed is the WIDTH it accepts.
+        assert!(PatchId::parse(&"0".repeat(64)).is_ok());
+
+        // FORTY IS NOW REFUSED, and that is the migration rather than a
+        // regression. The old rule accepted 40 or 64 because it was parsing
+        // whatever `git patch-id` printed, and that followed the REPOSITORY's
+        // hash — SHA-1 or SHA-256. The identity is now a SHA-256 over this
+        // crate's own canonical form (CLOUD-739), so the width is fixed by
+        // construction and a 40-hex value arriving here is a defect, not a
+        // SHA-1 repository.
+        assert!(
+            PatchId::parse(&"a".repeat(40)).is_err(),
+            "the width follows our own hash now, never the repository's"
+        );
+
+        assert!(PatchId::parse("").is_err());
+        assert!(PatchId::parse(&"a".repeat(63)).is_err(), "truncated");
+        assert!(PatchId::parse(&"a".repeat(65)).is_err(), "over-long");
+        assert!(PatchId::parse(&"g".repeat(64)).is_err(), "non-hex");
+        assert!(PatchId::parse(&"A".repeat(64)).is_err(), "lowercase only");
+    }
+
+    /// Nothing to land is never `landed` on the policy input, and the input's
+    /// bytes are the ones the string-and-bool fact wrote (CLOUD-2247).
+    #[test]
+    fn a_branch_with_nothing_to_land_is_not_landed() {
+        let fact = |verdict| LandingFact {
+            verdict,
+            unlanded: vec![String::from("1111111")],
+        };
+        for (verdict, token, landed) in [
+            (Verdict::Landed, "landed", true),
+            (Verdict::PartiallyLanded, "partially_landed", false),
+            (Verdict::NothingToLand, "nothing_to_land", true),
+            (
+                Verdict::NotLandedWithinWindow,
+                "not_landed_within_window",
+                false,
+            ),
+        ] {
+            assert_eq!(
+                serde_json::to_string(&fact(verdict)).unwrap(),
+                format!(r#"{{"verdict":"{token}","landed":{landed},"unlanded":["1111111"]}}"#),
+            );
+            assert_eq!(
+                serde_json::to_value(verdict).unwrap(),
+                serde_json::json!(token),
+                "the token is the verdict's own serialization"
+            );
+        }
+        assert_ne!(fact(Verdict::NothingToLand).verdict, Verdict::Landed);
+    }
+
+    #[test]
+    fn the_verdict_is_derived_from_evidence_alone() {
+        let id = PatchId::parse(&"a".repeat(64)).unwrap();
+        let landed = |evidence: Option<Evidence>| CommitLanding {
+            commit: "c".repeat(40),
+            patch_id: Some(id.clone()),
+            evidence,
+        };
+        let proof = Evidence::PatchId {
+            target_commit: "t".repeat(40),
+            patch_id: id.clone(),
+        };
+
+        // An empty net change is settled before anything else: there is no
+        // unlanded work, whatever the individual commits did.
+        assert_eq!(verdict(&[], None, None), Verdict::NothingToLand);
+        assert_eq!(
+            verdict(&[landed(None)], None, None),
+            Verdict::NothingToLand,
+            "a change and its revert leave nothing to land"
+        );
+
+        assert_eq!(
+            verdict(&[landed(Some(proof.clone()))], Some(&id), None),
+            Verdict::Landed
+        );
+        assert_eq!(
+            verdict(&[landed(None)], Some(&id), None),
+            Verdict::NotLandedWithinWindow,
+            "a negative names the window it searched, never a proven absence"
+        );
+        assert_eq!(
+            verdict(
+                &[landed(Some(proof.clone())), landed(None)],
+                Some(&id),
+                None
+            ),
+            Verdict::PartiallyLanded
+        );
+        // The squash path: no commit matched individually, but the branch's
+        // whole change is on the target.
+        let squash = Evidence::Squash {
+            target_commit: "s".repeat(40),
+            patch_id: id.clone(),
+        };
+        assert_eq!(
+            verdict(&[landed(None), landed(None)], Some(&id), Some(&squash)),
+            Verdict::Landed
+        );
+    }
+
+    #[test]
+    fn a_window_cannot_be_empty_and_defaults_generously() {
+        // The asymmetry, pinned: too small a window is a false "not landed",
+        // too large is a slower `git log`.
+        assert_eq!(Window::DEFAULT.commits(), 1000);
+        assert_eq!(Window::default(), Window::DEFAULT);
+        assert_eq!(Window::of(NonZeroUsize::MIN).commits(), 1);
+    }
+
+    #[test]
+    fn evidence_that_means_landed_always_names_a_target_commit() {
+        // The structural half of "no verdict without proof": the only variant
+        // that names nothing is the one that means nothing landed.
+        let id = PatchId::parse(&"a".repeat(64)).unwrap();
+        let target = "t".repeat(40);
+        for evidence in [
+            Evidence::PatchId {
+                target_commit: target.clone(),
+                patch_id: id.clone(),
+            },
+            Evidence::Squash {
+                target_commit: target.clone(),
+                patch_id: id,
+            },
+        ] {
+            assert_eq!(evidence.target_commit(), Some(target.as_str()));
+        }
+        assert_eq!(Evidence::NoContent.target_commit(), None);
+    }
+
+    #[test]
+    fn a_pathspec_selects_itself_and_what_lies_beneath_it_as_git_does() {
+        // git's `match_pathspec_item`, the arms a file meets (CLOUD-843). A
+        // literal is itself and a directory prefix — never a string prefix, so
+        // `src` does not select `srcs/x`; a wildcard is `wildmatch` with no flags,
+        // so `*` crosses `/` as it does in `git ls-files '*.toml'`.
+        let cases = [
+            ("src", "src", true),
+            ("src", "src/lib.rs", true),
+            ("src", "srcs/lib.rs", false),
+            ("src/", "src", false),
+            ("src/", "src/lib.rs", true),
+            ("./src", "src/a/b.rs", true),
+            (".", "anything/at/all", true),
+            ("*.toml", "batten.toml", true),
+            ("*.toml", "crates/batten/Cargo.toml", true),
+            ("tests/*.bats", "tests/x.bats", true),
+            ("tests/*.bats", "tests/x.rs", false),
+            ("crates/*/src", "crates/batten/src/lib.rs", false),
+            ("docs", "src/docs", false),
+        ];
+        for (spec, path, want) in cases {
+            assert_eq!(pathspec_matches(spec, path), want, "{spec} against {path}");
+        }
+    }
+
+    #[test]
+    fn a_pathspec_this_build_would_misread_is_refused() {
+        assert!(pathspec_is_supported("src"));
+        assert!(pathspec_is_supported("*.rs"));
+        assert!(!pathspec_is_supported(""));
+        assert!(!pathspec_is_supported(":(exclude)src"));
+        assert!(!pathspec_is_supported(":!src"));
+    }
+
+    #[test]
+    fn a_config_key_is_addressable_only_with_a_section_and_a_name() {
+        assert!(config_key_parses("commit.gpgsign"));
+        assert!(config_key_parses("remote.origin.url"));
+        assert!(!config_key_parses("gpgsign"));
+        assert!(!config_key_parses(".gpgsign"));
+        assert!(!config_key_parses("commit."));
+        assert!(!config_key_parses("remote..url"));
+    }
+
+    #[test]
+    fn an_instant_renders_fixed_width_utc() {
+        // Fixed width is what lets a module order two dates with `<`; the pinned
+        // readings are the ones `git_state_facts.rs` asserts over the binary.
+        assert_eq!(iso_utc(0), "1970-01-01T00:00:00Z");
+        assert_eq!(iso_utc(1_577_934_245), "2020-01-02T03:04:05Z");
+        assert_eq!(iso_utc(1_622_548_800), "2021-06-01T12:00:00Z");
+    }
+
+    /// No repository above a target places it outside; a discovery that failed
+    /// for any other reason is unplaceable, never outside. #1276's sweep found
+    /// the guard forced to `true` unpinned: no case reached a non-absent error.
+    ///
+    /// Fails by: the no-repository guard forced either way.
+    #[test]
+    fn only_an_absent_repository_places_a_target_outside() {
+        let absent = gix::discover::upwards::Error::NoGitRepository {
+            path: PathBuf::from("/nowhere"),
+        };
+        assert_eq!(
+            undiscovered(&gix::Error::from_error(absent)),
+            Placement::Outside
+        );
+        let untrusted = gix::discover::upwards::Error::NoTrustedGitRepository {
+            path: PathBuf::from("/here"),
+            candidate: PathBuf::from("/here/.git"),
+            required: gix::sec::Trust::Full,
+            trust: gix::sec::Trust::Reduced,
+        };
+        assert_eq!(
+            undiscovered(&gix::Error::from_error(untrusted)),
+            Placement::Unplaceable,
+            "an untrusted repository is not an absent one"
+        );
+        let foreign = std::io::Error::other("unreadable");
+        assert_eq!(
+            undiscovered(&gix::Error::from_error(foreign)),
+            Placement::Unplaceable
+        );
+    }
+
+    /// Fails by: an existing target walked past its own directory, a missing
+    /// one not walked up to its nearest existing ancestor, or a file placed by
+    /// itself rather than by its directory (CLOUD-2672).
+    #[test]
+    fn a_target_is_placed_by_its_nearest_existing_directory() {
+        let repo = crate::scratch::scratch("git-placement-walk");
+        crate::gitwrite::init_on_main(&repo).unwrap();
+        let src = repo.join("src");
+        fs::create_dir_all(&src).unwrap();
+        crate::durable::replace(repo.join("batten.toml"), "version = 1\n").unwrap();
+        crate::durable::replace(src.join("batten.toml"), "version = 1\n").unwrap();
+        crate::durable::replace(src.join("a.rs"), "").unwrap();
+        let here = Placement::Root(canonical(&src));
+        assert_eq!(placement(&src.join("a.rs"), "batten.toml"), here);
+        assert_eq!(
+            placement(&src.join("new").join("b.rs"), "batten.toml"),
+            here
+        );
+    }
+}
+
+/*
+The mutations CLOUD-843's a-git package declares over this module's retirement
+projections. Each removes or inverts one decision, and the named case is the one
+that stops discriminating. The suite is the compiled-binary tier, because each
+case asserts the projection against `git` itself over one fixture.
+
+A ROW'S SCRIPT MAY CARRY NO `|` of its own (`rows_in` splits on every one), so a
+row naming a closure or a disjunction mutates the one operand it is about.
+
+
+CLOUD-843's p6-board package: a trunk walk that breaks partway is could-not-look,
+never the shorter history above the break (`messages_reachable_from`).
+*/
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod roots_cache_tests {
+    use super::{RootsEntry, read_roots, write_roots};
+
+    /// Fails by: a cached `root` line read as a malformed entry, which turns
+    /// every published answer into a miss and the full walk.
+    #[test]
+    fn a_published_answer_reads_back_whole() {
+        let path = crate::scratch::scratch("git-roots-cache").join("roots");
+        let id = gix::ObjectId::from_hex(b"0123456789abcdef0123456789abcdef01234567").unwrap();
+        let held = RootsEntry {
+            raw: vec![id],
+            tips: vec![id],
+            roots: vec![String::from("89abcdef")],
+        };
+        write_roots(&path, "key", &held);
+        let read = read_roots(&path, "key").unwrap();
+        assert_eq!(
+            (read.raw, read.tips, read.roots),
+            (held.raw, held.tips, held.roots)
+        );
+    }
+}

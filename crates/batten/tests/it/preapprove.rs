@@ -17,28 +17,36 @@
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-// The engine-side rows this suite kills, declared beside the code they mutate
-// (`src/lib.rs`) and mirrored here so a board obligation naming this file binds:
-/*
-#MUTANT-SUITE crates/batten/tests/it/preapprove.rs
-#MUTANT preapprove-before-refusal|s@^            decided => decided,$@            decided => hook::policy_preapproval(policy, envelope, facts).map_or(decided, hook::Decision::Preapproved),@|a_refused_call_is_never_preapproved
-#MUTANT advice-beside-the-grant|s@^    if !matches!(decision, hook::Decision::Preapproved(_)) || advice.is_empty() {$@    if true {@|a_preapproval_carries_the_calls_advice_in_one_document
-*/
-// And the rows `write-is-preapproved.rego` declares (CLOUD-2002), mirrored for
-// the same reason:
-/*
-#MUTANT write-mode-unchecked|s@^\tinput.call\["permission-mode"\] == "auto"$@\ttrue@|an_edit_is_not_preapproved_in_default_mode
-#MUTANT write-destructive-granted|s@^\t\tnot destructive_program(program)$@\t\ttrue@|a_destructive_shell_write_is_left_to_the_host_in_auto
-*/
-
 use crate::common;
+use batten::capture::StreamedChild as _;
 
 use std::path::PathBuf;
 
 use common::{StateHome as _, stdout};
 
 fn root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
+    // The committed rows plus the retired substitution row (CLOUD-2698), which
+    // `a_refused_call_is_never_preapproved` needs as its refusing row.
+    static ROOT: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    ROOT.get_or_init(|| {
+        let dir = common::committed_fixture_with_substitution(&format!(
+            "preapprove-{}",
+            std::process::id()
+        ));
+        // The scripts the shell-write cases run, TRACKED AND CLEAN. Since
+        // CLOUD-2775 (f52167cb) a script absent where it runs is opaque reach,
+        // which `shell reach unread` refuses before any grant is asked, so an
+        // absent `tools/x.py` would assert that refusal instead of the grant.
+        // Reviewed code with no spawn is the write these cases mean.
+        std::fs::create_dir_all(dir.join("tools")).expect("make the tools dir");
+        for script in ["tools/x.py", "x.py"] {
+            std::fs::write(dir.join(script), "print('x')\n").expect("write a reviewed script");
+        }
+        common::git_in(&dir, &["add", "tools/x.py", "x.py"]);
+        common::git_in(&dir, &["commit", "-qm", "review the scripts the cases run"]);
+        dir
+    })
+    .clone()
 }
 
 fn envelope(mode: &str, tool: &str, input: &serde_json::Value) -> String {
@@ -53,6 +61,74 @@ fn envelope(mode: &str, tool: &str, input: &serde_json::Value) -> String {
 
 fn shell(mode: &str, command: &str) -> String {
     envelope(mode, "Bash", &serde_json::json!({ "command": command }))
+}
+
+/// The committed rows with `auto-mode-is-preapproved` left out of the preset
+/// (`except`, CLOUD-2290), so a narrower grant is the one that answers.
+///
+/// THE MODE GRANT ANSWERS FIRST IN EVERY MODE BUT PLAN since the owner's ruling
+/// of 2026-11-23 (CLOUD-2768), so in this repository's own config a narrower
+/// grant's withholding, or its absence, cannot be seen: the call is granted
+/// either way, under the mode grant's id. Each narrower grant's case runs here,
+/// where its own answer is the only one.
+fn narrow_root() -> PathBuf {
+    static ROOT: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    ROOT.get_or_init(|| {
+        let dir = common::committed_fixture_with_substitution(&format!(
+            "preapprove-narrow-{}",
+            std::process::id()
+        ));
+        let config = dir.join("batten.toml");
+        let text = std::fs::read_to_string(&config).expect("read the fixture config");
+        let enabling = "id = \"plan write refused\"\n";
+        let at = text.find(enabling).expect("the preset's enabling row");
+        let row = "preset = \"claude-code-cloud\"\n";
+        let preset = at + text[at..].find(row).expect("the row names the preset") + row.len();
+        let mut edited = text[..preset].to_owned();
+        edited.push_str("except = [\"auto-mode-is-preapproved\"]\n");
+        edited.push_str(&text[preset..]);
+        std::fs::write(&config, edited).expect("write the fixture config");
+        common::git_in(&dir, &["commit", "-qam", "leave the mode grant out"]);
+        dir
+    })
+    .clone()
+}
+
+/// [`verdict`] in [`narrow_root`].
+fn narrow_verdict(payload: &str) -> Option<(String, String)> {
+    let outcome = common::stdin_run(
+        &mut common::batten(),
+        &narrow_root(),
+        &["adjudicate", "--harness", "claude-code"],
+        payload,
+    );
+    parsed(&outcome).iter().find_map(|document| {
+        let inner = document.get("hookSpecificOutput")?;
+        Some((
+            inner.get("permissionDecision")?.as_str()?.to_owned(),
+            inner.get("permissionDecisionReason")?.as_str()?.to_owned(),
+        ))
+    })
+}
+
+/// [`assert_granted_by`] in [`narrow_root`].
+fn assert_narrow_granted_by(payload: &str, rule: &str) {
+    let (decision, reason) = narrow_verdict(payload).unwrap_or_default();
+    assert_eq!(decision, "allow", "must be pre-approved: {payload}");
+    assert!(
+        reason.contains(rule),
+        "the grant must be `{rule}`'s: {reason}"
+    );
+}
+
+/// [`assert_not_granted`] in [`narrow_root`].
+fn assert_narrow_not_granted(payload: &str) {
+    if let Some((decision, reason)) = narrow_verdict(payload) {
+        assert_ne!(
+            decision, "allow",
+            "must not be pre-approved: {payload}\n{reason}"
+        );
+    }
 }
 
 /// Every document the hook put on stdout, parsed.
@@ -104,6 +180,19 @@ fn assert_not_granted(payload: &str) {
         assert_ne!(
             decision, "allow",
             "must not be pre-approved: {payload}\n{reason}"
+        );
+    }
+}
+
+/// The call was not granted by `rule`: it may be granted by another, as every
+/// call the engine allows is in every mode but plan (owner ruling 2026-11-23,
+/// CLOUD-2768), so what a narrower grant's case asserts is that ITS rule held
+/// back. A grant's reason names its rule as ` — <rule>: `.
+fn assert_not_granted_by(payload: &str, rule: &str) {
+    if let Some((decision, reason)) = verdict(payload) {
+        assert!(
+            decision != "allow" || !reason.contains(&format!(" — {rule}: ")),
+            "must not be `{rule}`'s grant: {payload}\n{reason}"
         );
     }
 }
@@ -317,14 +406,14 @@ fn a_read_pipeline_is_preapproved() {
 
 #[test]
 fn a_reader_redirected_into_a_file_is_not_preapproved() {
-    assert_not_granted(&shell("default", "ls > out.txt"));
+    assert_not_granted_by(&shell("default", "ls > out.txt"), "call read now");
     // A bare redirection runs no program, so only the SEGMENT can say it writes.
-    assert_not_granted(&shell("default", "ls; > out.txt"));
+    assert_not_granted_by(&shell("default", "ls; > out.txt"), "call read now");
 }
 
 #[test]
 fn a_writer_in_a_substitution_spoils_the_line() {
-    assert_not_granted(&shell("default", "ls $(rm -rf x)"));
+    assert_not_granted_by(&shell("default", "ls $(rm -rf x)"), "call read now");
 }
 
 #[test]
@@ -350,93 +439,130 @@ fn a_session_read_is_preapproved_in_plan_mode() {
     assert_granted_by(&read, "call read now");
 }
 
-/// A prompt unique to one case, and its receipts removed when the case ends,
-/// so the real checkout's store keeps nothing a case wrote.
-struct Dispatch {
-    prompt: String,
-    git_dir: PathBuf,
-}
-
-impl Dispatch {
-    fn new(case: &str) -> Self {
-        let prompt = format!("dispatch fixture {case} {}", std::process::id());
-        let git_dir = batten::git::git_dir(&root()).expect("the checkout has a git dir");
-        Dispatch { prompt, git_dir }
-    }
-
-    fn linted(&self) -> &Self {
-        batten::dispatch::record_brief(&self.git_dir, &self.prompt).expect("store writable");
-        self
-    }
-
-    fn approved(&self) -> &Self {
-        let asked = format!("Dispatch brief:{}?", batten::dispatch::digest(&self.prompt));
-        let input = serde_json::json!({ "questions": [{ "question": asked, "options": [] }] });
-        let result = serde_json::json!({ "answers": { asked: batten::dispatch::APPROVE_LABEL } });
-        batten::dispatch::record_approvals(&self.git_dir, &input, &result).expect("store writable");
-        self
-    }
-
-    fn call(mode: &str, prompt: &str) -> String {
-        envelope(
-            mode,
-            "mcp__Claude_Code_Remote__create_session",
-            &serde_json::json!({ "prompt": prompt }),
-        )
-    }
-}
-
-impl Drop for Dispatch {
-    fn drop(&mut self) {
-        let digest = batten::dispatch::digest(&self.prompt);
-        let store = self.git_dir.join("batten-receipts");
-        for name in [batten::dispatch::BRIEF, batten::dispatch::APPROVED] {
-            let _ = std::fs::remove_file(store.join(format!("{name}.{digest}")));
-        }
-    }
-}
-
-#[test]
-fn a_linted_and_approved_dispatch_is_preapproved_in_auto() {
-    let fixture = Dispatch::new("cleared");
-    fixture.linted().approved();
-    assert_granted_by(&Dispatch::call("auto", &fixture.prompt), "call open now");
-}
-
-/// THE CASE `dispatch-uncleared` KILLS: linted but never approved — the owner
-/// rejected the bundle or has not answered — so the dispatch grant is not the
-/// one that answers.
+/// The committed rows plus the row enabling `claude-code-dispatch`, the preset
+/// `dispatch brief refused` ships in (CLOUD-2858).
 ///
-/// IN AUTO MODE, the only mode the dispatch grant fires in: a default-mode
-/// case could not tell an approval check from its absence, because the mode
-/// check refuses first. In auto every call batten allows is granted by auto's
-/// own row (CLOUD-2125), so what is asserted is WHICH row granted: never the
-/// dispatch rule, which the grant's first sighting names.
-#[test]
-fn a_dispatch_without_approval_is_not_preapproved() {
-    let fixture = Dispatch::new("unapproved");
-    fixture.linted();
-    let (_, reason) = verdict(&Dispatch::call("auto", &fixture.prompt)).unwrap_or_default();
-    assert!(
-        !reason.contains("call open now"),
-        "an unapproved dispatch is not the dispatch grant's: {reason}"
-    );
-    assert_not_granted(&Dispatch::call("default", &fixture.prompt));
+/// A FIXTURE ROW UNTIL THE PIN CARRIES THE PRESET: a release that does not ship
+/// `claude-code-dispatch` refuses a row naming it, so the committed config
+/// enables it with the pin bump that brings it, as `claude-code-plan`'s row was
+/// (2ef6df8b).
+fn dispatch_root() -> PathBuf {
+    static ROOT: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    ROOT.get_or_init(|| {
+        let dir = common::committed_fixture_with_substitution(&format!(
+            "preapprove-dispatch-{}",
+            std::process::id()
+        ));
+        let config = dir.join("batten.toml");
+        let mut text = std::fs::read_to_string(&config).expect("read the fixture config");
+        text.push_str(
+            "\n[[rule]]\nid = \"dispatch brief refused\"\nno_fix_reason = \"class 3 (a call \
+             rewrite): the subject is a tool call refused before it runs\"\nkind = \"policy\"\n\
+             scope = \"mediated_call\"\npreset = \"claude-code-dispatch\"\nseverity = \"deny\"\n",
+        );
+        std::fs::write(&config, text).expect("write the fixture config");
+        common::git_in(&dir, &["commit", "-qam", "enable the dispatch preset"]);
+        dir
+    })
+    .clone()
 }
 
-/// The grant is bound to the bytes the owner saw: an edited prompt clears
-/// nothing, and auto mode is the only mode the ruling grants in.
-#[test]
-fn an_edited_prompt_or_another_mode_is_not_preapproved() {
-    let fixture = Dispatch::new("edited");
-    fixture.linted().approved();
-    let edited = format!("{} and one more thing", fixture.prompt);
-    let (_, reason) = verdict(&Dispatch::call("auto", &edited)).unwrap_or_default();
-    assert!(
-        !reason.contains("dispatch"),
-        "an edited prompt is not the dispatch grant's: {reason}"
+/// Every document the hook put on stdout in [`dispatch_root`], parsed.
+fn dispatch_documents(payload: &str) -> Vec<serde_json::Value> {
+    let outcome = common::stdin_run(
+        &mut common::batten(),
+        &dispatch_root(),
+        &["adjudicate", "--harness", "claude-code"],
+        payload,
     );
-    assert_not_granted(&Dispatch::call("default", &fixture.prompt));
+    parsed(&outcome)
+}
+
+/// [`verdict`] in [`dispatch_root`].
+fn dispatch_verdict(payload: &str) -> Option<(String, String)> {
+    dispatch_documents(payload).iter().find_map(|document| {
+        let inner = document.get("hookSpecificOutput")?;
+        Some((
+            inner.get("permissionDecision")?.as_str()?.to_owned(),
+            inner.get("permissionDecisionReason")?.as_str()?.to_owned(),
+        ))
+    })
+}
+
+/// A dispatch message that passes `batten lint brief`: every section the
+/// schema requires, and a fenced command under `check`. `marker` is a word no
+/// refusal may carry, so a case can assert no byte of the message reaches one.
+fn linted_brief(marker: &str) -> String {
+    format!(
+        "## identifiers\n{marker}\n\n## period\nthis turn\n\n## instructions\ndo it\n\n\
+         ## read\nthe row\n\n## check\n\n```\nmise run lint:clippy\n```\n"
+    )
+}
+
+/// A `send_message` carrying `message`, in `mode`, at the event the host names.
+fn dispatch_at(event: &str, mode: &str, message: &str) -> String {
+    serde_json::json!({
+        "hook_event_name": event,
+        "permission_mode": mode,
+        "tool_name": "mcp__Claude_Code_Remote__send_message",
+        "tool_input": { "session_id": "session_x", "message": message },
+    })
+    .to_string()
+}
+
+/// THE GATE DECIDES, NEVER A HUMAN (CLOUD-2858): a dispatch whose message
+/// passes the brief lint is granted like any call the engine allows, at
+/// pre-tool and at the prompt, with no receipt in the store. Fails by: the
+/// grant still keyed on an owner-approval receipt.
+#[test]
+fn a_linted_dispatch_is_granted_without_approval() {
+    let message = linted_brief("granted-c2858");
+    let (decision, reason) =
+        dispatch_verdict(&dispatch_at("PreToolUse", "default", &message)).unwrap_or_default();
+    assert_eq!(decision, "allow", "a linted dispatch is granted: {reason}");
+    let answered = dispatch_documents(&dispatch_at("PermissionRequest", "default", &message));
+    assert!(
+        answered
+            .iter()
+            .any(|document| { document["hookSpecificOutput"]["decision"]["behavior"] == "allow" }),
+        "the prompt is answered allow: {answered:?}"
+    );
+}
+
+/// A MESSAGE THE LINT REFUSES IS REFUSED (CLOUD-2858): the brief schema is a
+/// deny gate on the call, and the refusal names the missing section by its id,
+/// never a byte of the message (rule 4). Fails by: the lint result ignored
+/// (`brief-lint-unread`).
+#[test]
+fn an_unlinted_dispatch_is_refused_with_its_findings() {
+    let marker = "unlinted-c2858";
+    let message = linted_brief(marker);
+    let unlinted = &message[..message.find("## check").expect("the check section")];
+    let (decision, reason) =
+        dispatch_verdict(&dispatch_at("PreToolUse", "default", unlinted)).unwrap_or_default();
+    assert_eq!(
+        decision, "deny",
+        "an unlinted dispatch is refused: {reason}"
+    );
+    assert!(reason.contains("dispatch brief refused"), "{reason}");
+    assert!(
+        reason.contains("check"),
+        "the refusal names the section: {reason}"
+    );
+    assert!(!reason.contains(marker), "no byte of the message: {reason}");
+}
+
+/// Plan mode keeps refusing a dispatch, a passing brief included.
+#[test]
+fn a_dispatch_in_plan_mode_is_refused() {
+    let (decision, reason) = dispatch_verdict(&dispatch_at(
+        "PreToolUse",
+        "plan",
+        &linted_brief("plan-c2858"),
+    ))
+    .unwrap_or_default();
+    assert_eq!(decision, "deny", "must be refused: {reason}");
+    assert!(reason.contains("plan write refused"), "{reason}");
 }
 
 /// CLOUD-2026: in auto mode no subagent or workflow call is put to the owner,
@@ -457,9 +583,10 @@ fn an_implementer_subagent_and_a_workflow_are_preapproved_in_auto() {
     assert_granted_by(&workflow, "agent open now");
 }
 
-/// THE CASE `subagent-mode-unchecked` KILLS: outside auto mode the host's own
-/// posture stands, and in default mode nothing refuses the spawn, so only the
-/// mode conjunct keeps it from being granted.
+/// THE CASE `subagent-mode-unchecked` KILLS: outside auto mode the subagent
+/// grant holds back, and in default mode nothing refuses the spawn, so only the
+/// mode conjunct keeps it from being that grant's. The mode grant answers it
+/// there since the owner's ruling (CLOUD-2768).
 #[test]
 fn an_implementer_subagent_is_not_preapproved_in_default_mode() {
     let implementer = envelope(
@@ -467,7 +594,7 @@ fn an_implementer_subagent_is_not_preapproved_in_default_mode() {
         "Agent",
         &serde_json::json!({ "subagent_type": "general-purpose", "prompt": "x", "description": "x" }),
     );
-    assert_not_granted(&implementer);
+    assert_not_granted_by(&implementer, "agent open now");
 }
 
 /// Plan mode keeps its posture: an implementer spawn is refused there.
@@ -481,7 +608,9 @@ fn an_implementer_subagent_is_not_preapproved_in_plan_mode() {
     assert_plan_refused(&implementer);
 }
 
-/// A worktree spawn stays refused in auto mode: the deny is composed first.
+/// A worktree spawn stays refused in auto mode on a disposable host: the deny
+/// is composed first. The host is declared, since CLOUD-2709 refuses a worktree
+/// only where the harness says the machine is disposable.
 #[test]
 fn a_worktree_spawn_is_refused_in_auto() {
     let worktree = envelope(
@@ -489,9 +618,43 @@ fn a_worktree_spawn_is_refused_in_auto() {
         "Agent",
         &serde_json::json!({ "subagent_type": "general-purpose", "isolation": "worktree", "prompt": "x" }),
     );
-    let (decision, reason) = verdict(&worktree).unwrap_or_default();
+    let mut disposable = common::batten();
+    disposable.env("CLAUDE_CODE_REMOTE", "true");
+    let (decision, reason) = documents_from(&mut disposable, &worktree)
+        .iter()
+        .find_map(|document| {
+            let inner = document.get("hookSpecificOutput")?;
+            Some((
+                inner.get("permissionDecision")?.as_str()?.to_owned(),
+                inner.get("permissionDecisionReason")?.as_str()?.to_owned(),
+            ))
+        })
+        .unwrap_or_default();
     assert_eq!(decision, "deny", "{reason}");
     assert!(reason.contains("spawn place wrong"), "{reason}");
+    // ON A DEVELOPER'S MACHINE THE SAME SPAWN IS NOT REFUSED, by design:
+    // `dd8c55487` (CLOUD-2709) made `agent-spawn.rego` host-aware, so the
+    // refusal this case once asserted for every host now holds only on a
+    // disposable one. Pinned here beside the refusal, so the host is the one
+    // thing that moves the decision, with both of the host's signals absent.
+    let mut machine = common::batten();
+    machine
+        .env_remove("CLAUDE_CODE_REMOTE")
+        .env_remove("BATTEN_ENVIRONMENT");
+    let refused = documents_from(&mut machine, &worktree)
+        .iter()
+        .find_map(|document| {
+            let inner = document.get("hookSpecificOutput")?;
+            Some((
+                inner.get("permissionDecision")?.as_str()?.to_owned(),
+                inner.get("permissionDecisionReason")?.as_str()?.to_owned(),
+            ))
+        })
+        .filter(|(decision, _)| decision == "deny");
+    assert_eq!(
+        refused, None,
+        "a worktree spawn on a machine is not refused (dd8c55487, CLOUD-2709)"
+    );
 }
 
 /// CLOUD-2313: this repository's `memory-write-tool` row is granted in default
@@ -505,9 +668,9 @@ fn a_memory_write_is_preapproved_outside_plan_mode() {
         "mcp__serena__edit_memory",
         "mcp__serena__rename_memory",
     ] {
-        assert_granted_by(&envelope("default", tool, &edit), "call grant now");
+        assert_narrow_granted_by(&envelope("default", tool, &edit), "call grant now");
     }
-    assert_not_granted(&envelope("default", "mcp__serena__delete_memory", &edit));
+    assert_narrow_not_granted(&envelope("default", "mcp__serena__delete_memory", &edit));
 }
 
 /// THE NOUN-FIRST READS (CLOUD-2519): GitHub names its pure reads
@@ -542,7 +705,10 @@ fn a_write_named_like_a_list_is_not_preapproved() {
         "mcp__x__mark_read",
         "mcp__Claude_Docs__mark_as_read",
     ] {
-        assert_not_granted(&envelope("default", tool, &serde_json::json!({})));
+        assert_not_granted_by(
+            &envelope("default", tool, &serde_json::json!({})),
+            "call read now",
+        );
     }
 }
 
@@ -554,7 +720,7 @@ fn an_mcp_trigger_is_not_preapproved() {
         "mcp__github__actions_run_trigger",
         &serde_json::json!({}),
     );
-    assert_not_granted(&trigger);
+    assert_not_granted_by(&trigger, "call read now");
 }
 
 #[test]
@@ -564,7 +730,7 @@ fn an_mcp_write_is_not_preapproved() {
         "mcp__Linear__save_comment",
         &serde_json::json!({}),
     );
-    assert_not_granted(&write);
+    assert_not_granted_by(&write, "call read now");
 }
 
 #[test]
@@ -615,24 +781,33 @@ fn an_edit_and_a_shell_write_are_preapproved_in_auto() {
     assert_granted_by(&shell("auto", "python3 tools/x.py"), "call grant now");
 }
 
-/// THE CASE `write-mode-unchecked` KILLS: outside auto mode the host's own
-/// prompt stands.
+/// THE CASE `write-mode-unchecked` KILLS: outside auto mode the write grant
+/// holds back. Judged in [`narrow_root`], because the mode grant answers the
+/// call in `default` since CLOUD-2768.
 #[test]
+///
+/// The same write auto mode grants, so the engine's own decision is Allow and
+/// the preapprove rule is asked: a write the engine refuses never reaches it,
+/// and would pass here with the mode check deleted.
 fn an_edit_is_not_preapproved_in_default_mode() {
-    let edit = envelope(
-        "default",
-        "Edit",
-        &serde_json::json!({ "file_path": "README.md", "old_string": "a", "new_string": "b" }),
-    );
-    assert_not_granted(&edit);
+    let write = |mode| {
+        envelope(
+            mode,
+            "Write",
+            &serde_json::json!({ "file_path": "/tmp/batten-preapprove/notes.txt", "content": "x" }),
+        )
+    };
+    assert_narrow_granted_by(&write("auto"), "call grant now");
+    assert_narrow_not_granted(&write("default"));
 }
 
 /// THE CASE `write-destructive-granted` KILLS: a line carrying `rm` is the
 /// host's to ask about, even in auto mode.
 #[test]
 fn a_destructive_shell_write_is_left_to_the_host_in_auto() {
-    // Outside auto mode, the narrow write grant still withholds it.
-    assert_not_granted(&shell("default", "python3 tools/x.py && rm -rf build"));
+    // Outside auto mode, the narrow write grant still withholds it: judged in
+    // `narrow_root`, where the mode grant cannot answer for it (CLOUD-2768).
+    assert_narrow_not_granted(&shell("default", "python3 tools/x.py && rm -rf build"));
     // In auto mode CLOUD-2125's mode grant answers the call under the same
     // class, so only the row named as raising it tells whether the write grant
     // withheld itself.
@@ -663,12 +838,12 @@ fn an_auto_mode_grant_never_spends_a_refusal() {
 
 #[test]
 fn a_destructive_batten_verb_is_not_preapproved() {
-    assert_not_granted(&shell("default", "batten target prune -y"));
+    assert_narrow_not_granted(&shell("default", "batten target prune -y"));
 }
 
 #[test]
 fn a_batten_verb_beside_a_push_is_not_preapproved() {
-    assert_not_granted(&shell(
+    assert_narrow_not_granted(&shell(
         "default",
         "batten claim check && git push origin main",
     ));
@@ -678,11 +853,13 @@ fn a_batten_verb_beside_a_push_is_not_preapproved() {
 fn a_plan_mode_write_is_refused() {
     assert_plan_refused(&shell("plan", "python3 x.py"));
     assert_plan_refused(&shell("plan", "batten override spend --admission x"));
-    assert_plan_refused(&shell("plan", "git status && git commit -m x"));
+    assert_plan_refused(&shell("plan", "git status && git commit -m 'fix: x'"));
 }
 
 /// CLOUD-2289: `issue read loose` routes a Linear read to `batten mcp call`, so
-/// that route must be reachable in plan mode. A write method stays refused.
+/// that route must be reachable in plan mode. A write method stays refused,
+/// and by the verdict the direct write earns (CLOUD-2789): the mediated call
+/// is the call it mediates, so the first row to refuse one refuses the other.
 #[test]
 fn a_plan_mode_batten_mcp_read_is_allowed_and_a_write_is_not() {
     let read = shell(
@@ -691,10 +868,37 @@ fn a_plan_mode_batten_mcp_read_is_allowed_and_a_write_is_not() {
     );
     assert_not_plan_refused(&read);
     assert_granted_by(&read, "call read now");
-    assert_plan_refused(&shell(
+    let mediated = verdict(&shell(
         "plan",
         r#"batten mcp call Linear save_issue '{"id":"CLOUD-1"}'"#,
     ));
+    let direct = verdict(&envelope(
+        "plan",
+        "mcp__Linear__save_issue",
+        &serde_json::json!({"id": "CLOUD-1"}),
+    ));
+    assert_eq!(
+        mediated.as_ref().map(|(decision, _)| decision.as_str()),
+        Some("deny"),
+        "a plan-mode write is refused: {mediated:?}"
+    );
+    assert_eq!(mediated, direct, "and refused as the direct write is");
+}
+
+/// THE PROGRAM ARM, and the case `#MUTANT mcp-call-unread` reddens. A LONE
+/// `batten mcp call` is mediated into the `mcp__<server>__<method>` call it
+/// stands for (`hook::mediated_mcp_call`), so the tool arm grants it and the
+/// case above never reaches the `program.name == "batten"` arm. Beside another
+/// read the command is no single mediated call, so only that arm can say the
+/// mcp read reads.
+#[test]
+fn a_plan_mode_batten_mcp_read_beside_another_read_is_allowed() {
+    let read = shell(
+        "plan",
+        r#"batten mcp call Linear get_issue '{"id":"CLOUD-1"}' && git status"#,
+    );
+    assert_not_plan_refused(&read);
+    assert_granted_by(&read, "call read now");
 }
 
 /// CLOUD-2289: reading the session's own notification queue is a read.
@@ -774,13 +978,18 @@ fn a_plan_mode_git_with_global_options_is_allowed() {
         "git --no-pager --git-dir=/home/user/batten/.git log --oneline -1",
         "git stash list",
         "git branch --show-current",
+        // CLOUD-2354: directory `-c`, verb `status`.
+        "git -C -c status",
         "echo landed",
     ] {
         let read = shell("plan", line);
         assert_not_plan_refused(&read);
         assert_granted_by(&read, "call read now");
     }
-    assert_plan_refused(&shell("plan", "git -C /home/user/batten commit -m x"));
+    assert_plan_refused(&shell(
+        "plan",
+        "git -C /home/user/batten commit -m 'fix: x'",
+    ));
     assert_plan_refused(&shell("plan", "git branch new-branch"));
     // A global option that hands git a program to run is never a read.
     assert_plan_refused(&shell("plan", "git -c core.pager=sh log"));
@@ -804,10 +1013,13 @@ fn a_batten_mcp_read_is_preapproved_outside_plan_mode() {
         ),
         "call read now",
     );
-    assert_not_granted(&shell(
-        "default",
-        r#"batten mcp call Linear save_comment '{"issueId":"x"}'"#,
-    ));
+    assert_not_granted_by(
+        &shell(
+            "default",
+            r#"batten mcp call Linear save_comment '{"issueId":"x"}'"#,
+        ),
+        "call read now",
+    );
 }
 
 #[test]
@@ -836,7 +1048,7 @@ fn outside_plan_mode_a_write_is_not_the_presets_to_refuse() {
 }
 
 /// DENY FIRST. `grep` is on the engine's read-only floor, so the preset would
-/// grant it — and this repository's `tool run loose` refuses it through Bash.
+/// grant it — and the fixture's substitution row refuses it through Bash.
 /// The refusal must stand.
 #[test]
 fn a_refused_call_is_never_preapproved() {
@@ -925,7 +1137,7 @@ fn a_preapproval_carries_the_calls_advice_in_one_document() {
             .write_all(shell("default", "ls").as_bytes())
             .expect("write the envelope");
     }
-    let outcome = child.wait_with_output().expect("run batten adjudicate");
+    let outcome = child.streamed_wait().expect("run batten adjudicate");
     let documents: Vec<serde_json::Value> = stdout(&outcome)
         .lines()
         .filter(|line| !line.trim().is_empty())
@@ -940,4 +1152,132 @@ fn a_preapproval_carries_the_calls_advice_in_one_document() {
             .is_some_and(|text| text.contains("fixture list nudged")),
         "the advice must ride the grant: {inner}"
     );
+}
+
+/// CLOUD-2206: a plan-mode read is admitted and granted; its write twin is
+/// refused. Every operand names no repository path, so the `tool select other`
+/// substitute row, which routes a read of a tracked path to the host's read
+/// tools, stays out of the way.
+fn reads_and_writes(reads: &[&str], writes: &[&str]) {
+    for line in reads {
+        let read = shell("plan", line);
+        assert_not_plan_refused(&read);
+        assert_granted_by(&read, "call read now");
+    }
+    for line in writes {
+        assert_plan_refused(&shell("plan", line));
+    }
+}
+
+#[test]
+fn a_plan_mode_sort_read_is_allowed_and_its_writes_are_refused() {
+    reads_and_writes(
+        &["sort f"],
+        &["sort -o g f", "sort --compress-program=sh f"],
+    );
+}
+
+#[test]
+fn a_plan_mode_find_read_is_allowed_and_its_actions_are_refused() {
+    reads_and_writes(
+        &["find . -name x -print"],
+        &["find . -name x -delete", "find . -exec rm {} \\;"],
+    );
+}
+
+#[test]
+fn a_plan_mode_awk_read_is_allowed_and_its_writes_are_refused() {
+    reads_and_writes(
+        &["awk 1 f", "git ls-tree -r -l HEAD | awk '{print $4}'"],
+        &["awk '{print > \"g\"}' f", "awk 'BEGIN{system(\"rm f\")}'"],
+    );
+}
+
+#[test]
+fn a_plan_mode_sed_print_is_allowed_and_its_writes_are_refused() {
+    reads_and_writes(
+        &["sed -n 1p f", "sed -n 1,20p f"],
+        &["sed -i s/x/y/ f", "sed -n '1w out' f"],
+    );
+}
+
+#[test]
+fn a_plan_mode_gh_read_is_allowed_and_its_writes_are_refused() {
+    reads_and_writes(
+        &["gh api repos/a/b", "gh release list", "gh pr view 1"],
+        &[
+            "gh api -X POST repos/a/b",
+            "gh api --method PATCH repos/a/b",
+            "gh api repos/a/b -f x=y",
+            "gh label create x",
+            "gh co list",
+            "gh -R a/b pr view 1",
+        ],
+    );
+}
+
+#[test]
+fn a_plan_mode_curl_get_is_allowed_and_its_writes_are_refused() {
+    reads_and_writes(
+        &["curl -sS https://example.com"],
+        &[
+            "curl -X POST https://example.com",
+            "curl -d x https://example.com",
+            "curl -o out https://example.com",
+        ],
+    );
+}
+
+#[test]
+fn a_plan_mode_git_network_read_is_allowed_and_its_writes_are_refused() {
+    reads_and_writes(
+        &[
+            "git fetch",
+            "git fetch origin main",
+            "git ls-remote origin",
+            "git remote show origin",
+        ],
+        &[
+            "git fetch origin main:main",
+            "git pull",
+            "git push",
+            "git ls-remote -u sh origin",
+            "git ls-remote --upload-pack=sh origin",
+            "git fetch -u origin",
+            "git fetch 'ext::sh -c x'",
+        ],
+    );
+}
+
+#[test]
+fn a_plan_mode_read_loop_is_allowed_and_a_writing_loop_is_refused() {
+    reads_and_writes(
+        &["git ls-files | while read f; do head -c2 \"$f\"; done"],
+        &["git ls-files | while read f; do rm \"$f\"; done"],
+    );
+}
+
+/// Loading a skill writes nothing; a plan-mode `Write` is still not granted.
+#[test]
+fn a_plan_mode_skill_is_allowed_and_a_write_tool_is_not() {
+    let skill = envelope("plan", "Skill", &serde_json::json!({"skill": "batten"}));
+    assert_not_plan_refused(&skill);
+    assert_granted_by(&skill, "call read now");
+    assert_not_granted(&envelope(
+        "plan",
+        "Write",
+        &serde_json::json!({"file_path": "README.md", "content": "x"}),
+    ));
+}
+
+/// The substitute row routes a read of a tracked path to the host's read
+/// tools before plan mode is asked, so these surface its class, not plan
+/// mode's. Records the routing; kills no mutant.
+#[test]
+fn a_plan_mode_substitute_on_a_repo_path_is_routed_not_plan_refused() {
+    for line in ["sed -n 1p README.md", "find crates -name '*.rego' -print"] {
+        let (_, reason) = verdict(&shell("plan", line)).unwrap_or_default();
+        assert!(reason.contains("tool select other"), "{line}: {reason}");
+        assert!(!reason.contains("plan write refused"), "{line}: {reason}");
+    }
 }

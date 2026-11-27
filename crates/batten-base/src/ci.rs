@@ -1,0 +1,1071 @@
+//! The merge contract, derived from the host ruleset (CLOUD-54).
+//!
+//! "Which checks must pass, and how may a branch land" is a fact every gate and
+//! lifecycle task either reads from somewhere or hardcodes. The hardcode was
+//! measured: required checks inlined, and `configured.unwrap_or("squash")` for
+//! the merge method.
+//!
+//! # The host is the authority; `[ci]` is the projection
+//!
+//! The GitHub rules API exposes the merged contract, and it is the authority.
+//! `[ci]` in `batten.toml` is a **derived** copy of it — never the reverse.
+//!
+//! A committed projection rather than a live fetch, deliberately: agents fetch,
+//! gates decide. Deriving on every run would put a credentialed network call
+//! inside a gate, and a gate that can fail because a token expired is not a gate.
+//! The committed copy is offline, deterministic and `[epoch]`-observable; the
+//! drift check is what keeps it from quietly becoming a second authority.
+//!
+//! # Why this cannot be a `[[rule]]` row
+//!
+//! No rule kind carries an external payload input, and the constraint is not a
+//! pattern over the tree. It was tried both ways and both fail in opposite
+//! directions: patterning `"--squash"` exits 0 against `unwrap_or("squash")` —
+//! missing the hardcode — and patterning `"merge_method"` exits 2 against a
+//! *correct* reader's own field. The computable form is "effective pair equals
+//! host-derived pair", which is a set comparison, not a match.
+//!
+//! # Drift is symmetric
+//!
+//! Both directions are findings: a check the host requires and the config omits,
+//! and a check the config claims and the host does not require. The second is
+//! not harmless — a stale name in the projection is exactly what a downstream
+//! reader would wait on forever.
+
+use std::collections::BTreeSet;
+
+use anyhow::Result;
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+
+use crate::error::UsageError;
+
+/// The `[ci]` table: this repository's committed copy of the host's contract.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Ci {
+    /// Paths proven INERT to the hk slow tier, as prefixes (CLOUD-398).
+    ///
+    /// **A deny-list, and the inversion is the design.** `rust-paths-check`
+    /// judges an allow-list because its four jobs decide a pure function of the
+    /// Rust tree. The slow tier is not enumerable that way — `cargo-clippy`
+    /// declares no glob at all and `batten-check` declares `**` — so any list of
+    /// "what the slow tier reads" is wrong the moment somebody adds a step. This
+    /// inverts the default: the tier runs unless EVERY changed path is on a short
+    /// list proven inert to it, so a wrong entry is the only way to lose a
+    /// verdict, and the list is the whole review surface.
+    ///
+    /// CONSUMER DATA, which is why it is config and not a constant (rule 1): the
+    /// paths a given repository can prove inert are that repository's, and the
+    /// engine knows only the RELATIONSHIP — an entry ending `/` covers a
+    /// directory, anything else is an exact path.
+    ///
+    /// Empty means nothing is inert, so the tier always runs. That is the safe
+    /// direction and the honest reading of an undeclared list.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub slow_inert: Vec<String>,
+    /// Paths a bats suite can be moved by without naming them (CLOUD-1716).
+    ///
+    /// **CONSUMER DATA for `slow_inert`'s reason, and it arrived here as a
+    /// constant** (review of #928). `suites::select` carried a literal list —
+    /// this repository's task runner, gate config, lockfile and harness settings
+    /// — inside `crates/batten`, which non-negotiable rule 1 refuses: the core
+    /// knows the RELATIONSHIP (a path every suite depends on widens the run) and
+    /// the consumer knows which of its paths those are.
+    ///
+    /// Same spelling as `slow_inert`: an entry ending `/` covers a directory,
+    /// anything else is an exact path.
+    ///
+    /// **Empty WIDENS, where `slow_inert` empty narrows**, and the asymmetry is
+    /// the one `suites::select` is built around: a selection that is too wide
+    /// costs money and shows up in the bill, while one that is too narrow has no
+    /// symptom at all — the suites simply do not run and a regression lands
+    /// green. So an undeclared list is read as "this tree has not said what its
+    /// shared inputs are", and the answer is every suite.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub suite_shared: Vec<String>,
+    /// The workflow whose matrix names the targets a release builds.
+    ///
+    /// CONSUMER DATA (rule 1): `release install` compares three authorities that
+    /// agree on an asset NAME, and which file declares the build matrix is a
+    /// fact about this repository's lane rather than about the comparison.
+    /// Absent is could-not-look — the verb refuses rather than guessing a path,
+    /// because a guessed path that does not exist reads as "no matrix" and a
+    /// gate that checks nothing must not report green.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub release_workflow: Option<String>,
+    /// Exact check-run names the host requires, sorted and unique.
+    ///
+    /// Required when the table is present: a `[ci]` declaring no checks is the
+    /// half-change rule 2 refuses — it looks like the contract is recorded when
+    /// nothing is.
+    pub required_checks: Vec<String>,
+    /// The merge methods the host allows, sorted.
+    ///
+    /// Absent means **the host exposes no merge-method constraint**, which is a
+    /// different claim from "no method is allowed". Legacy branch protection
+    /// exposes none at all, so absence is the ordinary case rather than an
+    /// omission.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allowed_merge_methods: Option<Vec<String>>,
+    /// Whether the host refuses a merge commit on the trunk (CLOUD-2273).
+    ///
+    /// `land linear` reads THIS, never a constant: it holds a branch's merge
+    /// commits to zero exactly when the host will, so the local gate is never
+    /// weaker than the server's and never stricter than the consumer's trunk.
+    ///
+    /// **`None` is UNCLAIMED, the `[host]` table's reading**: drift is silent
+    /// about it, and `land linear` keeps refusing merge commits — the stricter
+    /// answer, and the one it gave before the key existed. Only a claimed
+    /// `false` relaxes it to the descent check, and only a claimed value is
+    /// compared against the host.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub required_linear_history: Option<bool>,
+    /// Required CI checks with no local counterpart, each with its reason
+    /// (CLOUD-2788). `step cover` counts a check matched here as covered.
+    ///
+    /// CONSUMER DATA for `slow_inert`'s reason: which checks a repository can
+    /// only run on another OS or a release runner is that repository's. An entry
+    /// whose `check` ends in `*` matches every check it prefixes.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub exempt: Vec<Exempt>,
+}
+
+/// One required check `step cover` accepts without a local pass (CLOUD-2788).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Exempt {
+    /// The check's name, or a prefix ending in `*`.
+    pub check: String,
+    /// Why no local run stands for it, for the reader of the table.
+    pub reason: String,
+}
+
+impl Exempt {
+    /// Whether this entry covers the required check `name`.
+    #[must_use]
+    pub fn covers(&self, name: &str) -> bool {
+        self.check
+            .strip_suffix('*')
+            .map_or(self.check == name, |prefix| name.starts_with(prefix))
+    }
+}
+
+/// The merge methods the host vocabulary admits.
+///
+/// Checked at parse so a typo is exit 1 rather than a set that silently never
+/// matches the host's.
+pub const MERGE_METHODS: &[&str] = &["merge", "rebase", "squash"];
+
+impl Ci {
+    /// Validate the table at load.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`UsageError`] (→ exit `1`) for an empty or duplicated
+    /// `required_checks`, or an unknown merge-method token.
+    pub fn validate(&self) -> Result<()> {
+        if self.required_checks.is_empty() {
+            return Err(UsageError::raise(
+                "ci.required_checks: declares no checks; a merge contract recording nothing is \
+                 not a merge contract"
+                    .to_owned(),
+            ));
+        }
+        let unique: BTreeSet<&String> = self.required_checks.iter().collect();
+        if unique.len() != self.required_checks.len() {
+            return Err(UsageError::raise(
+                "ci.required_checks: contains a duplicate; the host reports a set, and a repeated \
+                 name means the projection was hand-edited"
+                    .to_owned(),
+            ));
+        }
+        if let Some(methods) = &self.allowed_merge_methods {
+            for method in methods {
+                if !MERGE_METHODS.contains(&method.as_str()) {
+                    return Err(UsageError::raise(format!(
+                        "ci.allowed_merge_methods: `{method}` is not one of {}",
+                        MERGE_METHODS.join(", ")
+                    )));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// The contract as a comparable pair.
+    fn pair(&self) -> Contract {
+        Contract {
+            required_checks: self.required_checks.iter().cloned().collect(),
+            allowed_merge_methods: self
+                .allowed_merge_methods
+                .as_ref()
+                .map(|methods| methods.iter().cloned().collect()),
+            required_linear_history: self.required_linear_history.unwrap_or(false),
+        }
+    }
+}
+
+/// A merge contract as sets, whichever side it came from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Contract {
+    /// Exact check-run names.
+    pub required_checks: BTreeSet<String>,
+    /// Allowed merge methods, or `None` for "the host constrains none".
+    pub allowed_merge_methods: Option<BTreeSet<String>>,
+    /// Whether any rule refuses a merge commit (`required_linear_history`).
+    pub required_linear_history: bool,
+}
+
+/// Derive the contract from a rules-API response array.
+///
+/// A pure function of the payload — no network, no clock — which is what lets
+/// the gate be a byte-stable comparison over caller-supplied data.
+///
+/// * required checks: the **union** of every `required_status_checks` rule's
+///   contexts. Union because each rule adds an obligation, and a branch must
+///   satisfy all of them.
+/// * allowed merge methods: the **intersection** over `pull_request` rules that
+///   carry the key. Intersection because each rule *narrows* what may be used,
+///   and a method has to be permitted by every rule that speaks to it. No such
+///   rule means no constraint, which is `None` rather than an empty set — the
+///   two are opposite claims.
+///
+/// Unknown rule types are ignored: the host adds them over time, and a
+/// derivation that failed on one would break the gate on a change nobody made.
+///
+/// # Errors
+///
+/// Returns a [`UsageError`] (→ exit `1`) when the payload is not a JSON array.
+/// A gate handed the wrong document must say so, not derive an empty contract
+/// from it — an empty contract compared against a real `[ci]` would read as
+/// drift, and compared against an absent one as agreement.
+pub fn derive(payload: &str) -> Result<Contract> {
+    let value: Value = serde_json::from_str(payload)
+        .map_err(|err| UsageError::raise(format!("host rules payload is not JSON: {err}")))?;
+    let Some(rules) = value.as_array() else {
+        return Err(UsageError::raise(
+            "host rules payload is not a rules-API array; expected the response of `GET \
+             /repos/{owner}/{repo}/rules/branches/{branch}`"
+                .to_owned(),
+        ));
+    };
+
+    let mut required_checks = BTreeSet::new();
+    let mut allowed_merge_methods: Option<BTreeSet<String>> = None;
+    let mut required_linear_history = false;
+    for rule in rules {
+        match rule.get("type").and_then(Value::as_str) {
+            // A parameterless rule: its presence IS the constraint, and any one
+            // rule carrying it binds the branch.
+            Some("required_linear_history") => required_linear_history = true,
+            Some("required_status_checks") => {
+                let contexts = rule
+                    .pointer("/parameters/required_status_checks")
+                    .and_then(Value::as_array);
+                for check in contexts.into_iter().flatten() {
+                    if let Some(context) = check.get("context").and_then(Value::as_str) {
+                        required_checks.insert(context.to_owned());
+                    }
+                }
+            }
+            Some("pull_request") => {
+                let Some(methods) = rule
+                    .pointer("/parameters/allowed_merge_methods")
+                    .and_then(Value::as_array)
+                else {
+                    // A `pull_request` rule that does not speak to merge methods
+                    // constrains none, so it narrows nothing.
+                    continue;
+                };
+                let declared: BTreeSet<String> = methods
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(ToOwned::to_owned)
+                    .collect();
+                allowed_merge_methods = Some(match allowed_merge_methods {
+                    Some(existing) => existing.intersection(&declared).cloned().collect(),
+                    None => declared,
+                });
+            }
+            _ => {}
+        }
+    }
+
+    Ok(Contract {
+        required_checks,
+        allowed_merge_methods,
+        required_linear_history,
+    })
+}
+
+/// The smell ids this comparison can raise.
+///
+/// Named per half so a reader knows which key to edit without parsing prose.
+///
+/// A TYPE RATHER THAN FOUR STRING CONSTANTS (CLOUD-2379). An id a reader cannot
+/// explain is an id that should not reach a report, and the only way to hold
+/// that is to make the vocabulary enumerable: [`crate::lint::SmellId::Drift`]
+/// wraps this, and [`crate::lint::SmellId::all`] therefore reaches every value
+/// here without re-typing one.
+///
+/// **Appended, never inserted**, for [`crate::trust::WeakeningKind`]'s reason:
+/// `Ord` on the wrapper sorts by [`DriftId::as_str`], so declaration order is
+/// not the sort order here — but a variant added mid-list still shifts every
+/// later discriminant, which `semver` reads as a break.
+///
+/// NO `Ord`, deliberately. A [`Drift`] is never sorted by id, and the wrapper's
+/// ordering is [`crate::lint::SmellId`]'s hand-written `as_str` comparison — so
+/// a derived order here would be unreachable state that reads as the sort order
+/// and is not.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum DriftId {
+    /// The projection and the host name different required checks.
+    RequiredChecks,
+    /// The merge-method half.
+    MergeMethods,
+    /// The linear-history half (CLOUD-2273).
+    LinearHistory,
+    /// The `[host]` half (CLOUD-380).
+    HostSetting,
+}
+
+impl DriftId {
+    /// Every id, so anything ranging over the vocabulary is derived rather than
+    /// re-typed — [`crate::trust::WeakeningKind::ALL`]'s idiom.
+    pub const ALL: &'static [DriftId] = &[
+        DriftId::RequiredChecks,
+        DriftId::MergeMethods,
+        DriftId::LinearHistory,
+        DriftId::HostSetting,
+    ];
+
+    /// The stable, lowercase identifier used in machine output (§6).
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            DriftId::RequiredChecks => "ci-required-checks-drift",
+            DriftId::MergeMethods => "ci-allowed-merge-methods-drift",
+            DriftId::LinearHistory => "ci-required-linear-history-drift",
+            DriftId::HostSetting => "host-setting-drift",
+        }
+    }
+
+    /// The one-sentence meaning `policy explain` prints (CLOUD-2379).
+    #[must_use]
+    pub const fn definition(self) -> &'static str {
+        match self {
+            DriftId::RequiredChecks => {
+                "The committed `[ci] required_checks` projection and the host's branch rules name \
+                 different checks."
+            }
+            DriftId::MergeMethods => {
+                "The committed `[ci] allowed_merge_methods` projection and the host's branch rules \
+                 admit different merge methods."
+            }
+            DriftId::LinearHistory => {
+                "The committed `ci.required_linear_history` claim disagrees with whether the host \
+                 requires a linear history."
+            }
+            DriftId::HostSetting => {
+                "A `[host]` key the tree projects disagrees with what the host reports, or the \
+                 host did not report it."
+            }
+        }
+    }
+}
+
+/// The repository-object keys [`derive_host`] reads.
+///
+/// Named once so the recogniser and the reader cannot drift: a payload is the
+/// repository response iff it carries one of these, and every one of them is a
+/// setting [`Host`] projects.
+const HOST_KEYS: &[&str] = &[
+    "delete_branch_on_merge",
+    "web_commit_signoff_required",
+    "security_and_analysis",
+];
+
+/// Repository settings the host decides and the tree projects (CLOUD-380).
+///
+/// **A projection a gate polices, never a second place the fact is decided** —
+/// the same wording `[ci]` already carries, and the reason both tables exist:
+/// the host is the authority, and a value here is a claim about the host that
+/// something checks.
+///
+/// **Membership is decidable rather than a matter of taste: a setting belongs
+/// here iff changing it WEAKENS a control.** That is the test `protected`
+/// already uses one table over. Description, topics, homepage and visibility are
+/// excluded by it — none of them gates anything — and the exclusion is what
+/// keeps this from becoming a mirror of the whole repository object, which would
+/// report drift every time somebody edits a sentence.
+///
+/// Every field is optional and `None` means **unclaimed**, never "false". A
+/// consumer projecting one setting must not be told it disagrees about three it
+/// never mentioned.
+///
+/// Measured: `delete_branch_on_merge` was set on the repository and nothing in
+/// the tree said so, so turning it off would have removed it with no diff, no
+/// gate and no notification. `ci-drift` established the right pattern for
+/// exactly one host fact — the branch ruleset — and the generalisation was never
+/// made.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Host {
+    /// Whether the host deletes a branch when its pull request merges.
+    ///
+    /// Off, stale branches accumulate and `branch-hygiene`'s subject drifts from
+    /// what actually landed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delete_branch_on_merge: Option<bool>,
+    /// Whether the host requires a sign-off on web commits.
+    ///
+    /// Off, a commit can enter `main` through the web UI carrying none of the
+    /// attribution `commit-attribution` decides over.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub web_commit_signoff_required: Option<bool>,
+    /// Whether the host blocks a push carrying a detected secret.
+    ///
+    /// Off, the last barrier before a secret reaches the remote is gone, and
+    /// `no-secrets` only ever sees what a local run reached.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub secret_scanning_push_protection: Option<bool>,
+}
+
+/// Whether a JSON object is the repository response rather than some other
+/// document (CLOUD-380).
+///
+/// Exposed so the caller routes on the same recogniser [`derive_host`] enforces,
+/// instead of a second reading that could disagree with it.
+#[must_use]
+pub fn is_host_payload(object: &serde_json::Map<String, Value>) -> bool {
+    HOST_KEYS.iter().any(|key| object.contains_key(*key))
+}
+
+/// Read the host's own view of these settings out of a `GET /repos/{owner}/{repo}`
+/// response (CLOUD-380).
+///
+/// **A key the payload omits stays `None`**, which is could-not-look rather than
+/// `false`: a token with no `administration` scope gets a response missing
+/// `security_and_analysis` entirely, and reading that as "push protection is
+/// off" would report drift the host never claimed.
+///
+/// # Errors
+///
+/// [`UsageError`] when the payload is not a JSON object — the repository
+/// endpoint returns one, and an array is the branch-rules payload handed to the
+/// wrong comparison.
+pub fn derive_host(payload: &str) -> Result<Host> {
+    let value: Value = serde_json::from_str(payload)
+        .map_err(|err| UsageError::raise(format!("host settings payload is not JSON: {err}")))?;
+    let Some(object) = value.as_object() else {
+        return Err(UsageError::raise(
+            "host settings payload is not a repository object; expected the response of `GET \
+             /repos/{owner}/{repo}`"
+                .to_owned(),
+        ));
+    };
+    // A PAYLOAD CARRYING NONE OF THESE KEYS IS COULD-NOT-LOOK, NEVER AGREEMENT.
+    // `{"message": "Not Found"}` is a JSON object too, and deriving `None` for
+    // every field from it would compare clean against any projection — a failed
+    // fetch reading as "the host agrees", which is the one answer this comparison
+    // must never give.
+    if !HOST_KEYS.iter().any(|key| object.contains_key(*key)) {
+        return Err(UsageError::raise(
+            "host settings payload carries none of the repository keys this compares; expected \
+             the response of `GET /repos/{owner}/{repo}`"
+                .to_owned(),
+        ));
+    }
+    let flag = |key: &str| object.get(key).and_then(Value::as_bool);
+    Ok(Host {
+        delete_branch_on_merge: flag("delete_branch_on_merge"),
+        web_commit_signoff_required: flag("web_commit_signoff_required"),
+        secret_scanning_push_protection: object
+            .get("security_and_analysis")
+            .and_then(Value::as_object)
+            .and_then(|analysis| analysis.get("secret_scanning_push_protection"))
+            .and_then(Value::as_object)
+            .and_then(|setting| setting.get("status"))
+            .and_then(Value::as_str)
+            .map(|status| status == "enabled"),
+    })
+}
+
+/// Compare the committed `[host]` against what the host reports (CLOUD-380).
+///
+/// One [`Drift`] per disagreeing key, so a refusal names the key an author has
+/// to edit rather than reporting that "something" differs — which is what
+/// separates a real comparison from a non-zero exit on any non-200.
+///
+/// A key the config leaves unclaimed is skipped: this polices what the tree
+/// says, and says nothing about what it does not. A key the config DOES claim
+/// and the host did not report is a [`Drift`] carrying `+unreported`, never a
+/// skip — see the comment on the comparison for the credential-scope shape that
+/// makes it live.
+#[must_use]
+pub fn host_drift(committed: &Host, host: &Host) -> Vec<Drift> {
+    let mut found = Vec::new();
+    let mut compare = |key: &str, mine: Option<bool>, theirs: Option<bool>| {
+        // AN UNCLAIMED KEY IS SKIPPED; AN UNREPORTED ONE IS NOT. The two were one
+        // `else { return }` (review of #848), so a key the tree DOES claim and
+        // the host did not report read as agreement — the answer this comparison
+        // exists never to give. `derive_host` guards only the all-absent payload;
+        // a partial one is the live shape, because
+        // `security_and_analysis.secret_scanning_push_protection` is absent
+        // whenever the credential lacks the scope to see it, which is a
+        // could-not-look about the strongest control in the table.
+        let Some(mine) = mine else {
+            return;
+        };
+        let Some(theirs) = theirs else {
+            found.push(Drift {
+                id: DriftId::HostSetting,
+                key: format!("host.{key}"),
+                // The same two-token shape, with could-not-look on the host's
+                // side spelled as a TOKEN rather than as a value it never sent.
+                tokens: vec![format!("-{mine}"), String::from("+unreported")],
+            });
+            return;
+        };
+        if mine != theirs {
+            found.push(Drift {
+                id: DriftId::HostSetting,
+                key: format!("host.{key}"),
+                // POINTER, NEVER PAYLOAD: which side claims what, as two tokens,
+                // and never a byte of the host's response.
+                tokens: vec![format!("-{mine}"), format!("+{theirs}")],
+            });
+        }
+    };
+    compare(
+        "delete_branch_on_merge",
+        committed.delete_branch_on_merge,
+        host.delete_branch_on_merge,
+    );
+    compare(
+        "web_commit_signoff_required",
+        committed.web_commit_signoff_required,
+        host.web_commit_signoff_required,
+    );
+    compare(
+        "secret_scanning_push_protection",
+        committed.secret_scanning_push_protection,
+        host.secret_scanning_push_protection,
+    );
+    found
+}
+
+/// One difference between the committed projection and the host's contract.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Drift {
+    /// The smell id.
+    pub id: DriftId,
+    /// The config key path this names.
+    pub key: String,
+    /// The differing tokens, sorted, each prefixed `+` (the host has it and the
+    /// config does not) or `-` (the config claims it and the host does not).
+    pub tokens: Vec<String>,
+}
+
+impl Drift {
+    /// The token list as it renders in a pointer.
+    #[must_use]
+    pub fn rendered(&self) -> String {
+        self.tokens.join(",")
+    }
+}
+
+/// Compare the committed `[ci]` against the host-derived contract.
+///
+/// Empty when they agree. Both directions are reported: a token the host has and
+/// the config lacks is `+`, one the config claims and the host does not is `-`.
+#[must_use]
+pub fn drift(committed: &Ci, host: &Contract) -> Vec<Drift> {
+    let mine = committed.pair();
+    let mut found = Vec::new();
+
+    let checks = difference_tokens(&mine.required_checks, &host.required_checks);
+    if !checks.is_empty() {
+        found.push(Drift {
+            id: DriftId::RequiredChecks,
+            key: "ci.required_checks".to_owned(),
+            tokens: checks,
+        });
+    }
+
+    // `None` on either side is "no constraint", and it only agrees with `None`.
+    // A host that constrains methods while the config omits the key is drift in
+    // the dangerous direction — the projection silently claims freedom the host
+    // does not grant.
+    let methods = match (&mine.allowed_merge_methods, &host.allowed_merge_methods) {
+        (None, None) => Vec::new(),
+        (Some(mine), Some(host)) => difference_tokens(mine, host),
+        (None, Some(host)) => host.iter().map(|token| format!("+{token}")).collect(),
+        (Some(mine), None) => mine.iter().map(|token| format!("-{token}")).collect(),
+    };
+    if !methods.is_empty() {
+        found.push(Drift {
+            id: DriftId::MergeMethods,
+            key: "ci.allowed_merge_methods".to_owned(),
+            tokens: methods,
+        });
+    }
+
+    // A CLAIMED value only, both directions: a host requiring a line the
+    // projection denies is the dangerous one (`land linear` would admit a merge
+    // the trunk refuses), and a projection claiming a rule the host dropped
+    // refuses work the host admits. Unclaimed is skipped, as `[host]` skips it.
+    if committed
+        .required_linear_history
+        .is_some_and(|claimed| claimed != host.required_linear_history)
+    {
+        let sign = if host.required_linear_history {
+            '+'
+        } else {
+            '-'
+        };
+        found.push(Drift {
+            id: DriftId::LinearHistory,
+            key: "ci.required_linear_history".to_owned(),
+            tokens: vec![format!("{sign}required")],
+        });
+    }
+    found
+}
+
+/// The symmetric difference, sorted, signed by which side has each token.
+fn difference_tokens(mine: &BTreeSet<String>, host: &BTreeSet<String>) -> Vec<String> {
+    let mut tokens: Vec<String> = host
+        .difference(mine)
+        .map(|token| format!("+{token}"))
+        .chain(mine.difference(host).map(|token| format!("-{token}")))
+        .collect();
+    tokens.sort();
+    tokens
+}
+
+/// Whether `path` is covered by one of the declared inert prefixes.
+///
+/// An entry ending `/` covers everything beneath it; anything else must match the
+/// path exactly. That is the shell's own rule, and the exactness matters: a bare
+/// `.coderabbit` entry must not cover `.coderabbit.yaml.bak`, which is a file
+/// nobody proved inert.
+#[must_use]
+pub fn inert(inert_prefixes: &[String], path: &str) -> bool {
+    inert_prefixes.iter().any(|entry| {
+        entry
+            .strip_suffix('/')
+            .map_or_else(|| path == entry, |_| path.starts_with(entry.as_str()))
+    })
+}
+
+/// The first changed path that can move the slow tier, if any.
+///
+/// **Returns the path rather than a boolean**, because a caller reporting *why*
+/// the tier is needed is reporting a pointer, and a boolean would make the answer
+/// unexplainable — which is how a deny-list quietly stops being reviewed.
+///
+/// An EMPTY `changed` is `None` here and could-not-look at the call site, never
+/// "nothing to do": an empty diff means the comparison did not look — a wrong
+/// base, a shallow clone — and answering "skip the tier" there is the
+/// false-absent this decision exists to avoid.
+#[must_use]
+pub fn first_live_path<'a>(inert_prefixes: &[String], changed: &'a [String]) -> Option<&'a str> {
+    changed
+        .iter()
+        .map(String::as_str)
+        .find(|path| !inert(inert_prefixes, path))
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod tests {
+
+    /// The declared inert list, as `batten.toml` carries it.
+    fn inert_list() -> Vec<String> {
+        vec![
+            String::from(".serena/memories/"),
+            String::from(".coderabbit.yaml"),
+        ]
+    }
+
+    #[test]
+    fn a_directory_entry_covers_what_is_beneath_it() {
+        assert!(inert(&inert_list(), ".serena/memories/core.md"));
+        assert!(inert(&inert_list(), ".serena/memories/deep/nested.md"));
+    }
+
+    #[test]
+    fn an_exact_entry_does_not_cover_a_longer_name() {
+        // THE NARROWING THAT MATTERS: `.coderabbit.yaml.bak` is a file nobody
+        // proved inert, and a bare prefix test would have swallowed it — losing a
+        // verdict, which is the only way this list can be wrong.
+        assert!(inert(&inert_list(), ".coderabbit.yaml"));
+        assert!(!inert(&inert_list(), ".coderabbit.yaml.bak"));
+    }
+
+    #[test]
+    fn the_first_live_path_is_named_rather_than_counted() {
+        let changed = vec![
+            String::from(".serena/memories/core.md"),
+            String::from("crates/batten/src/lib.rs"),
+        ];
+        assert_eq!(
+            first_live_path(&inert_list(), &changed),
+            Some("crates/batten/src/lib.rs")
+        );
+    }
+
+    #[test]
+    fn an_all_inert_diff_names_nothing() {
+        let changed = vec![
+            String::from(".serena/memories/core.md"),
+            String::from(".coderabbit.yaml"),
+        ];
+        assert_eq!(first_live_path(&inert_list(), &changed), None);
+    }
+
+    #[test]
+    fn an_empty_list_makes_every_path_live() {
+        // The safe direction for an undeclared list: nothing is inert, so the
+        // tier always runs rather than never running.
+        let changed = vec![String::from(".serena/memories/core.md")];
+        assert_eq!(
+            first_live_path(&[], &changed),
+            Some(".serena/memories/core.md")
+        );
+    }
+    use super::*;
+
+    /// `ALL` holds every id, so [`crate::lint::SmellId::all`] reaches each one
+    /// (CLOUD-2379).
+    ///
+    /// Derived from the declaration rather than re-typed, which is
+    /// `trust`'s `the_kind_vocabulary_is_derived_rather_than_re_typed` idiom:
+    /// a variant added without an `ALL` row is one `policy explain` would never
+    /// be asked about, and the census one level up could not see the hole.
+    #[test]
+    fn every_drift_id_is_in_all() {
+        let declared = crate::testing::declared_variants(include_str!("ci.rs"), "DriftId")
+            .expect("the drift id enum is declared here and closes");
+        assert_eq!(declared.delegated, 0, "every drift id is a unit variant");
+        assert_eq!(
+            declared.unit,
+            DriftId::ALL.len(),
+            "every variant must be in `ALL`"
+        );
+    }
+
+    /// Each id answers with its own token and its own sentence (CLOUD-2379).
+    ///
+    /// **THE WHOLE-VOCABULARY CENSUS ONE LEVEL UP DOES NOT COVER THIS, and
+    /// `mutate` is what settled it.** `lint`'s
+    /// `every_smell_id_round_trips_and_all_is_whole` reaches every `DriftId`
+    /// through `SmellId::Drift`, so a per-enum check looked subsumed and was
+    /// dropped as redundant. The sweep then carried `DriftId::as_str` and
+    /// `DriftId::definition` replaced wholesale with `""` and `"xyzzy"` —
+    /// four surviving mutants — because a mutant is only killed by a case the
+    /// runner selects for the file it mutated. Subsumption across files is not
+    /// coverage; the assertion has to sit beside the code it holds.
+    #[test]
+    fn every_drift_id_has_its_own_token_and_definition() {
+        let tokens: Vec<&str> = DriftId::ALL.iter().map(|id| id.as_str()).collect();
+        let definitions: Vec<&str> = DriftId::ALL.iter().map(|id| id.definition()).collect();
+
+        crate::testing::assert_distinct_nonempty("drift id tokens", &tokens);
+        crate::testing::assert_distinct_nonempty("drift id definitions", &definitions);
+
+        // Anti-vacuity: the tokens are the ones the retired constants carried,
+        // so a rename is a finding rather than a silently renamed smell id.
+        assert_eq!(DriftId::RequiredChecks.as_str(), "ci-required-checks-drift");
+        assert_eq!(DriftId::HostSetting.as_str(), "host-setting-drift");
+    }
+
+    /// The shape this repository's own host returns: one required check, and no
+    /// `pull_request` rule at all.
+    const RULES: &str = include_str!("../../batten/tests/fixtures/ci/rules-required-checks.json");
+    /// A ruleset that also constrains merge methods.
+    const RULES_WITH_METHODS: &str =
+        include_str!("../../batten/tests/fixtures/ci/rules-merge-methods.json");
+    /// Two `pull_request` rules whose method sets overlap.
+    const RULES_TWO_PR_RULES: &str =
+        include_str!("../../batten/tests/fixtures/ci/rules-two-pr-rules.json");
+    /// A legacy branch-protection-shaped payload: no `pull_request` rule.
+    const RULES_LEGACY: &str = include_str!("../../batten/tests/fixtures/ci/rules-legacy.json");
+
+    fn ci(checks: &[&str], methods: Option<&[&str]>) -> Ci {
+        Ci {
+            slow_inert: Vec::new(),
+            suite_shared: Vec::new(),
+            release_workflow: None,
+            required_checks: checks.iter().map(|check| (*check).to_owned()).collect(),
+            allowed_merge_methods: methods
+                .map(|methods| methods.iter().map(|m| (*m).to_owned()).collect()),
+            required_linear_history: None,
+            exempt: Vec::new(),
+        }
+    }
+
+    /// Fails by: a prefix entry matching only exactly, or an exact entry
+    /// matching as a prefix.
+    #[test]
+    fn an_exemption_covers_its_name_or_its_prefix() {
+        let exact = Exempt {
+            check: String::from("windows"),
+            reason: String::from("another OS"),
+        };
+        assert!(exact.covers("windows"));
+        assert!(!exact.covers("windows-arm"));
+        let prefix = Exempt {
+            check: String::from("dist / dist (*"),
+            reason: String::from("release targets"),
+        };
+        assert!(prefix.covers("dist / dist (x86_64-unknown-linux-gnu)"));
+        assert!(!prefix.covers("dist"));
+    }
+
+    #[test]
+    fn a_linear_history_rule_is_derived_and_its_absence_is_not() {
+        assert!(derive(RULES).unwrap().required_linear_history);
+        assert!(!derive(RULES_WITH_METHODS).unwrap().required_linear_history);
+        assert!(!derive("[]").unwrap().required_linear_history);
+    }
+
+    #[test]
+    fn linear_history_drift_is_reported_in_both_directions() {
+        // The host requires a line the projection denies: `land linear` would
+        // admit a merge commit the trunk refuses.
+        let mut denies = ci(&["final"], None);
+        denies.required_linear_history = Some(false);
+        let found = drift(&denies, &derive(RULES).unwrap());
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].id, DriftId::LinearHistory);
+        assert_eq!(found[0].rendered(), "+required");
+
+        // The projection claims a rule the host does not carry.
+        let mut claims = ci(&["final"], None);
+        claims.required_linear_history = Some(true);
+        let claimed = drift(
+            &claims,
+            &derive(r#"[{"type":"required_status_checks","parameters":{"required_status_checks":[{"context":"final"}]}}]"#).unwrap(),
+        );
+        assert_eq!(claimed.len(), 1);
+        assert_eq!(claimed[0].rendered(), "-required");
+
+        // Unclaimed is silent, whichever way the host answers.
+        assert!(drift(&ci(&["final"], None), &derive(RULES).unwrap()).is_empty());
+    }
+
+    #[test]
+    fn required_checks_are_the_union_over_every_rule_that_declares_them() {
+        let contract = derive(RULES).unwrap();
+        assert_eq!(
+            contract.required_checks,
+            ["final".to_owned()].into_iter().collect()
+        );
+        assert_eq!(
+            contract.allowed_merge_methods, None,
+            "no `pull_request` rule means no constraint, which is not an empty set"
+        );
+    }
+
+    #[test]
+    fn merge_methods_are_the_intersection_because_each_rule_narrows() {
+        // One rule: its own set.
+        let one = derive(RULES_WITH_METHODS).unwrap();
+        assert_eq!(
+            one.allowed_merge_methods,
+            Some(["squash".to_owned()].into_iter().collect())
+        );
+
+        // Two rules: only what both permit. Union would *widen* the contract
+        // past what one of the rules allows, which is the dangerous direction.
+        let two = derive(RULES_TWO_PR_RULES).unwrap();
+        assert_eq!(
+            two.allowed_merge_methods,
+            Some(["squash".to_owned()].into_iter().collect()),
+            "a method has to be permitted by every rule that speaks to it"
+        );
+    }
+
+    #[test]
+    fn a_legacy_payload_constrains_no_methods_and_still_yields_its_checks() {
+        let contract = derive(RULES_LEGACY).unwrap();
+        assert!(!contract.required_checks.is_empty());
+        assert_eq!(contract.allowed_merge_methods, None);
+    }
+
+    #[test]
+    fn an_unknown_rule_type_is_ignored_rather_than_fatal() {
+        // The host adds rule types over time. Failing on one would break the
+        // gate on a change nobody made.
+        let payload = r#"[{"type":"some_future_rule","parameters":{"whatever":true}},
+             {"type":"required_status_checks","parameters":{"required_status_checks":[{"context":"final"}]}}]"#;
+        let contract = derive(payload).unwrap();
+        assert_eq!(
+            contract.required_checks,
+            ["final".to_owned()].into_iter().collect()
+        );
+    }
+
+    #[test]
+    fn a_payload_that_is_not_a_rules_array_is_a_usage_error() {
+        // Never an empty contract: that would read as agreement against an
+        // absent `[ci]` and as drift against a real one — two wrong answers from
+        // one wrong document.
+        for payload in ["{}", "\"a string\"", "17", "not json"] {
+            let err = derive(payload).unwrap_err();
+            assert!(
+                err.downcast_ref::<UsageError>().is_some(),
+                "{payload:?} must be a usage error"
+            );
+        }
+        // An empty array IS a valid answer: a branch with no rules.
+        let empty = derive("[]").unwrap();
+        assert!(empty.required_checks.is_empty());
+        assert_eq!(empty.allowed_merge_methods, None);
+    }
+
+    #[test]
+    fn agreement_is_silence() {
+        let host = derive(RULES).unwrap();
+        assert!(drift(&ci(&["final"], None), &host).is_empty());
+    }
+
+    #[test]
+    fn drift_is_reported_in_both_directions() {
+        let host = derive(RULES).unwrap();
+
+        // The host requires a check the config lacks.
+        let missing = drift(&ci(&["other"], None), &host);
+        assert_eq!(missing.len(), 1);
+        assert_eq!(missing[0].id, DriftId::RequiredChecks);
+        assert_eq!(missing[0].key, "ci.required_checks");
+        assert_eq!(
+            missing[0].rendered(),
+            "+final,-other",
+            "`+` is the host's, `-` is the config's — the sign says which to edit"
+        );
+
+        // The config claims a check the host does not require. Not harmless: a
+        // stale name is what a downstream reader would wait on forever.
+        let stale = drift(&ci(&["final", "ghost"], None), &host);
+        assert_eq!(stale.len(), 1);
+        assert_eq!(stale[0].rendered(), "-ghost");
+    }
+
+    #[test]
+    fn a_host_constraint_the_config_omits_is_drift() {
+        // The dangerous direction: the projection silently claims freedom the
+        // host does not grant.
+        let host = derive(RULES_WITH_METHODS).unwrap();
+        let found = drift(&ci(&["final"], None), &host);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].id, DriftId::MergeMethods);
+        assert_eq!(found[0].rendered(), "+squash");
+
+        // And the reverse: the config constrains where the host does not.
+        let unconstrained = derive(RULES).unwrap();
+        let claimed = drift(&ci(&["final"], Some(&["squash"])), &unconstrained);
+        assert_eq!(claimed.len(), 1);
+        assert_eq!(claimed[0].rendered(), "-squash");
+    }
+
+    #[test]
+    fn a_table_that_records_nothing_is_refused() {
+        assert!(ci(&[], None).validate().is_err());
+        assert!(
+            ci(&["final", "final"], None).validate().is_err(),
+            "a duplicate means the projection was hand-edited"
+        );
+        assert!(ci(&["final"], Some(&["fast-forward"])).validate().is_err());
+        assert!(ci(&["final"], Some(&["squash"])).validate().is_ok());
+    }
+
+    /// AN UNREPORTED KEY IS NOT AGREEMENT, and it read as agreement.
+    ///
+    /// The live shape is `security_and_analysis`: it is absent whenever the
+    /// credential lacks the scope to see it, so the strongest control in the
+    /// table was the one whose could-not-look passed silently.
+    #[test]
+    fn a_key_the_tree_claims_and_the_host_does_not_report_is_drift() {
+        let claimed = Host {
+            delete_branch_on_merge: Some(true),
+            web_commit_signoff_required: None,
+            secret_scanning_push_protection: Some(true),
+        };
+        let partial = Host {
+            delete_branch_on_merge: Some(true),
+            web_commit_signoff_required: None,
+            secret_scanning_push_protection: None,
+        };
+        let found = host_drift(&claimed, &partial);
+        assert_eq!(found.len(), 1, "the unreported claim is the one finding");
+        assert_eq!(found[0].key, "host.secret_scanning_push_protection");
+        assert_eq!(found[0].rendered(), "-true,+unreported");
+
+        // ANTI-VACUITY, both halves. A key the tree does NOT claim stays skipped
+        // — this polices what the tree says — and a key both sides report and
+        // agree on is still clean.
+        assert!(host_drift(&partial, &partial).is_empty());
+    }
+
+    #[test]
+    fn the_host_settings_are_read_from_the_repository_object() {
+        let host = super::derive_host(
+            r#"{"delete_branch_on_merge": true, "web_commit_signoff_required": false,
+                "security_and_analysis": {"secret_scanning_push_protection": {"status": "enabled"}}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            host,
+            super::Host {
+                delete_branch_on_merge: Some(true),
+                web_commit_signoff_required: Some(false),
+                secret_scanning_push_protection: Some(true),
+            }
+        );
+        let off = super::derive_host(
+            r#"{"security_and_analysis": {"secret_scanning_push_protection": {"status": "disabled"}}}"#,
+        )
+        .unwrap();
+        assert_eq!(off.secret_scanning_push_protection, Some(false));
+        assert_eq!(off.delete_branch_on_merge, None);
+    }
+
+    /// A failed fetch is a JSON object too, and reading it as every key absent
+    /// would compare clean against any projection.
+    #[test]
+    fn a_payload_that_is_no_repository_object_is_refused() {
+        assert!(super::derive_host(r#"{"message": "Not Found"}"#).is_err());
+        assert!(super::derive_host("[]").is_err());
+        assert!(super::derive_host("not json").is_err());
+    }
+
+    #[test]
+    fn the_host_payload_is_recognised_by_any_one_repository_key() {
+        let object = |raw: &str| {
+            serde_json::from_str::<serde_json::Value>(raw)
+                .unwrap()
+                .as_object()
+                .unwrap()
+                .clone()
+        };
+        assert!(super::is_host_payload(&object(
+            r#"{"delete_branch_on_merge": true}"#
+        )));
+        assert!(!super::is_host_payload(&object(r#"{"message": "x"}"#)));
+    }
+
+    #[test]
+    fn every_declared_method_token_validates() {
+        // The vocabulary is a census, so a token added to `MERGE_METHODS`
+        // without being accepted here would fail loudly.
+        for method in MERGE_METHODS {
+            assert!(ci(&["final"], Some(&[method])).validate().is_ok());
+        }
+    }
+}

@@ -3,8 +3,8 @@
 # In auto mode a subagent or a workflow is never put to the operator (CLOUD-2026).
 #
 # The owner's ruling, 2026-09-29: in auto mode subagents and workflows never
-# prompt, implementers included; only sibling-session dispatch is gated, by
-# receipt (`dispatch-is-preapproved`). A subagent works in this one checkout and
+# prompt, implementers included; only sibling-session dispatch is gated, by its
+# message's brief lint (`dispatch-brief-is-linted`). A subagent works in this one checkout and
 # every tool call it makes passes through the same hook, so each of its writes
 # meets every deny in the tree on its own; the spawn itself decides nothing a
 # gate could refuse later.

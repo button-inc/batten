@@ -1,82 +1,102 @@
-//! The provisioning script supersedes the downloaded consumer artifact with this
-//! clone's own build (CLOUD-1859).
+//! The engine a session runs is the pinned release, never this clone's build,
+//! unless the tree pins a source (CLOUD-2840, which retired `setup.sh` under
+//! CLOUD-2739).
 //!
-//! `deps-install` runs `install.sh`, which resolves `-musl` for every Linux host
-//! deliberately — the static binary runs on any Linux whatever its glibc version.
-//! That is right for a consumer and wrong for a dev container, because the binary
-//! it leaves on PATH is the one every harness hook spawns on every tool call.
+//! `setup.sh` superseded the downloaded musl artifact with `mise run
+//! install:local`: a cold `cargo build --release` (224.87 s measured) on every
+//! fresh container, to escape musl's allocator (1444 ms against 96 ms per
+//! adjudication, CLOUD-1859). Both halves now belong to the release path. The
+//! bootstrap ends by running `batten engine install`, which fetches the gnu build
+//! wherever a gnu binary runs (`engine::gnu_twin`), and CI runs the
+//! released engine too, so a session that compiled its own would be judged by
+//! an engine nothing else uses.
 //!
-//! Measured 2026-09-19, same version, same tree, same box, warm and repeated:
-//! `adjudicate` 1444ms against 96ms, `check` over 143 rules 15501ms against
-//! 1791ms. `strace -c` on one adjudication: 5779 syscalls against 362, of which
-//! 2728 `mmap` and 2718 `munmap` — mallocng returning freed memory to the OS on
-//! every free where glibc retains its arenas.
-//!
-//! THE SUBJECT IS THE CALL, NOT THE BINARY. A test asserting that the installed
-//! `batten` is dynamically linked would pass or fail on whatever the machine
-//! running the suite happens to have provisioned, which is a property of the host
-//! rather than of this repository. What this tree decides is whether its own
-//! provisioning script asks for the supersession, and that is what is asserted.
+//! THE SUBJECT IS THE DECLARATION. Which binary a given host ends up with is a
+//! property of that host; what this tree decides is which command its two engine
+//! rows repair with, and that is what is asserted.
 
 use crate::common;
 
-/// The needle is assembled rather than spelled, because this file is scanned by
-/// the same censuses that scan the tree and a literal here is a second site
+/// The two `[[startup]]` rows that repair the engine.
+const ENGINE_ROWS: [&str; 2] = ["mediator-matches-the-tree", "engine-resolves-every-row"];
+
+/// The pinned-release install, as a row's `repair` spells it.
+const RELEASE_INSTALL: [&str; 3] = ["batten", "engine", "install"];
+
+/// The local build, assembled rather than spelled: this file is scanned by the
+/// same censuses that scan the tree, and a literal here would be a second site
 /// claiming to be the call (`rules/scanning.md`).
-fn supersession_call() -> String {
-    ["mise run ", "install:local"].concat()
+fn local_build() -> String {
+    ["install", ":local"].concat()
 }
 
-/// The predicate, factored out so the anti-vacuity case below drives the same
-/// reading the real one does rather than a paraphrase of it.
-fn supersedes(script: &str) -> bool {
-    script.contains(&supersession_call())
+/// The committed `[[startup]]` rows.
+fn startup_rows() -> Vec<toml::Value> {
+    let text =
+        std::fs::read_to_string(common::at_root("batten.toml")).expect("the committed authority");
+    let table: toml::Table = text.parse().expect("the committed authority parses");
+    table["startup"]
+        .as_array()
+        .expect("[[startup]] rows are declared")
+        .clone()
 }
 
-fn committed_setup() -> String {
-    let path = common::at_root("setup.sh");
-    std::fs::read_to_string(&path)
-        .unwrap_or_else(|e| panic!("setup.sh should be readable at {}: {e}", path.display()))
+/// A row's `repair` argv, or empty where it declares none.
+fn repair_of(row: &toml::Value) -> Vec<String> {
+    row.get("repair")
+        .and_then(toml::Value::as_array)
+        .map(|argv| {
+            argv.iter()
+                .filter_map(toml::Value::as_str)
+                .map(str::to_owned)
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
+/// Fails by: an engine row repairing with anything but the pinned release —
+/// the compile this file's header measured, back on every container.
 #[test]
-fn setup_supersedes_the_consumer_artifact_with_the_local_build() {
-    assert!(
-        supersedes(&committed_setup()),
-        "setup.sh should invoke the supersession task after deps-install, or every \
-         harness hook in a provisioned container spawns the musl consumer artifact"
-    );
+fn both_engine_rows_repair_with_the_pinned_release() {
+    let rows = startup_rows();
+    for id in ENGINE_ROWS {
+        let row = rows
+            .iter()
+            .find(|row| row.get("id").and_then(toml::Value::as_str) == Some(id))
+            .unwrap_or_else(|| panic!("`{id}` is a committed [[startup]] row"));
+        assert_eq!(
+            repair_of(row),
+            RELEASE_INSTALL,
+            "`{id}` repairs with the pinned release"
+        );
+    }
 }
 
+/// Fails by: any `[[startup]]` row compiling the engine. A source pin is the one
+/// case a local build is right, and that is `batten engine install`'s own branch
+/// to take (`mise exec -- batten engine install` builds a source pin), never a
+/// row's.
 #[test]
-fn a_setup_that_never_supersedes_is_refused() {
-    // ANTI-VACUITY. Without this, the case above passes over any file that happens
-    // to contain the string, and would keep passing if the predicate were widened
-    // to something that cannot fail.
-    let without = "mise run deps-install || echo 'incomplete' >&2\n";
-    assert!(
-        !supersedes(without),
-        "a provisioning script that never supersedes must be refused by the same \
-         reading that accepts the committed one"
-    );
+fn no_startup_row_builds_the_engine_locally() {
+    for row in startup_rows() {
+        let repair = repair_of(&row).join(" ");
+        assert!(
+            !repair.contains(&local_build()),
+            "{:?} repairs with a local build: {repair}",
+            row.get("id")
+        );
+    }
 }
 
+/// ANTI-VACUITY: the reading above refuses the repair it was written against,
+/// so a predicate widened until it cannot fail is caught here.
 #[test]
-fn the_supersession_runs_after_the_install_it_supersedes() {
-    // ORDER IS THE WHOLE OF IT. `install:local` writes to `install.sh`'s own
-    // destination, so running it BEFORE `deps-install` would have the download
-    // overwrite the local build and leave the slow binary on PATH — green by this
-    // file's first case and wrong in the container.
-    let script = committed_setup();
-    let install = script
-        .find(&["mise run ", "deps-install"].concat())
-        .expect("setup.sh should run the provisioning install");
-    let supersede = script
-        .find(&supersession_call())
-        .expect("setup.sh should run the supersession");
-    assert!(
-        supersede > install,
-        "the supersession must follow the install it supersedes, or the download \
-         overwrites the local build"
-    );
+fn a_row_that_builds_locally_is_refused() {
+    let row: toml::Value = toml::from_str(&format!(
+        "id = \"x\"\nrepair = [\"mise\", \"run\", \"{}\"]\n",
+        local_build()
+    ))
+    .expect("a row parses");
+    assert!(repair_of(&row).join(" ").contains(&local_build()));
+    assert_ne!(repair_of(&row), RELEASE_INSTALL);
 }

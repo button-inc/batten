@@ -105,6 +105,14 @@ pub const SESSION_SCHEMA: u32 = 1;
 /// The host's id for the session this process serves.
 pub const SESSION_ENV: &str = "BATTEN_SESSION";
 
+/// The off-box state repository, as the path it has on the project origin's
+/// host (CLOUD-2717 ruling 2).
+///
+/// Ambient, for [`SESSION_ENV`]'s reason: it is a fact about the machine this
+/// process runs on, never a setting a repository commits, so there is no
+/// config-file spelling and no surface flag. Unset means the feature is off.
+pub const STATE_REPO_ENV: &str = "BATTEN_STATE_REPO";
+
 /// The session a warm fork was forked from. Absent means "not a fork".
 pub const PARENT_ENV: &str = "BATTEN_SESSION_PARENT";
 
@@ -256,7 +264,7 @@ impl SessionRecord {
 /// is its own root, with no cursor", which re-syncs — the safe direction, since a
 /// half-read cursor would skip findings.
 fn read_record(path: &Path) -> Option<SessionRecord> {
-    let text = std::fs::read_to_string(path).ok()?;
+    let text = crate::fsio::read_to_string(path).ok()?;
     let record: SessionRecord = serde_json::from_str(&text).ok()?;
     (record.schema == SESSION_SCHEMA).then_some(record)
 }
@@ -516,7 +524,7 @@ pub fn forget_result(store_dir: &Path, root: &Root) -> Result<()> {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
-
+    #[cfg(test)]
     fn store(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
             "batten-session-{name}-{}-{:?}",
@@ -877,5 +885,3 @@ mod tests {
 
 // The host-declared session over the compiled binary: `state record` reads it
 // from the environment the suite hands the child, and records its lineage.
-//MUTANT-SUITE crates/batten/tests/it/advisory_drain.rs
-//MUTANT declared-session-unread|s@^    declared_with_env(\&\x7cname\x7c std::env::var(name).ok())$@    declared_with_env(\&\x7c_\x7c None)@|a_warm_fork_resumes_from_its_parents_watermark

@@ -18,6 +18,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
+use batten::capture::Streamed as _;
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -235,7 +236,7 @@ fn under_config_from_the_epoch_is_the_refs_surface_not_the_working_trees() {
         let output = Command::new("git")
             .args(args)
             .current_dir(&dir)
-            .output()
+            .streamed_output()
             .expect("run git");
         assert!(output.status.success(), "git {args:?} failed");
     }
@@ -254,7 +255,7 @@ fn under_config_from_the_epoch_is_the_refs_surface_not_the_working_trees() {
         .args(["config", "epoch", "--config-from", "origin/main"])
         .current_dir(&dir)
         .env_remove("BATTEN_CONFIG_FROM")
-        .output()
+        .streamed_output()
         .expect("run batten config epoch --config-from");
     assert_eq!(from_ref.status.code(), Some(0));
     assert_eq!(
@@ -268,7 +269,10 @@ fn under_config_from_the_epoch_is_the_refs_surface_not_the_working_trees() {
 
 #[test]
 fn config_epoch_is_declared_read_in_the_spec() {
-    let output = batten().arg("spec").output().expect("run batten spec");
+    let output = batten()
+        .arg("spec")
+        .streamed_output()
+        .expect("run batten spec");
     let spec: serde_json::Value = serde_json::from_slice(&output.stdout).expect("spec is JSON");
     let config = spec["subcommands"]
         .as_array()
@@ -295,7 +299,7 @@ fn doctor_json_carries_the_same_epoch_the_verb_prints() {
     let output = batten()
         .args(["doctor", "--json"])
         .current_dir(&dir)
-        .output()
+        .streamed_output()
         .expect("run batten doctor");
     let report: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("the report is JSON");
@@ -316,7 +320,7 @@ fn doctor_omits_the_epoch_when_the_surface_cannot_be_read() {
     let output = batten()
         .args(["doctor", "--json"])
         .current_dir(&dir)
-        .output()
+        .streamed_output()
         .expect("run batten doctor");
     assert_eq!(output.status.code(), Some(1));
     let report: serde_json::Value =
@@ -332,7 +336,7 @@ fn this_repositorys_own_epoch_is_computable() {
     let output = batten()
         .args(["config", "epoch"])
         .current_dir(&root)
-        .output()
+        .streamed_output()
         .expect("run batten config epoch");
     assert_eq!(
         output.status.code(),
@@ -366,7 +370,7 @@ fn epoch_in(dir: &Path, home: &Path, args: &[&str]) -> Output {
     command
         .state_dir(home)
         .current_dir(dir)
-        .output()
+        .streamed_output()
         .expect("run batten config epoch")
 }
 
@@ -634,7 +638,7 @@ fn config_from_neither_reads_nor_writes_the_cache() {
         let output = Command::new("git")
             .args(args)
             .current_dir(&dir)
-            .output()
+            .streamed_output()
             .expect("run git");
         assert!(output.status.success(), "git {args:?} failed");
     }

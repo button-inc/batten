@@ -12,9 +12,9 @@
 
 use crate::common;
 
+use batten::config_model::Rule;
 use batten::facts::Look;
 use batten::policy;
-use batten::rules::Rule;
 
 /// A mediated row registering `module`.
 fn row(module: &str) -> Rule {
@@ -77,7 +77,7 @@ fn root_with(name: &str, source: &str) -> std::path::PathBuf {
 /// One load of the fixture row at `checks`.
 fn load(root: &std::path::Path, checks: policy::ModuleChecks) -> policy::Bundle {
     // The module's own tokens, declared, so the checked load accepts them.
-    let verdicts: &'static [batten::verdict::DeclaredVerdict] =
+    let verdicts: &'static [batten::config_model::DeclaredVerdict] =
         Box::leak(common::verdicts_in(root).into_boxed_slice());
     let vocabulary = policy::Vocabulary {
         verdicts,
@@ -151,7 +151,9 @@ fn a_warm_load_from_the_working_directory_compiles_no_engine() {
 
 /// CLOUD-2315: inside one hook call's scope each rule of a bundle is evaluated
 /// ONCE per input, however often it is asked — and the answers are the ones an
-/// unscoped evaluation gives. Outside the scope nothing is memoised.
+/// unscoped evaluation gives. Outside the scope nothing is memoised. A rule is
+/// evaluated with its family and no other, so a call asking only `deny` never
+/// runs the grant's rules.
 #[test]
 fn one_call_evaluates_each_rule_once() {
     let root = root_with("once", ANSWERS_EVERY_RULE);
@@ -163,10 +165,12 @@ fn one_call_evaluates_each_rule_once() {
     for (input, expected) in CALLS.iter().zip(&unscoped) {
         let before = policy::bytecode_evaluations();
         assert_eq!(&decided(&bundle, input), expected, "{input}");
+        // TWO, one per family asked: the adjudication, then the grant, whose
+        // two rules share theirs. A `PostToolUse` asks only the first.
         assert_eq!(
             policy::bytecode_evaluations() - before,
-            1,
-            "deny, preapprove and rewrite share one evaluation: {input}"
+            2,
+            "deny is one evaluation, and preapprove and rewrite share a second: {input}"
         );
         let before = policy::bytecode_evaluations();
         assert_eq!(&decided(&bundle, input), expected, "{input}, asked again");
@@ -222,12 +226,109 @@ fn an_edited_module_is_not_answered_from_stale_bytecode() {
     );
 }
 
+/// A mediated module whose decision rides a `:=` bound to a string literal
+/// (#1276). The `:=` guard (CLOUD-2696) was spliced one byte early, inside the
+/// literal, so the hook path's bytecode bound `"read; op == op"` and let the
+/// read through while the interpreter — and `policy test` — refused it.
+const LITERAL_DECIDES: &str = r#"
+package batten.cached
+
+import rego.v1
+
+rules contains "write refused probe"
+
+refused_operation := op if {
+	op := "read"
+}
+
+violation contains {"rule": "write refused probe", "verdict": "write refused probe"} if {
+	input.call.operation == refused_operation
+}
+"#;
+
+#[test]
+fn a_hook_call_decides_a_literal_binding_as_the_interpreter_does() {
+    let root = root_with("literal", LITERAL_DECIDES);
+    // A checked load decides on bytecode too; its interpreter is the reference.
+    let interpreted = load(&root, policy::ModuleChecks::RunOverSelection)
+        .as_interpreted()
+        .expect("a checked load keeps its interpreter");
+    let compiled = load(&root, policy::ModuleChecks::SkipOnHotPath);
+    assert!(compiled.is_bytecode(), "the hook path decides on bytecode");
+    let read = r#"{"call":{"operation":"read"}}"#;
+    let Look::Is(expected) = policy::deny(&interpreted, read) else {
+        panic!("the interpreter answers");
+    };
+    assert_eq!(expected.len(), 1, "the interpreter refuses the read");
+    assert_eq!(
+        policy::deny(&compiled, read),
+        Look::Is(expected),
+        "the hook call refuses it too"
+    );
+}
+
+/// #1276: every load decides on bytecode, and an unchanged module's second
+/// load — at any [`policy::ModuleChecks`] — reads the `.rvm` entry instead of
+/// compiling it; a changed module compiles afresh.
+///
+/// Fails by: a checked load (`check`, `enforce`) deciding on the interpreter,
+/// as every one did before; a warm load compiling the program again; an edited
+/// module answered from the entry its previous text wrote.
+#[test]
+fn an_unchanged_module_loads_its_program_from_the_cache_and_a_changed_one_recompiles() {
+    let compiled = policy::Execution::Bytecode { cached: false };
+    let cached = policy::Execution::Bytecode { cached: true };
+    let root = root_with("rvm-reuse", ANSWERS_EVERY_RULE);
+    let first = load(&root, policy::ModuleChecks::Run);
+    assert_eq!(
+        first.execution(),
+        compiled,
+        "the first load compiles bytecode"
+    );
+    for checks in [
+        policy::ModuleChecks::Run,
+        policy::ModuleChecks::RunOverSelection,
+        policy::ModuleChecks::SkipOnHotPath,
+    ] {
+        let again = load(&root, checks);
+        assert_eq!(again.execution(), cached, "{checks:?} reads the entry");
+        for input in CALLS {
+            assert_eq!(decided(&again, input), decided(&first, input), "{input}");
+        }
+    }
+    // A distinct text per load, so each one is an edit its predecessor's entry
+    // does not answer.
+    for checks in [
+        policy::ModuleChecks::Run,
+        policy::ModuleChecks::SkipOnHotPath,
+    ] {
+        std::fs::write(
+            root.join("cached.rego"),
+            format!("{EDITED}\n# {checks:?}\n"),
+        )
+        .expect("edit module");
+        let edited = load(&root, checks);
+        assert_eq!(
+            edited.execution(),
+            compiled,
+            "{checks:?} recompiles an edit"
+        );
+        let Look::Is(refused) = policy::deny(&edited, r#"{"call":{"operation":"read"}}"#) else {
+            panic!("the edited module answers");
+        };
+        assert_eq!(refused.len(), 1, "{checks:?} answers from the edited text");
+    }
+}
+
 #[test]
 fn bytecode_answers_as_the_interpreter_does() {
     let root = root_with("agree", ANSWERS_EVERY_RULE);
-    let interpreted = load(&root, policy::ModuleChecks::Run);
+    let checked = load(&root, policy::ModuleChecks::Run);
+    let interpreted = checked
+        .as_interpreted()
+        .expect("a checked load keeps its interpreter");
     let compiled = load(&root, policy::ModuleChecks::SkipOnHotPath);
-    assert!(compiled.is_bytecode() && !interpreted.is_bytecode());
+    assert!(compiled.is_bytecode() && checked.is_bytecode() && !interpreted.is_bytecode());
     let mut refused = 0;
     for input in CALLS {
         let (denied, approved, rewritten) = decided(&compiled, input);
@@ -255,7 +356,7 @@ fn the_repositorys_bundles_answer_alike_compiled_and_interpreted() {
     let rows: Vec<Rule> = resolved
         .rules
         .iter()
-        .filter(|rule| rule.scope == batten::rules::RuleScope::MediatedCall)
+        .filter(|rule| rule.scope == batten::preset_catalog::RuleScope::MediatedCall)
         .cloned()
         .collect();
     let vocabulary = policy::Vocabulary {
@@ -268,7 +369,16 @@ fn the_repositorys_bundles_answer_alike_compiled_and_interpreted() {
         records: &resolved.records,
     };
     let load = |checks| policy::load(&repo, &rows, vocabulary, checks, None).expect("loads");
-    let interpreted = load(policy::ModuleChecks::RunOverSelection);
+    // A checked load decides on bytecode too now (#1276); its interpreter,
+    // kept for the checks, is what the bytecode is compared against.
+    let interpreted: Vec<policy::Bundle> = load(policy::ModuleChecks::RunOverSelection)
+        .iter()
+        .map(|bundle| {
+            bundle
+                .as_interpreted()
+                .expect("a checked load keeps its interpreter")
+        })
+        .collect();
     let compiled = load(policy::ModuleChecks::SkipOnHotPath);
     assert_eq!(interpreted.len(), compiled.len());
     assert!(
@@ -304,9 +414,17 @@ fn the_repositorys_bundles_answer_alike_compiled_and_interpreted() {
         }})
         .to_string(),
     ];
+    // EVERY MODULE'S OWN CASE INPUTS, NOT ONLY THE FIXED CALLS ABOVE (#1276).
+    // The fixed calls never reached the input that split the two evaluators
+    // over an undefined helper (CLOUD-2696); a module's cases are the inputs
+    // its author proved decisions over, so they are the ones both must agree on.
+    let mut corpus = 0;
     for (left, right) in interpreted.iter().zip(&compiled) {
         assert_eq!(left.id(), right.id());
-        for input in &calls {
+        let cases = policy::case_inputs(left)
+            .unwrap_or_else(|| panic!("{}: its case inputs are readable", left.id()));
+        corpus += cases.len();
+        for input in calls.iter().chain(&cases) {
             assert_eq!(
                 decided(right, input),
                 decided(left, input),
@@ -315,4 +433,11 @@ fn the_repositorys_bundles_answer_alike_compiled_and_interpreted() {
             );
         }
     }
+    // A corpus that collected nothing compares nothing, so a collector that
+    // silently stopped reading `with input as` fails here rather than passing.
+    // 283 measured on #1276; the floor sits just under it.
+    assert!(
+        corpus >= 250,
+        "the cases' inputs reach the comparison: {corpus}"
+    );
 }

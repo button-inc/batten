@@ -33,9 +33,10 @@ use std::path::Path;
 
 use anyhow::Result;
 
+use crate::config_model::McpConfig;
 use crate::exit::ExitCode;
 use crate::facts::{Format, Look, Node};
-use crate::mcp::{self, McpConfig};
+use crate::mcp;
 
 /// What the committed permissions say about one exposed tool.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -140,7 +141,7 @@ fn names_verb(rule: &str, alias: &str, verb: &str) -> bool {
 /// An absent arm is an empty list rather than `None`: a file that parses and
 /// states no deny has answered.
 fn rules_in(settings: &Path, arm: &str) -> Option<Vec<String>> {
-    let text = std::fs::read_to_string(settings).ok()?;
+    let text = crate::fsio::read_to_string(settings).ok()?;
     let document = crate::rules::parse_node(Format::Json, &text).ok()?;
     Some(match document.at(&format!("permissions.{arm}")) {
         Look::Is(Node::List(items)) => items
@@ -188,8 +189,6 @@ fn governed_maps<'a>(inputs: &Inputs<'a>) -> Vec<Governed<'a>> {
 /// EXACTLY ONE selector must match: none is an ungoverned server, and several
 /// would make the answer depend on the order the selectors were declared. Both
 /// are silence.
-//MUTANT-SUITE crates/batten/tests/it/connector_allow.rs
-//MUTANT connector-translated|s@mcp::endpoint_names(&endpoint, needle))$@true)@|a_claude_ai_connector_resolves_to_silence_never_a_grant
 fn alias_in(entry: &Node, selectors: &[(&str, &str)]) -> Option<String> {
     let endpoint = mcp::endpoint_of(entry)?;
     // THE STRICT MATCH, never the dispatch selector's substring: this licenses a
@@ -226,8 +225,6 @@ fn alias_of(inputs: &Inputs<'_>, key: &str) -> Option<String> {
 ///
 /// Deny is tested before allow, or an allow glob would pre-approve a verb the
 /// same file denies.
-//MUTANT deny-loses-to-allow-glob|s@^    let verdict = if states("deny") {@    let verdict = if false \&\& states("deny") {@|a_deny_outranks_an_allow_glob_over_the_same_server
-//MUTANT bare-grant-unhonoured|s@^        None => mcp::is_bare_server_rule(rule, alias),@        None => false,@|a_bare_server_rule_grants_every_verb_and_a_deny_still_wins
 #[must_use]
 pub fn resolve(inputs: &Inputs<'_>, tool: &str) -> Resolution {
     let Some((server, verb)) = split_tool(tool) else {
@@ -323,7 +320,6 @@ pub fn run_grant(
 /// The handler contract: an allow is the reason on stdout at exit 0, which a
 /// pre-approving row turns into the grant; a deny is the reason on stderr at
 /// exit 2; silence is nothing at exit 0.
-//MUTANT translated-allow-not-emitted|s@^        Verdict::Allow => {$@        Verdict::Allow => { return Ok(ExitCode::Success);@|a_committed_allow_is_a_preapproval_under_a_flipped_name
 fn guard(
     inputs: &Inputs<'_>,
     stdin: &str,
@@ -368,7 +364,7 @@ fn guard(
 #[cfg(test)]
 mod tests {
     use super::*;
-
+    #[cfg(test)]
     #[test]
     fn a_tool_name_splits_at_the_first_separator_after_the_server() {
         assert_eq!(split_tool("mcp__box__verb"), Some(("box", "verb")));

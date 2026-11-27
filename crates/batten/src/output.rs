@@ -48,73 +48,31 @@ use std::ffi::OsStr;
 use std::io::Write;
 
 use anyhow::Result;
-use clap::ValueEnum;
 
 use crate::UsageError;
 use crate::surface;
+use crate::surface_table::Verbosity;
 
-/// How much Batten says on stderr, quietest first.
-///
-/// The derived [`Ord`] is the ladder: `Silent < Quiet < Normal < Verbose < Debug
-/// < Trace`, which is what makes [`Verbosity::admits`] a comparison rather than
-/// a table anyone maintains.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
-#[non_exhaustive]
-pub enum Verbosity {
-    /// Say nothing but a verdict or a usage error.
-    Silent,
-    /// Suppress ordinary progress; keep warnings.
-    Quiet,
-    /// The default.
-    Normal,
-    /// Explain what is being checked.
-    Verbose,
-    /// Add resolution detail.
-    Debug,
-    /// Add everything.
-    Trace,
-}
-
-impl Verbosity {
+/// `Verbosity` behaviour that belongs to this module's layer, not the type's (CLOUD-2793).
+pub trait VerbosityExt: Sized {
     /// Every rung, so anything ranging over the ladder is derived rather than
     /// re-typed — the token parse, the surface's rung census, and the
     /// total-order test all read this one list.
-    pub const ALL: &'static [Verbosity] = &[
-        Verbosity::Silent,
-        Verbosity::Quiet,
-        Verbosity::Normal,
-        Verbosity::Verbose,
-        Verbosity::Debug,
-        Verbosity::Trace,
-    ];
+    const ALL: &'static [Verbosity];
 
     /// The default rung, and the origin the ladder is measured from.
-    pub const DEFAULT: Verbosity = Verbosity::Normal;
+    const DEFAULT: Verbosity;
 
     /// The rung's token, as `--log-level` and `BATTEN_LOG_LEVEL` spell it.
     #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Verbosity::Silent => "silent",
-            Verbosity::Quiet => "quiet",
-            Verbosity::Normal => "normal",
-            Verbosity::Verbose => "verbose",
-            Verbosity::Debug => "debug",
-            Verbosity::Trace => "trace",
-        }
-    }
+    fn as_str(&self) -> &'static str;
 
     /// The rung named by `token`, or `None` if it names none.
     ///
     /// Derived from [`Verbosity::ALL`] and [`Verbosity::as_str`], so the
     /// accepted spellings are exactly the emitted ones by construction.
     #[must_use]
-    pub fn from_token(token: &str) -> Option<Verbosity> {
-        Verbosity::ALL
-            .iter()
-            .copied()
-            .find(|rung| rung.as_str() == token)
-    }
+    fn from_token(token: &str) -> Option<Verbosity>;
 
     /// Step `extra` further rungs in the direction this rung lies from
     /// [`Verbosity::DEFAULT`], clamped at the end of the ladder.
@@ -125,7 +83,44 @@ impl Verbosity {
     /// than an error. `Normal.further(n)` is `Normal`: there is no direction to
     /// step in, which is why no flag selects it.
     #[must_use]
-    pub fn further(self, extra: u8) -> Verbosity {
+    fn further(self, extra: u8) -> Verbosity;
+
+    /// Whether a message declared at `rung` is said at this verbosity.
+    #[must_use]
+    fn admits(self, rung: Verbosity) -> bool;
+}
+
+impl VerbosityExt for Verbosity {
+    const ALL: &'static [Verbosity] = &[
+        Verbosity::Silent,
+        Verbosity::Quiet,
+        Verbosity::Normal,
+        Verbosity::Verbose,
+        Verbosity::Debug,
+        Verbosity::Trace,
+    ];
+
+    const DEFAULT: Verbosity = Verbosity::Normal;
+
+    fn as_str(&self) -> &'static str {
+        match self {
+            Verbosity::Silent => "silent",
+            Verbosity::Quiet => "quiet",
+            Verbosity::Normal => "normal",
+            Verbosity::Verbose => "verbose",
+            Verbosity::Debug => "debug",
+            Verbosity::Trace => "trace",
+        }
+    }
+
+    fn from_token(token: &str) -> Option<Verbosity> {
+        Verbosity::ALL
+            .iter()
+            .copied()
+            .find(|rung| rung.as_str() == token)
+    }
+
+    fn further(self, extra: u8) -> Verbosity {
         if extra == 0 || self == Verbosity::DEFAULT {
             return self;
         }
@@ -151,9 +146,7 @@ impl Verbosity {
         Verbosity::ALL.get(index).copied().unwrap_or(self)
     }
 
-    /// Whether a message declared at `rung` is said at this verbosity.
-    #[must_use]
-    pub fn admits(self, rung: Verbosity) -> bool {
+    fn admits(self, rung: Verbosity) -> bool {
         self >= rung
     }
 }
@@ -276,7 +269,7 @@ pub fn resolve_with(
                 "{LOG_LEVEL_ENV}: {token:?} names no verbosity; expected one of {}",
                 Verbosity::ALL
                     .iter()
-                    .map(|rung| rung.as_str())
+                    .map(VerbosityExt::as_str)
                     .collect::<Vec<_>>()
                     .join(", ")
             ))
@@ -500,7 +493,7 @@ pub fn message(
         return Ok(());
     }
     // A finding already opens with `batten <severity>` (CLOUD-2145).
-    if crate::refusal::is_headed(text) {
+    if crate::grammar::is_headed(text) {
         return writeln!(err, "{text}");
     }
     writeln!(err, "batten: {text}")
@@ -519,7 +512,7 @@ pub fn message(
 pub fn error(mode: Mode, err: &mut dyn Write, text: &str) -> std::io::Result<()> {
     // A finding already opens with `batten <severity>`: a second `batten:` in
     // front of it would be the channel naming itself twice.
-    if crate::refusal::is_headed(text) {
+    if crate::grammar::is_headed(text) {
         return writeln!(err, "{text}");
     }
     if mode.color {
@@ -558,7 +551,7 @@ pub fn verdict(err: &mut dyn Write, text: &str) -> std::io::Result<()> {
 /// distinction is exactly what a name-based census could not draw. Implementing
 /// this is what draws it.
 ///
-/// [`crate::rules::Finding`] is the asymmetry that proved the gap: the
+/// [`crate::findings::Finding`] is the asymmetry that proved the gap: the
 /// most-emitted type in the engine had no renderer at all, so its pointer was
 /// composed by an inline `match` on `Option<usize>` at two separate call sites.
 ///
@@ -629,6 +622,9 @@ where
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
+    #[cfg(test)]
+    use crate::output::VerbosityExt as _;
+    #[cfg(test)]
     use std::cell::RefCell;
 
     use super::*;

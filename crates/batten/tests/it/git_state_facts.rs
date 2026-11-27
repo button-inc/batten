@@ -32,6 +32,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
+use batten::capture::Streamed as _;
 
 use std::path::{Path, PathBuf};
 
@@ -121,7 +122,7 @@ fn git_env(dir: &Path, args: &[&str], env: &[(&str, &str)]) -> String {
     for (name, value) in env {
         command.env(name, value);
     }
-    let output = command.output().expect("run git");
+    let output = command.streamed_output().expect("run git");
     assert!(
         output.status.success(),
         "git {args:?} failed in {}: {}",
@@ -432,7 +433,7 @@ fn fired_with(dir: &Path, env: &[(String, String)]) -> bool {
     for (name, value) in env {
         command.env(name, value);
     }
-    decided(dir, &command.output().expect("run batten check"))
+    decided(dir, &command.streamed_output().expect("run batten check"))
 }
 
 /// The oracle's `git config` reading under the same environment.
@@ -445,7 +446,7 @@ fn git_config(dir: &Path, env: &[(String, String)], args: &[&str]) -> String {
     for (name, value) in pairs {
         command.env(name, value);
     }
-    let output = command.output().expect("run git config");
+    let output = command.streamed_output().expect("run git config");
     String::from_utf8(output.stdout)
         .expect("git stdout is UTF-8")
         .trim_end()
@@ -866,7 +867,7 @@ fn a_repo_local_config_write_from_a_linked_worktree_lands_where_git_reads_it() {
         .args(["attribution", "signing"])
         .current_dir(&linked)
         .envs(scopes)
-        .output()
+        .streamed_output()
         .expect("run batten");
     assert_eq!(
         repaired.status.code(),

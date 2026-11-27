@@ -35,7 +35,8 @@ use crate::common;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use batten::rules::{self, Rule};
+use batten::config_model::Rule;
+use batten::rules;
 
 /// The predicate id the module declares — NOT the `[[rule]]` id, which is
 /// `test cover missing`. The two differ, and the difference is load-bearing: an
@@ -329,6 +330,92 @@ fn an_added_file_carrying_a_gated_test_is_refused() {
         vec![GATED_ADDED.to_owned()],
         "a path with no committed side compares against zero, not against \
          could-not-look"
+    );
+}
+
+/// The rule run over a CHANGE-SET, as `batten check --staged` narrows it: the
+/// verdict classes a run scoped to `changed` reaches.
+fn verdicts_scoped(root: &Path, changed: &[&str]) -> Vec<String> {
+    let verdicts = common::verdicts_in(root);
+    let scope = rules::Scope::Changed(changed.iter().map(|path| (*path).to_owned()).collect());
+    rules::run_static_over(
+        &[row()],
+        &[],
+        batten::policy::Vocabulary {
+            patterns: &[],
+            verdicts: &verdicts,
+            words: None,
+            recorders: &[],
+            registers: &[],
+            traversals: &[],
+            records: &[],
+        },
+        root,
+        rules::RunOptions {
+            checks: batten::policy::ModuleChecks::Run,
+            scope: &scope,
+            surface: batten::facts::Surface::Check,
+            now: None,
+            half: None,
+            keyed_bases: &[],
+        },
+    )
+    .expect("the read surface runs a policy row over a change-set")
+    .findings
+    .into_iter()
+    .map(|finding| finding.rule)
+    .collect()
+}
+
+/// A COMMIT IS JUDGED ON WHAT IT STAGES, never on an unstaged file beside it
+/// (CLOUD-2789). The pre-commit step runs `check --staged`, and the module read
+/// `lines` for every tracked `.rs` file whatever the scope said: 4.4 s p50 at
+/// every commit, and a refusal of this commit for a gated test that is not in it.
+///
+/// Fails by: a scoped run reading an unstaged file's lines (the first assertion
+/// refuses `subject.rs`, which is not in the change-set), or the narrowing
+/// dropping the staged file itself (the second sees nothing).
+#[test]
+fn a_staged_run_reads_only_the_staged_files_lines() {
+    let root = repo(
+        "cfg-gated-staged-only",
+        &["#[test]", "fn a() {}"],
+        &["#[cfg(unix)]", "#[test]", "fn a() {}"],
+    );
+    let staged = root.join("crates/batten/src/staged.rs");
+    fs::write(&staged, join(&["fn b() {}"])).expect("write the staged file");
+    assert_eq!(
+        verdicts_scoped(&root, &["crates/batten/src/staged.rs"]),
+        Vec::<String>::new(),
+        "the unstaged gated test in subject.rs is not this commit's"
+    );
+    assert_eq!(
+        verdicts_scoped(&root, &["crates/batten/src/subject.rs"]),
+        vec![GATED_ADDED.to_owned()],
+        "the same edit, staged, is refused as the unnarrowed run refuses it"
+    );
+}
+
+/// A STAGED MOVE IS STILL A MOVE (CLOUD-2789). The staged change-set names the
+/// file's new home and never its old one, since a deletion leaves no index
+/// entry; the narrowed delta keeps the whole branch's deletions so the new home
+/// is paired with its base lines. Without that, moving a pre-existing
+/// platform-gated test between crates is refused at the commit as an addition.
+///
+/// Fails by: the narrowed delta dropping deletions (the move reads as an added
+/// file carrying one gated test, and is refused).
+#[test]
+fn a_staged_move_of_a_gated_test_is_not_an_addition() {
+    let gated = ["#[cfg(unix)]", "#[test]", "fn a() {}"];
+    let root = repo("cfg-gated-staged-move", &gated, &gated);
+    fs::remove_file(root.join("crates/batten/src/subject.rs")).expect("move: delete");
+    let moved = root.join("crates/batten-base/src/subject.rs");
+    fs::create_dir_all(moved.parent().expect("a parent")).expect("move: new home");
+    fs::write(&moved, join(&gated)).expect("move: write");
+    assert_eq!(
+        verdicts_scoped(&root, &["crates/batten-base/src/subject.rs"]),
+        Vec::<String>::new(),
+        "the moved file carries its base lines, so nothing grew"
     );
 }
 

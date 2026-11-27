@@ -33,6 +33,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
+use batten::capture::StreamedChild as _;
 
 use std::io::Write as _;
 use std::process::Stdio;
@@ -362,7 +363,7 @@ fn run(command: &mut std::process::Command, payload: &str) -> Option<i32> {
         .write_all(payload.as_bytes())
         .expect("write the payload");
     child
-        .wait_with_output()
+        .streamed_wait()
         .expect("the hook answers")
         .status
         .code()

@@ -236,6 +236,7 @@ pub fn counts(detections: &[Detection]) -> Counts {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+    #[cfg(test)]
     use crate::hook::RecordShape;
     use crate::transcript::parse;
 

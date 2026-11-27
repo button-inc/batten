@@ -179,7 +179,7 @@ fn produce(dir: &Path, knobs: &[(&str, &str)]) -> Output {
     for (name, value) in knobs {
         command.env(name, value);
     }
-    command.output().expect("run the producer")
+    command.streamed_output().expect("run the producer")
 }
 
 fn said(output: &Output) -> String {
@@ -416,7 +416,7 @@ fn check_sequence() -> Vec<String> {
         .as_array()
         .expect("[tasks.ntia-check] is an argv sequence")
         .iter()
-        .map(|entry| entry.as_str().expect("a string entry").to_owned())
+        .map(|entry| crate::common::rendered(entry.as_str().expect("a string entry")))
         .collect()
 }
 
@@ -450,7 +450,12 @@ fn wrapper(dir: &Path, knobs: &[(&str, &str)]) -> Output {
         for (name, value) in knobs {
             command.env(name, value);
         }
-        let out = command.output().expect("run one entry");
+        let out = command
+            .streamed_output_keeping(batten::capture::Keep {
+                stdin: true,
+                ..batten::capture::Keep::NONE
+            })
+            .expect("run one entry");
         let failed = !out.status.success();
         last = Some(out);
         if failed {

@@ -22,6 +22,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
+use batten::capture::StreamedChild as _;
 
 use std::path::{Path, PathBuf};
 
@@ -209,7 +210,7 @@ fn hook(dir: &Path, home: &Path, event: &str, command: &str) -> std::process::Ou
         sink.write_all(envelope(event, command).as_bytes())
             .expect("write the envelope");
     }
-    child.wait_with_output().expect("run batten hook")
+    child.streamed_wait().expect("run batten hook")
 }
 
 /// Mint the receipt the way a session does, then return the fixture.

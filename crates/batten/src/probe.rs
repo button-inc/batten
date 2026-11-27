@@ -64,7 +64,3 @@ pub fn run(command: &[String]) -> Result<Ran> {
     })?;
     Ok(Ran { status, log })
 }
-
-//MUTANT-SUITE crates/batten/tests/it/evaluator_io_probe.rs
-//MUTANT status-not-carried|s@^    Ok(Ran { status, log })$@    Ok(Ran { status: 0, log })@|the_probe_verb_derives_a_real_failure_into_the_pass
-//MUTANT stderr-not-read|s@Diagnostics::Keep, &\[\]@Diagnostics::Drop, \&[]@|the_probe_verb_reads_the_harness_line_on_either_stream

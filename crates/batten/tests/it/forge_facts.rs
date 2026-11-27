@@ -131,7 +131,7 @@ fn fixture(name: &str, record_sha: Option<&str>, conclusion: &str) -> PathBuf {
 fn check(dir: &Path) -> std::process::Output {
     let mut command = batten();
     command.current_dir(dir).arg("check");
-    command.output().expect("run batten check")
+    command.streamed_output().expect("run batten check")
 }
 
 /// The committed config, pointed at the REAL module rather than the probe.

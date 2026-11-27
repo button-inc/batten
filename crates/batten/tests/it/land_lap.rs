@@ -58,20 +58,20 @@
 //
 // The 146 titles, one row each.
 //
-// carried: "a refusal starts the next lap instead of ending the run" crates/batten/src/fast_forward.rs kind:mechanism
-// carried: "a cancelled run is the bot failing to DECIDE, not a refusal" crates/batten/src/fast_forward.rs kind:mechanism
-// carried: "a SIBLING PR's refusal is not this lap's verdict (CLOUD-409)" crates/batten/src/fast_forward.rs kind:mechanism
-// carried: "a keyed refusal IS still read — the filter did not stop reading" crates/batten/src/fast_forward.rs kind:mechanism
-// carried: "this lap's own run is read even when it fell off the first page (CLOUD-456)" crates/batten/src/fast_forward.rs kind:mechanism
-// carried: "paging stops at the short page instead of walking history (CLOUD-456)" crates/batten/src/fast_forward.rs kind:mechanism
-// carried: "a /fast-forward the API refused is never reported as posted (CLOUD-408)" crates/batten/src/fast_forward.rs kind:mechanism
-// carried: "CLOUD-413: a refused comment waits the retry-after the response STATES" crates/batten/src/fast_forward.rs kind:mechanism
-// carried: "CLOUD-413: with no retry-after it waits until x-ratelimit-reset" crates/batten/src/fast_forward.rs kind:mechanism
-// carried: "CLOUD-413: a response stating no limit headers still waits a floor" crates/batten/src/fast_forward.rs kind:mechanism
-// carried: "CLOUD-413: exhausting the budget names the LIMIT, not a moving main" crates/batten/src/fast_forward.rs kind:mechanism
-// carried: "a 403 from the runs query is not an answer (CLOUD-414)" crates/batten/src/fast_forward.rs kind:mechanism
-// carried: "an unreadable answer re-asks without buying a CI run" crates/batten/src/fast_forward.rs kind:mechanism
-// carried: "the fast-forward verdict is KEYED, not merely windowed" crates/batten/src/fast_forward.rs kind:mechanism
+// carried: "a refusal starts the next lap instead of ending the run" crates/batten-base/src/fast_forward.rs kind:mechanism
+// carried: "a cancelled run is the bot failing to DECIDE, not a refusal" crates/batten-base/src/fast_forward.rs kind:mechanism
+// carried: "a SIBLING PR's refusal is not this lap's verdict (CLOUD-409)" crates/batten-base/src/fast_forward.rs kind:mechanism
+// carried: "a keyed refusal IS still read — the filter did not stop reading" crates/batten-base/src/fast_forward.rs kind:mechanism
+// carried: "this lap's own run is read even when it fell off the first page (CLOUD-456)" crates/batten-base/src/fast_forward.rs kind:mechanism
+// carried: "paging stops at the short page instead of walking history (CLOUD-456)" crates/batten-base/src/fast_forward.rs kind:mechanism
+// carried: "a /fast-forward the API refused is never reported as posted (CLOUD-408)" crates/batten-base/src/fast_forward.rs kind:mechanism
+// carried: "CLOUD-413: a refused comment waits the retry-after the response STATES" crates/batten-base/src/fast_forward.rs kind:mechanism
+// carried: "CLOUD-413: with no retry-after it waits until x-ratelimit-reset" crates/batten-base/src/fast_forward.rs kind:mechanism
+// carried: "CLOUD-413: a response stating no limit headers still waits a floor" crates/batten-base/src/fast_forward.rs kind:mechanism
+// carried: "CLOUD-413: exhausting the budget names the LIMIT, not a moving main" crates/batten-base/src/fast_forward.rs kind:mechanism
+// carried: "a 403 from the runs query is not an answer (CLOUD-414)" crates/batten-base/src/fast_forward.rs kind:mechanism
+// carried: "an unreadable answer re-asks without buying a CI run" crates/batten-base/src/fast_forward.rs kind:mechanism
+// carried: "the fast-forward verdict is KEYED, not merely windowed" crates/batten-base/src/fast_forward.rs kind:mechanism
 // carried: "a lap rebases onto the main that moved, then re-verifies the new SHA" crates/batten/src/land.rs kind:mechanism
 // carried: "a conflicting rebase is the one stop, and it aborts what it started" crates/batten/src/land.rs kind:mechanism
 // carried: "a failing verify stops before CI is ever asked" crates/batten/src/lib.rs kind:mechanism
@@ -93,9 +93,9 @@
 // carried: "red CI stops the lap without asking for the merge" crates/batten/src/land.rs kind:mechanism
 // carried: "a run CI DECLINED is a stop, not a red — the agent is told to rebase" crates/batten/src/land.rs kind:mechanism
 // carried: "CLOUD-470: the declination is asked of land-lock, not re-derived" crates/batten/src/land.rs kind:mechanism
-// carried: "a verdict that could not be READ is not a red one" crates/batten/src/checks_green.rs kind:mechanism
-// carried: "an unset required roster stops rather than readying (CLOUD-467)" crates/batten/src/checks_green.rs kind:mechanism
-// carried: "CLOUD-376: an unset ANSWERED set stops rather than readying, for the same reason" crates/batten/src/checks_green.rs kind:mechanism
+// carried: "a verdict that could not be READ is not a red one" crates/batten-base/src/checks_green.rs kind:mechanism
+// carried: "an unset required roster stops rather than readying (CLOUD-467)" crates/batten-base/src/checks_green.rs kind:mechanism
+// carried: "CLOUD-376: an unset ANSWERED set stops rather than readying, for the same reason" crates/batten-base/src/checks_green.rs kind:mechanism
 // withdrawn: "CLOUD-376: no conclusion name is written in mise-tasks outside the manifest" both declared subjects are retired — `mise-tasks/land.sh` dies in this change and `mise-tasks/checks-green.sh` is already gone — so the case has no source to read. The property is structural in the engine: a conclusion literal inside `crates/batten` is non-negotiable rule 1's own violation, which `document_facts.rs` refuses
 // carried: "a rejected push stops rather than clobbering someone else's branch" crates/batten/src/land.rs kind:mechanism
 // carried: "CLOUD-345: a branch ABSENT from the remote is a stale ref, not a rival" crates/batten/src/land.rs kind:mechanism
@@ -104,13 +104,13 @@
 // carried: "endless refusals hit the lap cap rather than lapping forever" crates/batten/src/lib.rs kind:mechanism
 // carried: "land refuses to run from main" crates/batten/src/lib.rs kind:mechanism
 // carried: "a merged PR exits 0" crates/batten/src/lib.rs kind:mechanism
-// carried: "a PR that closed without merging exits non-zero" crates/batten/src/fast_forward.rs kind:mechanism
-// carried: "a run still in progress concludes neither way, and the poll continues" crates/batten/src/fast_forward.rs kind:mechanism
-// carried: "a run that predates this lap is not read as a verdict on it" crates/batten/src/fast_forward.rs kind:mechanism
-// carried: "the merge is what it waits for, not the comment" crates/batten/src/fast_forward.rs kind:mechanism
-// carried: "the poll carries no wall-clock timeout" crates/batten/src/fast_forward.rs kind:mechanism
-// carried: "a branch with no OPEN PR has nothing to land" crates/batten/src/fast_forward.rs kind:mechanism
-// carried: "THE MERGED-NAME CASE: a branch whose old PR merged binds the OPEN one (CLOUD-465)" crates/batten/src/fast_forward.rs kind:mechanism
+// carried: "a PR that closed without merging exits non-zero" crates/batten-base/src/fast_forward.rs kind:mechanism
+// carried: "a run still in progress concludes neither way, and the poll continues" crates/batten-base/src/fast_forward.rs kind:mechanism
+// carried: "a run that predates this lap is not read as a verdict on it" crates/batten-base/src/fast_forward.rs kind:mechanism
+// carried: "the merge is what it waits for, not the comment" crates/batten-base/src/fast_forward.rs kind:mechanism
+// carried: "the poll carries no wall-clock timeout" crates/batten-base/src/fast_forward.rs kind:mechanism
+// carried: "a branch with no OPEN PR has nothing to land" crates/batten-base/src/fast_forward.rs kind:mechanism
+// carried: "THE MERGED-NAME CASE: a branch whose old PR merged binds the OPEN one (CLOUD-465)" crates/batten-base/src/fast_forward.rs kind:mechanism
 // carried: "an already-proven HEAD is not proven again" crates/batten/src/lib.rs kind:mechanism
 // carried: "main moving mid-wait starts the next lap instead of paying out the run" crates/batten/src/land.rs kind:mechanism
 // carried: "a red CI re-drafts the PR before stopping" crates/batten/src/land.rs kind:mechanism
@@ -130,8 +130,8 @@
 // carried: "a lap that pushed does not also buy a second event" crates/batten/src/land.rs kind:mechanism
 // carried: "a landing that succeeds says nothing that reads as a failure" crates/batten/src/lib.rs kind:mechanism
 // carried: "the receipt guard still has its voice when it is the real failure" crates/batten/src/lib.rs kind:mechanism
-// carried: "a silent bot with main moved ends the lap instead of polling" crates/batten/src/main_watch.rs kind:mechanism
-// carried: "a silent bot with main unmoved keeps polling" crates/batten/src/main_watch.rs kind:mechanism
+// carried: "a silent bot with main moved ends the lap instead of polling" crates/batten-core/src/main_watch.rs kind:mechanism
+// carried: "a silent bot with main unmoved keeps polling" crates/batten-core/src/main_watch.rs kind:mechanism
 // withdrawn: "the watcher does not outlive a merged landing" the predecessor backgrounded a watcher subshell and reaped it on the merged path. `land::wait` races in-process and returns, so nothing outlives the call and there is no reaper to assert
 // carried: "a re-draft that fails stops the lap rather than waiting on a run nobody started" crates/batten/src/lib.rs kind:mechanism
 // carried: "a ready that fails stops before the push rather than pushing into silence" crates/batten/src/lib.rs kind:mechanism
@@ -142,17 +142,17 @@
 // carried: "a delete the remote refuses does not change land's exit code" crates/batten/src/land.rs kind:mechanism
 // carried: "a run that stops instead of merging deletes nothing" crates/batten/src/lib.rs kind:mechanism
 // carried: "a second land in this clone is refused before anything is spent (CLOUD-428)" crates/batten/src/lib.rs kind:mechanism
-// carried: "the lease is taken before the push, so no run starts unheld" crates/batten/src/lease.rs kind:mechanism
-// carried: "a lease held by someone else waits instead of pushing, and says so" crates/batten/src/lease.rs kind:mechanism
-// carried: "a lost lease is caught BEFORE the merge is asked for" crates/batten/src/lease.rs kind:mechanism
+// carried: "the lease is taken before the push, so no run starts unheld" crates/batten-core/src/lease.rs kind:mechanism
+// carried: "a lease held by someone else waits instead of pushing, and says so" crates/batten-core/src/lease.rs kind:mechanism
+// carried: "a lost lease is caught BEFORE the merge is asked for" crates/batten-core/src/lease.rs kind:mechanism
 // carried: "the lease is released on the merged path" crates/batten/src/lib.rs kind:mechanism
 // carried: "the lease is released on a die path too — a leak would wedge the fleet" crates/batten/src/pipeline.rs kind:mechanism
 // withdrawn: "the CI race waits on ITS OWN pids, never on every background job" the predecessor tracked its own background pids to avoid `wait`ing on every job in the shell. One process, no jobs, nothing to disambiguate
 // withdrawn: "a watcher that shrugs off the TERM is escalated, never left to outlive the lap" a TERM-then-KILL escalation over a subshell that ignored the first signal. The engine spawns no watcher, and `exec`'s own process-group handling is `policy/spawn-adapters.rego`'s subject rather than the lander's
 // withdrawn: "a detached descendant cannot hold bats' output stream — fd 3 is closed beneath the program under test" a bats harness property — fd 3 is the runner's output stream, and the case asserted a detached descendant could not hold it open. There is no descendant and no bats
 // withdrawn: "a land killed mid-race takes its watchers with it — the trap reaps the races too" the predecessor's EXIT trap reaped its race subshells so a killed lander took them with it. Nothing is backgrounded, so the trap has no subject
-// carried: "a head whose LATEST required run is a skip has no answer, so the ready is fired" crates/batten/src/checks_green.rs kind:mechanism
-// carried: "a skip its own re-run superseded is an answer, so nothing buys a second run" crates/batten/src/checks_green.rs kind:mechanism
+// carried: "a head whose LATEST required run is a skip has no answer, so the ready is fired" crates/batten-base/src/checks_green.rs kind:mechanism
+// carried: "a skip its own re-run superseded is an answer, so nothing buys a second run" crates/batten-base/src/checks_green.rs kind:mechanism
 // carried: "a run main moved under is CANCELLED, not left to bill for an answer nobody reads" crates/batten/src/land.rs kind:mechanism
 // carried: "a lap that CI answered cancels nothing — only a voided run is void" crates/batten/src/land.rs kind:mechanism
 // carried: "a waiter linearizes onto the HOLDER's head, not onto the main it is replacing" crates/batten/src/lib.rs kind:mechanism
@@ -160,11 +160,11 @@
 // carried: "A CONFLICTING SPECULATION FALLS BACK — it is information, not a stop" crates/batten/src/lib.rs kind:mechanism
 // carried: "THE BET CANNOT BE PUSHED WHEN IT LOSES: a stale speculation is unwound first" crates/batten/src/lib.rs kind:mechanism
 // carried: "an unwind the tree refuses is a stop, not a lap onto an unknown HEAD" crates/batten/src/lib.rs kind:mechanism
-// carried: "THE SECOND MATRIX: an admitted successor readies and pushes without the lease" crates/batten/src/lease.rs kind:mechanism
+// carried: "THE SECOND MATRIX: an admitted successor readies and pushes without the lease" crates/batten-core/src/lease.rs kind:mechanism
 // carried: "a verify failure on a SPECULATIVE tree names the borrowed base" crates/batten/src/lib.rs kind:mechanism
 // carried: "a verify failure with NO speculation still gets the original advice" crates/batten/src/lib.rs kind:mechanism
-// carried: "A WAITER THAT IS NOT ADMITTED STAYS IN DRAFT — this is what bounds the cost" crates/batten/src/lease.rs kind:mechanism
-// carried: "the successor reserves only once, however many laps it waits" crates/batten/src/lease.rs kind:mechanism
+// carried: "A WAITER THAT IS NOT ADMITTED STAYS IN DRAFT — this is what bounds the cost" crates/batten-core/src/lease.rs kind:mechanism
+// carried: "the successor reserves only once, however many laps it waits" crates/batten-core/src/lease.rs kind:mechanism
 // carried: "MAIN MOVING DURING THE WAIT: the winner laps rather than confirming a doomed head" crates/batten/src/land.rs kind:mechanism
 // carried: "a lap whose main did not move confirms and proceeds — the negative of the case above" crates/batten/src/land.rs kind:mechanism
 // carried: "the successor's run is bought ONCE, not re-pushed on every lap it waits" crates/batten/src/land.rs kind:mechanism
@@ -180,7 +180,7 @@
 // carried: "CLOUD-900: a run CI DECLINED abandons nothing — it is not a verdict" crates/batten/src/land.rs kind:mechanism
 // carried: "CLOUD-900: a provisioning transient abandons nothing — the jobs get re-run" crates/batten/src/land.rs kind:mechanism
 // carried: "CLOUD-900: a lap CI answered green abandons nothing" crates/batten/src/land.rs kind:mechanism
-// carried: "CLOUD-483: EMPTY IS NOT UNANIMOUS — no records is red, not absorbed" crates/batten/src/checks_green.rs kind:mechanism
+// carried: "CLOUD-483: EMPTY IS NOT UNANIMOUS — no records is red, not absorbed" crates/batten-base/src/checks_green.rs kind:mechanism
 // carried: "CLOUD-483: the retry budget is a COUNT, and exhausting it stops" crates/batten/src/land.rs kind:mechanism
 // carried: "CLOUD-483: a re-run the API refuses stops, naming the command" crates/batten/src/land.rs kind:mechanism
 // withdrawn: "CLOUD-383: a rendezvous that cannot be created stops, rather than guessing" a bash rendezvous — a FIFO the racing subshells synchronised on. The engine's race is two polls in one process and needs no rendezvous to create or fail to create
@@ -191,13 +191,13 @@
 // carried: "CLOUD-790: the landing makes the unsubscribe call itself, for THIS PR" crates/batten/src/land.rs kind:mechanism
 // carried: "CLOUD-790: a drop that could not happen does not stop the landing itself" crates/batten/src/land.rs kind:mechanism
 // carried: "CLOUD-518: a dropped subscription lets the landing proceed untouched" crates/batten/src/land.rs kind:mechanism
-// carried: "CLOUD-369 clause b1-neg — a holder whose CI answers RED admits nobody" crates/batten/src/lease.rs kind:mechanism
-// carried: "CLOUD-369 clause b1-neg — a holder whose CI has NOT ANSWERED admits nobody" crates/batten/src/lease.rs kind:mechanism
-// carried: "CLOUD-369 clause b1-neg — a holder whose CI COULD NOT BE READ admits nobody" crates/batten/src/lease.rs kind:mechanism
-// carried: "CLOUD-369 clause b1-neg — a lease naming no head admits nobody" crates/batten/src/lease.rs kind:mechanism
-// carried: "CLOUD-369 clause b1-pos — a GREEN holder still admits exactly one waiter" crates/batten/src/lease.rs kind:mechanism
-// carried: "CLOUD-369 clause e — a waiter whose base CONFLICTS is not admitted" crates/batten/src/lease.rs kind:mechanism
-// carried: "CLOUD-369 clause e — a waiter whose base APPLIES CLEANLY still is admitted" crates/batten/src/lease.rs kind:mechanism
+// carried: "CLOUD-369 clause b1-neg — a holder whose CI answers RED admits nobody" crates/batten-core/src/lease.rs kind:mechanism
+// carried: "CLOUD-369 clause b1-neg — a holder whose CI has NOT ANSWERED admits nobody" crates/batten-core/src/lease.rs kind:mechanism
+// carried: "CLOUD-369 clause b1-neg — a holder whose CI COULD NOT BE READ admits nobody" crates/batten-core/src/lease.rs kind:mechanism
+// carried: "CLOUD-369 clause b1-neg — a lease naming no head admits nobody" crates/batten-core/src/lease.rs kind:mechanism
+// carried: "CLOUD-369 clause b1-pos — a GREEN holder still admits exactly one waiter" crates/batten-core/src/lease.rs kind:mechanism
+// carried: "CLOUD-369 clause e — a waiter whose base CONFLICTS is not admitted" crates/batten-core/src/lease.rs kind:mechanism
+// carried: "CLOUD-369 clause e — a waiter whose base APPLIES CLEANLY still is admitted" crates/batten-core/src/lease.rs kind:mechanism
 // carried: "CLOUD-861: an ENOSPC during verify is reported as the environment, not as a defect to reproduce" crates/batten/src/land.rs kind:mechanism
 // carried: "an ordinary verify failure still says reproduce it locally" crates/batten/src/lib.rs kind:mechanism
 // carried: "CLOUD-862: a bet left by a dead run is adopted and unwound before anything is pushed" crates/batten/src/speculation.rs kind:mechanism
@@ -648,7 +648,7 @@ fn a_lap_refuses_to_run_from_the_trunk() {
         .arg("lap")
         .arg("main")
         .current_dir(&dir)
-        .output()
+        .streamed_output()
         .expect("the compiled binary runs");
     let said = String::from_utf8_lossy(&output.stderr);
 
@@ -683,4 +683,639 @@ fn land_names_checks_still_running_when_it_stops_red() {
         settled.contains("macos failure") && !settled.contains("still running"),
         "and with nothing running, nothing is said to be: {settled}"
     );
+}
+
+/// **A GATE JUDGES THE TREE IT STARTED ON** (CLOUD-2781).
+///
+/// Every stage a lap's gate dispatches reads the working tree, so a commit made
+/// while it ran reached the stages after it. The gate here commits and then
+/// passes: the run must come back voided, never clean, and its new head must
+/// never be recorded as verified, so no later push publishes it on this gate's
+/// word. Today the same gate comes back `Verified::Clean`.
+#[test]
+fn a_commit_made_while_the_gate_ran_voids_it() {
+    let dir = common::scratch("land-lap-tree-moved");
+    common::init_repo(&dir);
+    std::fs::write(dir.join("tracked.txt"), "base\n").expect("write the tracked file");
+    common::git_in(&dir, &["add", "tracked.txt"]);
+    common::git_in(&dir, &["commit", "-q", "-m", "base"]);
+    let start = common::git_in(&dir, &["rev-parse", "HEAD"])
+        .trim()
+        .to_owned();
+
+    let command = vec![
+        String::from("sh"),
+        String::from("-c"),
+        // `-C`: the gate inherits the CALLER's working directory (`land` runs it
+        // from the checkout's root as `.`), so the fixture is named, never assumed.
+        // No hooks: the host's global ones would run inside this fixture.
+        format!(
+            "git -C {} -c core.hooksPath=/dev/null commit -q --allow-empty -m moved 2>{}",
+            dir.display(),
+            dir.with_extension("err").display()
+        ),
+    ];
+    let verified = land::verify(&dir, "work", &command, &[], &[]).expect("run the gate");
+    let moved = common::git_in(&dir, &["rev-parse", "HEAD"])
+        .trim()
+        .to_owned();
+
+    assert_ne!(
+        moved,
+        start,
+        "the gate's own commit moved HEAD: {verified:?} {}",
+        std::fs::read_to_string(dir.with_extension("err")).unwrap_or_default()
+    );
+    assert!(
+        matches!(
+            verified,
+            land::Verified::Refused {
+                cause: land::Refusal::Voided { ref to, .. },
+                ..
+            } if *to == moved
+        ),
+        "a gate whose tree moved is voided: {verified:?}"
+    );
+    assert_ne!(
+        land::last_verified(&dir, "work").as_deref(),
+        Some(moved.as_str()),
+        "the moved head is never recorded as verified"
+    );
+}
+
+/// **AN EDIT LEFT IN THE TREE VOIDS IT TOO** (CLOUD-2780, CLOUD-2781).
+///
+/// HEAD does not move here: the gate edits a tracked file and leaves it dirty,
+/// so the stages after the edit compiled bytes no commit holds. The dirty count
+/// the comparison starts from was read AFTER the gate returned, equal to the
+/// count it ends on, so this came back clean and was recorded against HEAD.
+#[test]
+fn an_edit_left_while_the_gate_ran_voids_it() {
+    let dir = common::scratch("land-lap-tree-dirtied");
+    common::init_repo(&dir);
+    std::fs::write(dir.join("tracked.txt"), "base\n").expect("write the tracked file");
+    common::git_in(&dir, &["add", "tracked.txt"]);
+    common::git_in(&dir, &["commit", "-q", "-m", "base"]);
+    let head = common::git_in(&dir, &["rev-parse", "HEAD"])
+        .trim()
+        .to_owned();
+
+    let command = vec![
+        String::from("sh"),
+        String::from("-c"),
+        format!("printf 'edited\\n' > {}", dir.join("tracked.txt").display()),
+    ];
+    let verified = land::verify(&dir, "work", &command, &[], &[]).expect("run the gate");
+
+    assert!(
+        matches!(
+            verified,
+            land::Verified::Refused {
+                cause: land::Refusal::Voided { dirty, .. },
+                ..
+            } if dirty == 1
+        ),
+        "a gate whose tree was edited under it is voided: {verified:?}"
+    );
+    assert_ne!(
+        land::last_verified(&dir, "work").as_deref(),
+        Some(head.as_str()),
+        "and HEAD is never recorded as verified on that run's word"
+    );
+}
+
+/// A bench registering ONLY `path write held`, from its committed bytes, so no
+/// other row's refusal can stand in for this one's.
+fn lap_tree_bench(name: &str) -> std::path::PathBuf {
+    let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let module = std::fs::read_to_string(root.join("policy/lap-tree-held.rego"))
+        .expect("the module is readable");
+    common::Fixture::new(name)
+        .config(
+            "version = 1\n\n\
+             [[rule]]\nid = \"path write held\"\nkind = \"policy\"\n\
+             scope = \"mediated_call\"\nmodule = \"policy/lap-tree-held.rego\"\n\
+             severity = \"deny\"\n",
+        )
+        .file("policy/lap-tree-held.rego", &module)
+        .git()
+        .base_commit()
+        .build()
+}
+
+/// A Claude Code `PreToolUse` Write of `path`, judged in `dir`; whether it was
+/// refused under `path write held`.
+fn held(dir: &std::path::Path, path: &str) -> bool {
+    held_as(dir, path, None)
+}
+
+/// [`held`], judged as a call from inside the gate of the lap whose pid is
+/// `lap`, as every process that lap's gate spawns is.
+fn held_as(dir: &std::path::Path, path: &str, lap: Option<&str>) -> bool {
+    held_on(dir, path, lap, "PreToolUse")
+}
+
+/// [`held_as`] on the hook event `event`.
+fn held_on(dir: &std::path::Path, path: &str, lap: Option<&str>, event: &str) -> bool {
+    let payload = serde_json::json!({
+        "hook_event_name": event,
+        "tool_name": "Write",
+        "tool_input": {"file_path": path, "content": "x\n"},
+    })
+    .to_string();
+    // NOT THE LAP'S OWN GATE (CLOUD-2783): under a real lap this suite inherits
+    // that lap's pid, which is not this case's holder, so the hold still fires.
+    let mut command = common::batten();
+    if let Some(lap) = lap {
+        command.env(batten::land::LAP_PID, lap);
+    }
+    let answer = common::stdin_run(
+        &mut command,
+        dir,
+        &["adjudicate", "--harness", "claude-code"],
+        &payload,
+    );
+    format!("{}{}", common::stdout(&answer), common::stderr(&answer)).contains("path write held")
+}
+
+/// **A WRITE INTO A LIVE LAP'S CHECKOUT IS REFUSED BEFORE IT RUNS** (CLOUD-2781).
+///
+/// The live lap is this test process itself, holding the checkout's `land`
+/// singleton with its own pid: the reading `land` uses to refuse a second lap.
+/// Inside the checkout is refused while it holds; outside is admitted; and the
+/// same write is admitted once nothing holds the lock.
+#[test]
+fn a_write_into_the_checkout_is_held_while_a_lap_is_live() {
+    let dir = lap_tree_bench("land-lap-tree-held");
+    let inside = dir.join("src/a.rs").to_string_lossy().into_owned();
+    let outside = std::env::temp_dir()
+        .join("land-lap-tree-held-outside.md")
+        .to_string_lossy()
+        .into_owned();
+    assert!(
+        !held(&dir, &inside),
+        "no lap is live yet, so nothing is held"
+    );
+
+    let git_dir = batten::git::git_dir(&dir).expect("the bench has a git dir");
+    let pid = std::process::id().to_string();
+    assert!(matches!(
+        batten::task::singleton_acquire(&git_dir, "land", &pid, std::time::Duration::ZERO),
+        batten::task::Claim::Taken | batten::task::Claim::Reclaimed(_)
+    ));
+    assert!(
+        held(&dir, &inside),
+        "a write inside the checkout is held while the lap is live"
+    );
+    // ONLY BEFORE IT RUNS (CLOUD-2789): a `PostToolUse` reports a write already
+    // made, so liveness is never read for it and nothing is held.
+    assert!(
+        !held_on(&dir, &inside, None, "PostToolUse"),
+        "a write already made is reported, never held"
+    );
+    assert!(
+        !held(&dir, &outside),
+        "a write outside the checkout is admitted"
+    );
+    assert!(
+        !held_as(&dir, &inside, Some(&pid)),
+        "a call from inside the holder's own gate is the lap, never held by it"
+    );
+    assert!(
+        held_as(&dir, &inside, Some("1")),
+        "another lap's gate is held like any other caller"
+    );
+
+    batten::task::singleton_release(&git_dir, "land");
+    assert!(
+        !held(&dir, &inside),
+        "the same write is admitted once the lap has ended"
+    );
+}
+
+/// Whether `answer` refused under `path write held`: the row named AND a deny
+/// on the host's contract, so an advisory naming the row is not read as a hold.
+fn held_answer(answer: &std::process::Output) -> bool {
+    let named =
+        format!("{}{}", common::stdout(answer), common::stderr(answer)).contains("path write held");
+    if named {
+        assert!(
+            common::stdout(answer).contains(r#""permissionDecision":"deny""#),
+            "a hold refuses: {answer:?}"
+        );
+    }
+    named
+}
+
+/// The exit code `adjudicate --harness exit-code` gives a Bash call of
+/// `command` in `dir`: `2` is a refusal.
+fn bash_exit(dir: &std::path::Path, command: &str) -> Option<i32> {
+    let payload = serde_json::json!({
+        "hook_event_name": "PreToolUse",
+        "tool_name": "Bash",
+        "tool_input": {"command": command},
+    })
+    .to_string();
+    common::stdin_run(
+        &mut common::batten(),
+        dir,
+        &["adjudicate", "--harness", "exit-code"],
+        &payload,
+    )
+    .status
+    .code()
+}
+
+/// A Claude Code `PreToolUse` Bash call of `command`, judged in `dir`; whether
+/// it was refused under `path write held`.
+fn bash_held(dir: &std::path::Path, command: &str) -> bool {
+    let payload = serde_json::json!({
+        "hook_event_name": "PreToolUse",
+        "tool_name": "Bash",
+        "tool_input": {"command": command},
+    })
+    .to_string();
+    let answer = common::stdin_run(
+        &mut common::batten(),
+        dir,
+        &["adjudicate", "--harness", "claude-code"],
+        &payload,
+    );
+    held_answer(&answer)
+}
+
+/// **A SHELL READ IS NOT A WRITE BECAUSE IT REDIRECTS** (#1276): while a lap is
+/// live, a read that discards its stderr or reads its stdin from a file is
+/// admitted, and a redirect into the checkout is still held.
+///
+/// Measured on lap 6: `cat a 2>/dev/null` was refused as a write into the
+/// checkout, because the module read the raw token `2>/dev/null` as a relative
+/// target.
+#[test]
+fn a_redirecting_read_is_not_held_while_a_lap_is_live() {
+    let dir = lap_tree_bench("land-lap-redirect-read");
+    let git_dir = batten::git::git_dir(&dir).expect("the bench has a git dir");
+    let pid = std::process::id().to_string();
+    assert!(matches!(
+        batten::task::singleton_acquire(&git_dir, "land", &pid, std::time::Duration::ZERO),
+        batten::task::Claim::Taken | batten::task::Claim::Reclaimed(_)
+    ));
+    assert!(
+        !bash_held(&dir, "cat src/a.rs 2>/dev/null"),
+        "a read discarding its stderr is no write"
+    );
+    assert!(
+        !bash_held(&dir, "wc -l < src/a.rs"),
+        "an input redirection is no write"
+    );
+    assert!(
+        bash_held(&dir, "echo x > out.txt"),
+        "a redirect into the checkout is held"
+    );
+    batten::task::singleton_release(&git_dir, "land");
+}
+
+/// **ONE CALL, EVERY SURFACE** (CLOUD-2789): the same board and PR-body writes
+/// made through `batten mcp call` on a shell are held while a lap is live
+/// exactly as the raw connector tool's are, and a mediated read is not.
+#[test]
+fn mediated_filing_and_body_edits_are_held_as_the_direct_tool_is() {
+    let dir = lap_tree_bench("land-lap-mediated-writes");
+    let mediated = |server: &str, method: &str, arguments: &serde_json::Value| {
+        format!("batten mcp call {server} {method} '{arguments}'")
+    };
+    let file = serde_json::json!({"title": "t", "team": "CLOUD"});
+    let body =
+        serde_json::json!({"owner": "o", "repo": "r", "pullNumber": 1, "body": "Closes CLOUD-1"});
+    let read = serde_json::json!({"owner": "o", "repo": "r", "pullNumber": 1});
+    assert!(
+        !bash_held(&dir, &mediated("Linear", "save_issue", &file)),
+        "the premise: no lap, no hold"
+    );
+    let git_dir = batten::git::git_dir(&dir).expect("the bench has a git dir");
+    let pid = std::process::id().to_string();
+    assert!(matches!(
+        batten::task::singleton_acquire(&git_dir, "land", &pid, std::time::Duration::ZERO),
+        batten::task::Claim::Taken | batten::task::Claim::Reclaimed(_)
+    ));
+    assert!(
+        tool_held(&dir, "mcp__Linear__save_issue", &file),
+        "the direct filing is held"
+    );
+    assert!(
+        bash_held(&dir, &mediated("Linear", "save_issue", &file)),
+        "the mediated filing is held as the direct one is"
+    );
+    assert_eq!(
+        bash_exit(&dir, &mediated("Linear", "save_issue", &file)),
+        Some(2),
+        "the mediated filing's hold is a refusal on the exit-code contract"
+    );
+    assert!(
+        tool_held(&dir, "mcp__github__update_pull_request", &body),
+        "the direct body edit is held"
+    );
+    assert!(
+        bash_held(&dir, &mediated("github", "update_pull_request", &body)),
+        "the mediated body edit is held as the direct one is"
+    );
+    assert_eq!(
+        bash_exit(&dir, &mediated("github", "update_pull_request", &body)),
+        Some(2),
+        "the mediated body edit's hold is a refusal on the exit-code contract"
+    );
+    assert_eq!(
+        bash_exit(&dir, &mediated("github", "pull_request_read", &read)),
+        Some(0),
+        "a mediated read is allowed on the exit-code contract"
+    );
+    assert!(
+        !bash_held(&dir, &mediated("github", "pull_request_read", &read)),
+        "a mediated read is not held"
+    );
+    batten::task::singleton_release(&git_dir, "land");
+}
+
+/// **THE LAP IS JUDGED IN THE REPOSITORY THE COMMAND TARGETS, NOT THE SHELL'S
+/// CWD** (CLOUD-2789, measured on #1276): with a lap live in A, a `git -C <B>
+/// commit` run from A was refused while the same commit after `cd <B>` passed.
+/// Held in A by every spelling that targets A, from either checkout; admitted
+/// by every spelling that targets B.
+#[test]
+fn a_git_command_is_judged_by_the_repository_it_targets() {
+    let a = lap_tree_bench("land-lap-target-a");
+    let b = lap_tree_bench("land-lap-target-b");
+    let git_dir = batten::git::git_dir(&a).expect("the bench has a git dir");
+    let pid = std::process::id().to_string();
+    assert!(matches!(
+        batten::task::singleton_acquire(&git_dir, "land", &pid, std::time::Duration::ZERO),
+        batten::task::Claim::Taken | batten::task::Claim::Reclaimed(_)
+    ));
+    let (a_dir, b_dir) = (a.to_string_lossy(), b.to_string_lossy());
+    // The chained and relative spellings name each checkout by its parent and
+    // its own name; the two benches share a parent.
+    let parent = a.parent().expect("a bench has a parent").to_string_lossy();
+    let name = |dir: &std::path::Path| {
+        dir.file_name()
+            .expect("a bench has a name")
+            .to_string_lossy()
+            .into_owned()
+    };
+    let (a_name, b_name) = (name(&a), name(&b));
+    assert_eq!(b.parent(), a.parent(), "the benches share a parent");
+    assert!(
+        bash_held(&a, "git commit -m wip"),
+        "a commit in the lap's checkout is held"
+    );
+    for command in [
+        format!("git -C {a_dir} commit -m wip"),
+        format!("cd {a_dir} && git commit -m wip"),
+        format!("git --git-dir={a_dir}/.git --work-tree={a_dir} commit -m wip"),
+        format!("git -C {parent} -C {a_name} commit -m wip"),
+        format!("git --git-dir={a_dir}/.git commit -m wip"),
+        format!("git --git-dir {a_dir}/.git commit -m wip"),
+        format!("git -C ../{a_name} commit -m wip"),
+    ] {
+        assert!(
+            bash_held(&b, &command),
+            "`{command}` from B targets A, so it is held"
+        );
+    }
+    for command in [
+        format!("git -C {b_dir} commit -m wip"),
+        format!("cd {b_dir} && git commit -m wip"),
+        format!("git --git-dir={b_dir}/.git --work-tree={b_dir} commit -m wip"),
+        format!("git -C {b_dir} add -A && git -C {b_dir} commit -m wip"),
+        format!("git -C {parent} -C {b_name} commit -m wip"),
+        format!("git --git-dir={b_dir}/.git commit -m wip"),
+        format!("git --git-dir {b_dir}/.git commit -m wip"),
+        format!("git -C ../{b_name} commit -m wip"),
+        // CLOUD-2832, measured: a head-moving `git -C` into another repository
+        // outside the lap's checkout was refused while the lap ran.
+        format!("git -C {b_dir} checkout -b scratch"),
+    ] {
+        assert!(
+            !bash_held(&a, &command),
+            "`{command}` from A targets B, so it is admitted"
+        );
+    }
+    // A CALL ACTING IN SEVERAL CHECKOUTS IS HELD IF ANY HAS A LIVE LAP: the
+    // second program acts in A, whatever the first does in B.
+    for command in [
+        format!("git -C {b_dir} add -A && git commit -m wip"),
+        format!("git -C {b_dir} add -A && git -C {a_dir} commit -m wip"),
+    ] {
+        assert!(
+            bash_held(&a, &command),
+            "`{command}` acts in A too, so it is held"
+        );
+    }
+    batten::task::singleton_release(&git_dir, "land");
+}
+
+/// **EVERY PROGRAM IS JUDGED BY THE CHECKOUT IT WRITES** (CLOUD-2789): a
+/// non-git program's own directory option, an absolute redirect target and a
+/// write tool's `file_path` each name the checkout the call writes, and the lap
+/// is judged there rather than in the shell's directory.
+///
+/// Fails by: a non-git program read as acting in the shell's directory (A's
+/// lap then holds the `git -C <B>` commit beside it); an absolute redirect or
+/// write-tool target in A, made from B, judged under B, which has no lap.
+#[test]
+fn a_non_git_write_is_judged_by_the_checkout_it_writes() {
+    let a = lap_tree_bench("land-lap-written-a");
+    let b = lap_tree_bench("land-lap-written-b");
+    let git_dir = batten::git::git_dir(&a).expect("the bench has a git dir");
+    let pid = std::process::id().to_string();
+    assert!(matches!(
+        batten::task::singleton_acquire(&git_dir, "land", &pid, std::time::Duration::ZERO),
+        batten::task::Claim::Taken | batten::task::Claim::Reclaimed(_)
+    ));
+    let (a_dir, b_dir) = (a.to_string_lossy(), b.to_string_lossy());
+    // A program's own directory option moves where it acts: run from A into B,
+    // nothing it chains with is held by A's lap.
+    for option in [
+        format!("make -C {b_dir}"),
+        format!("make --directory={b_dir}"),
+        format!("cargo build --manifest-path {b_dir}/Cargo.toml"),
+        format!("cargo --manifest-path={b_dir}/Cargo.toml build"),
+        format!("mise -C {b_dir} run build"),
+        format!("mise --cd {b_dir} run build"),
+        format!("mise --cd={b_dir} run build"),
+    ] {
+        let command = format!("{option} && git -C {b_dir} commit -m wip");
+        assert!(
+            !bash_held(&a, &command),
+            "`{command}` from A writes B, so it is admitted"
+        );
+    }
+    // THE PREMISE: the same chain into A is held.
+    assert!(
+        bash_held(
+            &b,
+            &format!("make -C {a_dir} && git -C {a_dir} commit -m wip")
+        ),
+        "the same chain into A is held"
+    );
+    // An absolute redirect target names the checkout it writes.
+    assert!(
+        bash_held(&b, &format!("echo x > {a_dir}/out.txt")),
+        "a redirect from B into A is held"
+    );
+    assert!(
+        bash_held(&a, &format!("echo x > {a_dir}/out.txt")),
+        "an absolute redirect into the lap's own checkout is held"
+    );
+    assert!(
+        !bash_held(&a, &format!("echo x > {b_dir}/out.txt")),
+        "a redirect from A into B is admitted"
+    );
+    assert!(
+        !bash_held(&a, "cat src/a.rs 2>/dev/null"),
+        "a target in no checkout is admitted"
+    );
+    // A write tool's target names the checkout it writes.
+    assert!(
+        held(&b, &format!("{a_dir}/src/new.rs")),
+        "a write from B into A is held"
+    );
+    assert!(
+        !held(&a, &format!("{b_dir}/src/new.rs")),
+        "a write from A into B is admitted"
+    );
+    // THE FALLBACK STAYS: a `cd` that cannot be placed judges in the judging
+    // root, so A's lap holds the commit after it.
+    assert!(
+        bash_held(&a, "cd \"$(mktemp -d)\" && git commit -m wip"),
+        "an unplaceable `cd` keeps the judging root"
+    );
+    batten::task::singleton_release(&git_dir, "land");
+}
+
+/// Whether `adjudicate` holds a host MCP call `tool` with `arguments` in `dir`.
+fn tool_held(dir: &std::path::Path, tool: &str, arguments: &serde_json::Value) -> bool {
+    let payload = serde_json::json!({
+        "hook_event_name": "PreToolUse",
+        "tool_name": tool,
+        "tool_input": arguments,
+    })
+    .to_string();
+    let answer = common::stdin_run(
+        &mut common::batten(),
+        dir,
+        &["adjudicate", "--harness", "claude-code"],
+        &payload,
+    );
+    held_answer(&answer)
+}
+
+/// **THE BOARD AND THE PR BODY ARE THE GATE'S INPUTS TOO** (CLOUD-2785): laps 6
+/// and 10 on #1276 went red because a row was filed and the body edited while
+/// the lap ran. While a lap is live, filing and a body edit are held; editing an
+/// existing row and commenting are not; and nothing is held with no lap.
+#[test]
+fn filing_and_body_edits_are_held_while_a_lap_is_live() {
+    let dir = lap_tree_bench("land-lap-tracker-writes");
+    let file = serde_json::json!({"title": "t", "team": "CLOUD"});
+    let body =
+        serde_json::json!({"owner": "o", "repo": "r", "pullNumber": 1, "body": "Closes CLOUD-1"});
+    assert!(
+        !tool_held(&dir, "mcp__Linear__save_issue", &file),
+        "the premise: no lap, no hold"
+    );
+    let git_dir = batten::git::git_dir(&dir).expect("the bench has a git dir");
+    let pid = std::process::id().to_string();
+    assert!(matches!(
+        batten::task::singleton_acquire(&git_dir, "land", &pid, std::time::Duration::ZERO),
+        batten::task::Claim::Taken | batten::task::Claim::Reclaimed(_)
+    ));
+    assert!(
+        tool_held(&dir, "mcp__Linear__save_issue", &file),
+        "filing is held"
+    );
+    assert!(
+        tool_held(&dir, "mcp__github__update_pull_request", &body),
+        "a body edit is held"
+    );
+    assert!(
+        !tool_held(
+            &dir,
+            "mcp__Linear__save_issue",
+            &serde_json::json!({"id": "CLOUD-1", "state": "Done"})
+        ),
+        "editing an existing row is not"
+    );
+    assert!(
+        !tool_held(
+            &dir,
+            "mcp__Linear__save_comment",
+            &serde_json::json!({"issueId": "CLOUD-1", "body": "x"})
+        ),
+        "a comment is not"
+    );
+    batten::task::singleton_release(&git_dir, "land");
+}
+
+/// **A LIVE LAP HOLDS EXACTLY ITS OWN CHECKOUT** (CLOUD-2832): with a lap live
+/// in A and the session's directory in A,
+/// (a) a write into another clone B is admitted — `cd B && git commit`,
+///     `git -C B cherry-pick`, an `Edit` of `B/x` — and so is the same write
+///     into a clone nested inside A's directory, which is B's checkout, not A's;
+/// (b) from B, `git -C A commit` is refused;
+/// (c) an `Edit` or a `Write` of `A/x` is refused, from A or from B.
+#[test]
+fn a_live_lap_holds_exactly_its_own_checkout() {
+    let a = lap_tree_bench("land-lap-exact-a");
+    let b = lap_tree_bench("land-lap-exact-b");
+    let nested = a.join("nested-clone");
+    std::fs::create_dir_all(&nested).expect("a nested directory");
+    common::init_repo(&nested);
+    common::git_in(&nested, &["commit", "-q", "--allow-empty", "-m", "base"]);
+    let git_dir = batten::git::git_dir(&a).expect("the bench has a git dir");
+    let pid = std::process::id().to_string();
+    assert!(matches!(
+        batten::task::singleton_acquire(&git_dir, "land", &pid, std::time::Duration::ZERO),
+        batten::task::Claim::Taken | batten::task::Claim::Reclaimed(_)
+    ));
+    let edit = |path: &std::path::Path| serde_json::json!({"file_path": path.to_string_lossy(), "old_string": "a", "new_string": "b"});
+    let write = |path: &std::path::Path| serde_json::json!({"file_path": path.to_string_lossy(), "content": "x"});
+    for clone in [&b, &nested] {
+        let dir = clone.to_string_lossy();
+        for command in [
+            format!("cd {dir} && git commit -m wip"),
+            format!("git -C {dir} cherry-pick HEAD"),
+            format!("echo x > {dir}/x"),
+        ] {
+            assert!(
+                !bash_held(&a, &command),
+                "(a) `{command}` from A writes {dir}, so it is admitted"
+            );
+        }
+        assert!(
+            !tool_held(&a, "Edit", &edit(&clone.join("x"))),
+            "(a) an Edit of {dir}/x from A is admitted"
+        );
+        assert!(
+            !tool_held(&a, "Write", &write(&clone.join("x"))),
+            "(a) a Write of {dir}/x from A is admitted"
+        );
+    }
+    let a_dir = a.to_string_lossy();
+    assert!(
+        bash_held(&b, &format!("git -C {a_dir} commit -m wip")),
+        "(b) `git -C A commit` from B is held"
+    );
+    for from in [&a, &b] {
+        assert!(
+            tool_held(from, "Edit", &edit(&a.join("x"))),
+            "(c) an Edit of A/x from {} is held",
+            from.display()
+        );
+        assert!(
+            tool_held(from, "Write", &write(&a.join("x"))),
+            "(c) a Write of A/x from {} is held",
+            from.display()
+        );
+    }
+    batten::task::singleton_release(&git_dir, "land");
 }

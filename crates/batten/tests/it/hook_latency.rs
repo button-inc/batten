@@ -47,6 +47,28 @@ fn a_stop_over_its_budget_is_refused() {
     );
 }
 
+/// A session start measured over its ceiling is refused (CLOUD-2840).
+///
+/// Fails by: the `session-start` path dropped from `perf-assert`'s budgets,
+/// which leaves the arm measured and never gated — the shape the first
+/// response had while every setup step ran inside the hook.
+#[test]
+fn a_session_start_over_its_budget_is_refused() {
+    let dir = perf_assert::repo("session-start-over", Some(&perf_assert::agreeing_readme()));
+    let record = perf_assert::clean_record().replace("session-start 4.1", "session-start 150");
+    assert_ne!(
+        record,
+        perf_assert::clean_record(),
+        "the clean record carries the session-start arm this case overrides"
+    );
+    perf_assert::record(&dir, &record);
+    let answer = perf_assert::findings(&dir);
+    assert!(
+        answer.contains("path measure late"),
+        "a session start over its ceiling is a finding:\n{answer}"
+    );
+}
+
 /// The committed module the fixture's `symbols` row evaluates. Any tree module
 /// serves: the row exists to DECLARE the fact, and what decides is whether
 /// resolving it spawns.
@@ -124,7 +146,7 @@ fn shimmed(repo: &Path, shims: &Path, home: &Path, args: &[&str]) -> common::Bat
         .current_dir(repo)
         .args(args)
         .env("PATH", std::env::join_paths(dirs).expect("a joinable PATH"))
-        .env("GIT_CEILING_DIRECTORIES", env!("CARGO_TARGET_TMPDIR"))
+        .env("GIT_CEILING_DIRECTORIES", common::target_tmp())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
     command

@@ -43,6 +43,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
+use batten::capture::StreamedChild as _;
 
 use std::path::{Path, PathBuf};
 use std::process::{Output, Stdio};
@@ -60,9 +61,11 @@ const TOKEN_ENV: &str = "CLAUDE_SESSION_INGRESS_TOKEN_FILE";
 fn committed_argv() -> Vec<String> {
     let text = std::fs::read_to_string(at_root("mise.toml")).expect("the manifest");
     let parsed: toml::Value = toml::from_str(&text).expect("mise.toml parses");
-    let run = parsed["tasks"]["pr-unsubscribed"]["run"]
-        .as_str()
-        .expect("the task is one argv string");
+    let run = crate::common::rendered(
+        parsed["tasks"]["pr-unsubscribed"]["run"]
+            .as_str()
+            .expect("the task is one argv string"),
+    );
     let (_, argv) = run
         .split_once(" -- ")
         .expect("the task runs the engine with `cargo run ... --`");
@@ -183,7 +186,7 @@ fn task(dir: &Path, verb: &str, pr: &str, stdin: &str, host: &HostEnv<'_>) -> Ou
         .take()
         .expect("stdin")
         .write_all(stdin.as_bytes());
-    child.wait_with_output().expect("run the verb")
+    child.streamed_wait().expect("run the verb")
 }
 
 fn in_session(session: &str) -> HostEnv<'_> {
@@ -263,6 +266,35 @@ fn the_recorded_drop_is_what_makes_check_pass_for_that_pr_and_session_only() {
         Some(2),
         "nor one from another session"
     );
+}
+
+/// Fails by: `check` deciding with the whole ruleset rather than the one rule
+/// it names, so a rule that never reads this record refuses a recorded drop
+/// (CLOUD-2789).
+#[test]
+fn check_decides_with_its_named_rule_alone() {
+    let dir = repo("named-rule");
+    let mut config = std::fs::read_to_string(dir.join("batten.toml")).expect("the config");
+    config.push_str(
+        "\n[[rule]]\nid = \"no-todo\"\nkind = \"forbid\"\nseverity = \"deny\"\n\
+         glob = \"**/*.rs\"\npattern = \"TODO\"\nno_fix_reason = \"delete the marker\"\n",
+    );
+    write(&dir, "batten.toml", &config);
+    write(&dir, "src/a.rs", "fn main() {}\n// TODO fix me\n");
+    git_in(&dir, &["add", "-A"]);
+    git_in(&dir, &["commit", "-qm", "a rule that refuses the tree"]);
+    let bystander = common::run(&dir, &["check", "--rule", "no-todo"]);
+    assert_eq!(
+        bystander.status.code(),
+        Some(2),
+        "the premise: the other rule refuses: {}",
+        said(&bystander)
+    );
+    let session = in_session("cse_fixture");
+    let recorded = task(&dir, "record", "489", &answer_for("489"), &session);
+    assert!(recorded.status.success(), "{}", said(&recorded));
+    let check = task(&dir, "check", "489", "", &session);
+    assert_eq!(check.status.code(), Some(0), "{}", said(&check));
 }
 
 #[test]

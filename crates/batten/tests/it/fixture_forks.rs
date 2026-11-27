@@ -32,7 +32,8 @@ use crate::common;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use batten::rules::{self, Rule};
+use batten::config_model::Rule;
+use batten::rules;
 
 /// The predicate id the module declares.
 const FORK_ADDED: &str = "test add duplicate";
@@ -348,7 +349,7 @@ fn a_path_outside_the_suite_is_not_this_rules_business() {
     let root = repo(
         "fixture-forks-outside",
         &[],
-        &[("crates/batten/src/git.rs", &format!("{FORKING}\n"))],
+        &[("crates/batten-core/src/git.rs", &format!("{FORKING}\n"))],
     );
     assert!(
         verdicts(&root).is_empty(),

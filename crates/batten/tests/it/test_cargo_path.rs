@@ -30,11 +30,6 @@
 // `common/mod.rs` and `mutant-census` counts neither. The narrowed CLOUD-1951
 // mask is guarded by a hand application at integration until the sweep grows a
 // route to test-support sources.
-/*
-#MUTANT-SUITE crates/batten/tests/it/test_cargo_path.rs
-#MUTANT installed-batten-visible|s@^        if name == "batten" {$@        if name == "not-batten" {@|the_mask_hides_every_batten_and_keeps_the_rest
-#MUTANT batten-directory-kept|s@^            let shadow = shadows.join(name);$@            let shadow = dir.clone();@|the_mask_hides_every_batten_and_keeps_the_rest
-*/
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -64,7 +59,7 @@ fn resolves(path: &std::ffi::OsStr, name: &str) -> Option<PathBuf> {
         .find(|candidate| candidate.exists())
 }
 
-/// `#MUTANT installed-batten-visible` and `#MUTANT batten-directory-kept` redden
+/// Mutants that leave `batten` visible, or keep its directory, redden
 /// here: linking `batten` into the shadow, or keeping its directory, makes it
 /// resolvable again.
 #[test]

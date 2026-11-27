@@ -37,6 +37,21 @@ hk = "1.56.1"                                                # git-hook runner (
 # on. Deliberately NOT in ci.yml's install lists: nothing on the landing path
 # measures (see .github/workflows/perf.yml for why measurement is scheduled).
 "aqua:sharkdp/hyperfine" = "1.20.0"
+# The sampling profiler `skills/profile` reaches for (Firefox Profiler format,
+# perf_event_open directly, so no `perf` binary and no kernel headers). Callgrind
+# answers "which function" at 20-100x slowdown; a sampler answers it at native
+# speed, with wall-clock attribution, which a ~300 ms path needs. Prebuilt
+# release assets for every `lock-complete` platform.
+#
+# `http:`, NOT `github:` or `aqua:`. The proxy serves a third-party asset by URL
+# but refuses its release listing, and `[settings] lockfile = false` (below) means
+# a plain `mise install` never reads `mise.lock` — so a `github:` pin resolves its
+# version through `api.github.com/repos/mstange/samply/releases` on every cold
+# install, and `aqua:` has no samply entry and falls back to the same call. In a
+# container carrying no PAT (CLOUD-2688) that 403 killed every `mise` call, and so
+# every hook handler, before anything ran. `http:` names each asset's url and
+# checksum here, so no API call is made. Measured: installs and runs with no token.
+"http:samply" = { version = "0.13.1", platforms = { linux-x64 = { url = "https://github.com/mstange/samply/releases/download/samply-v0.13.1/samply-x86_64-unknown-linux-gnu.tar.xz", checksum = "sha256:61875daad67888798690dea3cb2748279df6ac299c5c6a857d67eed7642473d9" }, linux-arm64 = { url = "https://github.com/mstange/samply/releases/download/samply-v0.13.1/samply-aarch64-unknown-linux-gnu.tar.xz", checksum = "sha256:aa465162b62830168775b7ff4804bc35049436dcbc29bb3d1ea9f580380ea06a" }, macos-arm64 = { url = "https://github.com/mstange/samply/releases/download/samply-v0.13.1/samply-aarch64-apple-darwin.tar.xz", checksum = "sha256:7597239aa3769e75058be5ed359dbfe067f5e7714a5f052c45dd81d509aec17f" }, macos-x64 = { url = "https://github.com/mstange/samply/releases/download/samply-v0.13.1/samply-x86_64-apple-darwin.tar.xz", checksum = "sha256:a57f05f9162d06c36df6d51425d976ac774a8cd6dbd84050e6303fa8bf813998" }, windows-x64 = { url = "https://github.com/mstange/samply/releases/download/samply-v0.13.1/samply-x86_64-pc-windows-msvc.zip", checksum = "sha256:8fed74dac18197bbb2520125b0199255e09709bed7903a7672a06225a5d7e976" } } }
 # NOTE: no cargo-msrv pin, and since CLOUD-593 no MSRV gate needs one. It was
 # already unpinnable — upstream ships no aarch64-unknown-linux binary in ANY
 # release, so a release-asset backend locks no `linux-arm64` entry and `mise run
@@ -327,6 +342,16 @@ uv = "0.12.5"                     # the installer the pipx: backend runs; ntia-c
 
 [env]
 CARGO_TERM_COLOR = "always"
+# WHICH MUTATION RUNNER OWNS WHICH SOURCE, declared once for every task that
+# reads it: the sweep, `mutate cargo`, and the census in `verify`, which refuses
+# a hand-written row in a source cargo-mutants owns (`runner-owned`). Every
+# tracked `.rs` must match a cargo-mutants glob, and `mutant_rows.rs` holds the
+# tree to that, so the Rust tier is cargo-mutants' alone (CLOUD-2253). Test
+# children never inherit it: `common::batten` removes it.
+MUTANT_RUNNERS = "cargo-mutants=**/*.rs"
+# WHERE THIS REPOSITORY'S PRESETS LIVE, which the crate does not name (rule 1,
+# CLOUD-2711): the sweep and the census read a preset gate's modules from here.
+MUTANT_PRESETS = "crates/batten/src/policy/presets"
 # WHERE THIS REPOSITORY KEEPS ITS TASK PROGRAMS, read by `alive` and by `land`'s
 # reap of an abandoned landing's process groups (CLOUD-2366). The engine may not
 # spell a consumer's directory (non-negotiable rule 1), so it reads this; before
@@ -427,7 +452,31 @@ RUSTC_WRAPPER = "{% if os() != 'windows' %}{{ exec(command='{ ' ~ config_root ~ 
 # alone — the fan-in. This roster is what `ci-wait` WAITS ON before landing, and
 # waiting only on `final` would strand every landing on a check that fans in from
 # eighteen. Two sets, two purposes; neither derives the other.
-CI_REQUIRED_CHECKS = "ci,batten-check,mutants (0),mutants (1),mutants (2),mutants (3),cross,musl,commit-lint,zizmor,darwin-link (aarch64-apple-darwin),darwin-link (x86_64-apple-darwin),semver,perf,windows,macos,final,action (ubuntu-latest),action (macos-latest),action (windows-latest),action-violation,action-deny,action-usage,action-internal (ubuntu-latest),action-internal (macos-latest),action-final,dist / dist (x86_64-unknown-linux-gnu),dist / dist (aarch64-unknown-linux-gnu),dist / dist (x86_64-unknown-linux-musl),dist / dist (aarch64-unknown-linux-musl),dist / dist (x86_64-pc-windows-gnu),dist / dist (aarch64-apple-darwin),dist / dist (x86_64-apple-darwin)"
+#
+# WHICH LOCAL STEP STANDS FOR EACH CHECK HERE is `CI_LOCAL_PROOF`, and which have
+# none is `CI_EXEMPT_CHECKS`, both just below (CLOUD-2788).
+#
+# `mutants (reach)` IS NOT HERE, AND IT RUNS ON EVERY PULL REQUEST (CLOUD-2851):
+# a saving, never a verdict — the shards build for themselves when it fails,
+# times out or is skipped — so waiting on it strands a landing on a non-verdict.
+# `ci-local-parity` accepts its absence only because it compares names up to the
+# first `(`, and `mutants (n)` stands for every `mutants (…)`.
+CI_REQUIRED_CHECKS = "ci,batten-check,mutants (0),mutants (1),mutants (2),mutants (3),mutants (4),mutants (5),mutants (6),mutants (7),mutants (8),mutants (9),mutants (10),mutants (11),mutants (12),mutants (13),mutants (14),mutants (15),cross,musl,commit-lint,zizmor,darwin-link (aarch64-apple-darwin),darwin-link (x86_64-apple-darwin),semver,perf,windows,macos,final,action (ubuntu-latest),action (macos-latest),action (windows-latest),action-violation,action-deny,action-usage,action-internal (ubuntu-latest),action-internal (macos-latest),action-final,dist / dist (x86_64-unknown-linux-gnu),dist / dist (aarch64-unknown-linux-gnu),dist / dist (x86_64-unknown-linux-musl),dist / dist (aarch64-unknown-linux-musl),dist / dist (x86_64-pc-windows-gnu),dist / dist (aarch64-apple-darwin),dist / dist (x86_64-apple-darwin)"
+# Read by `batten step cover`, the last line of `verify` (CLOUD-2788): a check is
+# covered when the step it maps to passed at the lap's tree (`step run` and
+# `step graph run` record each pass). Beside the roster rather than in
+# `batten.toml`: it is the same CI vocabulary, and the released engine drops
+# `batten.toml` keys it does not know. `ci-suite` is hk's suite, whose
+# `mutant:changed` stands for `mutants (n)`. `mutants (reach)` has no entry:
+# it is off the roster, and `step cover` refuses a mapped check the roster does
+# not hold (CLOUD-2851).
+CI_LOCAL_PROOF = "ci=ci-suite,mutants (0)=ci-suite,mutants (1)=ci-suite,mutants (2)=ci-suite,mutants (3)=ci-suite,mutants (4)=ci-suite,mutants (5)=ci-suite,mutants (6)=ci-suite,mutants (7)=ci-suite,mutants (8)=ci-suite,mutants (9)=ci-suite,mutants (10)=ci-suite,mutants (11)=ci-suite,mutants (12)=ci-suite,mutants (13)=ci-suite,mutants (14)=ci-suite,mutants (15)=ci-suite,batten-check=gate:batten-check,commit-lint=gate:commit-lint,zizmor=gate:zizmor,semver=gate:semver,cross=gate:cross-check,darwin-link (aarch64-apple-darwin)=gate:darwin-link,darwin-link (x86_64-apple-darwin)=gate:darwin-link,perf=perf-gate"
+# Each exemption's reason; a `*` entry covers every check it prefixes. `musl`:
+# a link target CI builds, with no local toolchain declared. `windows`, `macos`:
+# the suite on another OS's runtime. `final`: the fan-in of the others, covered
+# through them. `action*`: the composite action, exercised on hosted runners.
+# `dist / dist (*`: release artifact builds per target.
+CI_EXEMPT_CHECKS = "musl,windows,macos,final,action*,dist / dist (*"
 
 # JOBS LEAVING THE ROSTER, and only while they still run (CLOUD-2301). The
 # fast-forward bot judges a head against TRUNK's roster, so a job is retired in
@@ -662,18 +711,10 @@ CI_FANIN_WORKFLOW = ".github/workflows/ci.yml"
 # the job the same verb excludes.
 CI_VERDICT_STEPS = "Run mise run ,Run mise exec -- "
 
-# The gates `mise run mutant` ENFORCES (CLOUD-418). A gate named here with no
-# `#MUTANT` declaration in its own file fails the sweep — that is the anti-vacuity
-# term, and without it the task reports success over a set it never touched.
-#
-# A gate NOT named here is a FILED ROW, never a silent exemption: the remaining
-# names are carried on CLOUD-480, `relatedTo` CLOUD-418. The property this buys is
-# "coverage cannot be silently zero", which a visible list with filed gaps has and
-# which forty hastily-written declarations would not — while adding branch age,
-# the thing that multiplies laps and CI runs, to the change that reduces them.
-#
-# Seeded with the gates this bundle touches, so every "mutation-checked per
-# CLOUD-418" obligation in it is cashed rather than cited.
+# The gates `mise run mutant` ENFORCES live in `batten.toml`'s `[mutate] gates`
+# (CLOUD-2010), the one committed authority. `$MUTANT_GATES` is a raise-only
+# override and is deliberately not set here: a set in the variable left the
+# census without a table, so its declaration arm never ran.
 # Upstream regorus's declared OPA compliance level, and the regorus line it was
 # read against (CLOUD-876). Both are read by the `opa-tracks-regorus-compliance`
 # policy row, which holds the `[tools]` opa pin to the first and the `Cargo.toml`
@@ -686,8 +727,7 @@ CI_VERDICT_STEPS = "Run mise run ,Run mise exec -- "
 # README from a gate instead would answer "what does upstream claim right now",
 # which is a property of the world and belongs on a clock (`lock-complete`).
 REGORUS_OPA_COMPLIANCE = "1.2.0"
-REGORUS_OPA_COMPLIANCE_FOR = "0.11"
-MUTANT_GATES = ".config/nextest.toml,action.yml,engine-testing,crates/batten/tests/it/common/mod.rs,agentic-experiment-record,answer-the-operator,claude-code-cloud,claude-code-plan,engine-disk-watch,engine-prune,engine-cache,engine-epoch,awk-regex,cap-drift,cfg-gated-test,ci-cache-declared,ci-hygiene,ci-parity,ci-slow-inert,ci-suite-lane,ci-tools,claim-before-code,claim-order-is-stated,coderabbit-config,commit-hygiene,dead-capability,denials-outlive-the-turn,digest-major-agreement,egress-fencing,engine-checks-green,engine-config,engine-doctor,engine-exec,engine-handler,engine-hook,engine-land,engine-landed,engine-lease,engine-lib,engine-mcp,engine-perf,engine-semver,engine-identity,engine-install,engine-pinned,engine-pipeline,engine-policy,engine-ready,engine-speculation,engine-surface,engine-verdict,engine-wiring,filed-here,could-not-look-laundered,fixture-forks,forge-verdict-required,glob-containment,harness-grant,harness-wiring,hk-fix-selection,hk-plan-required,hook-pin-check,hook-skip-local,landing-loop,landing-roster-guarded,leased-push,license-table,linear-history,lock-complete,mcp-timeout-budget,mise,mise-action-floor,mise-pin-agreement,module-map,msrv-pin-agreement,mutation-declared-case,nextest-slow,no-doctests,obligations-bound,perf-assert,pinned-toolchain,pipefail-grep,plan-complete,pr-partition-restated,pr-unsubscribed,privileged-lane,prose-only,publish-credential,red-head,release-due,release-provision-parity,release-tag-shape,remedy-authorship,repetition-without-progress,report-only,review-answered,review-dispatched,rules-paths-trigger,run-shape,rust-paths-check,sbom-inventory,shell-hygiene,shell-retirement,shell-write-advisory,skill-frontmatter-complete,spawn-widening,stop-posture,suite-subject-retirable,task-substitution,test-targets,timeout-budget,trunk-based,validator-verdict-clean,verdict-routes-resolve,weakens-declared,worktree-registration,engine-mutate,engine-task,run-arg-shape,engine-cargo-graph,branch-age,engine-released,evaluator-closure,evaluator-io-probe,agent-spawn,macos-link,ntia,release-tracking,sbom-actions,task-callable,transcript-corpus,engine-rules,release-assets,durable-write,spawn-factory,turn-ask,turn-defer,engine-forge,engine-forge-query,engine-git,engine-census,ci-signal,engine-ci-signal,docs-tree-absent,ripcord-untracked,hk-pin-agreement,engine-record,engine-suites,engine-admission,engine-ci-step,engine-gitwrite,engine-refusal,engine-repair,crates/batten/tests/it/mutant_rows.rs,crates/batten/tests/it/refusal_ceiling.rs,hk-fix-selection.pkl,engine-dist,engine-sbom,supply-chain,engine-reclaim,engine-durable,engine-step,engine-step-table,engine-mcp-grant,engine-mcp-posture,engine-preflight,engine-trust,engine-sweep,sweep-exit-table,tracker-hygiene,engine-tracker-reading,task-duplicate-close-check,engine-release,release-hygiene,engine-hygiene,engine-hk,hook-profile,engine-attestation,engine-turn,engine-unsubscribe,engine-probe,finding-sink,engine-commit,engine-receipt,engine-board-check,check-verdict,engine-budget,engine-codemod,engine-remedy,engine-config-edit,engine-propose,crates/batten/tests/it/stub_portability.rs,crates/batten/tests/it/truncate_handle.rs,git,engine-engine,engine-attribution,crates/batten/tests/it/pointer_only.rs,engine-hookcost,engine-transcript,engine-contract,forge-read-first,engine-advisory,engine-drain,engine-patch,engine-provision,batten.toml,engine-replay,engine-fetch,engine-pr-watch,engine-symbols,engine-rest,engine-environment,engine-lint,engine-session,engine-worktree,engine-doc,engine-history,engine-capture,engine-recorder,engine-state,engine-collect,engine-o200k,engine-stream-input,engine-background,engine-redirect,engine-release-verify,engine-release-path,engine-release-state,engine-release-guard,task-verify,task-alive,.github/workflows/release-plz.yml,.github/workflows/release-land.yml,.github/workflows/release-artifacts.yml,.github/workflows/renovate.yml,engine-scratch,engine-stop"
+REGORUS_OPA_COMPLIANCE_FOR = "0.15"
 # The file inline tasks are declared in, for `mutate`'s `task-` route (CLOUD-1909).
 # The crate may not spell a consumer's filename (non-negotiable rule 1), so the
 # manifest is named here, beside the set it serves. Unset, a `task-` gate resolves
@@ -701,7 +741,7 @@ MUTANT_TASKS = "mise.toml"
 # `mise install` fails ("GitHub access to this repository is not enabled"). The
 # fix is not to give up — GitHub is reachable — it is to send just the API/asset
 # hosts straight to GitHub, over the direct route (our tools are public repos, so
-# unauthenticated resolution works there; GH_TOKEN below still carries our PAT):
+# unauthenticated resolution works there; GH_TOKEN below carries a PAT where one is set):
 #   * NO_PROXY gains api.github.com (+ the redirect/asset hosts) so those calls
 #     bypass the proxy. github.com itself is deliberately left proxied, so git
 #     keeps its proxy-provided auth to button-inc/batten. The guard appends once
@@ -714,7 +754,7 @@ MUTANT_TASKS = "mise.toml"
 #     1200 s in `verify`); the proxy stays the route, and the tokens stay empty as below.
 # See AGENTS.md, "GitHub is reachable — never report the toolchain as unrunnable".
 # `gh` and zizmor read GH_TOKEN. In the sandbox the ambient GH_TOKEN is a proxy
-# placeholder that 401s when sent direct (NO_PROXY, above), so set it to our PAT;
+# placeholder that 401s when sent direct (NO_PROXY, above), so a PAT, where one is set, takes its place;
 # in CI there is no PAT, so fall back to MISE_GITHUB_TOKEN, which mise-action sets
 # to the job token. Both are valid, non-empty tokens (never the proxy
 # placeholder), so a tool that rejects an *empty* GH_TOKEN — like zizmor — works
@@ -727,7 +767,16 @@ MUTANT_TASKS = "mise.toml"
 # reported 401, and not a repository-scope verdict. Measure with `mise cache
 # clear` before EACH arm: without it the first arm that succeeds makes every
 # later arm pass from cache, which is how this was misread three times.
-GH_TOKEN = "{{ get_env(name='GITHUB_PERSONAL_ACCESS_TOKEN', default=get_env(name='BATTEN_GITHUB_TOKEN', default=get_env(name='MISE_GITHUB_TOKEN', default=''))) }}"
+#
+# WITH NO PAT THE PLACEHOLDER IS KEPT, never blanked (CLOUD-2688). An empty
+# GH_TOKEN makes `gh` refuse before it sends anything ("populate the GH_TOKEN
+# environment variable"), while the placeholder reaches the proxy — `NO_PROXY`
+# above only sends GitHub direct when a real token exists — and the proxy swaps
+# in its own credential. Measured 2026-11-11, no PAT in the container: `gh api
+# repos/button-inc/batten` answers through the placeholder and fails under the
+# blanked value; the API answers 403 for a third-party repository with or
+# without the placeholder, so keeping it costs nothing anywhere.
+GH_TOKEN = "{{ get_env(name='GITHUB_PERSONAL_ACCESS_TOKEN', default=get_env(name='BATTEN_GITHUB_TOKEN', default=get_env(name='MISE_GITHUB_TOKEN', default=get_env(name='GH_TOKEN', default='')))) }}"
 # THE OTHER HALF OF THE SAME REPAIR, and its absence is why the paragraph above
 # describes a 401 the paragraph above did not fix. `GH_TOKEN` is what `gh` and
 # zizmor read; `GITHUB_TOKEN` is what MISE'S OWN backends read — aqua, the
@@ -762,12 +811,19 @@ no_proxy = "{% set ours = get_env(name='GITHUB_PERSONAL_ACCESS_TOKEN', default=g
 # with `if [[ -n "${BATTEN_BIN:-}" ]]; then batten=("$BATTEN_BIN"); else batten=(cargo
 # run --quiet -p batten --); fi`, and an argv `run = [...]` has no shell to say it
 # in — so it is a var every argv entry opens with, and `BATTEN_BIN` still names the
-# binary under test (the tiers set it; `test:bats` exports it). Without it a task
+# binary under test: `verify:gated` builds it once (`build:debug`) and sets it in
+# its `env`, so every tier's child `mise run` renders this to the built binary
+# rather than a `cargo run` per gate (CLOUD-2924). Without it a task
 # composed from a fixture — `board-sweep`'s gates, under a `CARGO_TARGET_DIR` that
 # puts the fixture beneath another checkout — builds whatever workspace cargo finds
 # by walking up, which is not the engine being tested (CLOUD-843).
 [vars]
 batten = "{{ get_env(name='BATTEN_BIN', default='cargo run --quiet -p batten --') }}"
+# THE DIST LEG THIS HOST BUILDS (CLOUD-2789): `dist.yml`'s matrix names each
+# triple, and `verify` builds the one whose host it runs on, so a contributor's
+# Linux or macOS machine runs a leg CI runs. Not Windows, where `verify` runs no
+# wrapped build either.
+dist_host = "{% if arch() == 'arm64' %}aarch64{% else %}x86_64{% endif %}-{% if os() == 'macos' %}apple-darwin{% else %}unknown-linux-gnu{% endif %}"
 # The duplicate-close window, in characters of an ISO-8601 stamp: 19 is the
 # second, and `DUPLICATE_CLOSE_WINDOW` widens it, as the retired body let it.
 duplicate_close_window = "{{ get_env(name='DUPLICATE_CLOSE_WINDOW', default='19') }}"
@@ -943,7 +999,16 @@ description = "Clippy with warnings denied"
 # line), so the variable rides the step's own argv rather than the task's `env`,
 # where it would also send the engine's `cargo run` into `target/clippy` and pay
 # a second full debug build of it there.
-run = "cargo run --quiet -p batten -- step run lint:clippy -- env CARGO_TARGET_DIR=target/clippy cargo clippy --all-targets --all-features -- -D warnings"
+# ONE ROW PER PACKAGE CUT OUT OF `batten` (CLOUD-2789): `batten-facts`,
+# `batten-base` and `batten-core` are each keyed
+# on its own sources, so an edit confined to `batten` hits their receipts, and
+# the workspace row excludes them, so every package is still linted once.
+run = [
+  "{{vars.batten}} step run lint:clippy:facts -- env CARGO_TARGET_DIR=target/clippy cargo clippy -p batten-facts --all-targets --all-features -- -D warnings",
+  "{{vars.batten}} step run lint:clippy:base -- env CARGO_TARGET_DIR=target/clippy cargo clippy -p batten-base --all-targets --all-features -- -D warnings",
+  "{{vars.batten}} step run lint:clippy:core -- env CARGO_TARGET_DIR=target/clippy cargo clippy -p batten-core --all-targets --all-features -- -D warnings",
+  "{{vars.batten}} step run lint:clippy -- env CARGO_TARGET_DIR=target/clippy cargo clippy --workspace --exclude batten-facts --exclude batten-base --exclude batten-core --all-targets --all-features -- -D warnings",
+]
 # ITS OWN BUILD DIRECTORY, and the clippy argv above keeps its flags unchanged so
 # no CI parity reading moves. `verify` runs this beside `test:cargo`, the narrow
 # nextest lanes and the cross builds, all in `target/`, and clippy's
@@ -990,8 +1055,8 @@ description = "taplo: TOML syntax, duplicate keys, schema bindings, and formatti
 # hands the tool's own output back unchanged. `cargo run` resolves the TREE's
 # engine, because `--tracked` is newer than any release on PATH.
 run = [
-  "cargo run --quiet -p batten -- exec --tee --tracked '*.toml' -- taplo lint",
-  "cargo run --quiet -p batten -- exec --tee --tracked '*.toml' -- taplo format --check --diff",
+  "{{vars.batten}} exec --tee --tracked '*.toml' -- taplo lint",
+  "{{vars.batten}} exec --tee --tracked '*.toml' -- taplo format --check --diff",
 ]
 
 [tasks."lint:deno"]
@@ -1037,7 +1102,7 @@ description = "deno fmt: JSON/JSONC and non-workflow YAML parse and are formatte
 # the same index projection a policy row's `index` column reads, and `--tee`
 # hands the tool's own output back unchanged. `cargo run` resolves the TREE's
 # engine, because `--tracked` is newer than any release on PATH.
-run = "cargo run --quiet -p batten -- exec --tee --tracked '*.json' --tracked '*.jsonc' --tracked '*.yaml' --tracked '*.yml' --except '.github/workflows/*' --except 'schema/*.json' --except 'contracts/*.json' --except 'crates/batten/tests/fixtures/*' --except 'fuzz/corpus/*' --except 'tests/fixtures/*' -- deno fmt --check --prose-wrap=preserve"
+run = "{{vars.batten}} exec --tee --tracked '*.json' --tracked '*.jsonc' --tracked '*.yaml' --tracked '*.yml' --except '.github/workflows/*' --except 'schema/*.json' --except 'contracts/*.json' --except 'crates/batten/tests/fixtures/*' --except 'fuzz/corpus/*' --except 'tests/fixtures/*' -- deno fmt --check --prose-wrap=preserve"
 
 [tasks."fmt:deno"]
 description = "deno fmt: rewrite the tracked JSON/JSONC and non-workflow YAML in canonical form"
@@ -1071,7 +1136,7 @@ description = "deno fmt: rewrite the tracked JSON/JSONC and non-workflow YAML in
 # the same index projection a policy row's `index` column reads, and `--tee`
 # hands the tool's own output back unchanged. `cargo run` resolves the TREE's
 # engine, because `--tracked` is newer than any release on PATH.
-run = "cargo run --quiet -p batten -- exec --tee --tracked '*.json' --tracked '*.jsonc' --tracked '*.yaml' --tracked '*.yml' --except '.github/workflows/*' --except 'schema/*.json' --except 'contracts/*.json' --except 'crates/batten/tests/fixtures/*' --except 'fuzz/corpus/*' --except 'tests/fixtures/*' -- deno fmt --prose-wrap=preserve"
+run = "{{vars.batten}} exec --tee --tracked '*.json' --tracked '*.jsonc' --tracked '*.yaml' --tracked '*.yml' --except '.github/workflows/*' --except 'schema/*.json' --except 'contracts/*.json' --except 'crates/batten/tests/fixtures/*' --except 'fuzz/corpus/*' --except 'tests/fixtures/*' -- deno fmt --prose-wrap=preserve"
 
 [tasks."fix-selection-check"]
 description = "hk's `fix` hook selects exactly the gate's fixer-bearing steps — no check-only step, no unrouted fixer"
@@ -1164,8 +1229,8 @@ description = "opa fmt: Rego formatting over the tracked module corpus"
 # then the same selection under `--fail` refuses. A reader sees every offender on
 # one run, and the gate still fails on any.
 run = [
-  "cargo run --quiet -p batten -- exec --tee --tracked '*.rego' -- mise exec -- opa fmt -l",
-  "cargo run --quiet -p batten -- exec --tee --tracked '*.rego' -- mise exec -- opa fmt -l --fail",
+  "{{vars.batten}} exec --tee --tracked '*.rego' -- mise exec -- opa fmt -l",
+  "{{vars.batten}} exec --tee --tracked '*.rego' -- mise exec -- opa fmt -l --fail",
   "mise exec -- opa check -s schema/ policy/ crates/batten/src/policy/presets/shell-hygiene/",
 ]
 
@@ -1184,7 +1249,7 @@ description = "opa fmt -w: rewrite the tracked Rego corpus in canonical form"
 # the same index projection a policy row's `index` column reads, and `--tee`
 # hands the tool's own output back unchanged. `cargo run` resolves the TREE's
 # engine, because `--tracked` is newer than any release on PATH.
-run = "cargo run --quiet -p batten -- exec --tee --tracked '*.rego' -- mise exec -- opa fmt -w"
+run = "{{vars.batten}} exec --tee --tracked '*.rego' -- mise exec -- opa fmt -w"
 
 [tasks.coverage]
 description = "Report: line/region coverage of the Rust suite. A REPORT, never a gate — deliberately not in `verify` and not a required check"
@@ -1423,7 +1488,7 @@ description = "Run the Rust workspace test suite"
 # that tail, and `task_cargo` in `policy/ci-parity.rego` lifts it off the
 # `step run test:cargo -- ` wrapper. The fail-fast posture rides
 # `NEXTEST_PROFILE` in `[env]`, which every leg inherits.
-run = "cargo run --quiet -p batten -- step run test:cargo -- cargo nextest run --workspace"
+run = "{{vars.batten}} step run test:cargo -- cargo nextest run --workspace"
 
 # --- the four tiers `hk` reaches by name (CLOUD-1164) ---------------------------
 #
@@ -1455,19 +1520,46 @@ run = "cargo run --quiet -p batten -- step run test:cargo -- cargo nextest run -
 # `verify` runs these beside `test:cargo`: measured, the full suite's report was
 # replaced by a 12-case one. `junit_wired.rs` holds every filtered nextest task here
 # to a profile of its own.
+# THE TRACED BRANCH, JUDGED SOMEWHERE (CLOUD-2789, CLOUD-2784). A case takes a
+# traced branch where a process in it asks `trace::Host::tracer` and is answered:
+# the case itself (`common::traced`, `Host::here`), or a `batten` it spawns that
+# traces a `step run` miss or a sweep's reach. Locally every suite lane is
+# untraced there: `test:cargo` runs under `step run`, which traces a miss, so no
+# second tracer attaches. CI's `ci` job is the other kind: under `CI=true` its
+# `step run` is bypassed, so with `strace` installed every such case takes its
+# TRACED branch there and nowhere here. So a red only that branch shows was
+# found by CI, a whole lap late.
+#
+# THIS LANE RUNS THOSE BRANCHES HERE, as CI's `ci` job does: outside `step run`,
+# `CI=true`, `strace` provisioned, and `BATTEN_TEST_TRACED_REQUIRED` turning an
+# untraceable host into a failure, never the fallback. Its modules are every
+# `tests/it` module whose source asks for a tracer or spawns what does, and
+# `the_traced_lane_runs_every_module_that_reaches_a_tracer` derives that set from
+# the source and holds this line to it, so a new such module cannot be missed.
+# Two argvs, the `it` modules and the lib's tracer cases, since a positional
+# filter would match the lib's whole `mutate::` tree too. NOT receipt-routed:
+# a `step run` miss would trace the suite and fail it.
+[tasks."test:traced"]
+description = "Gate: every case that takes a traced branch on CI's `ci` job, run here as that job runs it (CLOUD-2789)"
+run = [
+  "cargo nextest run -p batten --no-tests=fail --test it ci_tools:: land:: mutate:: mutate_schema:: prune_watch:: step_cover:: step_journal:: step_receipt::",
+  "cargo nextest run -p batten --no-tests=fail --lib mutate::trace::tests::",
+]
+env = { CI = "true", BATTEN_TEST_SCRATCH_LANE = "narrow", BATTEN_TEST_TRACED_REQUIRED = "1", NEXTEST_PROFILE = "narrow" }
+
 [tasks."test:reference-coverage"]
 description = "Gate: the rendered CLI reference and the command spec name exactly the same flags, in both directions (CLOUD-171)"
-run = "cargo run --quiet -p batten -- step run test:reference-coverage -- cargo nextest run -p batten --no-tests=fail --test it reference_coverage::"
+run = "{{vars.batten}} step run test:reference-coverage -- cargo nextest run -p batten --no-tests=fail --test it reference_coverage::"
 env = { BATTEN_TEST_SCRATCH_LANE = "narrow", NEXTEST_PROFILE = "narrow" }
 
 [tasks."test:skill-contract"]
 description = "Gate: every shipped skill stays inside its line budget and describes only the surface the binary ships (CLOUD-213)"
-run = "cargo run --quiet -p batten -- step run test:skill-contract -- cargo nextest run -p batten --no-tests=fail --test it skill_contract::"
+run = "{{vars.batten}} step run test:skill-contract -- cargo nextest run -p batten --no-tests=fail --test it skill_contract::"
 env = { BATTEN_TEST_SCRATCH_LANE = "narrow", NEXTEST_PROFILE = "narrow" }
 
 [tasks."test:config-schema"]
 description = "Gate: the committed JSON Schemas match the ones the binary derives from the config types (CLOUD-33)"
-run = "cargo run --quiet -p batten -- step run test:config-schema -- cargo nextest run -p batten --no-tests=fail --test it config_schema::"
+run = "{{vars.batten}} step run test:config-schema -- cargo nextest run -p batten --no-tests=fail --test it config_schema::"
 env = { BATTEN_TEST_SCRATCH_LANE = "narrow", NEXTEST_PROFILE = "narrow" }
 
 [tasks."test:hook-profile"]
@@ -1487,8 +1579,13 @@ env = { BATTEN_TEST_SCRATCH_LANE = "narrow", NEXTEST_PROFILE = "narrow" }
 
 [tasks."test:config-deprecations"]
 description = "Gate: no config key left the published schema without a deprecation window (CLOUD-360)"
-run = "cargo nextest run -p batten --no-tests=fail --test it config_deprecations::"
-env = { BATTEN_TEST_SCRATCH_LANE = "narrow", NEXTEST_PROFILE = "narrow" }
+# THE PREDICATE ITSELF, NOT ITS TEST SUITE (#1276). This ran
+# `cargo nextest … --test it config_deprecations::`, so verify's seconds tier
+# compiled the whole `it` binary before `test:cargo` had: measured at 266.9 s of
+# `enforce --half live`, every other row of which ran in under 3 s. The suite
+# still runs whole under `test:cargo`; the gate asks the verb, against the
+# newest `v*` tag by version order, named on its output line.
+run = "{{vars.batten}} config deprecations latest"
 
 [tasks.prose-only-check]
 description = "Gate: a branch whose whole diff is comment lines buys a CI matrix no required check can have an opinion about (reads the diff; pointer-only)"
@@ -1507,14 +1604,14 @@ description = "Gate: a branch whose whole diff is comment lines buys a CI matrix
 #
 # `--rule` naming no declared row is a usage error rather than a clean run, so a
 # renamed row breaks this loudly instead of silently passing.
-run = "cargo run --quiet -p batten -- check --rule 'diff ship early'"
+run = "{{vars.batten}} check --rule 'diff ship early'"
 
 [tasks."ci-drift"]
 description = "Gate: the committed [ci] table still matches the host ruleset (CLOUD-54)"
 # CLOUD-54's gate, ported off `mise-tasks/ci-drift.sh` under CLOUD-843.
 #
 # THE ADJUDICATION WAS ALREADY THE VERB'S. The program's last line was
-# `config lint --host-rules -`, so the comparison has lived in `crates/batten/src/ci.rs`
+# `config lint --host-rules -`, so the comparison has lived in `crates/batten-base/src/ci.rs`
 # all along. What the shell still owned was a credentialed FETCH, which the engine
 # may not do — house-style §5, and `evaluator-io-check` is the standing gate on it.
 #
@@ -1535,7 +1632,7 @@ description = "Gate: the committed [ci] table still matches the host ruleset (CL
 # named. It was the shell's `:?` until CLOUD-1991; mise's template refuses to
 # render a variable the environment does not carry, naming it, and the task fails
 # before the engine starts — the same refusal with no shell line behind it.
-run = 'cargo run --quiet -p batten -- config lint --host-rules "{{env.CI_DRIFT_RULES}}"'
+run = '{{vars.batten}} config lint --host-rules "{{env.CI_DRIFT_RULES}}"'
 
 [tasks."hooks-wiring-check"]
 description = "Gate: batten is registered exactly once on every hook surface (doctor hooks), and every other registration names the issue retiring it (harness-wiring)"
@@ -1559,8 +1656,8 @@ description = "Gate: batten is registered exactly once on every hook surface (do
 # verdict is never discarded — the property the `&&` was spelled for, without a
 # shell line to carry it. There is no decision here to hide: both are the engine's.
 run = [
-  "cargo run --quiet -p batten -- doctor hooks",
-  "cargo run --quiet -p batten -- check --rule 'hook wire missing'",
+  "{{vars.batten}} doctor hooks",
+  "{{vars.batten}} check --rule 'hook wire missing'",
 ]
 
 [tasks."config-lint"]
@@ -1602,7 +1699,7 @@ description = "Gate: batten.toml carries no policy smell, and no weakening the g
 # The `${VAR:+...}` was argv assembly and nothing else, and the template's `if`
 # is the same assembly — an unset or empty `CONFIG_LINT_BASE` adds no flag — with
 # no shell line left to carry it.
-run = 'cargo run --quiet -p batten -- config lint {% if env.CONFIG_LINT_BASE %}--config-from "{{env.CONFIG_LINT_BASE}}"{% endif %}'
+run = '{{vars.batten}} config lint {% if env.CONFIG_LINT_BASE %}--config-from "{{env.CONFIG_LINT_BASE}}"{% endif %}'
 
 [tasks.semver]
 description = "Gate: the API delta on this branch is compatible with the bump release-plz will infer, unless a commit declares the break"
@@ -1642,7 +1739,7 @@ description = "Gate: the API delta on this branch is compatible with the bump re
 # origin/main..HEAD` — which is exactly what a `[[step]]` row's `tools` column
 # keys a receipt on, so they belong on the `semver` row beside the crates it
 # already names as inputs. The task is the step and nothing else.
-run = "cargo run --quiet -p batten -- step run semver -- cargo run --quiet -p batten -- semver check"
+run = "{{vars.batten}} step run semver -- {{vars.batten}} semver check"
 
 [tasks."claim-check"]
 description = "Gate: the issue you are about to pull is actually unclaimed (reads get_issue payloads on stdin)"
@@ -1672,7 +1769,17 @@ description = "Gate: the issue you are about to pull is actually unclaimed (read
 # already carried the whole decision. They are `--takeover` and
 # `--bypass-sequence`, which is also what a harness classifying `FOO=1 cmd` as a
 # bypass leaves reachable.
-run = "cargo run --quiet -p batten -- claim check"
+run = "{{vars.batten}} claim check"
+
+[tasks."session-watch"]
+description = "Wait, backgrounded, until a dispatched child session is done (0), dead or never started (2), or unreadable (3)"
+# CLOUD-2826: the parent's wake with no timer. Run it backgrounded; its exit is
+# the wake-up `AGENTS.md` mandates, and its output is one pointer line per child
+# plus the inventory file. `Claude_Code_Remote` is this consumer's
+# `[mcp.source.endpoint_contains]` name for the session toolbox, which is why
+# it is spelled here and not in the engine. Extra arguments (`--session <id>`)
+# narrow the watch to named sessions.
+run = "{{vars.batten}} session watch --server Claude_Code_Remote"
 
 [tasks."perf-pair"]
 description = "Measure this branch and its merge base back to back on one machine, and print both arms as paired records"
@@ -1698,7 +1805,7 @@ description = "Measure this branch and its merge base back to back on one machin
 # The defaults live in `crates/batten/src/perf.rs` beside the reasoning, not here:
 # `origin/main`, 100 runs, 10 warmups, and `target/perf`, each still overridable
 # through the `BENCH_*` variables CI already exports.
-run = "cargo run --quiet -p batten -- perf pair"
+run = "{{vars.batten}} perf pair"
 
 [tasks."perf-compare"]
 description = "Gate: this branch has not made an invocation path measurably slower than its merge base (reads a paired measurement on stdin)"
@@ -1718,7 +1825,7 @@ description = "Gate: this branch has not made an invocation path measurably slow
 # EXPERIMENT (the measured null spread, 0.966-1.102) and names no consumer, while
 # every accepted row this repository has written cites a tracker key, which may
 # not appear anywhere in `crates/batten`.
-run = "cargo run --quiet -p batten -- perf compare"
+run = "{{vars.batten}} perf compare"
 
 [tasks."perf-gate"]
 description = "Gate: measure this branch against its merge base and refuse a regression — the one call `verify` and CI make"
@@ -1741,7 +1848,7 @@ description = "Gate: measure this branch against its merge base and refuse a reg
 # there is no pipeline: `perf::gate` holds the outcome as a value and matches on
 # it, so a skip and a failed measurement are different variants rather than two
 # readings of one byte stream.
-run = "cargo run --quiet -p batten -- perf gate"
+run = "{{vars.batten}} step run perf-gate -- {{vars.batten}} perf gate"
 
 [tasks."perf-seed"]
 description = "Effect: build the perf pair's arm profile and stage it under target/perf/base-seed, which perf.yml saves as every pull request's base-arm seed"
@@ -1759,7 +1866,9 @@ run = [
 ]
 
 [tasks."mutant"]
-description = "Gate: every declared gate has a mutation its own suite is PROVEN to catch (CLOUD-418)"
+#MUTANT-SUITE crates/batten/tests/it/verify_chain.rs
+#MUTANT whole-tree-unset|s@MUTANT_WHOLE_TREE = "1"@MUTANT_WHOLE_TREE = ""@|the_scheduled_sweep_judges_the_whole_rust_tree
+description = "Gate: every declared gate has a mutation its own suite is PROVEN to catch (CLOUD-418), and every mutant cargo-mutants makes of the whole workspace is caught (CLOUD-2849)"
 # CLOUD-418's mechanism, ported off `mise-tasks/mutant.sh` under CLOUD-1267.
 #
 # THE TASK NAME SURVIVES THE MIGRATION, for `perf-pair`'s reason above and with a
@@ -1782,54 +1891,114 @@ description = "Gate: every declared gate has a mutation its own suite is PROVEN 
 # `lock-currency` were separated along. What a commit CAN move is the gates it
 # touched, and `mutant:changed` sweeps exactly those at admission (CLOUD-2072);
 # the census is the other half that runs in the gate.
-run = "cargo run --quiet -p batten -- mutate sweep"
+#
+# THROUGH `mutant:declared`, so the sweep's environment is declared once: with no
+# `MUTANT_CHANGED_SINCE` it narrows to nothing and sweeps every gate.
+#
+# AND THROUGH `mutant:rust` OVER THE WHOLE WORKSPACE (CLOUD-2849). Retiring the
+# hand-written Rust rows onto cargo-mutants left the schedule judging only the
+# declared Rego, Pkl and manifest gates, and Rust only on a branch's diff, so code
+# no change touched had no mutation judged against its suite. `MUTANT_WHOLE_TREE`
+# makes `batten mutate cargo` list `cargo mutants --workspace` with no base; a
+# subtask inherits it, as `mutant:changed`'s inherit its base, and a base set
+# beside it is a usage error. Both run whatever the first says, as there.
+env = { MUTANT_WHOLE_TREE = "1" }
+run = "mise run --continue-on-error --jobs 1 mutant:declared ::: mutant:rust"
 
 [tasks."mutant:changed"]
-description = "Gate: every enforced gate this branch touched since origin/main has a mutation its own suite is PROVEN to catch (CLOUD-2072)"
-# BACK ON ADMISSION, CARGO-MUTANTS INCLUDED (CLOUD-1746, the owner's 2026-10-16
-# ruling: the changed diff's mutants run at landing, with local and CI parity).
-# `hk.pkl`'s `mutant:changed` step runs it in `verify`, so a change's mutants run
-# here first. CI runs the same task in its own `mutants` job as a `MUTANT_SHARD`
-# matrix, the cargo-mutants book's PR recipe, and carves it out of the `ci` job
-# with `HK_SKIP_STEPS`, as `batten-check` is. So CI's confirmation costs a shard's
-# wall time on top of the local run, not a second serial run. The whole sweep is
-# the schedule's (`mutant`), never admission's.
-# `mutant`'s sweep NARROWED TO THE CHANGE, which is what puts it on the landing
-# path that the whole sweep stays off. The owner's 2026-10-02 ruling: tests run
-# at admission, and a schedule is for drift. The whole sweep is a proof about
-# every suite and costs a cold build per gate; a gate this branch did not touch
-# cannot have been weakened by it, so admission pays only for the gates whose
-# source or suite the diff names (`mutate::touched`).
+#MUTANT-SUITE crates/batten/tests/it/mutate_schema.rs
+#MUTANT changed-base-overrides-caller|s@^env = { MUTANT_CHANGED_SINCE = .*@env = { MUTANT_CHANGED_SINCE = "origin/main" }@|mutant_changed_hands_a_callers_base_to_both_runners
+description = "Gate: every mutant cargo-mutants makes of this branch's Rust change is caught, and every declared Rego, Pkl or manifest gate it touched has a mutation its suite catches"
+# ON ADMISSION, AT LANDING (CLOUD-1746, the owner's 2026-10-16 ruling, with
+# local and CI parity). `hk.pkl`'s `mutant:changed` step runs it in `verify`; CI
+# runs the same task in its `mutants` job as a `MUTANT_SHARD` matrix and carves it
+# out of the `ci` job with `HK_SKIP_STEPS`. The whole sweep is `mutant`'s, on a
+# schedule.
 #
-# NO RUST ROW IS SWEPT HERE. A gate whose rows mutate `.rs` is left to `cargo
-# mutants --in-diff` (CLOUD-1746), the publisher's own admission recipe; sweeping
-# it by hand as well would stand a second Rust mutation system at admission. Those
-# rows stay in the whole sweep until cargo-mutants gates, then retire.
+# TWO RUNNERS, EACH OVER WHAT IT OWNS:
 #
-# THE BASE RIDES `MUTANT_CHANGED_SINCE`, beside `MUTANT_GATES` in `[env]`.
+# * RUST IS CARGO-MUTANTS' MUTANTS, JUDGED IN ONE SCHEMA BUILD (CLOUD-2253):
+#   cargo-mutants lists the branch's diff (`--list --json --in-diff`), and
+#   `batten mutate cargo` switches every one of them into a single build
+#   (mutant schemata: Untch, Offutt & Harrold, ISSTA 1993), records which cases
+#   reach each site in one run of the suite, and judges each mutant by those
+#   cases alone, cheapest first, stopping at the first kill (Zhang, Marinov &
+#   Khurshid, ISSTA 2013). A verdict is journaled the moment it is decided and
+#   reused while its function and its cases' files are unchanged, so a lap
+#   re-judges only what moved. Measured on #1276: one 195 s build against the
+#   classic tool's build per mutant. What the schema cannot switch (a struct
+#   field, an `impl Trait` body, a const item) it hands back by name to
+#   cargo-mutants itself, run as its book says: `--re` per name, `--iterate`,
+#   `--jobs` sized below. `.cargo/mutants.toml` carries its settings: the
+#   `[profile.mutants]` build, nextest, and `.git` in each copy. The nextest
+#   profile `mutants` stops at a mutant's first failing case and never retries.
+#   `--shard` in CI slices the listing by index, so the shards partition it.
+# * EVERYTHING ELSE IS `batten mutate sweep`'s: the hand-written `#MUTANT` rows of
+#   Rego, Pkl and manifests, which no tool mutates (CLOUD-2070), narrowed to the
+#   gates the diff touched.
 #
-# COULD-NOT-LOOK WIDENS. With no `origin/main` to diff against, the verb sweeps
-# every enforced gate and says so on stderr, as `ci suites` does: too wide shows
-# in the bill, too narrow has no symptom.
+# `MUTANT_RUNNERS` IS THE OWNERSHIP DECLARATION, NOT A RUNNER: it tells the
+# declared sweep which sources are cargo-mutants' (so it never judges one), and
+# `obligations-bound.rego` reads it to accept a Ready block's `cargo-mutants`
+# obligation for those files.
 #
 # `origin/main` IS A TIP DIFF, for `git::base_delta`'s stated reason: `verify`
 # asserts the branch is rebased on it, and CI's `ci` job fetches it first.
-#
-# THE RUNNER REGISTRY (CLOUD-1746). `MUTANT_RUNNERS` gives every Rust source to
-# cargo-mutants, so the declared runner here judges the Rego, Pkl and manifest
-# rows, the same set locally and in `ci.yml`'s `ci` job. cargo-mutants runs
-# because this task sets `MUTANT_RUNNER=cargo-mutants`, from the pin that
-# `batten.toml`'s `[[provision]]` row ships (CLOUD-2345), which the sweep applies
-# itself. The 16-shard matrix tried on #1132 ran it where `verify` never did,
-# and was removed for that. This one confirms what `verify` already ran.
-# THE GLOBS ARE WHAT SHIPS AND WHAT TESTS IT: each crate's `src/`, `build.rs`
-# and `tests/`, whose cases a Ready block's `cargo-mutants` obligation names
-# (`obligations-bound.rego` reads ownership from this line). `examples/`
-# is measurement tooling no test target compiles, which cargo-mutants could only
-# report as `no-suite` on every run (measured on #1132); left unowned, the
-# declared runner judges it, and it declares no rows.
-env = { MUTANT_CHANGED_SINCE = "origin/main", MUTANT_RUNNER = "cargo-mutants", MUTANT_RUNNERS = "cargo-mutants=crates/*/src/**/*.rs,crates/*/build.rs,crates/*/tests/**/*.rs" }
-run = "cargo run --quiet -p batten -- mutate sweep"
+# BOTH RUNNERS RUN, WHATEVER THE FIRST ONE SAYS: a Rego survivor must not hide
+# the Rust verdicts, or a lap returns one runner's survivors and the next lap the
+# other's. `--continue-on-error` runs each and fails if either did, one at a
+# time so they do not compete for the box.
+# THE CHANGE BOTH RUNNERS JUDGE, declared once: a subtask inherits the
+# environment `mise run` hands it. Ownership is `[env]`'s `MUTANT_RUNNERS`.
+# `origin/main` IS THE DEFAULT, NEVER AN OVERRIDE (CLOUD-2918): an operator who
+# narrowed the base gets that base judged, as `mutant:rust` already keeps it,
+# rather than the whole branch.
+env = { MUTANT_CHANGED_SINCE = "{{ get_env(name='MUTANT_CHANGED_SINCE', default='origin/main') }}" }
+run = "mise run --continue-on-error --jobs 1 mutant:declared ::: mutant:rust"
+
+[tasks."mutant:declared"]
+description = "Gate: every declared Rego, Pkl or manifest gate this branch touched has a mutation its suite catches"
+# A PRESET IS MUTATED IN AN OVERLAY, NEVER IN PLACE: the crate `include_str!`s
+# it, so an in-place mutation recompiled the crate twice per row (~41 s a row on
+# #1276). The suite is built once with `preset-overlay` and reads the mutated
+# copy from `BATTEN_PRESET_OVERLAY` (`mutate::Overlay`, `PresetModule::text`);
+# the overlay's root is `[env]`'s `MUTANT_PRESETS`.
+env = { MUTANT_OVERLAY_ENV = "BATTEN_PRESET_OVERLAY", MUTANT_OVERLAY_FEATURES = "preset-overlay" }
+# THE SUITE'S `pkl eval hk.pkl` CASES NEED THE PACKAGE CACHE WARM, as `hooks` and
+# `record-verdicts` do (CLOUD-2311). Run alone on a cold, TLS-intercepted host,
+# `hk_contract`'s four pkl cases went baseline-red and every mutant they reach
+# came back unjudged; CI's `mutants` job restores `~/.pkl/cache`, so only a
+# local sweep paid it.
+depends = ["pkl-package"]
+run = "{{vars.batten}} mutate sweep"
+
+[tasks."mutant:rust"]
+#MUTANT-SUITE crates/batten/tests/it/mutate_schema.rs
+#MUTANT rust-base-undeclared|s@, MUTANT_CHANGED_SINCE = "[^"]*"@@|mutant_rust_runs_on_its_own_against_a_declared_base
+description = "Gate: every mutant cargo-mutants makes of this branch's Rust change since origin/main is caught"
+# THE TASK OWNS ITS BASE (CLOUD-2855): its description promises the change since
+# `origin/main`, so a standalone `mise run mutant:rust` judges that rather than
+# exiting usage on a missing base. A caller's own base is kept: `mutant:changed`
+# hands `origin/main` down, and an operator's `MUTANT_CHANGED_SINCE` wins. THE
+# DEFAULT YIELDS TO THE WHOLE TREE: under `mutant`'s `MUTANT_WHOLE_TREE` only a
+# caller's explicit base is passed, so the schedule lists `--workspace` and a
+# base set beside it is still the verb's usage error (CLOUD-2849). Here and
+# never in `mutate::changed_since`, which `mutant:declared` reads as "every
+# gate" when unset.
+# THE PER-JOB COST IS THE TREE'S, THE MACHINE IS MEASURED: for the mutants the
+# schema hands back, `batten mutate cargo` divides cores, temp-volume headroom
+# above the collector's floor, and memory by one copy's cold mutants-profile
+# build: 5.5 GB of target beside a ~340 MB copy on #1276, 2026-11-13 (3,872 MB on
+# CLOUD-1414; the tree grew), and a 3.5 GB peak rustc. Sized under, two jobs
+# filled the disk mid-build and a mutant whose build hit ENOSPC was recorded
+# unviable. The schema itself judges on every core but one, since its workers
+# share its one build.
+env = { NEXTEST_PROFILE = "mutants", MUTANT_JOB_DISK_MB = "6200", MUTANT_JOB_MEMORY_MB = "4000", MUTANT_CHANGED_SINCE = "{% if get_env(name='MUTANT_WHOLE_TREE', default='') == '' %}{{ get_env(name='MUTANT_CHANGED_SINCE', default='origin/main') }}{% else %}{{ get_env(name='MUTANT_CHANGED_SINCE', default='') }}{% endif %}" }
+# The package cache, for `mutant:declared`'s reason above.
+depends = ["pkl-package"]
+# The verb applies the pin and runs the cached binary, so nothing is linked onto
+# PATH and no task step precedes it.
+run = "{{vars.batten}} mutate cargo"
 
 [tasks."mutant-census"]
 description = "Gate: every gate in the tree is either mutation-enforced or carries a filed exemption (CLOUD-480)"
@@ -1843,7 +2012,7 @@ description = "Gate: every gate in the tree is either mutation-enforced or carri
 # ships to every consumer and cannot read a `[[pattern]]` row one wrote, so it is
 # exactly where CLOUD-934's dead-predicate class lives — and a census blind to
 # that directory is blind to the class.
-run = "cargo run --quiet -p batten -- mutate census"
+run = "{{vars.batten}} mutate census"
 
 [tasks."target-prune"]
 description = "Collect superseded, then least recently used, build units until [prune] max_free_mb is free — pointer-only, no build, no network"
@@ -1919,7 +2088,7 @@ description = "Gate: every row this branch put on the board was refined at creat
 # `stop-guard`'s callers, and `stop-guard` is retired in this same change: those
 # questions are asked at `Stop` by the engine's own hook now, over the same
 # module, so there is still exactly one implementation of the intersection.
-run = "cargo run --quiet -p batten -- check --rule 'issue file other'"
+run = "{{vars.batten}} check --rule 'issue file other'"
 
 [tasks."filed-here:guard"]
 description = "The decision behind the filed-row-settled handler: refuse an edit while a row this branch filed is unrefined, over its diff, or left open"
@@ -1944,7 +2113,7 @@ description = "Gate: no other OPEN pull request already claims a key this branch
 #
 # Every other `command` row in `batten.toml` names a `mise run` task for the same
 # reason; this one being the exception was an oversight rather than a choice.
-run = "cargo run --quiet -p batten -- claim race"
+run = "{{vars.batten}} claim race"
 
 [tasks.policy-test]
 description = "Gate: run every registered policy module's and enabled preset's own `test_` rules"
@@ -1975,7 +2144,7 @@ description = "Gate: run every registered policy module's and enabled preset's o
 #
 # ONE ARGV (CLOUD-1991): the `set -eu` the body carried guarded a single command,
 # whose exit code a one-command task already is.
-run = "cargo run --quiet -p batten -- policy test"
+run = "{{vars.batten}} step run policy-test -- {{vars.batten}} policy test"
 
 # The repository SBOM (CLOUD-262) and the binary SBOM (CLOUD-263), retired onto
 # `batten sbom` under CLOUD-843. The derivation — syft's scan, the identity
@@ -1990,7 +2159,7 @@ run = "cargo run --quiet -p batten -- policy test"
 #   batten sbom --names        the asset names, without scanning
 [tasks.sbom]
 description = "Effect: derive the SPDX and CycloneDX inventories of this tree, under the names the release assets carry"
-run = "cargo run --quiet -p batten -- sbom"
+run = "{{vars.batten}} sbom"
 
 # Produce, and — as its OWN task — the one rule. The binary's inventory is
 # `batten sbom --binary`'s, its record the `supply-chain` preset's to decide
@@ -2010,7 +2179,7 @@ usage = """
 arg "<binary>" help="the built binary"
 arg "<target>" help="the target triple the binary was built for"
 """
-run = "cargo run --quiet -p batten -- sbom --binary {{usage.binary}} --target {{usage.target}}"
+run = "{{vars.batten}} sbom --binary {{usage.binary}} --target {{usage.target}}"
 
 [tasks.sbom-binary-check]
 description = "Gate: refuse a binary inventory that catalogs nothing, or crates the lockfile does not hold — over `sbom-binary`'s record"
@@ -2019,7 +2188,7 @@ description = "Gate: refuse a binary inventory that catalogs nothing, or crates 
 # leg-wide setting, which puts every task's tools through MSYS's PATH rewrite
 # (rust.yml's `windows` job measured that). The class fix is CLOUD-2557.
 shell = "bash -c"
-run = "cargo run --quiet -p batten -- check --rule 'commit grade unsafe'"
+run = "{{vars.batten}} check --rule 'commit grade unsafe'"
 
 # CLOUD-266's measurement half: three declared forge reads, in order, because
 # each fans out over the family the one before it recorded (CLOUD-843). The
@@ -2034,9 +2203,9 @@ run = "cargo run --quiet -p batten -- check --rule 'commit grade unsafe'"
 [tasks.timeout-drift-record]
 description = "Record each workflow's recent successful runs and their jobs' durations, for `bound grade other`"
 run = [
-  "cargo run --quiet -p batten -- record query drift-workflows",
-  "cargo run --quiet -p batten -- record query drift-runs",
-  "cargo run --quiet -p batten -- record query drift-jobs",
+  "{{vars.batten}} record query drift-workflows",
+  "{{vars.batten}} record query drift-runs",
+  "{{vars.batten}} record query drift-jobs",
 ]
 
 # The record and the decision over it as one workflow step (CLOUD-843, Phase 4):
@@ -2045,7 +2214,7 @@ run = [
 [tasks.timeout-drift-check]
 description = "Gate: record each job's duration, then refuse a declared budget that no longer matches it"
 depends = ["timeout-drift-record"]
-run = "cargo run --quiet -p batten -- check --rule 'bound grade other' --fail-on-warning"
+run = "{{vars.batten}} check --rule 'bound grade other' --fail-on-warning"
 
 # CLOUD-831's producer, ported off `mise-tasks/evaluator-closure-check.sh` under
 # CLOUD-1717. The two things that are not decisions: the `cargo metadata` spawn,
@@ -2056,7 +2225,7 @@ run = "cargo run --quiet -p batten -- check --rule 'bound grade other' --fail-on
 # dependency, the same one activated, a dev-dependency, and a crate the
 # workspace reaches but the evaluator does not — and they are the
 # security-critical half. Inlined here they would be assertable by nothing;
-# in `crates/batten/src/cargo_graph.rs` they are
+# in `crates/batten-base/src/cargo_graph.rs` they are
 # `crates/batten/tests/it/evaluator_closure.rs`'s to drive.
 #
 # IT WAS A `.py` SIBLING FOR PART OF THIS BRANCH, and that detour is recorded
@@ -2154,8 +2323,8 @@ run = "cargo run --quiet -p batten -- check --rule 'bound grade other' --fail-on
 [tasks.signing-posture-check]
 description = "Gate: this checkout's signer is verifiable and no commit in range carries a key nobody can check (CLOUD-669)"
 run = [
-  "cargo run --quiet -p batten -- record derive signing-posture",
-  "cargo run --quiet -p batten -- check --rule 'commit grade unsafe'",
+  "{{vars.batten}} record derive signing-posture",
+  "{{vars.batten}} check --rule 'commit grade unsafe'",
 ]
 
 # THE PRODUCER HALF ALONE, under the name `hk.pkl`'s `signing-posture-record`
@@ -2165,25 +2334,25 @@ run = [
 # producer with its judge for the callers that want both.
 [tasks.signing-posture-record]
 description = "Effect: re-derive this checkout's signing-posture record for the range under judgement, which `commit grade unsafe` reads"
-run = "cargo run --quiet -p batten -- record derive signing-posture"
+run = "{{vars.batten}} record derive signing-posture"
 
 # THE SHELL CENSUS UNDER A NAME (CLOUD-843): every home shell lives in, counted in
 # code lines as pointers, read from `[census.shell]`. A report, never a gate — the
 # ban is the gate — so it is the number the retirement posts on its row.
 [tasks.census]
 description = "Report: every place this repository still writes shell, in code lines (CLOUD-843)"
-run = "cargo run --quiet -p batten -- census shell"
+run = "{{vars.batten}} census shell"
 
 # The board gates `[board] sweep` declares, run over one payload set on stdin
 # (CLOUD-825), under the name the retired body carried and the release summary
 # still gives a reader. A session that can read the tracker pipes the payloads in.
 [tasks.board-sweep]
 description = "Gate: every declared board gate over one tracker payload set on stdin (CLOUD-825)"
-run = "cargo run --quiet -p batten -- board sweep"
+run = "{{vars.batten}} board sweep"
 
 [tasks.evaluator-io-record]
 description = "Effect: record whether the IO-free evaluator test goes red under `probe-evaluator-io`, for `test judge never`"
-run = "cargo run --quiet -p batten -- record probe evaluator-io-probe --input test=no_evaluator_feature_admits_io -- cargo test --quiet -p batten --features probe-evaluator-io --test policy_modules no_evaluator_feature_admits_io -- --include-ignored"
+run = "{{vars.batten}} record probe evaluator-io-probe --input test=no_evaluator_feature_admits_io -- cargo test --quiet -p batten --features probe-evaluator-io --test policy_modules no_evaluator_feature_admits_io -- --include-ignored"
 
 [tasks.transcript-corpus-record]
 description = "Effect: count this host's independent session transcripts against a threshold, for `corpus count thin`"
@@ -2204,7 +2373,7 @@ description = "Effect: count this host's independent session transcripts against
 # `if` adds each flag only where the shell's test did. An EMPTY
 # `BATTEN_SESSION_ID` is falsy there exactly as `-n` read it.
 usage = 'arg "[threshold]" default="2" help="how many independent sessions make the corpus thick"'
-run = 'cargo run --quiet -p batten -- record derive transcript-corpus --input "root={% if env.BATTEN_TRANSCRIPT_ROOT %}{{env.BATTEN_TRANSCRIPT_ROOT}}{% else %}{{env.HOME}}/.claude/projects{% endif %}" --input "threshold={{usage.threshold}}"{% if env.BATTEN_SESSION_ID %} --input "exclude={{env.BATTEN_SESSION_ID}}"{% endif %}'
+run = '{{vars.batten}} record derive transcript-corpus --input "root={% if env.BATTEN_TRANSCRIPT_ROOT %}{{env.BATTEN_TRANSCRIPT_ROOT}}{% else %}{{env.HOME}}/.claude/projects{% endif %}" --input "threshold={{usage.threshold}}"{% if env.BATTEN_SESSION_ID %} --input "exclude={{env.BATTEN_SESSION_ID}}"{% endif %}'
 
 [tasks.macos-link-record]
 description = "Effect: record the built macOS graph's links-declaring and framework-linking crates, for `workspace carry unsafe`"
@@ -2218,7 +2387,7 @@ description = "Effect: record the built macOS graph's links-declaring and framew
 # repo-agnostic core (CLOUD-1717). The `BATTEN_LINK_CHECK_METADATA` fixture
 # switch is gone: a recorded graph reaches the same walk on stdin, with no
 # `resolve`, which is how `macos_link.rs` already drives it.
-run = "cargo run --quiet -p batten -- record derive macos-link --input framework=sdk-framework-crate --input vendored=vendored-links-crate --input resolve=aarch64-apple-darwin"
+run = "{{vars.batten}} record derive macos-link --input framework=sdk-framework-crate --input vendored=vendored-links-crate --input resolve=aarch64-apple-darwin"
 
 # The macOS link gate as hk's `macos-link-check` step runs it (CLOUD-1991). The
 # step's `check` was a `&&` pair — produce, then decide — which made it the one
@@ -2229,7 +2398,11 @@ run = "cargo run --quiet -p batten -- record derive macos-link --input framework
 [tasks.macos-link-check]
 description = "Gate: the macOS graph links no Apple SDK framework — record it, then decide `workspace carry unsafe`"
 depends = ["macos-link-record"]
-run = "cargo run --quiet -p batten -- check --rule 'workspace carry unsafe'"
+run = "{{vars.batten}} check --rule 'workspace carry unsafe'"
+
+[tasks.crate-reach-record]
+description = "Effect: record which workspace crates each workspace crate reaches, for `crate reach unsafe` (CLOUD-2798)"
+run = "{{vars.batten}} record derive crate-reach --input resolve=any"
 
 [tasks.evaluator-closure-record]
 description = "Effect: record the evaluator's activated sub-closure and any IO-bearing crate in it, for `layer reach unsafe`"
@@ -2239,7 +2412,7 @@ description = "Effect: record the evaluator's activated sub-closure and any IO-b
 # IS NEVER 0 and records nothing — the verb's exit 3 where the body's was 2. The
 # `BATTEN_EVALUATOR_METADATA` switch is gone: a recorded graph reaches the same
 # walk on stdin, which is how `evaluator_closure.rs` shows the gate able to FAIL.
-run = "cargo run --quiet -p batten -- record derive evaluator-closure --input roots=evaluator-package --input bears=evaluator-io-crate --input resolve=any"
+run = "{{vars.batten}} record derive evaluator-closure --input roots=evaluator-package --input bears=evaluator-io-crate --input resolve=any"
 
 # CLOUD-349's reading half: three declared forge reads, in order, because the
 # tips fan out over the heads the first one recorded (CLOUD-843). The age in days
@@ -2265,9 +2438,9 @@ run = "cargo run --quiet -p batten -- record derive evaluator-closure --input ro
 [tasks.branch-age-record]
 description = "Effect: record every remote branch, each tip's age in days, and recently closed pull requests' heads (CLOUD-349)"
 run = [
-  "cargo run --quiet -p batten -- record query branch-heads",
-  "cargo run --quiet -p batten -- record query branch-tips",
-  "cargo run --quiet -p batten -- record query branch-merged",
+  "{{vars.batten}} record query branch-heads",
+  "{{vars.batten}} record query branch-tips",
+  "{{vars.batten}} record query branch-merged",
 ]
 
 # The record and the decision over it as one workflow step (CLOUD-843, Phase 4):
@@ -2276,7 +2449,7 @@ run = [
 [tasks.branch-age-check]
 description = "Gate: record the branch heads, tips and merges, then refuse a branch left open past its watch window"
 depends = ["branch-age-record"]
-run = "cargo run --quiet -p batten -- check --rule 'branch watch loose'"
+run = "{{vars.batten}} check --rule 'branch watch loose'"
 
 [tasks."render:cli"]
 description = "Effect: render the CLI reference from the command surface — the publish-time artifact, never committed (CLOUD-171)"
@@ -2302,7 +2475,7 @@ flag "--names" help="print the asset path and exit, with no build and no network
 # the path defaults `RENDER_CLI_OUT_DIR` to `reference` and names the asset from
 # `[env]`, and `--names` selects an `echo` of that path rather than the render,
 # so asking for the name still builds nothing.
-run = '{% if usage.names %}echo reference={% if env.RENDER_CLI_OUT_DIR %}{{env.RENDER_CLI_OUT_DIR}}{% else %}reference{% endif %}/{{env.BATTEN_CLI_REFERENCE}}{% else %}cargo run --quiet -p batten -- artifacts write --reference {% if env.RENDER_CLI_OUT_DIR %}{{env.RENDER_CLI_OUT_DIR}}{% else %}reference{% endif %}/{{env.BATTEN_CLI_REFERENCE}}{% endif %}'
+run = '{% if usage.names %}echo reference={% if env.RENDER_CLI_OUT_DIR %}{{env.RENDER_CLI_OUT_DIR}}{% else %}reference{% endif %}/{{env.BATTEN_CLI_REFERENCE}}{% else %}{{vars.batten}} artifacts write --reference {% if env.RENDER_CLI_OUT_DIR %}{{env.RENDER_CLI_OUT_DIR}}{% else %}reference{% endif %}/{{env.BATTEN_CLI_REFERENCE}}{% endif %}'
 
 # CLOUD-278's manifest, moved off `mise-tasks/checksums.sh` under CLOUD-1717 and
 # off this body onto `batten release sums` under CLOUD-843: download a release's
@@ -2312,7 +2485,7 @@ run = '{% if usage.names %}echo reference={% if env.RENDER_CLI_OUT_DIR %}{{env.R
 # manifest's name is `[env]`'s one declaration, rendered into the argv.
 [tasks.checksums]
 description = "Effect: derive the SHA256 manifest of a release's own assets, read back after upload"
-run = "cargo run --quiet -p batten -- release sums --manifest {{env.BATTEN_CHECKSUM_MANIFEST}}"
+run = "{{vars.batten}} release sums --manifest {{env.BATTEN_CHECKSUM_MANIFEST}}"
 
 # CLOUD-518's gate and CLOUD-790's actor, retired onto `batten pr unsubscribed`
 # under CLOUD-843. The receipt store, the endpoint call and the reading are the
@@ -2328,7 +2501,7 @@ run = "cargo run --quiet -p batten -- release sums --manifest {{env.BATTEN_CHECK
 # the arm and the pull request appended to this argv.
 [tasks.pr-unsubscribed]
 description = "Gate: this session has dropped the PR's webhook subscription (records unsubscribe_pr_activity's answer, then decides) — CLOUD-518"
-run = "cargo run --quiet -p batten -- pr unsubscribed --session-env CLAUDE_CODE_REMOTE_SESSION_ID --token-env CLAUDE_SESSION_INGRESS_TOKEN_FILE --endpoint https://api.anthropic.com/v2/ccr-sessions/{session}/github/mcp --tool unsubscribe_pr_activity --arguments '{\"owner\":\"{owner}\",\"repo\":\"{repo}\",\"pullNumber\":\"{pr}\"}' --family pr-unsubscribed --rule 'event watch other'"
+run = "{{vars.batten}} pr unsubscribed --session-env CLAUDE_CODE_REMOTE_SESSION_ID --token-env CLAUDE_SESSION_INGRESS_TOKEN_FILE --endpoint https://api.anthropic.com/v2/ccr-sessions/{session}/github/mcp --tool unsubscribe_pr_activity --arguments '{\"owner\":\"{owner}\",\"repo\":\"{repo}\",\"pullNumber\":\"{pr}\"}' --family pr-unsubscribed --rule 'event watch other'"
 
 # CLOUD-258/262/278's reading half, ported off `mise-tasks/release-assets-check.sh`
 # under CLOUD-1717 and off this body onto `batten record release` under
@@ -2339,14 +2512,14 @@ run = "cargo run --quiet -p batten -- pr unsubscribed --session-env CLAUDE_CODE_
 # the `release-hygiene` preset's. The tag is appended; empty is the latest.
 [tasks.release-assets-record]
 description = "Effect: record a release's assets, its checksum manifest's entries, and the entries whose bytes disagree (CLOUD-258)"
-run = "cargo run --quiet -p batten -- record release --manifest {{env.BATTEN_CHECKSUM_MANIFEST}}"
+run = "{{vars.batten}} record release --manifest {{env.BATTEN_CHECKSUM_MANIFEST}}"
 
 # The name `release-assets.yml` runs on its clock, kept, and the DECISION only:
 # the record is written by `release-assets-record <tag>` first, because a task's
 # appended argument reaches its LAST command and the tag belongs to the record.
 [tasks.release-assets-check]
 description = "Gate: a release carries one archive per target the dist matrix builds, every uploaded asset, and a covering checksum manifest (CLOUD-258)"
-run = "cargo run --quiet -p batten -- check --rule 'release grade other' --rule 'release pin other'"
+run = "{{vars.batten}} check --rule 'release grade other' --rule 'release pin other'"
 
 # THE PAIR `release-assets.yml` RUNS AS ONE STEP (CLOUD-843, Phase 4): the record
 # and the decision over it, in order, so the check never judges a record that was
@@ -2357,8 +2530,8 @@ run = "cargo run --quiet -p batten -- check --rule 'release grade other' --rule 
 [tasks.release-assets-audit]
 description = "Gate: record the release named by $TAG, then decide it carries one archive per target, every asset, and a covering checksum manifest"
 run = [
-  "cargo run --quiet -p batten -- record release --manifest {{env.BATTEN_CHECKSUM_MANIFEST}} {{env.TAG}}",
-  "cargo run --quiet -p batten -- check --rule 'release grade other' --rule 'release pin other'",
+  "{{vars.batten}} record release --manifest {{env.BATTEN_CHECKSUM_MANIFEST}} {{env.TAG}}",
+  "{{vars.batten}} check --rule 'release grade other' --rule 'release pin other'",
 ]
 
 # The provenance half of the same audit, on the same terms: `batten record
@@ -2367,8 +2540,8 @@ run = [
 [tasks.release-attestation-audit]
 description = "Gate: record each archive's attestation verdict for the release named by $TAG, then decide the release carries build provenance"
 run = [
-  "cargo run --quiet -p batten -- record attestation {{env.TAG}} --binary batten",
-  "cargo run --quiet -p batten -- check --rule 'commit grade unsafe'",
+  "{{vars.batten}} record attestation {{env.TAG}} --binary batten",
+  "{{vars.batten}} check --rule 'commit grade unsafe'",
 ]
 
 # The name `auto-release-land.yml` runs, kept: exit 0 due, 2 holding.
@@ -2377,7 +2550,7 @@ run = [
 # two release workflows' lines by `batten check`.
 [tasks.release-tracking-check]
 description = "Gate: a shipped tag reaches Linear — both release-tracking invocations present, pinned, and bound to the tag, in the release's land job and on the backfill path alike"
-run = "cargo run --quiet -p batten -- check --rule 'release wire other'"
+run = "{{vars.batten}} check --rule 'release wire other'"
 
 # `ntia-check`'s name, kept for every hand that types it: record, then decide.
 # THE RECEIPT IS NOT A VERDICT (CLOUD-631): it caches an answer already given, so
@@ -2395,9 +2568,9 @@ description = "Gate: the SBOM this tree produces meets the NTIA minimum elements
 # transcript is not such a failure: `receipt record` reports it and records anyway
 # (CLOUD-819). `cargo run` resolves the tree's engine.
 run = [
-  "cargo run --quiet -p batten -- sbom --conformance",
-  "cargo run --quiet -p batten -- check --rule 'manifest cover other'",
-  "cargo run --quiet -p batten -- receipt record sbom-ntia",
+  "{{vars.batten}} sbom --conformance",
+  "{{vars.batten}} check --rule 'manifest cover other'",
+  "{{vars.batten}} receipt record sbom-ntia",
 ]
 
 # CLOUD-319's gate, whose reading half retired off `[tasks.release-due-record]`
@@ -2408,9 +2581,9 @@ run = [
 [tasks.release-due]
 description = "Gate: may the release PR land now? Debounce — quiet minutes on main, or hours since the last release, whichever comes first"
 run = [
-  "cargo run --quiet -p batten -- record query release-due-activity",
-  "cargo run --quiet -p batten -- record query release-due-latest",
-  "cargo run --quiet -p batten -- check --rule 'release grade early'",
+  "{{vars.batten}} record query release-due-activity",
+  "{{vars.batten}} record query release-due-latest",
+  "{{vars.batten}} check --rule 'release grade early'",
 ]
 
 # CLOUD-618's sweep, ported off `mise-tasks/release-backfill.sh` under CLOUD-1717
@@ -2426,14 +2599,14 @@ run = [
 # pattern selects; `-- --dry-run` prints the plan.
 [tasks.release-backfill]
 description = "Effect: record historical tags in the Linear release pipeline: dispatch the backfill workflow once per tag, oldest first, stopping on the first failure"
-run = "cargo run --quiet -p batten -- release backfill --workflow linear-release-backfill.yml --ref main --pattern 'v[0-9]*'"
+run = "{{vars.batten}} release backfill --workflow linear-release-backfill.yml --ref main --pattern 'v[0-9]*'"
 
 # A turn that cites `path:line` evidence and gives it no OPEN row stranded a
 # finding (CLOUD-252, CLOUD-475, CLOUD-775) — retired onto `batten record decide`
 # under CLOUD-843, and reached as the `finding-sink` `[[hook.handler]] on = "stop"`
 # row, the engine's end-of-turn ladder's second rung.
 #
-# THE READING IS THE ENGINE'S (`crates/batten/src/turn.rs`): the LAST turn, main
+# THE READING IS THE ENGINE'S (`crates/batten-base/src/turn.rs`): the LAST turn, main
 # thread only; whether its prose matches `[[pattern]] finding-citation`; and its
 # tool calls, each with the row it names (a direct call's `id`/`issueId`, or the
 # `finding-mediated-key` group of a mediated `batten mcp call`) and the column
@@ -2450,7 +2623,7 @@ run = "cargo run --quiet -p batten -- release backfill --workflow linear-release
 [tasks.finding-sink-check]
 description = "Gate: a turn that cites path:line evidence and makes no durable write stranded a finding (reads a Stop payload or transcript path on stdin; pointer-only)"
 dir = "{{cwd}}"
-run = "cargo run --quiet -p batten -- record decide turn-writes --input citation=finding-citation --input key=finding-mediated-key --input fields=id,issueId --input receipt=issue-read --input field=5 --rule 'turn file missing'"
+run = "{{vars.batten}} record decide turn-writes --input citation=finding-citation --input key=finding-mediated-key --input fields=id,issueId --input receipt=issue-read --input field=5 --rule 'turn file missing'"
 
 # An issue may become Done only if none of its own pull requests is still open
 # (CLOUD-468). CLOUD-843 retired the bash body: the reading is `batten record
@@ -2674,9 +2847,9 @@ depends = ["pkl-package"]
 # `verify` that runs it — fails on a checkout whose only credential is gh's own
 # keyring, where it used to pass. Export one of those names to run `verify`.
 run = [
-  "cargo run --quiet -p batten -- record validate config-validator",
-  "cargo run --quiet -p batten -- record validate renovate-config",
-  "cargo run --quiet -p batten -- record forge HEAD --fetch --answered '{{env.CI_ANSWERED_CONCLUSIONS}}' --fanin '{{env.CI_FANIN_CHECK}}'",
+  "{{vars.batten}} record validate config-validator",
+  "{{vars.batten}} record validate renovate-config",
+  "{{vars.batten}} record forge HEAD --fetch --answered '{{env.CI_ANSWERED_CONCLUSIONS}}' --fanin '{{env.CI_FANIN_CHECK}}'",
 ]
 
 # The perf producer and the perf gate (CLOUD-207, ported off
@@ -2706,7 +2879,7 @@ run = [
 # that needs one line must not spend a real body's budget.
 [tasks."perf"]
 description = "Measure batten's invocation cost on every path and print one byte-stable record per path"
-run = "cargo run --quiet -p batten -- perf measure"
+run = "{{vars.batten}} perf measure"
 
 # CLOUD-172's series, ported onto `perf record` under CLOUD-1753. Same reason the
 # task above is declared: `perf.yml` names it.
@@ -2715,9 +2888,25 @@ run = "cargo run --quiet -p batten -- perf measure"
 # `git notes append`; `git::append_note` writes the blob, the tree and the commit
 # through gix, so a notes ref is not a reason for the engine to hold a child
 # process it otherwise does not need.
+# Where an arm's time goes, in one call (`skills/profile`, CLOUD-2813): build
+# the symbolized `profiling` binary, sample the arm with the pinned samply
+# behind a guard that restores `perf_event_paranoid`, and print ranked rows.
+# A diagnostic, never a gate: `perf-gate` and `perf-assert` decide.
+[tasks."profile"]
+description = "Diagnose: sample one perf arm (noop, check, hook, passthrough, posttool, stop, a commit-time batten step, or the lap rows policy-test, enforce-tree, enforce-live, state-record) and print where its time goes"
+run = "mise exec -- cargo run --release -q --manifest-path tools/batten-profile/Cargo.toml --target-dir target/profile-tool -- record"
+
+[tasks."semantic"]
+description = "Diagnose: run a rust-analyzer semantic pass over the crate (probe, traits) or its `demote` codemod"
+# The entry its manifest names (CLOUD-2803): a nested workspace, built into the
+# root `target/semantic` so `batten target prune` collects it. Kept, not
+# deleted, as the semantic move tool plan step 8's crate-split recipe builds
+# on (Lakos Vol. I 3.5: move an item down, or inject it).
+run = "mise exec -- cargo run --release -q --manifest-path tools/batten-semantic/Cargo.toml --target-dir target/semantic --"
+
 [tasks."perf-record"]
 description = "Append a measurement to the trunk's invocation-cost series in git notes (reads `perf` records on stdin; refuses to run off main)"
-run = "cargo run --quiet -p batten -- perf record"
+run = "{{vars.batten}} perf record"
 
 # CLOUD-119's benchmark, ported onto `bench tokens` under CLOUD-1753. Declared
 # rather than auto-discovered, for the reason `perf` above records: the name is
@@ -2729,17 +2918,17 @@ run = "cargo run --quiet -p batten -- perf record"
 # rather than an empty shell variable that silently prices everything at zero.
 [tasks."token-bench"]
 description = "Measure the token economics of the Batten-wrapped path against the raw tool, from committed fixtures (CLOUD-119)"
-run = "cargo run --quiet -p batten -- bench tokens"
+run = "{{vars.batten}} bench tokens"
 
 # The gate over the published table: it reproduces, and every figure states its
 # method. Both halves are the verb's, because deciding the first requires running
 # the benchmark and the second reads the same bytes it already opens.
 [tasks."token-bench-check"]
 description = "Gate: the committed benchmark table is what a fresh run produces, and no figure in it lacks a method (CLOUD-119)"
-run = "cargo run --quiet -p batten -- bench tokens --check"
+run = "{{vars.batten}} bench tokens --check"
 
 [tasks.record-perf]
-description = "Effect: reduce `perf` records to a p95 per path and record them where `batten check` reads them (reads `perf` records on stdin)"
+description = "Effect: reduce `perf` records to a p95 and a p50 per path and record them where `batten check` reads them (reads `perf` records on stdin)"
 # THE REDUCTION IS THE WRITER'S SINCE CLOUD-1991. `--pick path=p95` keeps every
 # stdin line opening with `path=` and records `<path> <p95>` from it — the
 # `awk` program this body ran in front of `record tool`, whose field names are
@@ -2749,7 +2938,11 @@ description = "Effect: reduce `perf` records to a p95 per path and record them w
 # finding whose cause is this task. The verb refuses it as could-not-look (exit
 # 3, where the body used 2) and writes nothing. stdin reaches the verb as it
 # reached the body: `perf.yml` redirects the measurement into `mise run`.
-run = "cargo run --quiet -p batten -- record tool perf-p95 --pick path=p95"
+# `,p50` IS THE TARGET'S READING (CLOUD-2730). The same record gains
+# `<path>/p50 <p50>` beside each `<path> <p95>`, so `perf-assert` holds the hook
+# arms to their 10 ms p50 target from the measurement that already holds them to
+# the 100 ms p95 ceiling. One record, because the key is one binary's digest.
+run = "{{vars.batten}} record tool perf-p95 --pick path=p95,p50"
 
 # The gate the producer above feeds, and the same wrapper shape `lock-complete`
 # takes: the task name and the rule id are one object, so the workflow step, this
@@ -2759,7 +2952,7 @@ run = "cargo run --quiet -p batten -- record tool perf-p95 --pick path=p95"
 # latency gate would report every other tree rule through it.
 [tasks.perf-assert]
 description = "Gate: every measured invocation path is inside its latency budget, and README publishes the budget this gate enforces"
-run = "cargo run --quiet -p batten -- check --rule 'path measure wrong'"
+run = "{{vars.batten}} check --rule 'path measure wrong'"
 
 # `[tasks.msrv]` IS RETIRED (CLOUD-593), replaced by
 # `mise-tasks/msrv-pin-agreement.sh`.
@@ -2782,7 +2975,22 @@ description = "cargo-deny: licenses, advisories, sources"
 # The advisory DB is a property of the world, and worlds change on a clock, not
 # on this branch: CI still runs the full check on every PR, which is the same
 # split lock-currency already made.
-run = "cargo run --quiet -p batten -- step run deny -- cargo deny check"
+run = "{{vars.batten}} step run deny -- cargo deny check"
+
+[tasks."build:debug"]
+#MUTANT-SUITE crates/batten/tests/it/verify_chain.rs
+#MUTANT engine-unpinned|s@^env = { CARGO_TARGET_DIR = .*$@@|the_gate_set_runs_the_engine_it_built_first
+#MUTANT engine-profile-moved|s@ --bin batten"$@ --bin batten --release"@|the_gate_set_runs_the_engine_it_built_first
+description = "Build the tree's engine once, the binary `verify:gated` names in `BATTEN_BIN` (CLOUD-2924)"
+# `cargo run` per gate re-fingerprinted the engine under cargo's lock on every
+# step, hit or miss; one build up front lets every later step start at once.
+#
+# THE TARGET DIR IS PINNED to the expression `BATTEN_BIN` is built from, so a
+# user-level `build.target-dir` or `CARGO_BUILD_TARGET_DIR` cannot send the
+# build somewhere `BATTEN_BIN` does not name: cargo reads `CARGO_TARGET_DIR`
+# ahead of both, and an argv entry has no shell to read cargo's path back.
+env = { CARGO_TARGET_DIR = "{{ get_env(name='CARGO_TARGET_DIR', default=config_root ~ '/target') }}" }
+run = "cargo build --quiet -p batten --bin batten"
 
 [tasks."build:release"]
 description = "Build the release binary the hook registrations execute"
@@ -2799,19 +3007,25 @@ description = "Build the release binary the hook registrations execute"
 # the working tree, disqualifying on the hottest path in the binary. The gates
 # keep `cargo run` for exactly the reason stated at `batten-check` below.
 #
-# BUILT, STAMPED AND PINNED IN ONE TASK: building to test IS building to use.
-# The build alone left an unstamped binary first on `_.path` while
-# `batten.toml` kept naming the release, so a branch's hook and gates judged it
-# with an engine it had not built — measured on #1132, v0.0.214's floor model
-# refusing a lap while the branch carried the collector that retires it. The
-# stamp records this tree's digest beside the binary; the pin names it, so the
-# config, the binary on PATH and the tree agree. `engine-pin-check` refuses a
-# source pin at landing (CLOUD-2063): a branch flips back to a release pin
-# before it lands, and `main` never carries one.
+# BUILT AND STAMPED IN ONE TASK: building to test IS building to use. The
+# build alone left an unstamped binary first on `_.path` (measured on #1132).
+# The stamp records this tree's digest beside the binary, which is what
+# `doctor mediator` compares.
+#
+# IT WRITES NO TRACKED FILE. It used to end with `engine pin source`, which
+# wrote this machine's build digest into the committed `batten.toml`. Every
+# caller of this task then dirtied the tree, the `[[startup]]` repair
+# `mediator-matches-the-tree` included. Measured on #1276: a SessionStart fired
+# by a context compaction ran that repair under a live lap. The worktree pin
+# moved the admission epoch (`epoch::describe` reads the working tree), made
+# every receipted step miss its key as "dirty", and failed `engine-pin-check`:
+# 714 s of `verify` for nothing. The pin was never needed for the hook to run
+# this build. A release pin is satisfied by any engine of that version
+# (`engine::check`), and a branch's build carries the workspace version the pin
+# names. Which engine judges is the committed authority's word, never a build's.
 run = [
   "cargo build --quiet --release -p batten",
   "target/release/batten engine stamp",
-  "target/release/batten engine pin source",
 ]
 
 [tasks.acquisition-bench]
@@ -2935,7 +3149,7 @@ description = "Price `config::load` over the committed batten.toml, with its own
 # figure — so it takes a third stamp, and `crates/batten/tests/acquisition_metric.rs`
 # asserts every bench task carries one and that no two of them collide.
 env = { BENCH_METRIC = "config-load-wall-clock" }
-run = "cargo run --quiet -p batten --example config-load-bench"
+run = "{{vars.batten}}example config-load-bench"
 
 [tasks.refusal-render-bench]
 description = "Price refusal rendering by strategy and explicit residency, writing bench/refusal-render/RESULTS.md (CLOUD-1606)"
@@ -2961,7 +3175,7 @@ description = "Price refusal rendering by strategy and explicit residency, writi
 # re-renders the six records in-process and diffs them against the committed
 # file, so the report cannot go stale without `test:cargo` reddening.
 env = { BENCH_METRIC = "refusal-render-characters" }
-run = "cargo run --quiet -p batten --example refusal-render-bench"
+run = "{{vars.batten}}example refusal-render-bench"
 
 [tasks."doctor:mediator"]
 description = "Report whether the engine adjudicating this tree was built from it"
@@ -3177,7 +3391,7 @@ description = "Gate: every mem: reference in tracked markdown resolves to a real
 # under the branch, the installed binary predated it, and BOTH wrappers refused
 # with a config parse error that named a section neither gate reads. Nothing in
 # CI installs `batten` either, so the bare form had never been CI-verified.
-run = "cargo run --quiet -p batten -- check --rule 'memory point missing'"
+run = "{{vars.batten}} check --rule 'memory point missing'"
 
 # CLOUD-843 / CLOUD-1150, and the same wrapper shape one member over: `hk.pkl`'s
 # `rules-drift` step runs `mise run rules-drift` and still does, so the caller
@@ -3194,7 +3408,7 @@ run = "cargo run --quiet -p batten -- check --rule 'memory point missing'"
 # together across two files, and there is one name here.
 [tasks.rules-drift]
 description = "Gate: a value `.claude/rules/*.md` restates still agrees with the mechanism that owns it (CLOUD-506)"
-run = "cargo run --quiet -p batten -- check --rule 'rule watch other'"
+run = "{{vars.batten}} check --rule 'rule watch other'"
 # ---------------------------------------------------------------------------
 # The session-start provisioning steps, one task each (CLOUD-312 row 10).
 #
@@ -3269,7 +3483,23 @@ silent = "stdout"
 # `MISE_ENV = "agent"` provisions `mise.agent.toml` on top of the manifest, and
 # holds `toolchain-check` to it: Serena lives there now, out of every build's
 # reach (CLOUD-2553), and a session is the one place that launches it.
-env = { MISE_LOCKFILE = "false", MISE_ENV = "agent" }
+#
+# LOCKED, AND STILL PURE (CLOUD-2688). Locked mode installs every tool from the
+# URL and checksum `mise.lock` pins and never writes the lock, so the residue
+# `MISE_LOCKFILE=false` existed to stop cannot arise; it needs the lockfile ON to
+# read it, the opt-in every CI workflow already makes. It also needs no GitHub
+# API: measured 2026-11-11 in a cloud session with no PAT, a locked install of
+# the whole manifest into an empty data directory went through the agent proxy,
+# installed all 38 tools and left `mise.lock` byte-identical, where an unlocked
+# resolve is refused 403 for every third-party repository.
+#
+# NO ATTESTATION READ, EITHER BACKEND (CLOUD-2395, CLOUD-2845). Verifying
+# provenance reads api.github.com for the upstream repo, which the proxy refuses
+# for a third party. `aqua:` and `github:` tools each have their own setting;
+# without this pair, `cargo-llvm-cov`, `cargo-semver-checks` and
+# `cargo-auditable` downloaded, passed their checksums, then 403'd. The lock's
+# sha256 still pins every byte.
+env = { MISE_LOCKFILE = "true", MISE_LOCKED = "true", MISE_ENV = "agent", MISE_AQUA_GITHUB_ATTESTATIONS = "false", MISE_GITHUB_GITHUB_ATTESTATIONS = "false" }
 run = ["mise install", "mise run toolchain-check"]
 
 [tasks."toolchain-check"]
@@ -3565,7 +3795,7 @@ run = "batten engine outdated --notice --record engine-fresh --max-releases 3 --
 # predecessor's own scope stated as a flag.
 [tasks.lock-complete]
 description = "Gate: mise.lock has no partial or bogus platform entry — a pure function of the committed lockfile, no network, no write"
-run = "cargo run --quiet -p batten -- check --rule 'lock cover partial'"
+run = "{{vars.batten}} check --rule 'lock cover partial'"
 
 # CLOUD-1833. The engine, with the arguments the caller gives — the half of
 # `batten-check` that is not the consumer-#1 gate.
@@ -3589,7 +3819,7 @@ run = "cargo run --quiet -p batten -- check --rule 'lock cover partial'"
 # engine and config together, the pair that ships.
 [tasks.batten]
 description = "Run the working tree's engine with the given arguments, so a workflow step can select one rule"
-run = "cargo run --quiet -p batten --"
+run = "{{vars.batten}}"
 
 [tasks.batten-check]
 description = "Consumer #1: evaluate the committed batten.toml with batten's own engine against this repository"
@@ -3631,19 +3861,34 @@ description = "Consumer #1: evaluate the committed batten.toml with batten's own
 # installed is a fault of the environment, not a verdict about the tree, and `1` is
 # already what the engine emits for "a `command` rule whose binary cannot run".
 #
-# NO RECEIPT ANY MORE, AND SO NO CAPTURE (CLOUD-843). The capture-and-re-exit
-# above existed so a receipt could be written after a zero exit. The receipt is
-# gone because it was never sound: `enforce` reads state no pathspec names — the
-# record stores under the git directory (`input.tree.records`), captures, the
-# forge's recorded answers — so a record flipping to a deny value with no
-# tracked change hit a tree-keyed receipt and skipped the gate. A `[[step]]` row
-# keys index entries, tool answers and arguments only, so this step has no row.
-# `enforce` is the chain's LAST entry, so its code is the task's with nothing
-# after it to replace one; `provision apply` runs first, and an array entry
-# that fails stops the task.
+# NO CAPTURE (CLOUD-843). The capture-and-re-exit above existed so a receipt
+# could be written after a zero exit, and a WHOLE-RUN receipt was never sound:
+# `enforce` reads state no pathspec names — the record stores under the git
+# directory (`input.tree.records`), captures, the forge's recorded answers — so
+# a record flipping to a deny value with no tracked change hit a tree-keyed
+# receipt and skipped the gate.
+#
+# SO THE RUN IS SPLIT, AND ONLY THE HALF A KEY CAN COVER IS RECEIPTED (step 13a).
+# `enforce --half tree` judges the rows whose verdict is a function of the
+# indexed tree alone — `rules::Rule::half` decides, and anything it cannot
+# establish is live — under `[[step]] enforce-tree`, which keys index entries,
+# the toolchain, the merge base with `origin/main` (what a `--keyed-base` ratchet
+# counts against), `HEAD^{tree}`, the UTC date (waivers lapse by date) and
+# `enforce --half tree --inputs-digest`, the engine's digest of the out-of-tree
+# state the half still reads — the store baseline and admissions above all. A hit
+# skips the half. `enforce --half live` then judges every other row, and the
+# ledger, budgets, transcript, judges and sinks, unreceipted, every time. Each
+# half applies the baseline entries of its own rows. Under `CI` the step cache is
+# off, so CI judges both halves in full.
+#
+# Each entry's code stops the chain on a non-zero exit, so a tree-half `2`
+# stops before the live half and is the task's code; `enforce --half live` is
+# the LAST entry, so a clean tree half leaves the task's code to it with nothing
+# after it to replace one. `provision apply` runs first.
 run = [
-  "cargo run --quiet -p batten -- provision apply",
-  "cargo run --quiet -p batten -- enforce",
+  "{{vars.batten}} provision apply",
+  "{{vars.batten}} step run enforce-tree -- {{vars.batten}} enforce --half tree --keyed-base origin/main",
+  "{{vars.batten}} enforce --half live",
 ]
 
 [tasks.policy-budget]
@@ -3654,7 +3899,24 @@ description = "Gate: the always-loaded context (AGENTS.md + anything else declar
 # config a reviewer can read rather than arithmetic buried in a shell script.
 # `cargo run` for the same reason `batten-check` uses it: the gate judges the
 # working tree's engine and config together, the pair that ships.
-run = "cargo run --quiet -p batten -- policy budget"
+run = "{{vars.batten}} policy budget"
+
+[tasks.modules-ratchet]
+description = "Tighten modules.lock to every crate source root's module-graph metrics, refusing any that got worse (CLOUD-2821)"
+# THE RECORD IS THE ONE AUTHORITY. Each source root's largest cycle, propagation
+# cost (basis points), misplaced inherent impls and re-export shims are held to
+# its line in `modules.lock`: a worse metric is refused, a better one rewrites
+# the line, so the record only tightens. It replaces three `--max` ceilings that
+# had to be lowered by hand: a commit improving the cycle from 61 to 58 left the
+# ceiling at 61 for the next commit to spend.
+run = "{{vars.batten}} modules ratchet --record modules.lock"
+
+[tasks."modules-ratchet:check"]
+description = "Gate: no crate source root scores worse than modules.lock, and the record is not looser than the tree (CLOUD-2821)"
+# Writes nothing, so a lap judges one tree: a looser record is refused too, so
+# the commit that improves a metric carries the tightened record (`mise run
+# modules-ratchet`) and no later commit can spend it.
+run = "{{vars.batten}} modules ratchet --record modules.lock --check"
 
 [tasks.hook-cost]
 description = "Gate: this session's hook output fits its per-session budget, and no hook repeats itself (CLOUD-417)"
@@ -3678,7 +3940,7 @@ description = "Gate: this session's hook output fits its per-session budget, and
 #
 # `cargo run` for `policy-budget`'s reason: the gate judges the working tree's
 # engine and config as the pair that ships.
-run = "cargo run --quiet -p batten -- policy hooks"
+run = "{{vars.batten}} policy hooks"
 
 [tasks.completions]
 description = "Regenerate the committed shell completions from the command surface"
@@ -3689,7 +3951,7 @@ description = "Regenerate the committed shell completions from the command surfa
 # THE REDIRECT IS THE ENGINE'S NOW (CLOUD-1991): `artifacts write` writes the
 # bytes `generate completions` emits, into the directory named here, and the
 # loop over three shells that was this body is the verb's.
-run = "cargo run --quiet -p batten -- artifacts write --completions completions"
+run = "{{vars.batten}} artifacts write --completions completions"
 
 [tasks.hk-contract]
 description = "Regenerate the committed plan projection from the pinned gate runner (CLOUD-947)"
@@ -3699,14 +3961,14 @@ description = "Regenerate the committed plan projection from the pinned gate run
 # `generate` family above, where the artifact IS the stream and the caller owns
 # the redirect. A stream could not tell a partial acquisition from a complete
 # one, and a partial contract commits clean for the surface it lost.
-run = "cargo run --quiet -p batten -- hk contract"
+run = "{{vars.batten}} hk contract"
 
 [tasks.hk-drift]
 description = "Gate: the committed plan projection still matches the pinned gate runner (CLOUD-947)"
 # `cargo run` rather than an installed binary, for `completions`' reason: the
 # artifact must track the WORKING TREE's projection, or the gate answers about a
 # canonicaliser nobody is landing.
-run = "cargo run --quiet -p batten -- step run hk-drift -- cargo run --quiet -p batten -- hk drift"
+run = "{{vars.batten}} step run hk-drift -- {{vars.batten}} hk drift"
 
 [tasks.man]
 description = "Regenerate the committed man pages from the command surface"
@@ -3736,7 +3998,7 @@ description = "Regenerate the committed man pages from the command surface"
 # `artifacts write --man` derives the pages from the same spec this body read
 # with `jq`, clears the directory's `*.1` first for the reason above, and writes
 # each page `generate man` emits under `render::page_name`'s spelling.
-run = "cargo run --quiet -p batten -- artifacts write --man man"
+run = "{{vars.batten}} artifacts write --man man"
 
 [tasks.schema]
 description = "Regenerate every committed JSON Schema — both config surfaces and both policy-input surfaces — from the types that define them"
@@ -3758,7 +4020,7 @@ description = "Regenerate every committed JSON Schema — both config surfaces a
 # build-time check answering about a document the engine no longer emits.
 # The four redirects are `artifacts write --schema`'s since CLOUD-1991: the same
 # four surfaces, written together into the directory named here.
-run = "cargo run --quiet -p batten -- artifacts write --schema schema"
+run = "{{vars.batten}} artifacts write --schema schema"
 
 [tasks.zizmor]
 description = "Static-analyse the GitHub Actions workflows (dangerous triggers, unpinned actions, injection sinks)"
@@ -3842,76 +4104,16 @@ run = [
   "git --no-pager diff --stat --exit-code -- mise.lock",
 ]
 
-# ONE TURN'S CROSS-TRIPLE TYPE-CHECK, DETACHED (CLOUD-1731).
-#
-# `cross-check` runs in exactly one place — inside `verify` — so "this does not
-# compile on Windows" is learned at the cadence of the whole gate, which in
-# practice means after the author has moved on. `rules/rust.md` states the cost
-# in its own words ("the next edit to the other one is discovered by CI") and
-# CLOUD-1148 is the recorded instance: the `windows` job reddening alone, and the
-# first fix making it worse.
-#
-# AFFORDABLE BECAUSE OF THE RECEIPT, measured 2026-09-09 rather than assumed:
-# a re-run whose inputs, command and toolchain are unchanged answers from
-# its step receipt in **1.0s**; a run that must re-derive takes 54s cold. So the
-# per-turn cost is a second on every turn that changed no Rust, and 54s on the
-# turns that changed some — which are the turns that need it.
-#
-# DETACHED, BECAUSE A HANDLER THAT WAITS IS A HANDLER THAT TAXES EVERY TURN. The
-# verdict is not needed before the turn proceeds; it is needed before the author
-# stops thinking about the change, which is a much weaker deadline. `verify`
-# remains the blocking authority and this never substitutes for it.
-#
-# THE FAILURE IS REPORTED ON THE NEXT TURN AND SUCCESS IS SILENT. A log nobody
-# reads is sensor-only (non-negotiable rule 2), so the marker file is what turns
-# this from a log into a mechanism: the next invocation prints it and clears it.
-# Success says nothing, because a line on every turn is noise that trains the
-# reader to skip the one turn it matters.
-#
-# THE PATTERN TOLERATES COLOUR RATHER THAN SUPPRESSING IT, and that is the third
-# draft of this line. `[env]` sets `CARGO_TERM_COLOR = "always"` repo-wide, so a
-# machine-read log carries escapes between `: ` and `error`: the first draft
-# scraped `-->` and got nothing, the second matched `: error` and got nothing,
-# and the third set `CARGO_TERM_COLOR=never` on the invocation — which ALSO got
-# nothing, because a task's own environment beats a value inherited from the
-# caller. Three silent failures, each announcing a break with no pointer.
-#
-# So the pattern anchors on the SHAPE `--message-format=short` guarantees —
-# `path:line:col: ` — and lets `.*` span whatever decoration sits after it. It
-# needs no escape literal, survives either colour setting, and excludes the
-# trailing `error: could not compile` summaries, which carry no location and
-# would have spent the cap on nothing.
-#
-# BOUNDED AT FIVE LINES, AND BOUNDED IS NOT THE SAME AS USEFUL. The first draft
-# emitted one fixed sentence, which is cheap and costs the reader a whole turn
-# re-running the check to learn what broke — bounded and useless is its own
-# waste. What it emits instead is the first THREE `path:line` pointers and a
-# path to the rest: actionable enough to fix without a second run, and
-# pointer-only per non-negotiable rule 4, since a compiler's full output is the
-# payload and these are the pointer. The window cost of a failing turn is five
-# lines; of a passing turn, zero.
-#
-# `[hook_output] max_repeats = 1` IS SATISFIED BY THE CLEAR, not by luck: the
-# marker is removed once printed, so one failure is announced once rather than
-# on every turn until it is fixed — which is what would otherwise trip that
-# ceiling and, worse, train the reader to skip the line.
-#
-# ON STDOUT, AND THAT IS THE WHOLE DIFFERENCE BETWEEN AN ALARM AND A LOG.
-# `handler.rs` states the contract: "Exit `0` with stdout: advisory text, to be
-# merged into Batten's own" — so stdout is what reaches the AGENT and stderr is
-# what reaches a log nobody opens. The first draft of this line wrote the marker
-# to stderr, which would have printed the failure, cleared it, and shown it to
-# no one: a sensor wearing an alarm's clothes, one layer inside the rule against
-# exactly that. Caught in review before it landed.
-#
-# ONE LINE JOINED BY `;` RATHER THAN A `"""` BODY, for `deps-install`'s reason:
-# `inline-task-bodies-not-growing-basic` is `non_increasing` against
-# `origin/main` with no `admits_with`, so a new block body is refused and the
-# only routes are extraction or a waiver. Neither is worth spending here.
-#
-# `batten singleton` RATHER THAN A PROCESS PROBE: the lock is the declared
-# mechanism for "may a second copy start in this clone", and polling the process
-# table for one is the shape `polls-a-local-process` refuses.
+# THE PER-TURN DETACHED CROSS-CHECK IS RETIRED (229841f43). `cross-turn` ran
+# `cross-check` detached on every turn under a `batten singleton` lock, and
+# reduced a failure to three `path:line` pointers through a
+# `compiler-error-pointer` `[[pattern]]` row; the task, the verb and the row are
+# all gone. `[tasks.cross-check]` below is what remains: CI's `cross` job
+# (`rust.yml`, `release-plz.yml`), run by hand to prove it locally, never a
+# per-turn handler. It keeps
+# `--message-format=short` on every `cargo check` so a failure there still names
+# its line as one `path:line:col: error: …` row
+# (`cross_check.rs`'s `the_cross_check_asks_the_compiler_for_one_line_per_diagnostic`).
 # The provisioning `mise-tasks/doctor.sh` owned, as the declared table that
 # replaces it (CLOUD-1753). `--repair` because that is what the program did: it
 # checked and then FIXED what it could, and a session that only reported would
@@ -3936,7 +4138,7 @@ usage = '''
 arg "<base>" help="the revision the checkout is diffed against"
 arg "[head]" help="the revision whose tree the checkout must carry"
 '''
-run = 'cargo run --quiet -p batten -- ci slow-needed --base "{{usage.base}}"{% if usage.head %} --head "{{usage.head}}"{% endif %}'
+run = '{{vars.batten}} ci slow-needed --base "{{usage.base}}"{% if usage.head %} --head "{{usage.head}}"{% endif %}'
 
 # THE INSTALLED BINARY, NEVER A COMPILE (CLOUD-1753, CLOUD-1991). Session start
 # is the one path that may not assume a toolchain, and a bare `cargo run` there
@@ -3970,7 +4172,7 @@ run = "batten startup --repair"
 # check never linked its own target. Appended to `darwin_link`, the triple is its
 # `$1`: the `ci-slow-needed` shape.
 #
-# ONE LINE JOINED BY `;`, on the `cross-turn` precedent below:
+# ONE LINE JOINED BY `;`:
 # `inline-task-bodies-not-growing` is `non_increasing` with no `admits_with`, so
 # a new ''' body is refused outright.
 #
@@ -4022,29 +4224,29 @@ run = "batten startup --repair"
 # rule ids are this branch's and a PATH-resolved release does not carry them.
 [tasks."ci-tools-check"]
 description = "Gate: every tool a workflow reaches for is pinned where this repository pins tools"
-run = "cargo run --quiet -p batten -- check --rule 'tool pin wrong'"
+run = "{{vars.batten}} check --rule 'tool pin wrong'"
 
 [tasks."rust-paths-check"]
 description = "Gate: the rust workflow's path filters name every path its jobs actually judge"
-run = "cargo run --quiet -p batten -- check --rule 'path list partial'"
+run = "{{vars.batten}} check --rule 'path list partial'"
 
 [tasks."report-only-check"]
 description = "Gate: a reporting workflow does not silently stand in for a gate that must decide"
-run = "cargo run --quiet -p batten -- check --rule 'gate report silent'"
+run = "{{vars.batten}} check --rule 'gate report silent'"
 
 [tasks."timeout-check"]
 description = "Gate: every job declares a timeout, and every declared timeout binds to a job"
-run = "cargo run --quiet -p batten -- check --rule 'job bind missing'"
+run = "{{vars.batten}} check --rule 'job bind missing'"
 
 [tasks."awk-regex-check"]
 description = "Gate: an awk program carries no pattern that is unsafe under the shell that invokes it"
-run = "cargo run --quiet -p batten -- check --rule 'pattern carry unsafe'"
+run = "{{vars.batten}} check --rule 'pattern carry unsafe'"
 [tasks."target-ensure"]
 description = "Effect: ensure one rustup target is installed, behind the per-toolchain lock so concurrent callers queue instead of colliding"
 # NO `"$1"`: mise appends a task's positional arguments to its `run` string, so
 # naming one here passes the triple TWICE and the verb refuses the second as an
 # unexpected argument. Measured on the first invocation of this task.
-run = "cargo run --quiet -p batten -- doctor target"
+run = "{{vars.batten}} doctor target"
 
 [tasks."darwin-link"]
 description = "Gate: the macOS targets actually LINK from Linux, which is what proves no dependency needs an Apple SDK"
@@ -4059,37 +4261,31 @@ description = "Gate: the macOS targets actually LINK from Linux, which is what p
 # receipt for one triple never answers for the other (CLOUD-1916). A hit now
 # skips the link and not the target install, which `target-ensure` makes
 # idempotent behind its lock.
+#
+# NO ARGUMENT LINKS BOTH TRIPLES (CLOUD-2789). `verify` runs this bare, and the
+# bare form linked only `aarch64-apple-darwin` while CI links both as matrix
+# legs, so the Intel leg could go red in CI where no local gate looked. A CI leg
+# still passes its one triple; with none, the first two entries link
+# `aarch64-apple-darwin` and the last two `x86_64-apple-darwin`, which render
+# empty when a triple is given. Both triples are named in this body, where
+# `ci-parity`'s leg clause reads them. ONE STEP PER TRIPLE, the receipts a CI
+# leg takes: one zigbuild with two `--target`s also read the root `.gitignore`,
+# outside the step's declared inputs, and the trace refused it.
 usage = '''
-arg "[target]" default="aarch64-apple-darwin" help="the Darwin triple to link" {
+arg "[target]" help="the Darwin triple to link; with none, both" {
   choices "aarch64-apple-darwin" "x86_64-apple-darwin"
 }
 '''
 run = [
-  "mise run target-ensure {{usage.target}}",
-  "cargo run --quiet -p batten -- step run darwin-link --arg {{usage.target}} -- cargo zigbuild --workspace --profile darwin-link --target {{usage.target}}",
+  "mise run target-ensure {% if usage.target %}{{usage.target}}{% else %}aarch64-apple-darwin{% endif %}",
+  "{{vars.batten}} step run darwin-link --arg {% if usage.target %}{{usage.target}}{% else %}aarch64-apple-darwin{% endif %} -- cargo zigbuild --workspace --profile darwin-link --target {% if usage.target %}{{usage.target}}{% else %}aarch64-apple-darwin{% endif %}",
+  "{% if not usage.target %}mise run target-ensure x86_64-apple-darwin{% endif %}",
+  "{% if not usage.target %}{{vars.batten}} step run darwin-link --arg x86_64-apple-darwin -- cargo zigbuild --workspace --profile darwin-link --target x86_64-apple-darwin{% endif %}",
 ]
 
-[tasks."cross-turn"]
-description = "One turn's cross-triple type-check, detached — reports the previous run's failure and never blocks the turn"
-# ONE ARGV SINCE CLOUD-1991: `batten singleton detach` is the whole shape the
-# one-liner spelled with `&`, `grep`, `head` and `sed`. It announces the previous
-# run's failure on STDOUT (the handler's advisory channel) and clears it, so one
-# failure is said once; it starts an attached copy and returns, so the turn never
-# waits on cargo; the copy takes the `cross-turn` lock for its OWN pid — a second
-# copy is refused by the lock, never by a process probe — runs `cross-check` with
-# the whole output in the log, and on a failure leaves at most three pointer
-# lines plus the log's path. Which lines are pointers is the
-# `compiler-error-pointer` `[[pattern]]` row, which tolerates the colour escapes
-# `CARGO_TERM_COLOR = "always"` puts between `: ` and `error`. Bare `batten`,
-# the handler's own rule: nothing on a turn compiles. `singleton detach` is newer
-# than every release until CLOUD-1991 ships, so it resolves only through
-# `_.path`'s `target/release`, which `session:batten` builds at session start;
-# where that build failed, this handler fails every turn — loudly, never as a
-# pass — until it succeeds or a release carries the verb (`session:git-hooks`
-# records the same dependency).
-run = "batten singleton detach cross-turn --marker target/cross-turn.fail --log target/cross-turn.log --pattern compiler-error-pointer -- mise run cross-check"
-
 [tasks.cross-check]
+#MUTANT-SUITE crates/batten/tests/it/cross_check.rs
+#MUTANT short-format-dropped|s@ --message-format=short",$@",@|the_cross_check_asks_the_compiler_for_one_line_per_diagnostic
 description = "Type-check for other targets from Linux (no macOS runner needed)"
 # The `rustup target add` below is not idempotent against a half-installed
 # component; `batten doctor target` in the loop is what makes it one, and it
@@ -4150,11 +4346,14 @@ description = "Type-check for other targets from Linux (no macOS runner needed)"
 #     (CLOUD-397). Registry dependencies build with `--cap-lints allow`, so only
 #     workspace code is held to it.
 #   * `--message-format=short` is one `path:line:col: error: …` per diagnostic,
-#     which is the shape `cross-turn` reads pointers from (CLOUD-1731).
+#     so a failure names its line and not a page of context.
 run = [
   "mise run target-ensure x86_64-pc-windows-gnu",
   "mise run target-ensure x86_64-unknown-linux-musl",
-  "mise run -q batten -- step run cross-check -- env 'RUSTFLAGS=-D warnings' cargo check --workspace --all-targets --target x86_64-pc-windows-gnu --target x86_64-unknown-linux-musl --message-format=short",
+  "{{vars.batten}} step run cross-check:facts -- env 'RUSTFLAGS=-D warnings' cargo check -p batten-facts --all-targets --target x86_64-pc-windows-gnu --target x86_64-unknown-linux-musl --message-format=short",
+  "{{vars.batten}} step run cross-check:base -- env 'RUSTFLAGS=-D warnings' cargo check -p batten-base --all-targets --target x86_64-pc-windows-gnu --target x86_64-unknown-linux-musl --message-format=short",
+  "{{vars.batten}} step run cross-check:core -- env 'RUSTFLAGS=-D warnings' cargo check -p batten-core --all-targets --target x86_64-pc-windows-gnu --target x86_64-unknown-linux-musl --message-format=short",
+  "{{vars.batten}} step run cross-check -- env 'RUSTFLAGS=-D warnings' cargo check --workspace --exclude batten-facts --exclude batten-base --exclude batten-core --all-targets --target x86_64-pc-windows-gnu --target x86_64-unknown-linux-musl --message-format=short",
 ]
 
 [tasks."test:musl"]
@@ -4204,14 +4403,14 @@ description = "Gate: hk's version is pinned identically in mise.toml and hk.pkl 
 # THE DECISION IS `policy/hk-pin-agreement.rego` SINCE CLOUD-1991, over facts the engine
 # reads itself; this name survives for `hk.pkl`'s step and for hands that type
 # it, and selects the one row so it reports nothing else.
-run = "cargo run --quiet -p batten -- check --rule 'tool pin other'"
+run = "{{vars.batten}} check --rule 'tool pin other'"
 
 [tasks.no-docs-tree]
 description = "Gate: no committed docs/ tree. Research deliverables and evidence notes attach to the Linear issue, not a repo docs/ folder (see AGENTS.md)."
 # THE DECISION IS `policy/docs-tree-absent.rego` SINCE CLOUD-1991, over facts the engine
 # reads itself; this name survives for `hk.pkl`'s step and for hands that type
 # it, and selects the one row so it reports nothing else.
-run = "cargo run --quiet -p batten -- check --rule 'prose place refused'"
+run = "{{vars.batten}} check --rule 'prose place refused'"
 
 [tasks.no-armed-ripcord]
 description = "Gate: the break-glass sentinel is never committed. An armed ripcord in the index hands every clone the bypass (CLOUD-1847)."
@@ -4230,7 +4429,7 @@ description = "Gate: the break-glass sentinel is never committed. An armed ripco
 # THE DECISION IS `policy/ripcord-untracked.rego` SINCE CLOUD-1991, over facts the engine
 # reads itself; this name survives for `hk.pkl`'s step and for hands that type
 # it, and selects the one row so it reports nothing else.
-run = "cargo run --quiet -p batten -- check --rule 'path ship refused'"
+run = "{{vars.batten}} check --rule 'path ship refused'"
 
 [tasks.hooks]
 description = "Run the git-hook gate (fmt, lint, test) through hk — the same hk.pkl the pre-commit hook uses, in check-only mode"
@@ -4316,7 +4515,7 @@ run = "hk check --all"
 # form, and a wrapper that needs one line must not spend a real body's budget.
 [tasks."install-check"]
 description = "Gate: the install path resolves the assets the release actually publishes, and no binary is committed"
-run = "cargo run --quiet -p batten -- release install"
+run = "{{vars.batten}} release install"
 
 # The release build and archive (CLOUD-843), ported off `mise-tasks/dist.sh` onto
 # `batten dist`. THE TASK SURVIVES THE PROGRAM for `install-check`'s reason:
@@ -4328,9 +4527,25 @@ run = "cargo run --quiet -p batten -- release install"
 description = "Effect: build the release binary for a target and stage its archive in dist/, printing archive= and binary= pointers"
 run = "cargo run --quiet --locked -p batten -- dist"
 
+[tasks."dist:lap"]
+description = "The dist leg at the lap's cost: `dist` for this host with the dist profile's LTO and codegen overridden (CLOUD-2789)"
+# THE PROFILE IS THIS TASK'S, NOT THE GATE SET'S: only `--profile dist` reads
+# these, so they are scoped to the one leg that builds it rather than exported
+# to every step `verify:gated` runs.
+env = { CARGO_PROFILE_DIST_LTO = "false", CARGO_PROFILE_DIST_CODEGEN_UNITS = "256", CARGO_PROFILE_DIST_OPT_LEVEL = "0", CARGO_PROFILE_DIST_INCREMENTAL = "true" }
+run = "mise run dist {{vars.dist_host}} --build-tool cargo-dist"
+
 [tasks."tree-clean"]
+#MUTANT-SUITE crates/batten/tests/it/verify_chain.rs
+#MUTANT engine-unbuilt|s@^depends = \["build:debug"\]$@@|the_gate_set_runs_the_engine_it_built_first
 description = "Gate: the working tree is the bytes at HEAD, so a receipt keyed to HEAD names what was actually validated"
-run = "cargo run --quiet -p batten -- receipt clean"
+# THE ENGINE EXISTS BEFORE THIS RUNS IT (CLOUD-2924): `verify:gated` runs this
+# first, as its `depends` and as its first body entry, and its `env` names in
+# `BATTEN_BIN` the binary `build:debug` writes, so every route here builds that
+# binary first. A dirty tree's build is wasted work, never a wrong verdict:
+# this still refuses before any gate runs.
+depends = ["build:debug"]
+run = "{{vars.batten}} receipt clean"
 
 [tasks."verified"]
 description = "Gate: is HEAD verified? Answers from the receipts, so no shell idiom can mask the verdict"
@@ -4342,7 +4557,7 @@ description = "Gate: is HEAD verified? Answers from the receipts, so no shell id
 # kept for callers that no longer exist is a second exit table with no reader, so
 # the name now answers on the one table every other verb answers on: `0`
 # verified, `2` not verified, `1`/`3` the question could not be asked.
-run = "cargo run --quiet -p batten -- receipt verified"
+run = "{{vars.batten}} receipt verified"
 
 # ─── `mise run land`, the name every caller still uses (CLOUD-1148) ──────────
 #
@@ -4374,8 +4589,13 @@ run = "cargo run --quiet -p batten -- receipt verified"
 # same optional positional, which mise then binds.
 [tasks.land]
 description = "Land this branch's PR: rebase, verify, push, wait for CI, /fast-forward — lapping until it merges or a rebase conflicts"
-usage = 'arg "[reference]" default="" help="the trunk to land onto (default: the declared trunk)"'
-run = 'cargo run --quiet -p batten -- land lap "{{usage.reference}}"'
+# `--hold` (CLOUD-2783) stops at the first final verify, before the lease, the
+# push and the ready: the one way to measure a lap without landing it.
+usage = '''
+arg "[reference]" default="" help="the trunk to land onto (default: the declared trunk)"
+flag "--hold" help="stop after the first final verify, never leasing, pushing or readying"
+'''
+run = '{{vars.batten}} land lap "{{usage.reference}}"{% if usage.hold %} --hold{% endif %}'
 
 # Is HEAD linear on the CURRENT origin/main, so the PR can fast-forward-land?
 # Retired off `mise-tasks/linear-check.sh` under CLOUD-1717; the name and the
@@ -4403,8 +4623,8 @@ description = "Gate: HEAD is linear on the current origin/main, so the PR can fa
 # will not write fails the task — the two properties the body's `set -uo
 # pipefail` and `|| { …; exit 1; }` were carrying.
 run = [
-  "cargo run --quiet -p batten -- land linear",
-  "cargo run --quiet -p batten -- receipt record linear-check",
+  "{{vars.batten}} land linear",
+  "{{vars.batten}} receipt record linear-check",
 ]
 
 # The external analyzer's verdict on one SHA (CLOUD-441), retired off
@@ -4431,8 +4651,8 @@ arg "<sha>" help="The commit whose analysis is read"
 flag "--check <name>" env="SONAR_CHECK_NAME" default="SonarCloud Code Analysis" help="The check-run name the analyzer posts under"
 '''
 run = [
-  "cargo run --quiet -p batten -- record query check-runs --input sha={{usage.sha}} --input 'check={{usage.check}}'",
-  "cargo run --quiet -p batten -- check --rule 'check grade other' --fail-on-warning",
+  "{{vars.batten}} record query check-runs --input sha={{usage.sha}} --input 'check={{usage.check}}'",
+  "{{vars.batten}} check --rule 'check grade other' --fail-on-warning",
 ]
 
 [tasks."checks-green"]
@@ -4609,6 +4829,16 @@ description = "The hk gate minus the slow tier — what a diff that cannot move 
 # the binary too. On a cold runner this pays a `batten` debug build first.
 run = "hk check --all --profile '!slow'"
 
+# EVERY hk STEP BUT THE SUITE AND THE MUTANTS (CLOUD-2789), so `verify`'s second
+# tier reports `schema-check`, `reference-check`, `skill-check` and the rest in
+# minutes, beside clippy, rather than after `test:cargo` and `mutant:changed`
+# end an hour in. Each is keyed by its own `step run` receipt, so `ci` in the
+# third tier reads them back as hits and is left with the suite alone.
+[tasks."ci:checks"]
+description = "Every hk step except the test suite and the mutation sweep — `verify`'s second tier"
+depends = ["pkl-package"]
+run = "hk check --all --skip-step test --skip-step mutant:changed"
+
 [tasks.ci]
 description = "Everything CI runs"
 # fmt-check + lint + test come from the SAME hk.pkl the pre-commit hook runs
@@ -4617,8 +4847,8 @@ depends = ["hooks", "deny"]
 
 [tasks.verify]
 #MUTANT-SUITE crates/batten/tests/it/verify_unprovisioned.rs
-#MUTANT hook-repair-dropped|s@^  "cargo run --quiet -p batten -- wiring reclaim -y",$@@|the_hook_surface_is_reclaimed_before_the_gate_set_judges_it
-description = "Full local pre-flight — run this before marking any draft PR ready"
+#MUTANT hook-repair-dropped|s@^  "{{vars.batten}} wiring reclaim -y",$@@|the_hook_surface_is_reclaimed_before_the_gate_set_judges_it
+description = "The full local gate each `land` lap runs — iterate a draft with it; on a pushed head run `mise run land`"
 # A SEQUENCE OF ARGV STEPS, AND NO LONGER A MAPPER (CLOUD-843, CLOUD-1990). mise
 # runs a `run` array in order, stops at the first step that fails, and exits with
 # THAT step's code — measured, the same verbatim propagation CLOUD-407 recorded
@@ -4645,6 +4875,12 @@ description = "Full local pre-flight — run this before marking any draft PR re
 # 2. THE TOOLCHAIN (CLOUD-1683), after the reclaim and before anything that runs
 #    `cargo run`, so an unprovisioned tree is refused as that and not as a missing
 #    claim receipt.
+# 2a. THE PLACEMENT (CLOUD-2707), right after the toolchain because it is the
+#    first `cargo run`. ADVICE, NEVER A REFUSAL: verifying without landing is
+#    legitimate. On a committed, pushed head outside the lap it says on stderr
+#    that `land` is the next step and answers this head from the receipt this
+#    run writes, so no second gate runs unless the trunk moves. The lap's own
+#    gate (`BATTEN_LAND_GATE`) and a dirty or unpushed draft hear nothing.
 # 3. THE CLAIM RECEIPT (CLOUD-431, CLOUD-693, CLOUD-1295). The hook row is the
 #    fast half and can be unloaded; this is the half every landing path runs. ANY
 #    ONE of the three kinds satisfies it — `claim.<branch>` from a refined issue,
@@ -4677,11 +4913,19 @@ description = "Full local pre-flight — run this before marking any draft PR re
 # this task at all (`LAND_VERIFY_RECEIPT`, `land::verified_by_receipt`), which is
 # the path the measurement was about. A hand-run `mise run verify` re-proves; the
 # early exit could not be spelled as a step of a sequence that runs every step.
+# CHEAPEST FIRST: a dirty tree is one `git status` read and was refused only at
+# `receipt record`, after two compiles (#1276). The INSTALLED release asks it —
+# every session has one, the hooks run it on every call — so the answer costs
+# no build. The receipt steps stay on this tree's build, so the writer and the
+# reader of a receipt are one version. (Above the array, not in it: the shell
+# census reads every array line, comments included.)
 run = [
+  "batten receipt clean",
   "mise run toolchain-check",
-  "cargo run --quiet -p batten -- receipt status claim --or bot --or carry --key branch",
+  "{{vars.batten}} land placed",
+  "{{vars.batten}} receipt status claim --or bot --or carry --key branch",
   "mise run linear-check",
-  "cargo run --quiet -p batten -- wiring reclaim -y",
+  "{{vars.batten}} wiring reclaim -y",
   "mise run verify:gated",
 ]
 
@@ -4698,6 +4942,8 @@ run = [
 # which drive the verb the way `ci.yml` calls it.
 
 [tasks."verify:gated"]
+#MUTANT-SUITE crates/batten/tests/it/verify_chain.rs
+#MUTANT engine-unnamed|s@^env = { BATTEN_BIN = "[^"]*" }$@@|the_gate_set_runs_the_engine_it_built_first
 description = "Every gate verify runs, and the receipt — invoked through `verify`, after the claim and linearity questions"
 # Split out of `[tasks.verify]` for CLOUD-407, when `verify` was a mapper that
 # flattened this task's code to 1. Nothing flattens it now (CLOUD-843): a gate
@@ -4755,7 +5001,35 @@ description = "Every gate verify runs, and the receipt — invoked through `veri
 # window, the same shape `linear-check` already has in `verify` and
 # `ready-guard`. It is deliberately NOT an hk step: `pre-commit` runs over a
 # tree that is dirty by definition.
-depends = ["tree-clean", "ci", "cross-check", "darwin-link", "zizmor", "semver"]
+#
+# ONLY `tree-clean` IS A `depends` NOW (operator ruling, 2026-11-11: order every
+# step of the landing loop cheap to expensive). `ci`, `cross-check`,
+# `darwin-link`, `zizmor` and `semver` were here too, and mise runs `depends`
+# before the body, so a mistyped commit subject or a config-lint error was
+# reported only after the full suite and three cross builds. They moved into the
+# body's one fan, below, behind the cheap gates.
+#
+# THE ENGINE IS BUILT ONCE, THEN NAMED (CLOUD-2924): `tree-clean`, which opens
+# both this `depends` and the body, depends on `build:debug`, so the binary
+# exists before any `{{vars.batten}}` runs, and `BATTEN_BIN` points every child
+# `mise run` at it. Without this each of the tiers' `step run` entries was
+# `cargo run -p batten`, which takes cargo's lock and fingerprints the engine
+# before it even looks up its receipt, so a step that hit still queued behind
+# every sibling build.
+depends = ["tree-clean"]
+env = { BATTEN_BIN = "{{ get_env(name='CARGO_TARGET_DIR', default=config_root ~ '/target') }}/debug/batten" }
+# THE FAN (operator ruling, 2026-11-11). Every independent gate runs in ONE
+# `mise run --continue-on-error` invocation, listed cheapest first: mise starts
+# them in that order within its job limit, so the seconds-cheap gates report
+# while the suite and the cross builds are still running, and a failure in one
+# never stops the others, so a lap reports every failure at once (the ruling of
+# 2026-11-10: let it run and fix everything in one pass). The fan exits non-zero
+# if any gate failed, which still stops the body before the receipt. Order:
+# commit and config lint, the diff and pin questions, zizmor and test cover, then
+# deny and semver, the test replay, the two cross builds, and `ci` (hk's whole
+# suite and cargo-deny) last. `batten check` is spelled without `--`, which would
+# swallow the `:::` after it (measured with `--dry-run`).
+#
 # THE BODY, AS A SEQUENCE (CLOUD-843, CLOUD-1990). It was hand-guarded shell
 # because a task body does not run under `set -e`; a `run` array needs no guard,
 # since mise stops at the first failing step and the receipt is the last one —
@@ -4773,8 +5047,8 @@ depends = ["tree-clean", "ci", "cross-check", "darwin-link", "zizmor", "semver"]
 # * `config-lint` against the trusted base (CLOUD-236, CLOUD-1702) —
 #   `verify:config-lint` carries it.
 # * `evaluator-io-record` then its verdict row (CLOUD-1717, CLOUD-831).
-# * `prose-only-check` last of the content gates (CLOUD-827), stating no remedy of
-#   its own (CLOUD-1050): the gate's message is the remedy.
+# * `prose-only-check` in the fan (CLOUD-827), stating no remedy of its own
+#   (CLOUD-1050): the gate's message is the remedy.
 # * `perf-gate` ALONE AND LAST before the receipt (CLOUD-2283), after every
 #   other step has exited: in the body it does not compete with the test builds
 #   (CLOUD-1891), and last it does not compete with its body siblings either.
@@ -4797,20 +5071,82 @@ depends = ["tree-clean", "ci", "cross-check", "darwin-link", "zizmor", "semver"]
 # to be asked, which CI would otherwise be the first to discover. The note sits
 # here rather than inside the array because the shell census reads every array
 # line, comments included.
+#
+# TIERS, NOT ONE FAN (owner ruling, 2026-11-11). One fan started every gate at
+# once, so ordering it cheapest-first bought nothing: on #1276 the seconds-long
+# gates (`config-lint`, `engine-pin-check`, `commit-lint`, `deny`) failed while
+# `ci` — hk's whole suite, `mutant:changed` and `mutant:declared` included — ran
+# on for 41 minutes over a head they had already refused. So the cheap tier
+# still reports first, and a tier starts only once every tier before it passed.
+#
+# A RED TIER STOPS EVERY LATER ONE (CLOUD-2853; owner ruling,
+# `.batten/asked.jsonl:223`: the most expensive stage runs only once every cheap
+# stage has passed). Each tier is ONE `mise run --continue-on-error` fan, so a
+# tier reports every red it holds in one pass (CLOUD-2789), and the `run` array
+# stops at the first failing entry, so no later tier starts over a red one.
+# Every tier-1 gate still waits on the record writes, which run as their own
+# entries ahead of it, in order.
+#   1. seconds: the lap's commits and config, the diff and pin questions, the
+#      workflow audit, the cfg-gated-test ratchet, cargo-deny, the instruction
+#      budget, the policy modules' own tests, and `batten-check` (the whole
+#      committed rule set): it ran only in tier 3, behind hk's `test` step, so on
+#      #1276 a held filed row, a seconds read, refused only after hours of mutants.
+#      The two records it reads (`signing-posture-record`, `record validate`, hk's
+#      edges for it) are written in sequence just above, so it never judges a stale one.
+#      Since CLOUD-2789 also every hk step not tagged `slow` (`ci:quick`) and
+#      the test replay's removed-test half, which needs no build.
+#   2. minutes: semver, the test replay, the two cross builds, clippy, and every
+#      hk step but the suite and the mutants (`ci:checks`).
+#   3. the suite: `ci`, whose other steps the first two tiers already receipted,
+#      so what runs is the suite and the mutants; then CI's slow-tier question.
+#   4. `perf-gate`, alone (CLOUD-2283), every other row having exited.
+# `modules-ratchet:check` is a tier-1 row: a seconds read that sat alone
+# between the tiers.
+#
+# THE TIERS ARE ARRAY ENTRIES, NOT A STEP GRAPH, UNTIL THE ENGINE PIN READS
+# `group` (CLOUD-2785's graph rows are withheld: the pinned v0.0.220 cannot read
+# them, and `engine gate` refuses a config the pin cannot read). The pin bump
+# that brings a reader restores `step graph run verify-1 verify-2=2 verify-3=1
+# verify-4` and the `gate:*` rows together. Until then tier 2 keeps the graph's
+# fan width with `--jobs 2` and tier 3 its one-at-a-time with `--jobs 1`.
 run = [
   "mise run tree-clean",
-  "mise run verify:commit-lint",
   "mise run record-verdicts",
-  "mise run verify:config-lint",
-  "mise run verify:test-replay",
   "mise run evaluator-io-record",
-  "mise run batten -- check --rule 'test cover never'",
-  "mise run engine-pin-check",
-  "mise run prose-only-check",
-  "mise run batten -- ci step --verdict needed --on 0=true --on 2=false -- mise run ci-slow-needed origin/main",
+  "mise run signing-posture-record",
+  "{{vars.batten}} record validate config-validator",
+  "mise run --continue-on-error verify:commit-lint ::: verify:config-lint ::: ci:quick ::: verify:test-replay-structural ::: prose-only-check ::: engine-pin-check ::: zizmor ::: batten check --rule 'test cover never' ::: deny ::: policy-budget ::: policy-test ::: batten-check ::: modules-ratchet:check",
+  "mise run --continue-on-error --jobs 2 semver ::: verify:test-replay ::: ci:checks ::: cross-check ::: darwin-link ::: lint:clippy",
+  # THE DIST LEG, AS `dist.yml` RUNS IT (CLOUD-2789): `rust.yml` calls that
+  # workflow on every pull request, and `ci-parity` now follows the call, so its
+  # build, the binary's inventory and the inventory's check run here too. In
+  # its order, each step reading the last one's output.
+  #
+  # AT THE LAP'S COST, NOT THE RELEASE'S: the `dist` profile's fat LTO and one
+  # codegen unit cost 878 s cold here, every lap. What this leg proves (cargo-dist
+  # builds through `cargo auditable`, the archive stages, the inventory reads
+  # the binary) holds at `opt-level = 0`, so the profile is overridden for this
+  # entry alone, through `dist:lap`'s own `env`: 145 s cold, and the same 318
+  # packages inventoried.
+  "mise run dist:lap",
+  "mise run sbom-binary target/{{vars.dist_host}}/dist/batten {{vars.dist_host}}",
+  "mise run sbom-binary-check",
+  "mise run --continue-on-error --jobs 1 verify:ci-suite ::: verify:ci-slow-needed ::: test:traced",
   "mise run perf-gate",
-  "cargo run --quiet -p batten -- receipt record verify",
+  "{{vars.batten}} step cover",
+  "{{vars.batten}} receipt record verify",
 ]
+
+# THE SUITE TIER'S TWO NODES, as tasks (CLOUD-2789): a `[[step]]` row's argv
+# reaches the tree's engine through `mise run batten`, and mise drops the `--`
+# that `step run` and `ci step` need before the wrapped command.
+[tasks."verify:ci-suite"]
+description = "The suite, through its keyed `ci-suite` step — invoked through `verify`'s third tier"
+run = "{{vars.batten}} step run ci-suite -- mise run ci"
+
+[tasks."verify:ci-slow-needed"]
+description = "CI's slow-tier question, asked as the `ci` job asks it — invoked through `verify`'s third tier"
+run = "{{vars.batten}} ci step --verdict needed --on 0=true --on 2=false -- mise run ci-slow-needed origin/main"
 
 # THE LAP'S COMMIT RANGE, AS DATA (CLOUD-1702). `commit-lint` reads
 # `BASE_SHA`/`HEAD_SHA`, which CI sets from the pull request and this sets from the
@@ -4839,10 +5175,19 @@ run = "mise run config-lint"
 # THE BASE-TEST REPLAY (CLOUD-2090), over the same trusted base as the two above:
 # each `#[test]` this lap modified runs in its BASE form against HEAD, and a base
 # expectation HEAD no longer meets is admitted only by a recorded answer.
+[tasks."verify:test-replay-structural"]
+description = "Gate: no test this lap removed is gone without a recorded answer, judged without a build — invoked through `verify`'s first tier"
+# THE SECONDS HALF, FIRST (CLOUD-2789). A removed test is decided by the two
+# trees alone, so it is judged in tier 1 beside `config-lint`, rather than an
+# hour into the lap behind the replay's build; `verify:test-replay` still runs
+# the modified tests' base bodies in tier 2.
+env = { TEST_REPLAY_BASE = "{{ get_env(name='BATTEN_SPEC_BASE', default='origin/main') }}" }
+run = "{{vars.batten}} test replay --structural --base {{env.TEST_REPLAY_BASE}}"
+
 [tasks."verify:test-replay"]
 description = "Gate: every modified test's base form passes against HEAD, or a recorded answer admits it — invoked through `verify`"
 env = { TEST_REPLAY_BASE = "{{ get_env(name='BATTEN_SPEC_BASE', default='origin/main') }}" }
-run = "{{vars.batten}} step run test-replay --arg {{env.TEST_REPLAY_BASE}} -- {{vars.batten}} test replay --base {{env.TEST_REPLAY_BASE}}"
+run = "{{vars.batten}} step run test-replay -- {{vars.batten}} test replay --base {{env.TEST_REPLAY_BASE}}"
 
 [tasks.commit-msg]
 description = "Gate: one pending commit message's subject follows the convention (policy: [commit] in batten.toml)"
@@ -4920,7 +5265,7 @@ description = "Gate: no vendor authorship, branding or session links in BASE_SHA
 # The range is assembled by mise's template rather than a shell `:?` expansion
 # (CLOUD-1991): a template variable the environment does not carry refuses to
 # render, naming it, so an unarmed caller still fails before the engine starts.
-run = "cargo run --quiet -p batten -- attribution check {{env.BASE_SHA}}..{{env.HEAD_SHA}}"
+run = "{{vars.batten}} step run commit-attribution -- {{vars.batten}} attribution check {{env.BASE_SHA}}..{{env.HEAD_SHA}}"
 
 [tasks."commit:precheck"]
 description = "Run both commit-msg gates over a drafted message file BEFORE `git commit`, so a subject or attribution refusal never costs the pre-commit suite"
@@ -4981,7 +5326,7 @@ description = "Gate: every commit subject in BASE_SHA..HEAD_SHA follows the conv
 # The range is assembled by mise's template rather than a shell `:?` expansion
 # (CLOUD-1991): a template variable the environment does not carry refuses to
 # render, naming it, so an unarmed caller still fails before the engine starts.
-run = "cargo run --quiet -p batten -- commit check {{env.BASE_SHA}}..{{env.HEAD_SHA}}"
+run = "{{vars.batten}} step run commit-check -- {{vars.batten}} commit check {{env.BASE_SHA}}..{{env.HEAD_SHA}}"
 
 [tasks.commit-lint]
 description = "Validate every commit in BASE_SHA..HEAD_SHA is Conventional Commits and names the issue it serves"

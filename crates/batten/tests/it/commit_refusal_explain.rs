@@ -51,7 +51,7 @@ fn refused(dir: &Path, verb: &str, body: &str) -> String {
     let out = batten()
         .args([verb, "check", "--message", "msg"])
         .current_dir(dir)
-        .output()
+        .streamed_output()
         .expect("run batten");
     assert_eq!(out.status.code(), Some(2), "{verb}: {}", stdout(&out));
     stdout(&out)
@@ -60,7 +60,7 @@ fn refused(dir: &Path, verb: &str, body: &str) -> String {
 #[test]
 fn a_refused_commit_msg_line_names_a_class_policy_explain_resolves() {
     let dir = fixture("commit-refusal-explain");
-    let registry: Vec<String> = batten::verdict::vendored()
+    let registry: Vec<String> = batten::config_check::verdict::vendored()
         .into_iter()
         .map(|row| row.id)
         .collect();
@@ -93,7 +93,7 @@ fn a_refused_commit_msg_line_names_a_class_policy_explain_resolves() {
         let explained = batten()
             .args(["policy", "explain", class])
             .current_dir(&dir)
-            .output()
+            .streamed_output()
             .expect("run batten");
         assert_eq!(explained.status.code(), Some(0), "{class}");
         assert!(!stdout(&explained).trim().is_empty(), "{class}");

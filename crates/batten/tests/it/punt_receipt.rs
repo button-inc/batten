@@ -38,6 +38,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
+use batten::capture::StreamedChild as _;
 
 use std::path::{Path, PathBuf};
 
@@ -252,7 +253,7 @@ fn superseded(name: &str) -> PathBuf {
     let recorded = batten()
         .current_dir(&dir)
         .args(["receipt", "record", "verify"])
-        .output()
+        .streamed_output()
         .expect("run batten receipt record");
     assert!(
         recorded.status.success(),
@@ -322,7 +323,7 @@ fn a_superseded_receipt_is_refused_by_the_vendored_registry() {
             .write_all(write_payload("src/tracked.rs").as_bytes())
             .expect("write the payload");
     }
-    let output = child.wait_with_output().expect("collect the verdict");
+    let output = child.streamed_wait().expect("collect the verdict");
     assert_eq!(
         output.status.code(),
         Some(2),
@@ -353,16 +354,15 @@ fn the_class_declares_the_route_that_makes_the_wedge_escapable() {
     // the two must travel together. This one stays because it localises the
     // failure: green here and red there says the registry is fine and the boundary
     // is not, which is a different repair from the route having been dropped.
-    let entry = batten::verdict::vendored()
+    let entry = batten::config_check::verdict::vendored()
         .into_iter()
         .find(|entry| entry.id == "receipt read other")
         .expect("the class is vendored");
     assert!(
-        entry
-            .routes
-            .iter()
-            .any(|route| route.kind == batten::verdict::RouteKind::Override
-                && route.precondition.is_some()),
+        entry.routes.iter().any(
+            |route| route.kind == batten::preset_catalog::RouteKind::Override
+                && route.precondition.is_some()
+        ),
         "the class must declare an articulation route, or the wedge returns"
     );
 }

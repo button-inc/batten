@@ -55,6 +55,7 @@
 // ported: "install.bats::an explicitly named version never falls back" crates/batten/tests/it/engine_install.rs subject:install.sh
 
 use crate::common;
+use batten::capture::Streamed as _;
 
 /// THE ACTION INSTALLS THE RELEASE ITS REF PINS, NEVER THE MANIFEST'S VERSION
 /// (CLOUD-2033). `action.yml` resolves the version from `batten.toml`'s
@@ -110,7 +111,7 @@ fn the_action_installs_its_refs_pin() {
         .arg(&script)
         .env("ACTION_PATH", &dir)
         .env("INPUT_VERSION", "")
-        .output()
+        .streamed_output()
         .expect("run the action's resolution");
     assert_eq!(
         String::from_utf8_lossy(&output.stdout),

@@ -9,7 +9,7 @@
 //!   marker with no tool call after it. Two producers, both exact membership
 //!   over a token set: a turn that ended because the model finished
 //!   ([`crate::transcript::StopReason`]), and a hook run at a Stop-family event
-//!   ([`crate::hook::Event`]).
+//!   ([`crate::config_model::Event`]).
 //! * **`¬landed`** — [`crate::git::landing`] finds no patch-id-equivalent
 //!   commit on the landing target. **Content, never ancestry**, which is the
 //!   whole reason acceptance's rebased-and-landed case needs no code here: it
@@ -23,7 +23,7 @@
 //! is **self-clearing** — the next evaluation over the same session, once the
 //! work has landed, resolves it with no acknowledgement from anybody. That is
 //! also why the finding is registered through the advisory door and never
-//! becomes a [`crate::rules::Finding`]: an advisory surface must be
+//! becomes a [`crate::findings::Finding`]: an advisory surface must be
 //! *structurally* unable to block (house style §0.3), not merely observed not
 //! to.
 //!
@@ -137,6 +137,94 @@ pub enum Outcome {
         /// Why, as a fixed token — never a path and never an error string.
         reason: &'static str,
     },
+}
+
+/// Whether the claim's commits are on their upstream (CLOUD-2656).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum PushState {
+    /// Every commit is on the upstream.
+    Pushed,
+    /// The upstream lacks some of them.
+    Unpushed,
+    /// The branch tracks nothing.
+    NoUpstream,
+    /// It could not be computed (a shallow clone): never read as pushed.
+    NotComputable,
+}
+
+/// What the Stop owes an unlanded claim (CLOUD-2655, CLOUD-2656).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Step {
+    /// The agent lands it.
+    Land,
+    /// The clone is too shallow to say whether it landed.
+    Shallow,
+    /// Push it: a person merges, and the upstream lacks it.
+    Push,
+    /// Set an upstream and push: a person merges, and it tracks nothing.
+    NoUpstream,
+    /// Whether it is pushed could not be computed.
+    PushUnknown,
+    /// Pushed, and a person merges it: nothing is owed here.
+    MergeHeld,
+}
+
+impl Step {
+    /// The receipt's spelling.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Land => "land",
+            Self::Shallow => "shallow",
+            Self::Push => "push",
+            Self::NoUpstream => "no-upstream",
+            Self::PushUnknown => "push-unknown",
+            Self::MergeHeld => "merge-held",
+        }
+    }
+
+    /// The step a receipt spells, or `None` for a spelling this build does not
+    /// know.
+    #[must_use]
+    pub fn parse(text: &str) -> Option<Self> {
+        [
+            Self::Land,
+            Self::Shallow,
+            Self::Push,
+            Self::NoUpstream,
+            Self::PushUnknown,
+            Self::MergeHeld,
+        ]
+        .into_iter()
+        .find(|step| step.as_str() == text)
+    }
+
+    /// Whether an ignored pointer about this step refuses the next Stop. A held
+    /// merge and a shallow target are never refused: nothing here is owed.
+    #[must_use]
+    pub const fn refusable(self) -> bool {
+        matches!(
+            self,
+            Step::Land | Step::Push | Step::NoUpstream | Step::PushUnknown
+        )
+    }
+}
+
+/// The step a raised claim owes, given who lands and where the commits are
+/// (CLOUD-2656). Under `"agent"` it is always `land`, today's behaviour.
+#[must_use]
+pub const fn next_step(landed_by: crate::config_model::LandedBy, push: PushState) -> Step {
+    match landed_by {
+        crate::config_model::LandedBy::Agent => Step::Land,
+        crate::config_model::LandedBy::Person => match push {
+            PushState::Pushed => Step::MergeHeld,
+            PushState::Unpushed => Step::Push,
+            PushState::NoUpstream => Step::NoUpstream,
+            PushState::NotComputable => Step::PushUnknown,
+        },
+    }
 }
 
 /// The token a landing target that does not resolve is reported under.
@@ -340,6 +428,22 @@ pub fn no_fix_reason(target: &str) -> String {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+    #[cfg(test)]
+    /// A push nobody could compute refuses like an unpushed one (CLOUD-2656).
+    #[test]
+    fn a_push_nobody_could_compute_is_never_read_as_pushed() {
+        let step = next_step(
+            crate::config_model::LandedBy::Person,
+            PushState::NotComputable,
+        );
+        assert_eq!(step, Step::PushUnknown);
+        assert!(step.refusable());
+        assert!(!next_step(crate::config_model::LandedBy::Person, PushState::Pushed).refusable());
+        assert_eq!(
+            next_step(crate::config_model::LandedBy::Agent, PushState::Pushed),
+            Step::Land
+        );
+    }
     use crate::hook::RecordShape;
     use crate::transcript::parse;
 

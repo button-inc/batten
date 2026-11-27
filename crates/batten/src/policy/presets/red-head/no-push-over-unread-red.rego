@@ -1,5 +1,5 @@
 #MUTANT-SUITE crates/batten/tests/it/head_push_unread.rs
-#MUTANT push-subcommand-unread|s@^\tsubcommand(program.arguments) == "push"$@\tfalse@|a_push_over_an_unread_red_check_is_refused
+#MUTANT push-subcommand-unread|s@^\tprogram.subcommand == "push"$@\tfalse@|a_push_over_an_unread_red_check_is_refused
 #MUTANT read-receipt-ignored|s@^\tentry.read == false$@\ttrue@|reading_the_failed_check_admits_the_push
 # A push over a red head owes each failed check's log a read (CLOUD-2270).
 #
@@ -51,33 +51,32 @@ violation contains {
 	count(unread) > 0
 	subjects := array.concat(
 		[{"artifact": sprintf("%s job %s", [entry.name, entry.id])} | some entry in unread],
-		[{"artifact": sprintf("%s still running", [name])} | some name in input.facts["red-head"].running],
+		[{"artifact": sprintf("%s still running", [name])} | some name in listed("running")],
 	)
 }
 
+# A red-head list the producer reported, or none: a `null` where it reported
+# nothing faulted regorus's interpreter (`some .. in` over null), so the whole
+# preset answered could-not-look instead of letting the push through (#1276).
+listed(key) := list if {
+	list = input.facts["red-head"][key]
+	is_array(list)
+}
+
+# Two exclusive definitions rather than an `else`, which keeps the preset on
+# bytecode (`Fallback::RuleElse`): absent and `null` alike are not an array.
+listed(key) := [] if not is_array(input.facts["red-head"][key])
+
+# The subcommand the engine projects past git's own options (CLOUD-2354).
 pushes(program) if {
-	subcommand(program.arguments) == "push"
+	program.subcommand == "push"
 }
 
 # Each failed check whose log no receipt says was read, in record order.
 unread := [entry |
-	some entry in input.facts["red-head"].failed
+	some entry in listed("failed")
 	entry.read == false
 ]
-
-# THE SUBCOMMAND, not membership, copied from `linear-history`'s
-# `no-merge-into-branch.rego`: the first argument that is not a global option,
-# skipping the value a `-C <path>` or `-c <k=v>` takes.
-subcommand(arguments) := word if {
-	positions := [i | some i, word in arguments; not startswith(word, "-"); not value_of_global(arguments, i)]
-	count(positions) > 0
-	word := arguments[positions[0]]
-}
-
-value_of_global(arguments, i) if {
-	i > 0
-	arguments[i - 1] in {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--config-env"}
-}
 
 # The predicate's own tests, `with input as`. The compiled-binary tier is
 # `crates/batten/tests/it/head_push_unread.rs`.
@@ -91,7 +90,7 @@ test_a_push_over_an_unread_failure_is_caught if {
 	some v in violation with input as {
 		"call": {
 			"command": "git push origin HEAD",
-			"programs": [{"program": "git", "name": "git", "arguments": ["push", "origin", "HEAD"], "mediated": false}],
+			"programs": [{"program": "git", "name": "git", "arguments": ["push", "origin", "HEAD"], "subcommand": "push", "global-options": [], "mediated": false}],
 		},
 		"facts": {"red-head": red},
 	}
@@ -107,7 +106,7 @@ test_a_compound_push_is_caught if {
 			"command": "cd x && git push origin HEAD",
 			"programs": [
 				{"program": "cd", "name": "cd", "arguments": ["x"], "mediated": false},
-				{"program": "git", "name": "git", "arguments": ["push", "origin", "HEAD"], "mediated": false},
+				{"program": "git", "name": "git", "arguments": ["push", "origin", "HEAD"], "subcommand": "push", "global-options": [], "mediated": false},
 			],
 		},
 		"facts": {"red-head": red},
@@ -119,7 +118,7 @@ test_a_global_option_does_not_hide_the_push if {
 	some v in violation with input as {
 		"call": {
 			"command": "git -C /work push",
-			"programs": [{"program": "git", "name": "git", "arguments": ["-C", "/work", "push"], "mediated": false}],
+			"programs": [{"program": "git", "name": "git", "arguments": ["-C", "/work", "push"], "subcommand": "push", "global-options": ["-C", "/work"], "mediated": false}],
 		},
 		"facts": {"red-head": red},
 	}
@@ -131,7 +130,7 @@ test_only_unread_failures_are_named if {
 	some v in violation with input as {
 		"call": {
 			"command": "git push",
-			"programs": [{"program": "git", "name": "git", "arguments": ["push"], "mediated": false}],
+			"programs": [{"program": "git", "name": "git", "arguments": ["push"], "subcommand": "push", "global-options": [], "mediated": false}],
 		},
 		"facts": {"red-head": {
 			"head": "abc123",
@@ -146,7 +145,7 @@ test_every_failure_read_admits_the_push if {
 	count(violation) == 0 with input as {
 		"call": {
 			"command": "git push origin HEAD",
-			"programs": [{"program": "git", "name": "git", "arguments": ["push", "origin", "HEAD"], "mediated": false}],
+			"programs": [{"program": "git", "name": "git", "arguments": ["push", "origin", "HEAD"], "subcommand": "push", "global-options": [], "mediated": false}],
 		},
 		"facts": {"red-head": {
 			"head": "abc123",
@@ -160,7 +159,7 @@ test_a_running_check_alone_never_refuses if {
 	count(violation) == 0 with input as {
 		"call": {
 			"command": "git push",
-			"programs": [{"program": "git", "name": "git", "arguments": ["push"], "mediated": false}],
+			"programs": [{"program": "git", "name": "git", "arguments": ["push"], "subcommand": "push", "global-options": [], "mediated": false}],
 		},
 		"facts": {"red-head": {"head": "abc123", "failed": [], "running": ["macos"]}},
 	}
@@ -170,9 +169,22 @@ test_no_red_head_is_left_alone if {
 	count(violation) == 0 with input as {
 		"call": {
 			"command": "git push",
-			"programs": [{"program": "git", "name": "git", "arguments": ["push"], "mediated": false}],
+			"programs": [{"program": "git", "name": "git", "arguments": ["push"], "subcommand": "push", "global-options": [], "mediated": false}],
 		},
 		"facts": {"red-head": null},
+	}
+}
+
+# A RED HEAD REPORTING `null` FOR A LIST is one with nothing in it. Fails by:
+# `some .. in` over the null faulting the interpreter (#1276), so the preset
+# answers could-not-look rather than this count.
+test_a_null_failed_or_running_list_is_left_alone if {
+	count(violation) == 0 with input as {
+		"call": {
+			"command": "git push",
+			"programs": [{"program": "git", "name": "git", "arguments": ["push"], "subcommand": "push", "global-options": [], "mediated": false}],
+		},
+		"facts": {"red-head": {"head": "abc123", "failed": null, "running": null}},
 	}
 }
 
@@ -181,14 +193,14 @@ test_another_subcommand_is_left_alone if {
 	count(violation) == 0 with input as {
 		"call": {
 			"command": "git commit -m push",
-			"programs": [{"program": "git", "name": "git", "arguments": ["commit", "-m", "push"], "mediated": false}],
+			"programs": [{"program": "git", "name": "git", "arguments": ["commit", "-m", "push"], "subcommand": "commit", "global-options": [], "mediated": false}],
 		},
 		"facts": {"red-head": red},
 	}
 	count(violation) == 0 with input as {
 		"call": {
 			"command": "git fetch origin",
-			"programs": [{"program": "git", "name": "git", "arguments": ["fetch", "origin"], "mediated": false}],
+			"programs": [{"program": "git", "name": "git", "arguments": ["fetch", "origin"], "subcommand": "fetch", "global-options": [], "mediated": false}],
 		},
 		"facts": {"red-head": red},
 	}

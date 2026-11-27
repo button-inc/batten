@@ -1,0 +1,1 @@
+../../../skills/codemod/SKILL.md

@@ -25,6 +25,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
+use batten::capture::StreamedChild as _;
 
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -63,7 +64,7 @@ fn record(root: &Path, body: &str) -> std::process::Output {
             .write_all(body.as_bytes())
             .expect("write the body");
     }
-    child.wait_with_output().expect("the verb terminates")
+    child.streamed_wait().expect("the verb terminates")
 }
 
 /// Read the record back through the engine's own path derivation.
@@ -204,6 +205,118 @@ fn an_edited_body_is_the_newest_closing_set() {
         r#"{"owner":"o","repo":"r","pullNumber":7,"state":"closed"}"#,
     );
     assert_eq!(recorded(&untouched), None);
+}
+
+/// A completed MEDIATED call on a pull request: `batten mcp call github <tool>
+/// '<input>'` run as a shell command, answering on stdout with the payload the
+/// connector returned.
+fn mediated_pull_request_call(root: &Path, tool: &str, input: &str) {
+    let command = format!("batten mcp call github {tool} '{input}'");
+    let payload = serde_json::json!({
+        "hook_event_name": "PostToolUse",
+        "tool_name": "Bash",
+        "tool_input": {"command": command},
+        "tool_response": {
+            "stdout": "{\"id\":\"4870062878\",\"url\":\"https://github.com/o/r/pull/7\"}\n",
+            "stderr": "",
+        },
+    });
+    let _ = common::run_with_stdin(
+        root,
+        &["adjudicate", "--harness", "exit-code"],
+        &payload.to_string(),
+    );
+}
+
+/// EVERY SURFACE OF ONE CALL RECORDS ALIKE (CLOUD-2789): a body set through
+/// `batten mcp call github update_pull_request` — the mediated route — is the
+/// newest closing set exactly as the raw connector tool's is. Measured before
+/// this: the mediated edit recorded nothing, and the record stayed `closes 0`
+/// over a body closing 77 keys.
+#[test]
+fn a_mediated_edit_records_its_body_as_the_direct_tool_does() {
+    let input =
+        r#"{"owner":"o","repo":"r","pullNumber":7,"body":"Closes CLOUD-11\nCloses CLOUD-12\n"}"#;
+    let direct = body_recorder_repo("record-closes-direct-twin");
+    edit_pull_request(&direct, input);
+    let mediated = body_recorder_repo("record-closes-mediated");
+    mediated_pull_request_call(&mediated, "update_pull_request", input);
+    assert_eq!(
+        recorded(&mediated).as_deref(),
+        Some("closes 2:CLOUD-11,CLOUD-12\n")
+    );
+    assert_eq!(
+        recorded(&mediated),
+        recorded(&direct),
+        "one call, one record"
+    );
+
+    // ANTI-VACUITY: a mediated call of a method no row names records nothing.
+    let other = body_recorder_repo("record-closes-mediated-other");
+    mediated_pull_request_call(&other, "get_pull_request", input);
+    assert_eq!(recorded(&other), None);
+}
+
+/// A BACKGROUNDED MEDIATED EDIT IS RECORDED WHEN ITS TASK EXITS (CLOUD-2789), as
+/// a backgrounded shell fetch is (CLOUD-2214): deferral selects the mediated
+/// call's rows, so the body is the newest closing set once the output lands.
+///
+/// Fails by: `defer_backgrounded` selecting on the shell's name alone, so the
+/// placeholder result defers nothing and the replay has nothing to record.
+#[test]
+fn a_backgrounded_mediated_edit_records_its_body_when_the_task_exits() {
+    let root = body_recorder_repo("record-closes-mediated-background");
+    let transcript = root.join("transcript.jsonl");
+    std::fs::write(&transcript, "").expect("transcript");
+    let input = r#"{"owner":"o","repo":"r","pullNumber":7,"body":"Closes CLOUD-21\n"}"#;
+    let call = |event: &str, response: &serde_json::Value| {
+        let payload = serde_json::json!({
+            "hook_event_name": event,
+            "tool_name": "Bash",
+            "tool_input": {
+                "command": format!("batten mcp call github update_pull_request '{input}'"),
+                "run_in_background": true,
+            },
+            "tool_response": response,
+            "transcript_path": transcript,
+        });
+        let out = common::run_with_stdin(
+            &root,
+            &["adjudicate", "--harness", "exit-code"],
+            &payload.to_string(),
+        );
+        assert_eq!(out.status.code(), Some(0), "{out:?}");
+    };
+    call(
+        "PostToolUse",
+        &serde_json::json!({
+            "stdout": "", "stderr": "", "interrupted": false, "isImage": false,
+            "noOutputExpected": false, "backgroundTaskId": "m1",
+        }),
+    );
+    assert_eq!(
+        recorded(&root),
+        None,
+        "nothing is recorded before the task exits"
+    );
+
+    let output = root.join("m1.output");
+    std::fs::write(
+        &output,
+        "{\"id\":\"4870062878\",\"url\":\"https://github.com/o/r/pull/7\"}\n",
+    )
+    .expect("output");
+    let notification = serde_json::json!({
+        "type": "user",
+        "origin": {"kind": "task-notification"},
+        "message": {"role": "user", "content": format!(
+            "<task-notification>\n<task-id>m1</task-id>\n<output-file>{}</output-file>\n<status>completed</status>\n</task-notification>",
+            output.display()
+        )},
+    });
+    std::fs::write(&transcript, format!("{notification}\n")).expect("notify");
+    call("PreToolUse", &serde_json::Value::Null);
+    assert_eq!(recorded(&root).as_deref(), Some("closes 1:CLOUD-21\n"));
 }
 
 #[test]

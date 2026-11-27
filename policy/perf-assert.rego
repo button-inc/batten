@@ -62,8 +62,13 @@
 #MUTANT over-budget-passes|s@to_number(measured) > budgets\[id\]@false@|an_over_budget_path_is_refused
 #MUTANT readme-budget-disagreement-passes|s@published\[id\] != budgets\[id\]@false@|a_readme_publishing_a_different_budget_is_refused
 #MUTANT absent-budgeted-path-passes|s@not id in object.keys(judged)@false@|a_budgeted_path_absent_from_a_present_record_is_refused
+#MUTANT unmeasured-commit-step-passes|s@not id in object.keys(published_p95)@false@|a_commit_step_readme_publishes_unmeasured_is_refused
+#MUTANT target-read-from-p95|s@measured := judged\[p50_key(id)\]@measured := judged[id]@|a_p95_over_its_budget_is_the_budget_finding_alone
+#MUTANT missing-p50-reads-clean|s@not p50_key(id) in object.keys(judged)@false@|a_targeted_path_with_no_p50_is_refused
+#MUTANT target-finding-reported-as-budget|s@"verdict": "hook measure late"@"verdict": "path measure late"@|a_p50_over_its_target_is_the_target_finding_alone
 #MUTANT-SUITE crates/batten/tests/it/hook_latency.rs
 #MUTANT stop-budget-unenforced|s@"stop": 100,@@|a_stop_over_its_budget_is_refused
+#MUTANT session-start-budget-unenforced|s@"session-start": 100,@@|a_session_start_over_its_budget_is_refused
 
 # METADATA
 # description: |
@@ -76,7 +81,11 @@ package batten.perf_assert
 
 import rego.v1
 
+rules contains "hook measure late"
+
 rules contains "path measure late"
+
+rules contains "path measure absent"
 
 rules contains "path measure partial"
 
@@ -103,10 +112,59 @@ budgets := {
 	# CLOUD-1480: an end of turn waits on the mediated verb exactly as a tool
 	# call does, and it cost ~110 s while no arm measured it.
 	"stop": 100,
+	# CLOUD-2840: a session's first response waits on `SessionStart`, which
+	# starts the setup task and returns; the setup itself is never on this path.
+	"session-start": 100,
 	"hook": 100,
 	"wired": 100,
 	"check": 100,
+	# CLOUD-2789: a commit hook is a batten hook. Every default commit-time hk
+	# step a Rust-plus-config commit fires, timed in `perf measure`'s commit
+	# fixture as hk runs it.
+	"cargo-fmt": 100,
+	"taplo": 100,
+	"taplo-format": 100,
+	"merge-conflict-markers": 100,
+	"conventional-commit": 100,
+	"commit-attribution": 100,
+	# CLOUD-2736: the pre-tool and post-tool calls with the off-box daemon watch
+	# on, which an agent with the state repository set pays on every tool call.
+	"hook-offbox": 100,
+	"posttool-offbox": 100,
 }
+
+# The commit-time steps among `budgets`, whose README row must publish a measured
+# p95 (CLOUD-2852).
+commit_steps := {
+	"cargo-fmt", "taplo", "taplo-format", "merge-conflict-markers",
+	"conventional-commit", "commit-attribution",
+}
+
+# The targets, in milliseconds, for the arms an agent waits on at every tool
+# call (CLOUD-2730).
+#
+# TARGET IS p50 AND LIMIT IS p95, because the two numbers answer different
+# questions: what a call normally costs, and what it must never exceed. With only
+# the ceiling gated, a change could take a hook path from 3 ms to 90 ms and
+# every gate stayed green.
+#
+# `noop` and `check` carry no target: neither is on the path of a mediated call.
+targets := {
+	"hook": 10,
+	"passthrough": 10,
+	"posttool": 10,
+	"stop": 10,
+	# Every hook arm an agent waits on is held to the target, and a session's
+	# first response waits on `SessionStart` (CLOUD-2840).
+	"session-start": 10,
+	"wired": 10,
+	"hook-offbox": 10,
+	"posttool-offbox": 10,
+}
+
+# Where the record carries an arm's p50: `record-perf` writes it beside the p95,
+# as `<path>/p50`.
+p50_key(id) := sprintf("%s/p50", [id])
 
 # The record ids this module owns.
 #
@@ -130,7 +188,7 @@ owned := "perf-p95"
 # the honest answer and not a pass.
 judged := measurements if {
 	is_object(input.tree["tool-verdict"])
-	measurements := input.tree["tool-verdict"][owned]
+	measurements = input.tree["tool-verdict"][owned]
 }
 
 # --- the measurement half ----------------------------------------------------
@@ -168,6 +226,29 @@ unmeasured contains id if {
 	is_object(judged)
 	some id, _ in budgets
 	not id in object.keys(judged)
+}
+
+# A targeted arm whose p50 the record does not carry: the same partial record,
+# over the other reading.
+unmeasured contains p50_key(id) if {
+	is_object(judged)
+	some id, _ in targets
+	not p50_key(id) in object.keys(judged)
+}
+
+# A targeted arm whose measured p50 is over its target.
+violation contains {
+	"rule": "hook measure late",
+	"verdict": "hook measure late",
+	"subjects": [{"count": count(over_target)}],
+} if {
+	count(over_target) > 0
+}
+
+over_target contains id if {
+	some id, target in targets
+	measured := judged[p50_key(id)]
+	to_number(measured) > target
 }
 
 # --- the README half ---------------------------------------------------------
@@ -234,6 +315,77 @@ disagreeing contains id if {
 	not id in object.keys(published)
 }
 
+# --- the commit-step half ----------------------------------------------------
+
+# A COMMIT STEP IS PUBLISHED MEASURED OR IT IS REFUSED (CLOUD-2852). The record
+# half abstains wherever no record resolves, which is every checkout without the
+# release build it is keyed to, so eight commit-step budgets sat asserted with
+# `—` in their p95 cells while one step measured 29x its ceiling. The README is
+# read on every run, so a commit step whose p95 cell carries no number is refused
+# here, where no build or record is needed to see it.
+violation contains {
+	"rule": "path measure absent",
+	"verdict": "path measure absent",
+	"subjects": [{"count": count(unpublished_measure)}],
+} if {
+	count(unpublished_measure) > 0
+}
+
+unpublished_measure contains id if {
+	some id in commit_steps
+	count(table_rows) > 0
+	not id in object.keys(published_p95)
+}
+
+# The p95 column's index, found by its header for `budget_column`'s reason.
+p95_column := index if {
+	some cells in table_rows
+	some index, cell in cells
+	trim_space(cell) == "p95"
+}
+
+# The published p95 per commit step, for the rows whose p95 cell is a number.
+published_p95[id] := measured if {
+	some cells in table_rows
+	id := trim_space(cells[1])
+	id in commit_steps
+	cell := trim_space(cells[p95_column])
+	some token in split(cell, " ")
+	regex.match(data.batten.patterns["published-measure-value"], token)
+	measured := to_number(token)
+}
+
+# The target column, found by its header for the budget column's reason.
+target_column := index if {
+	some cells in table_rows
+	some index, cell in cells
+	trim_space(cell) == "target"
+}
+
+# The published target per path id, for the rows that publish a number.
+published_target[id] := target if {
+	some cells in table_rows
+	id := trim_space(cells[1])
+	id in object.keys(targets)
+	cell := trim_space(cells[target_column])
+	some token in split(cell, " ")
+	regex.match(data.batten.patterns["published-budget-value"], token)
+	target := to_number(token)
+}
+
+# A targeted arm README publishes a different target for, or none.
+disagreeing contains id if {
+	some id, _ in targets
+	id in object.keys(published_target)
+	published_target[id] != targets[id]
+}
+
+disagreeing contains id if {
+	some id, _ in targets
+	count(table_rows) > 0
+	not id in object.keys(published_target)
+}
+
 # --- could not look ----------------------------------------------------------
 
 # THE `missing` CLAUSE, and it is not optional. A module that iterates only what
@@ -261,15 +413,33 @@ violation contains {
 # A README table publishing exactly what `budgets` enforces, so a case about the
 # measurement half is not also a case about the README half.
 agreeing_readme := [
-	"| path | what it does | p50 | p95 | budget |",
-	"| ---- | ------------ | --- | --- | ------ |",
-	"| `noop` | process start | 2.1 ms | 2.4 ms | ≤ 100 ms |",
-	"| `check` | one-rule tree | 2.3 ms | 2.7 ms | ≤ 100 ms |",
-	"| `hook` | adjudication | 2.8 ms | 3.0 ms | ≤ 100 ms |",
-	"| `passthrough` | a call no rule selects | — | — | ≤ 100 ms |",
-	"| `posttool` | a PostToolUse call | — | — | ≤ 100 ms |",
-	"| `stop` | an end of turn | — | — | ≤ 100 ms |",
-	"| `wired` | as settings.json invokes it | 8.0 ms | 8.4 ms | ≤ 100 ms |",
+	"| path | what it does | p50 | p95 | target | budget |",
+	"| ---- | ------------ | --- | --- | ------ | ------ |",
+	"| `noop` | process start | 2.1 ms | 2.4 ms | — | ≤ 100 ms |",
+	"| `check` | one-rule tree | 2.3 ms | 2.7 ms | — | ≤ 100 ms |",
+	"| `hook` | adjudication | 2.8 ms | 3.0 ms | ≤ 10 ms | ≤ 100 ms |",
+	"| `passthrough` | a call no rule selects | — | — | ≤ 10 ms | ≤ 100 ms |",
+	"| `posttool` | a PostToolUse call | — | — | ≤ 10 ms | ≤ 100 ms |",
+	"| `stop` | an end of turn | — | — | ≤ 10 ms | ≤ 100 ms |",
+	"| `session-start` | a session's first moment | — | — | ≤ 10 ms | ≤ 100 ms |",
+	"| `wired` | as settings.json invokes it | 8.0 ms | 8.4 ms | ≤ 10 ms | ≤ 100 ms |",
+	"| `cargo-fmt` | a commit-time hook step | 31.2 ms | 45.8 ms | — | ≤ 100 ms |",
+	"| `taplo` | a commit-time hook step | 20.9 ms | 30.3 ms | — | ≤ 100 ms |",
+	"| `taplo-format` | a commit-time hook step | 20.9 ms | 30.3 ms | — | ≤ 100 ms |",
+	"| `merge-conflict-markers` | a commit-time hook step | 50.0 ms | 60.0 ms | — | ≤ 100 ms |",
+	"| `conventional-commit` | a commit-time hook step | 50.0 ms | 60.0 ms | — | ≤ 100 ms |",
+	"| `commit-attribution` | a commit-time hook step | 29.3 ms | 42.9 ms | — | ≤ 100 ms |",
+	"| `hook-offbox` | adjudication, daemon watch on | — | — | ≤ 10 ms | ≤ 100 ms |",
+	"| `posttool-offbox` | a PostToolUse call, daemon watch on | — | — | ≤ 10 ms | ≤ 100 ms |",
+]
+
+# The commit-time steps' rows, for a case whose own README has a different
+# shape (`test_a_reordered_budget_column_is_still_found`).
+commit_rows := [sprintf("| `%s` | ≤ 100 ms | — | 9.0 ms | 12.0 ms |", [id]) |
+	some id in [
+		"cargo-fmt", "taplo", "taplo-format", "merge-conflict-markers",
+		"conventional-commit", "commit-attribution",
+	]
 ]
 
 # Every budgeted path measured, comfortably inside.
@@ -280,7 +450,69 @@ clean_record := {
 	"passthrough": "2.2",
 	"posttool": "2.3",
 	"stop": "2.6",
+	"session-start": "4.1",
 	"wired": "8.4",
+	"cargo-fmt": "9.0",
+	"taplo": "9.0",
+	"taplo-format": "9.0",
+	"merge-conflict-markers": "9.0",
+	"conventional-commit": "9.0",
+	"commit-attribution": "9.0",
+	"hook/p50": "2.8",
+	"passthrough/p50": "2.0",
+	"posttool/p50": "2.1",
+	"stop/p50": "2.4",
+	"session-start/p50": "3.9",
+	"wired/p50": "8.0",
+	"hook-offbox": "3.2",
+	"hook-offbox/p50": "3.0",
+	"posttool-offbox": "2.6",
+	"posttool-offbox/p50": "2.4",
+}
+
+# THE TWO FINDINGS ARE TOLD APART BY TOKEN (CLOUD-2730): a p50 over its target
+# with a p95 inside its budget raises the target's and only the target's.
+test_a_p50_over_its_target_is_the_target_finding_alone if {
+	found := violation with input as {"tree": {
+		"lines": {"README.md": agreeing_readme},
+		"tool-verdict": {"perf-p95": object.union(clean_record, {"posttool": "50", "posttool/p50": "11"})},
+	}}
+	{finding.verdict | some finding in found} == {"hook measure late"}
+}
+
+test_a_p95_over_its_budget_is_the_budget_finding_alone if {
+	found := violation with input as {"tree": {
+		"lines": {"README.md": agreeing_readme},
+		"tool-verdict": {"perf-p95": object.union(clean_record, {"posttool": "101", "posttool/p50": "9"})},
+	}}
+	{finding.verdict | some finding in found} == {"path measure late"}
+}
+
+test_a_targeted_path_with_no_p50_is_refused if {
+	found := violation with input as {"tree": {
+		"lines": {"README.md": agreeing_readme},
+		"tool-verdict": {"perf-p95": object.remove(clean_record, {"posttool/p50"})},
+	}}
+	{finding.verdict | some finding in found} == {"path measure partial"}
+}
+
+# `noop` and `check` are not on a mediated call's path, so a slow p50 for one of
+# them in the record is measured and not held to the target.
+test_an_untargeted_path_is_not_held_to_the_target if {
+	count(violation) == 0 with input as {"tree": {
+		"lines": {"README.md": agreeing_readme},
+		"tool-verdict": {"perf-p95": object.union(clean_record, {"noop/p50": "40"})},
+	}}
+}
+
+test_a_readme_publishing_a_different_target_is_refused if {
+	found := violation with input as readme_tree(readme_with_row(4, "| `hook` | adjudication | 2.8 ms | 3.0 ms | ≤ 20 ms | ≤ 100 ms |"))
+	{finding.verdict | some finding in found} == {"prose state wrong"}
+}
+
+test_a_readme_publishing_no_target_for_a_targeted_path_is_refused if {
+	found := violation with input as readme_tree(readme_with_row(4, "| `hook` | adjudication | 2.8 ms | 3.0 ms | — | ≤ 100 ms |"))
+	{finding.verdict | some finding in found} == {"prose state wrong"}
 }
 
 test_a_measurement_inside_every_budget_is_silent if {
@@ -342,24 +574,37 @@ test_a_sibling_rows_record_is_not_read if {
 	}}
 }
 
+# EACH README CASE CHANGES ONE ROW, KEEPS EVERY OTHER, AND NAMES THE ID IT EXPECTS
+# TO DISAGREE. A fixed slice of `agreeing_readme` went vacuous when the commit-step
+# rows were appended (CLOUD-2789): it dropped them, so the absent-row clause alone
+# satisfied `count(violation) == 1`, and `published[id] != budgets[id]` could be
+# deleted with every case green. `disagreeing == {id}` is what fails then.
+readme_with_row(index, row) := array.concat(
+	array.slice(agreeing_readme, 0, index),
+	array.concat([row], array.slice(agreeing_readme, index + 1, count(agreeing_readme))),
+)
+
+readme_without_row(index) := array.concat(
+	array.slice(agreeing_readme, 0, index),
+	array.slice(agreeing_readme, index + 1, count(agreeing_readme)),
+)
+
+# The tree a README case runs over. Each `with` term builds its README itself
+# rather than reading a case local: a second `with` reading a local keeps the
+# case off bytecode (#1276).
+readme_tree(readme) := {"tree": {
+	"lines": {"README.md": readme},
+	"tool-verdict": {"perf-p95": clean_record},
+}}
+
 test_a_readme_publishing_a_different_budget_is_refused if {
-	count(violation) == 1 with input as {"tree": {
-		"lines": {"README.md": array.concat(
-			array.slice(agreeing_readme, 0, 2),
-			array.concat(
-				["| `noop` | process start | 2.1 ms | 2.4 ms | ≤ 50 ms |"],
-				array.slice(agreeing_readme, 3, 9),
-			),
-		)},
-		"tool-verdict": {"perf-p95": clean_record},
-	}}
+	count(violation) == 1 with input as readme_tree(readme_with_row(2, "| `noop` | process start | 2.1 ms | 2.4 ms | — | ≤ 50 ms |"))
+	disagreeing == {"noop"} with input as readme_tree(readme_with_row(2, "| `noop` | process start | 2.1 ms | 2.4 ms | — | ≤ 50 ms |"))
 }
 
 test_a_readme_with_no_row_for_a_budgeted_path_is_refused if {
-	count(violation) == 1 with input as {"tree": {
-		"lines": {"README.md": array.slice(agreeing_readme, 0, 8)},
-		"tool-verdict": {"perf-p95": clean_record},
-	}}
+	count(violation) == 1 with input as readme_tree(readme_without_row(9))
+	disagreeing == {"wired"} with input as readme_tree(readme_without_row(9))
 }
 
 # THE UNGATED CELL IS THE DISAGREEMENT WRITTEN THE OTHER WAY ROUND. `—` publishes
@@ -367,33 +612,39 @@ test_a_readme_with_no_row_for_a_budgeted_path_is_refused if {
 # published column and the enforced table drift apart in the direction nobody
 # notices.
 test_a_readme_publishing_no_budget_for_a_gated_path_is_refused if {
-	count(violation) == 1 with input as {"tree": {
-		"lines": {"README.md": array.concat(
-			array.slice(agreeing_readme, 0, 2),
-			array.concat(
-				["| `noop` | process start | 2.1 ms | 2.4 ms | — |"],
-				array.slice(agreeing_readme, 3, 9),
-			),
-		)},
-		"tool-verdict": {"perf-p95": clean_record},
-	}}
+	count(violation) == 1 with input as readme_tree(readme_with_row(2, "| `noop` | process start | 2.1 ms | 2.4 ms | — | — |"))
+	disagreeing == {"noop"} with input as readme_tree(readme_with_row(2, "| `noop` | process start | 2.1 ms | 2.4 ms | — | — |"))
+}
+
+# A COMMIT STEP PUBLISHED UNMEASURED IS REFUSED, record or no record (CLOUD-2852):
+# the row the measurement half could never see, since it abstains wherever no
+# record resolves. Row 14 is `conventional-commit`.
+test_a_commit_step_readme_publishes_unmeasured_is_refused if {
+	count(violation) == 1 with input as {"tree": {"lines": {"README.md": readme_with_row(14, "| `conventional-commit` | a commit-time hook step | — | — | — | ≤ 100 ms |")}}}
+	unpublished_measure == {"conventional-commit"} with input as {"tree": {"lines": {"README.md": readme_with_row(14, "| `conventional-commit` | a commit-time hook step | — | — | — | ≤ 100 ms |")}}}
 }
 
 # THE COLUMN IS FOUND BY ITS HEADER, so a table that grows a column still compares
 # the right cell. A fixed index would silently start reading `p95` here.
 test_a_reordered_budget_column_is_still_found if {
 	count(violation) == 0 with input as {"tree": {
-		"lines": {"README.md": [
-			"| path | budget | p50 | p95 |",
-			"| ---- | ------ | --- | --- |",
-			"| `noop` | ≤ 100 ms | 2.1 ms | 2.4 ms |",
-			"| `check` | ≤ 100 ms | 2.3 ms | 2.7 ms |",
-			"| `hook` | ≤ 100 ms | 2.8 ms | 3.0 ms |",
-			"| `passthrough` | ≤ 100 ms | — | — |",
-			"| `posttool` | ≤ 100 ms | — | — |",
-			"| `stop` | ≤ 100 ms | — | — |",
-			"| `wired` | ≤ 100 ms | 8.0 ms | 8.4 ms |",
-		]},
+		"lines": {"README.md": array.concat(
+			[
+				"| path | budget | target | p50 | p95 |",
+				"| ---- | ------ | ------ | --- | --- |",
+				"| `noop` | ≤ 100 ms | — | 2.1 ms | 2.4 ms |",
+				"| `check` | ≤ 100 ms | — | 2.3 ms | 2.7 ms |",
+				"| `hook` | ≤ 100 ms | ≤ 10 ms | 2.8 ms | 3.0 ms |",
+				"| `passthrough` | ≤ 100 ms | ≤ 10 ms | — | — |",
+				"| `posttool` | ≤ 100 ms | ≤ 10 ms | — | — |",
+				"| `stop` | ≤ 100 ms | ≤ 10 ms | — | — |",
+				"| `session-start` | ≤ 100 ms | ≤ 10 ms | — | — |",
+				"| `wired` | ≤ 100 ms | ≤ 10 ms | 8.0 ms | 8.4 ms |",
+				"| `hook-offbox` | ≤ 100 ms | ≤ 10 ms | — | — |",
+				"| `posttool-offbox` | ≤ 100 ms | ≤ 10 ms | — | — |",
+			],
+			commit_rows,
+		)},
 		"tool-verdict": {"perf-p95": clean_record},
 	}}
 }

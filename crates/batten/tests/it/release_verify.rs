@@ -359,7 +359,7 @@ fn release_path_posts_success_for_an_inherited_pin_on_the_graded_head() {
         .current_dir(&repo)
         .env("BATTEN_REST_FIXTURE", &forge)
         .args(["release", "path", &head, "--post"])
-        .output()
+        .streamed_output()
         .expect("run release path");
     assert_eq!(output.status.code(), Some(0), "{}", common::stderr(&output));
     assert!(common::stdout(&output).contains("release path: success"));
@@ -414,7 +414,7 @@ fn release_path_reports_a_refused_post_rather_than_posting_it() {
         .current_dir(&repo)
         .env("BATTEN_REST_FIXTURE", &forge)
         .args(["release", "path", &head, "--post"])
-        .output()
+        .streamed_output()
         .expect("run release path");
     assert_eq!(output.status.code(), Some(3), "{}", common::stderr(&output));
     assert!(
@@ -496,7 +496,7 @@ fn verify_uncut(name: &str, extra: &[(&str, &str, &str)], flags: &[&str]) -> (Op
         .env("BATTEN_REST_FIXTURE", &forge)
         .args(["release", "verify", "v9.9.9"])
         .args(flags)
-        .output()
+        .streamed_output()
         .expect("run release verify");
     (output.status.code(), common::stderr(&output))
 }
@@ -595,7 +595,7 @@ fn release_path_uncut_at(
         .args(&global)
         .args(["release", "path", &head])
         .args(flags)
-        .output()
+        .streamed_output()
         .expect("run release path");
     (
         output.status.code(),
@@ -1129,7 +1129,7 @@ fn release_discard_deletes_a_draft_and_its_tag_over_the_forge() {
         .current_dir(&repo)
         .env("BATTEN_REST_FIXTURE", &forge)
         .args(["release", "discard", "v1.0.1"])
-        .output()
+        .streamed_output()
         .expect("run release discard");
     assert_eq!(output.status.code(), Some(0), "{}", common::stderr(&output));
     let asked = std::fs::read_to_string(forge.join("args")).unwrap_or_default();

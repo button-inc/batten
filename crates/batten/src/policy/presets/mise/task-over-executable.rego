@@ -46,7 +46,7 @@ rules contains "task reach loose"
 # pipeline, a sequence, a multi-line body — and is skipped here rather than
 # guessed at: its first word is not what running it would reach.
 defined[name] := argv if {
-	tasks := input.facts.tasks
+	tasks = input.facts.tasks
 	is_object(tasks)
 	some name, argv in tasks
 	is_array(argv)

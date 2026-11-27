@@ -503,6 +503,11 @@ fn a_session_start_records_the_programs_the_pin_composes() {
         &["adjudicate", "--harness", "claude-code"],
         &payload,
     );
+    // THE PIN RECORD IS THE SETUP TASK'S (CLOUD-2840): the door starts it, and
+    // the task inherits the door's `PATH`, so the stub still answers.
+    // `session_start` is unix-only, as is the detached setup task it waits on.
+    #[cfg(unix)]
+    let _ = crate::session_start::settle(&dir);
 
     match pinned::cached(&dir) {
         Look::Is(programs) => assert_eq!(

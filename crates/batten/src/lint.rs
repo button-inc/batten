@@ -53,6 +53,8 @@
 //! only through a clearly explained question whose presented text and selected
 //! answer are recorded, which is what [`admissions`] now decides over.
 
+use crate::rules::RuleKindExt as _;
+use crate::waiver::WaiverExt as _;
 use std::fmt;
 use std::path::Path;
 
@@ -60,9 +62,12 @@ use anyhow::Result;
 use serde::Deserialize;
 use toml::Spanned;
 
-use crate::config::{self, Config};
+use crate::config;
+use crate::config_model::Config;
+use crate::findings::line_of;
 use crate::severity::RuleSeverity;
 use crate::trust;
+use crate::trust_pin;
 
 /// Where in `batten.toml` a smell sits.
 ///
@@ -121,7 +126,12 @@ impl Smell {
     /// so one weakening has one pointer whichever verb reports it.
     #[must_use]
     pub fn line_text(&self) -> String {
-        format!("{}:{} {}", config::CONFIG_FILE, self.at, self.id)
+        format!(
+            "{}:{} {}",
+            crate::config_model::CONFIG_FILE,
+            self.at,
+            self.id
+        )
     }
 }
 
@@ -188,7 +198,7 @@ pub enum SmellId {
     /// green is what this row was opened about, and without this smell the two
     /// above pass on a gate that analysed nothing.
     PolicyModuleUnswept,
-    /// A waiver over a rule whose `kind` mints no [`crate::rules::Finding`], so
+    /// A waiver over a rule whose `kind` mints no [`crate::findings::Finding`], so
     /// [`crate::waiver::apply`] never sees one to suppress (CLOUD-293). The
     /// third dead-suppression shape, and the one that survives both the others:
     /// the rule exists, so `waiver-names-no-rule` is satisfied, and the expiry
@@ -220,6 +230,11 @@ pub enum SmellId {
     TestExpectationChanged,
     /// A base test that HEAD deleted (`batten test replay`).
     TestRemoved,
+    /// An `engine` pin some top-level key other than `version` precedes
+    /// ([`crate::engine::pin_out_of_order`]). The pin is still read and
+    /// followed; the file is invalid until the key is moved to its head, where
+    /// every load reads it in a few lines.
+    PinOutOfOrder,
     /// A base-ref comparison smell, delegating to the kind [`trust`] already
     /// enumerates.
     Weakening(trust::WeakeningKind),
@@ -249,6 +264,7 @@ const UNITS: &[SmellId] = &[
     SmellId::DeferralReversed,
     SmellId::TestExpectationChanged,
     SmellId::TestRemoved,
+    SmellId::PinOutOfOrder,
 ];
 
 impl SmellId {
@@ -275,6 +291,7 @@ impl SmellId {
             SmellId::DeferralReversed => "deferral-reversible",
             SmellId::TestExpectationChanged => "test-expectation-changed",
             SmellId::TestRemoved => "test-removed",
+            SmellId::PinOutOfOrder => "engine-pin-out-of-order",
             SmellId::Weakening(kind) => kind.as_str(),
             SmellId::Drift(drift) => drift.as_str(),
         }
@@ -334,6 +351,10 @@ impl SmellId {
                 "A base test that HEAD's code no longer satisfies, or that will not build there."
             }
             SmellId::TestRemoved => "A base test that HEAD deleted.",
+            SmellId::PinOutOfOrder => {
+                "The `engine` pin is not at the head of the config: a top-level key other than \
+                 `version` precedes it. Move the `engine` line to directly under `version`."
+            }
             SmellId::Weakening(kind) => kind.definition(),
             SmellId::Drift(drift) => drift.definition(),
         }
@@ -407,7 +428,7 @@ impl serde::Serialize for SmellId {
 ///
 /// The located view and the parsed config must describe the same rows in the
 /// same order, because the pairing below is positional.
-/// [`config::Unresolvable::row_index`] is the row's ordinal in the source, which
+/// [`crate::config_model::Unresolvable::row_index`] is the row's ordinal in the source, which
 /// is precisely the index to remove.
 ///
 /// **A KEY DROP REMOVES NO ROW, and `row_index` is what says so.** The two
@@ -418,7 +439,7 @@ impl serde::Serialize for SmellId {
 fn without_unresolvable<T>(
     rows: Vec<T>,
     section: &str,
-    dropped: &[config::Unresolvable],
+    dropped: &[crate::config_model::Unresolvable],
 ) -> Vec<T> {
     rows.into_iter()
         .enumerate()
@@ -455,7 +476,7 @@ struct Located {
 /// A rule's span, located by its `id`, plus the one column a smell reads.
 ///
 /// `severity` is **optional here** and must stay so: a `judge` row is refused
-/// that column outright ([`crate::rules::RuleKind::permits`]), so a required
+/// that column outright ([`crate::config_model::RuleKind::permits`]), so a required
 /// field made this whole view unparseable for any config carrying one — `config
 /// lint` answered exit 1 with serde's "missing field severity" on a config the
 /// real loader accepts. This mirror exists only to recover spans `config::parse`
@@ -544,7 +565,7 @@ fn waiver_smells(
                 && config
                     .rules
                     .iter()
-                    .any(|rule| rule.kind == crate::rules::RuleKind::Policy) => {}
+                    .any(|rule| rule.kind == crate::config_model::RuleKind::Policy) => {}
             None => found.push(Smell {
                 at: at.clone(),
                 id: SmellId::WaiverNamesNoRule,
@@ -582,12 +603,6 @@ fn waiver_smells(
     found
 }
 
-/// Convert a byte offset into a 1-based line number.
-pub(crate) fn line_of(text: &str, offset: usize) -> usize {
-    text.get(..offset)
-        .map_or(1, |prefix| prefix.matches('\n').count() + 1)
-}
-
 /// Every smell in `text`, sorted.
 ///
 /// `base` supplies the trusted comparison when the caller named a ref; without
@@ -613,6 +628,18 @@ pub fn smells(
         toml::from_str(text).map_err(|err| config::config_error(source, text, &err))?;
 
     let mut found = Vec::new();
+
+    // THE PIN HEADS THE FILE, after only `version`. A buried pin still parses
+    // and is still followed — never a load error, or the engine that must read
+    // it to get out of the way could not — but the file is refused here until
+    // the key moves up, because its place is what keeps every load's read of it
+    // to a few lines.
+    if let Some(line) = crate::engine::pin_out_of_order(text) {
+        found.push(Smell {
+            at: Where::Line(line),
+            id: SmellId::PinOutOfOrder,
+        });
+    }
 
     // A DEFERRAL WHOSE CONDITION NOW HOLDS (CLOUD-759). Reported here rather than
     // as a rule of its own because the subject IS `batten.toml` — the row is the
@@ -806,15 +833,15 @@ pub fn smells(
 /// Returns a [`crate::UsageError`] (→ exit `1`) when the working config or the
 /// base-ref config cannot be read or parsed.
 pub fn run(dir: &Path, base_ref: Option<&str>, today: crate::waiver::Date) -> Result<Vec<Smell>> {
-    let path = dir.join(config::CONFIG_FILE);
+    let path = dir.join(crate::config_model::CONFIG_FILE);
     // THE BASE REF IS LOADED FIRST, and the order is the contract rather than a
     // style choice (CLOUD-719). A ref this binary cannot read stays exit `1`
     // whatever the working tree looks like, so it must be asked before the
     // working file's absence can route anywhere.
     let base = base_ref
-        .map(|reference| trust::load_base(dir, reference))
+        .map(|reference| trust_pin::load_base(dir, reference, crate::config::parse_base))
         .transpose()?;
-    let text = match std::fs::read_to_string(&path) {
+    let text = match crate::fsio::read_to_string(&path) {
         Ok(text) => text,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
             // THE MAXIMAL WEAKENING IS A VERDICT, NOT A USAGE ERROR. Deleting
@@ -841,7 +868,7 @@ pub fn run(dir: &Path, base_ref: Option<&str>, today: crate::waiver::Date) -> Re
                 )));
             };
             let mut found: Vec<Smell> =
-                trust::weakenings(base, &config::Config::declaring_nothing())
+                trust::weakenings(base, &crate::config_model::Config::declaring_nothing())
                     .into_iter()
                     .map(|w| Smell {
                         at: Where::Key(w.key),
@@ -877,13 +904,102 @@ pub fn run(dir: &Path, base_ref: Option<&str>, today: crate::waiver::Date) -> Re
         })
         .and_then(std::result::Result::ok)
         .unwrap_or_default();
-    smells(
+    let found = smells(
         &text,
         &path.display().to_string(),
         base.as_ref(),
         today,
         &bundles,
-    )
+    )?;
+    // A MOVE IS NOT A WEAKENING (CLOUD-2789). The kinds below compare paths by
+    // their spelling, so a file moved between crates reads as a path removed or
+    // a glob changed although the gate covers exactly the same files. Only a
+    // finding a move fully explains is dropped; one that changes what is
+    // covered still reaches the owner.
+    let (Some(base), Some(reference)) = (base.as_ref(), base_ref) else {
+        return Ok(found);
+    };
+    let Ok(working) = config::parse(&text, &path.display().to_string()) else {
+        return Ok(found);
+    };
+    let Ok(moves) = crate::git::moves_since(dir, reference) else {
+        return Ok(found);
+    };
+    if moves.is_empty() {
+        return Ok(found);
+    }
+    let tracked = crate::git::tracked_paths(dir).unwrap_or_default();
+    Ok(found
+        .into_iter()
+        .filter(|smell| !explained_by_moves(smell, base, &working, &moves, &tracked))
+        .collect())
+}
+
+/// Whether `smell` is a path comparison that the branch's file moves fully
+/// explain (CLOUD-2789).
+///
+/// - `landing-path-removed` for a path that moved, whose new path the working
+///   list declares: the lease reads the same file.
+/// - `rule-predicate-changed` on a path-selecting column (`glob`, `sources`,
+///   `*_sources`) whose old and new selectors pick EXACTLY the same tracked
+///   files, each file judged by the old selector at the path it had before the
+///   move ([`crate::git::unmoved`]). A widening that also covers a file the old
+///   one did not is still reported: this equates, it never ranks.
+fn explained_by_moves(
+    smell: &Smell,
+    base: &crate::config_model::Config,
+    working: &crate::config_model::Config,
+    moves: &std::collections::BTreeMap<String, String>,
+    tracked: &std::collections::BTreeSet<String>,
+) -> bool {
+    let (Where::Key(key), SmellId::Weakening(kind)) = (&smell.at, &smell.id) else {
+        return false;
+    };
+    match kind {
+        trust::WeakeningKind::LandingPathRemoved => key
+            .strip_prefix("lease.landing_paths[")
+            .and_then(|rest| rest.strip_suffix(']'))
+            .and_then(|old| moves.get(old))
+            .is_some_and(|new| trust::landing_paths(working).contains(new)),
+        trust::WeakeningKind::RulePredicateChanged => {
+            let Some((id, column)) = key
+                .strip_prefix("rule[")
+                .and_then(|rest| rest.split_once("]."))
+            else {
+                return false;
+            };
+            if !(column == "glob" || column == "sources" || column.ends_with("_sources")) {
+                return false;
+            }
+            let selectors =
+                |config: &crate::config_model::Config| -> Option<Vec<crate::selector::Selector>> {
+                    let rule = config.rules.iter().find(|rule| rule.id == id)?;
+                    let value = serde_json::to_value(rule).ok()?.get(column)?.clone();
+                    let globs: Vec<String> = match value {
+                        serde_json::Value::String(glob) => vec![glob],
+                        serde_json::Value::Array(items) => items
+                            .into_iter()
+                            .map(|item| item.as_str().map(str::to_owned))
+                            .collect::<Option<_>>()?,
+                        _ => return None,
+                    };
+                    globs
+                        .iter()
+                        .map(|glob| crate::selector::Selector::new(glob).ok())
+                        .collect()
+                };
+            let (Some(was), Some(now)) = (selectors(base), selectors(working)) else {
+                return false;
+            };
+            let any = |selectors: &[crate::selector::Selector], path: &str| {
+                selectors.iter().any(|selector| selector.matches(path))
+            };
+            tracked
+                .iter()
+                .all(|path| any(&was, &crate::git::unmoved(path, moves)) == any(&now, path))
+        }
+        _ => false,
+    }
 }
 
 /// Compare the committed `[ci]` against a host ruleset payload (CLOUD-54).
@@ -913,7 +1029,7 @@ pub fn host_drift(
         std::io::Read::read_to_string(&mut std::io::stdin(), &mut buffer)?;
         buffer
     } else {
-        std::fs::read_to_string(source).map_err(|err| {
+        crate::fsio::read_to_string(source).map_err(|err| {
             crate::UsageError::raise(format!("cannot read host rules from {source}: {err}"))
         })?
     };
@@ -941,7 +1057,7 @@ pub fn host_drift(
         let Some(committed) = resolved.host.as_ref() else {
             return Err(crate::UsageError::raise(format!(
                 "--host-rules was handed a repository object, but {} declares no [host] table",
-                config::CONFIG_FILE
+                crate::config_model::CONFIG_FILE
             )));
         };
         return Ok(crate::ci::host_drift(committed, &host)
@@ -957,7 +1073,7 @@ pub fn host_drift(
     let Some(committed) = resolved.ci.as_ref() else {
         return Err(crate::UsageError::raise(format!(
             "--host-rules asked for a comparison, but {} declares no [ci] table",
-            config::CONFIG_FILE
+            crate::config_model::CONFIG_FILE
         )));
     };
 
@@ -1020,7 +1136,7 @@ fn workspace_rust_version(source: &str) -> Option<String> {
         .parent()
         .unwrap_or(std::path::Path::new("."))
         .join("Cargo.toml");
-    let manifest = std::fs::read_to_string(beside).ok()?;
+    let manifest = crate::fsio::read_to_string(beside).ok()?;
     // `toml::from_str`, never `str::parse`: the `FromStr` impl reads a single
     // VALUE and rejects a document at its first table header, so parsing a
     // manifest that way silently yields `None` and the gate reports nothing.
@@ -1192,6 +1308,7 @@ pub fn admissions(smells: &[Smell], ledger: &crate::asked::Ledger) -> Vec<(Smell
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+    #[cfg(test)]
     use crate::waiver::Date;
 
     /// A fixed date, so a lint verdict never depends on when the suite ran — the
@@ -1441,7 +1558,7 @@ mod tests {
         let dir = crate::scratch::scratch("lint-run").join("tree");
         std::fs::create_dir_all(&dir).expect("the fixture directory");
         std::fs::write(
-            dir.join(config::CONFIG_FILE),
+            dir.join(crate::config_model::CONFIG_FILE),
             "version = 1\nprotected = []\n",
         )
         .expect("the fixture config");
@@ -1452,7 +1569,8 @@ mod tests {
 
         // Anti-vacuity: a config with nothing to say reports nothing, so the
         // assertion above is not "anything non-empty".
-        std::fs::write(dir.join(config::CONFIG_FILE), "version = 1\n").expect("a clean config");
+        std::fs::write(dir.join(crate::config_model::CONFIG_FILE), "version = 1\n")
+            .expect("a clean config");
         assert!(run(&dir, None, today()).expect("still readable").is_empty());
     }
 
@@ -1472,7 +1590,7 @@ mod tests {
         std::fs::write(&payload, RULES).expect("the fixture payload");
         // A projection claiming a check the host's ruleset does not require.
         std::fs::write(
-            dir.join(config::CONFIG_FILE),
+            dir.join(crate::config_model::CONFIG_FILE),
             "version = 1\n\n[ci]\nrequired_checks = [\"a-check-the-host-never-heard-of\"]\n",
         )
         .expect("the fixture config");
@@ -1486,7 +1604,7 @@ mod tests {
         // Anti-vacuity: a projection naming exactly what the ruleset requires
         // reports nothing, so the assertion above is about the comparison.
         std::fs::write(
-            dir.join(config::CONFIG_FILE),
+            dir.join(crate::config_model::CONFIG_FILE),
             "version = 1\n\n[ci]\nrequired_checks = [\"final\"]\n",
         )
         .expect("the agreeing config");
@@ -1705,6 +1823,154 @@ mod tests {
             found[0].line_text(),
             "batten.toml:protected[a] protected-removed"
         );
+    }
+
+    /// Fails by: a glob widened only to follow a moved file still charged as a
+    /// weakening, or a glob that ALSO covers a file the old one did not, or
+    /// stops covering one, dropped as a move.
+    #[test]
+    fn a_glob_that_only_follows_a_move_is_not_a_weakening() {
+        let rule = |glob: &str| {
+            format!(
+                "version = 1\n[[rule]]\nid = \"r\"\nkind = \"forbid\"\nglob = \"{glob}\"\npattern = \"x\"\nseverity = \"deny\"\nscope = \"tree\"\n"
+            )
+        };
+        let base = config::parse(&rule("crates/a/src/**/*.rs"), "base").unwrap();
+        let moves = std::collections::BTreeMap::from([(
+            "crates/a/src/x.rs".to_owned(),
+            "crates/b/src/x.rs".to_owned(),
+        )]);
+        let tracked: std::collections::BTreeSet<String> = [
+            "crates/a/src/kept.rs",
+            "crates/b/src/x.rs",
+            "crates/b/src/new.rs",
+            "crates/c/src/other.rs",
+            "docs.md",
+        ]
+        .map(str::to_owned)
+        .into();
+        let judged = |glob: &str| {
+            let working = config::parse(&rule(glob), "test").unwrap();
+            let found = smells(&rule(glob), "test", Some(&base), today(), &[]).unwrap();
+            let changed = found
+                .iter()
+                .find(|smell| smell.id.as_str() == "rule-predicate-changed")
+                .unwrap_or_else(|| panic!("{glob}: the spelling did change"));
+            explained_by_moves(changed, &base, &working, &moves, &tracked)
+        };
+        assert!(
+            judged("crates/{a,b}/src/**/*.rs"),
+            "follows the move exactly"
+        );
+        assert!(
+            !judged("crates/**/*.rs"),
+            "also covers crates/c/src/other.rs"
+        );
+        assert!(
+            !judged("crates/b/src/**/*.rs"),
+            "drops crates/a/src/kept.rs"
+        );
+        assert!(
+            !judged("{crates/{a,b}/src/**/*.rs,*.md}"),
+            "also covers docs.md"
+        );
+    }
+
+    /// Fails by: an array-valued selector column (`sources`) read as no
+    /// selector at all, so a list that only follows a move is still charged.
+    #[test]
+    fn a_sources_list_that_only_follows_a_move_is_not_a_weakening() {
+        let rule = |sources: &str| {
+            format!(
+                "version = 1\n[[rule]]\nid = \"r\"\nkind = \"policy\"\nscope = \"tree\"\n\
+                 sources = {sources}\nbundle = \"policy/set\"\nseverity = \"deny\"\n\
+                 no_fix_reason = \"class 3 (x): y\"\n"
+            )
+        };
+        let base = config::parse(&rule("[\"crates/a/src/**/*.rs\"]"), "base").unwrap();
+        let working = config::parse(&rule("[\"crates/{a,b}/src/**/*.rs\"]"), "test").unwrap();
+        let moves = std::collections::BTreeMap::from([(
+            "crates/a/src/x.rs".to_owned(),
+            "crates/b/src/x.rs".to_owned(),
+        )]);
+        let tracked: std::collections::BTreeSet<String> =
+            ["crates/a/src/kept.rs", "crates/b/src/x.rs", "docs.md"]
+                .map(str::to_owned)
+                .into();
+        let changed = smell(
+            SmellId::Weakening(trust::WeakeningKind::RulePredicateChanged),
+            "rule[r].sources",
+        );
+        assert!(explained_by_moves(
+            &changed, &base, &working, &moves, &tracked
+        ));
+    }
+
+    /// Fails by: `run`'s move filter inverted, keeping only the findings a
+    /// move explains and dropping every other one.
+    #[test]
+    fn run_drops_only_the_findings_a_move_explains() {
+        let dir = crate::scratch::scratch("lint-run-moves");
+        crate::gitwrite::init_on_main(&dir).unwrap();
+        let rule = |glob: &str, extra: &str| {
+            format!(
+                "version = 1\n{extra}[[rule]]\nid = \"r\"\nkind = \"forbid\"\nglob = \"{glob}\"\n\
+                 pattern = \"x\"\nseverity = \"deny\"\nscope = \"tree\"\n\
+                 no_fix_reason = \"class 3 (x): y\"\n"
+            )
+        };
+        let config = crate::config_model::CONFIG_FILE;
+        std::fs::create_dir_all(dir.join("crates/a/src")).unwrap();
+        std::fs::create_dir_all(dir.join("crates/b/src")).unwrap();
+        std::fs::write(dir.join(config), rule("crates/a/src/**/*.rs", "")).unwrap();
+        std::fs::write(dir.join("crates/a/src/x.rs"), "x").unwrap();
+        std::fs::write(dir.join("crates/a/src/kept.rs"), "k").unwrap();
+        let paths = |list: &[&str]| list.iter().map(|p| (*p).to_owned()).collect::<Vec<_>>();
+        crate::gitwrite::commit_paths(
+            &dir,
+            &paths(&[config, "crates/a/src/x.rs", "crates/a/src/kept.rs"]),
+            "base",
+        )
+        .unwrap();
+        std::fs::remove_file(dir.join("crates/a/src/x.rs")).unwrap();
+        std::fs::write(dir.join("crates/b/src/x.rs"), "x").unwrap();
+        std::fs::write(
+            dir.join(config),
+            rule("crates/{a,b}/src/**/*.rs", "protected = []\n"),
+        )
+        .unwrap();
+        crate::gitwrite::commit_paths(
+            &dir,
+            &paths(&[config, "crates/b/src/x.rs", "crates/a/src/kept.rs"]),
+            "move",
+        )
+        .unwrap();
+        let found = run(&dir, Some("HEAD~1"), today()).unwrap();
+        let ids: Vec<&str> = found.iter().map(|smell| smell.id.as_str()).collect();
+        assert!(ids.contains(&EMPTY_PROTECTED_SET), "{ids:?}");
+        assert!(!ids.contains(&"rule-predicate-changed"), "{ids:?}");
+    }
+
+    /// Fails by: a landing path dropped only because its file moved, to a path
+    /// the working list declares, still charged as a weakening; or one moved
+    /// somewhere the list does not declare dropped as a move.
+    #[test]
+    fn a_landing_path_that_only_follows_a_move_is_not_a_weakening() {
+        let lease = |paths: &str| format!("version = 1\n[lease]\nlanding_paths = [{paths}]\n");
+        let base = config::parse(&lease("\"a.sh\", \"b.rs\""), "base").unwrap();
+        let tracked = std::collections::BTreeSet::new();
+        let judged = |paths: &str, to: &str| {
+            let moves = std::collections::BTreeMap::from([("b.rs".to_owned(), to.to_owned())]);
+            let working = config::parse(&lease(paths), "test").unwrap();
+            let found = smells(&lease(paths), "test", Some(&base), today(), &[]).unwrap();
+            let removed = found
+                .iter()
+                .find(|smell| smell.id.as_str() == "landing-path-removed")
+                .unwrap_or_else(|| panic!("{paths}: b.rs was dropped"));
+            explained_by_moves(removed, &base, &working, &moves, &tracked)
+        };
+        assert!(judged("\"a.sh\", \"c.rs\"", "c.rs"), "follows the move");
+        assert!(!judged("\"a.sh\"", "c.rs"), "the new path is not declared");
     }
 
     #[test]
@@ -1966,16 +2232,16 @@ mod tests {
     /// index removing a row here, so the positional pairing slips.
     #[test]
     fn only_this_sections_dropped_rows_leave_the_located_view() {
-        let row = |section: &str, index: usize| config::Unresolvable {
+        let row = |section: &str, index: usize| crate::config_model::Unresolvable {
             section: section.to_owned(),
-            unit: config::Unit::Row { id: None, index },
+            unit: crate::config_model::Unit::Row { id: None, index },
         };
         let dropped = [
             row("rule", 1),
             row("waiver", 0),
-            config::Unresolvable {
+            crate::config_model::Unresolvable {
                 section: "rule".to_owned(),
-                unit: config::Unit::Key("x".to_owned()),
+                unit: crate::config_model::Unit::Key("x".to_owned()),
             },
         ];
         assert_eq!(
@@ -2012,7 +2278,7 @@ mod tests {
     fn run_lints_the_working_file_and_tells_absence_from_a_failed_read() {
         let dir = crate::scratch::scratch("lint-run");
         std::fs::write(
-            dir.join(config::CONFIG_FILE),
+            dir.join(crate::config_model::CONFIG_FILE),
             "version = 1\nprotected = []\n",
         )
         .unwrap();
@@ -2025,7 +2291,7 @@ mod tests {
         let err = run(&absent, None, today()).unwrap_err();
         assert!(format!("{err:#}").contains("no config found"), "{err:#}");
         let unreadable = crate::scratch::scratch("lint-run-unreadable");
-        std::fs::create_dir_all(unreadable.join(config::CONFIG_FILE)).unwrap();
+        std::fs::create_dir_all(unreadable.join(crate::config_model::CONFIG_FILE)).unwrap();
         let err = run(&unreadable, None, today()).unwrap_err();
         assert!(!format!("{err:#}").contains("no config found"), "{err:#}");
     }
@@ -2038,13 +2304,13 @@ mod tests {
             "[workspace]\nmembers = []\n\n[workspace.package]\nrust-version = \"1.80\"\n",
         )
         .unwrap();
-        let source = dir.join(config::CONFIG_FILE);
+        let source = dir.join(crate::config_model::CONFIG_FILE);
         assert_eq!(
             workspace_rust_version(&source.to_string_lossy()).as_deref(),
             Some("1.80")
         );
         let elsewhere = crate::scratch::scratch("lint-rust-version-absent");
-        let source = elsewhere.join(config::CONFIG_FILE);
+        let source = elsewhere.join(crate::config_model::CONFIG_FILE);
         assert_eq!(workspace_rust_version(&source.to_string_lossy()), None);
     }
 
@@ -2128,7 +2394,7 @@ mod tests {
         .unwrap();
         let text = "version = 1\n\n[[deferral]]\nissue = \"TEST-1\"\nfact = \"rust-version\"\n\
                     reaches = \"1.80\"\nreason = \"waits on the pin\"\n";
-        let source = dir.join(config::CONFIG_FILE);
+        let source = dir.join(crate::config_model::CONFIG_FILE);
         let found = smells(text, &source.to_string_lossy(), None, today(), &[]).unwrap();
         assert_eq!(
             found.iter().map(|smell| smell.id).collect::<Vec<_>>(),
@@ -2163,5 +2429,3 @@ mod tests {
 
 // `config lint` over the compiled binary: the host-rules payload a path names,
 // and the located view a dropped row must not shift.
-//MUTANT-SUITE crates/batten/tests/it/config_lint.rs
-//MUTANT host-rules-path-unread|s@^    let payload = if source == "-" {$@    let payload = if true {@|a_linear_history_rule_the_config_denies_is_drift

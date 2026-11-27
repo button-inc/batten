@@ -83,9 +83,9 @@
 // carried: "a job that failed in a mise EXEC step rendered a verdict too" crates/batten/src/ci_signal.rs kind:verb crates/batten/tests/it/nonverdict.rs
 // carried: "THE FAN-IN IS EXCLUDED: final's needs-assertion is not a non-verdict failure" crates/batten/src/ci_signal.rs kind:verb crates/batten/tests/it/nonverdict.rs
 // carried: "A JOB OUTSIDE THE ROSTER IS EXCLUDED: a declining merge bot is not a failure here" crates/batten/src/ci_signal.rs kind:verb crates/batten/tests/it/nonverdict.rs
-// carried: "the conditional request is actually sent once an ETag is stored" crates/batten/src/forge.rs kind:mechanism crates/batten/tests/it/forge_window.rs
-// carried: "nonverdict-scan.bats::A 304 KEEPS THE PREVIOUS READING rather than reading as an empty window" crates/batten/src/forge.rs kind:mechanism crates/batten/tests/it/forge_window.rs
-// carried: "nonverdict-scan.bats::a 304 with no cached body is unreadable, never an empty window" crates/batten/src/forge.rs kind:mechanism crates/batten/tests/it/forge_window.rs
+// carried: "the conditional request is actually sent once an ETag is stored" crates/batten-base/src/forge.rs kind:mechanism crates/batten/tests/it/forge_window.rs
+// carried: "nonverdict-scan.bats::A 304 KEEPS THE PREVIOUS READING rather than reading as an empty window" crates/batten-base/src/forge.rs kind:mechanism crates/batten/tests/it/forge_window.rs
+// carried: "nonverdict-scan.bats::a 304 with no cached body is unreadable, never an empty window" crates/batten-base/src/forge.rs kind:mechanism crates/batten/tests/it/forge_window.rs
 // carried: "an unreadable jobs read is counted, not silently dropped" crates/batten/src/ci_signal.rs kind:verb crates/batten/tests/it/nonverdict.rs
 // changed: "an empty roster is unreadable rather than a count over every job" crates/batten/src/ci_signal.rs kind:verb this one genuinely changed rather than moved: with no roster named by `--required-check` or `$CI_REQUIRED_CHECKS` the producer now refuses before any request and writes nothing, because recording `unreadable=1` over an empty window would spell total blindness as the partial-coverage finding, and those are different facts
 // carried: "a summary line is always emitted, even when nothing failed" crates/batten/src/ci_signal.rs kind:verb crates/batten/tests/it/nonverdict.rs
@@ -519,7 +519,7 @@ fn classify(dir: &std::path::Path, forge: &std::path::Path) -> std::process::Out
         .env("CI_VERDICT_STEPS", VERDICT_STEPS)
         .env("BATTEN_REST_FIXTURE", forge)
         .current_dir(dir)
-        .output()
+        .streamed_output()
         .expect("the compiled binary runs")
 }
 
@@ -581,7 +581,7 @@ fn a_flag_outranks_the_environment_it_defaults_from() {
         .env("CI_VERDICT_STEPS", "Set up job")
         .env("BATTEN_REST_FIXTURE", &forge)
         .current_dir(&dir)
-        .output()
+        .streamed_output()
         .expect("the compiled binary runs");
     assert_eq!(measured.status.code(), Some(0), "{}", said(&measured));
     assert!(
@@ -620,7 +620,7 @@ fn the_vendored_route_runs_on_its_flags_alone() {
         .env("GH_REPO", "acme/widgets")
         .env("BATTEN_REST_FIXTURE", &forge)
         .current_dir(&dir)
-        .output()
+        .streamed_output()
         .expect("the compiled binary runs");
     assert_eq!(measured.status.code(), Some(0), "{}", said(&measured));
     assert!(
@@ -682,7 +682,7 @@ fn an_unreadable_run_list_is_could_not_look_and_an_empty_roster_is_refused() {
         .env_remove("CI_REQUIRED_CHECKS")
         .env("GH_REPO", "acme/widgets")
         .current_dir(&dir)
-        .output()
+        .streamed_output()
         .expect("the compiled binary runs");
     assert_ne!(refused.status.code(), Some(0), "{}", said(&refused));
     assert_ne!(refused.status.code(), Some(3), "{}", said(&refused));
@@ -701,7 +701,7 @@ fn an_unreadable_run_list_is_could_not_look_and_an_empty_roster_is_refused() {
         .env_remove("CI_VERDICT_STEPS")
         .env("GH_REPO", "acme/widgets")
         .current_dir(&dir)
-        .output()
+        .streamed_output()
         .expect("the compiled binary runs");
     assert_ne!(unspelled.status.code(), Some(0), "{}", said(&unspelled));
     assert_ne!(unspelled.status.code(), Some(3), "{}", said(&unspelled));

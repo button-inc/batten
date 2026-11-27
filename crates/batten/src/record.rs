@@ -56,6 +56,7 @@
 //! in this family for a secret to appear.
 
 use std::collections::BTreeMap;
+use std::fmt::Write as _;
 use std::io::{Read as _, Write};
 use std::path::{Path, PathBuf};
 
@@ -66,6 +67,12 @@ use crate::exit::ExitCode;
 use crate::facts::ToolQuery;
 use crate::resolve::Overrides;
 use crate::{forge, git, resolve, tools};
+// The section's declaration lives with the model (CLOUD-2789).
+use crate::config_check::record::safe_component;
+#[cfg(test)]
+use crate::config_check::record::validate;
+#[cfg(test)]
+use crate::config_model::RecordDeclared as Declared;
 
 /// Read the verdict lines a producer piped in.
 ///
@@ -157,6 +164,11 @@ pub fn run_tool(id: &str, overrides: &Overrides) -> Result<ExitCode> {
 /// output shape, reduced by the writer rather than by a pipeline in front of
 /// it. The keys are the caller's, so no producer's field names reach the core.
 ///
+/// **Further token keys follow the first, comma-separated** (CLOUD-2730):
+/// `<name-key>=<first>,<second>` also records `<name>/<second> <token>` for each
+/// line that carries the second field. One record then holds two readings of
+/// the same measurement, and the first key's lines are exactly what they were.
+///
 /// # Errors
 ///
 /// A [`UsageError`] for a `pick` that is not two non-empty keys, and every
@@ -192,31 +204,42 @@ fn pick_keys(pick: &str) -> Option<(&str, &str)> {
 /// (`arm=… path=…`) is not taken for an absolute one — and carries a non-empty
 /// value for both keys. A key given twice on one line reads its LAST value, the
 /// reading the retired `awk` program made.
-fn picked(raw: &str, name: &str, token: &str) -> String {
+fn picked(raw: &str, name: &str, tokens: &str) -> String {
     let opener = format!("{name}=");
+    let mut wanted = tokens.split(',').filter(|token| !token.is_empty());
+    let token = wanted.next().unwrap_or_default();
+    let further: Vec<&str> = wanted.collect();
     let mut reduced = String::new();
     for line in raw.lines().filter(|line| line.starts_with(&opener)) {
-        let mut named = None;
-        let mut value = None;
-        for (key, field) in line
+        let fields: Vec<(&str, &str)> = line
             .split_whitespace()
             .filter_map(|field| field.split_once('='))
-        {
-            if key == name {
-                named = Some(field);
+            .collect();
+        // A key given twice on one line reads its LAST value.
+        let last = |key: &str| {
+            fields
+                .iter()
+                .rev()
+                .find(|(held, _)| *held == key)
+                .map(|(_, field)| *field)
+                .filter(|field| !field.is_empty())
+        };
+        let (Some(named), Some(value)) = (last(name), last(token)) else {
+            continue;
+        };
+        reduced.push_str(named);
+        reduced.push(' ');
+        reduced.push_str(value);
+        reduced.push('\n');
+        for key in &further {
+            if let Some(value) = last(key) {
+                reduced.push_str(named);
+                reduced.push('/');
+                reduced.push_str(key);
+                reduced.push(' ');
+                reduced.push_str(value);
+                reduced.push('\n');
             }
-            if key == token {
-                value = Some(field);
-            }
-        }
-        if let (Some(named), Some(value)) = (named, value)
-            && !named.is_empty()
-            && !value.is_empty()
-        {
-            reduced.push_str(named);
-            reduced.push(' ');
-            reduced.push_str(value);
-            reduced.push('\n');
         }
     }
     reduced
@@ -224,9 +247,6 @@ fn picked(raw: &str, name: &str, token: &str) -> String {
 
 // The reduction's mutation rows, each caught by the compiled case it names in
 // the perf tier, which drives the real writer and reads the record back.
-//MUTANT-SUITE crates/batten/tests/it/perf_assert.rs
-//MUTANT pick-any-line|s@^    for line in raw.lines().filter(\x7cline\x7c line.starts_with(&opener)) {$@    for line in raw.lines() {@|a_picked_measurement_skips_a_line_that_does_not_open_with_the_name
-//MUTANT pick-empty-recorded|s@^    if text.is_empty() {$@    if false {@|a_picked_measurement_with_no_record_line_is_could_not_look
 
 /// Record `text` under the declared tool row `id`: [`run_tool`]'s tail, shared with
 /// [`run_tool_picked`] and with an in-process producer, so a verb that reduced a
@@ -250,7 +270,7 @@ pub(crate) fn store_tool(id: &str, text: &str, overrides: &Overrides) -> Result<
     // over bytes this producer never read would be a verdict about a file nobody
     // can identify, which is the one thing the digest in the key exists to make
     // impossible.
-    let Ok(bytes) = std::fs::read(&subject) else {
+    let Ok(bytes) = crate::fsio::read(&subject) else {
         return Err(UsageError::raise(format!(
             "cannot read `{}`, the input row `{id}` names, so no verdict can be keyed to it",
             row.input
@@ -301,7 +321,7 @@ pub fn run_validate(id: &str, overrides: &Overrides, err: &mut dyn Write) -> Res
         )));
     }
     let root = git::repo_root(Path::new("."))?;
-    let Ok(bytes) = std::fs::read(root.join(&row.input)) else {
+    let Ok(bytes) = crate::fsio::read(root.join(&row.input)) else {
         return Err(UsageError::raise(format!(
             "cannot read `{}`, the input row `{id}` names, so no verdict can be keyed to it",
             row.input
@@ -372,11 +392,9 @@ const RECEIPTS: &str = "batten-tools-asked";
 // THE RECEIPT'S DISCRIMINATION, over the compiled binary: skipping the check
 // re-runs a validator whose inputs did not move, and an unkeyed argv replays an
 // answer to a question nobody is asking.
-//MUTANT receipt-never-read|s@^    if already_clean(.record, .receipt, .asked) {$@    if false {@|a_clean_answer_over_the_same_bytes_and_argv_is_not_asked_again
-//MUTANT receipt-ignores-argv|s@^    let same_argv = .*$@    let same_argv = std::fs::metadata(receipt).is_ok();@|a_moved_argv_is_asked_again_over_the_same_bytes
 fn already_clean(record: &Path, receipt: &Path, asked: &str) -> bool {
-    let answered_zero = std::fs::read_to_string(record).is_ok_and(|body| body == "exit 0\n");
-    let same_argv = std::fs::read_to_string(receipt).is_ok_and(|held| held == asked);
+    let answered_zero = crate::fsio::read_to_string(record).is_ok_and(|body| body == "exit 0\n");
+    let same_argv = crate::fsio::read_to_string(receipt).is_ok_and(|held| held == asked);
     answered_zero && same_argv
 }
 
@@ -403,12 +421,6 @@ fn already_clean(record: &Path, receipt: &Path, asked: &str) -> bool {
 // the fixture forge: an unanswered conclusion recorded as a grading
 // (CLOUD-1965), a run other than `checks green`'s latest winning, a record
 // written before the fan-in answers, and a spaced name mangled into the record.
-//MUTANT-SUITE crates/batten/tests/it/record_verdicts.rs
-//MUTANT unanswered-recorded|s@^    answered.contains(.conclusion)$@    true@|an_unanswered_conclusion_is_not_recorded_as_a_grading
-//MUTANT listing-order-wins|s@^        if let Some(run) = crate::checks_green::winner(.group, .owned) {$@        if let Some(run) = group.last().copied() {@|the_latest_run_per_name_wins_by_completion_then_start
-//MUTANT fanin-ungated|s@^        && !graded.contains_key(fanin)$@        \&\& false@|nothing_is_written_until_the_fan_in_has_answered
-//MUTANT spaced-name-kept|s@^        if name.chars().any(char::is_whitespace) {$@        if false {@|a_name_with_whitespace_is_dropped_and_counted_never_mangled
-//MUTANT unknown-commit-could-not-look|s@^    if crate::rest::declared_nothing_graded(answer.status) {$@    if false {@|a_commit_the_forge_has_never_seen_records_nothing_and_passes
 #[must_use]
 pub fn graded(runs: &[crate::checks_green::Run], answered: &[&str]) -> BTreeMap<String, String> {
     let owned: Vec<String> = answered.iter().map(|word| (*word).to_owned()).collect();
@@ -571,7 +583,7 @@ fn run_forge_fetch(reference: &str, fetch: &Fetch, err: &mut dyn Write) -> Resul
             "`{reference}` resolves to no commit, so there is no sha to key this verdict to"
         )));
     };
-    let Some(repo) = crate::repo_slug(root) else {
+    let Some(repo) = crate::race::repo_slug(root) else {
         writeln!(
             err,
             "batten: record forge: could not look: no forge remote names the repository"
@@ -618,6 +630,20 @@ fn run_forge_fetch(reference: &str, fetch: &Fetch, err: &mut dyn Write) -> Resul
         return Ok(ExitCode::Internal);
     }
     let runs = crate::pr_watch::runs_from_body(&answer.body);
+    // A MANUFACTURED FAN-IN RED IS NO ANSWER (CLOUD-2317 against CLOUD-1831): a
+    // draft's `final` fails because every job it needs skipped, and recording it
+    // as a verdict made `forge check red` refuse every head pushed as a draft,
+    // the push the workflow asks for early and often. Nothing recorded is
+    // could-not-look, which is what a draft's run is about the code.
+    if let Some(fanin) = fetch.fanin.as_deref()
+        && crate::checks_green::fanin_failure_manufactured(&runs, &fetch.answered, fanin)
+    {
+        writeln!(
+            err,
+            "record forge: the fan-in failed only because its siblings did not answer (a draft or cancelled run); nothing recorded"
+        )?;
+        return Ok(ExitCode::Success);
+    }
     let answered: Vec<&str> = fetch.answered.iter().map(String::as_str).collect();
     let conclusions = graded(&runs, &answered);
     let Some((body, dropped)) = forge_body(&conclusions, fetch.fanin.as_deref()) else {
@@ -680,7 +706,6 @@ fn profile_or_default(named: Option<String>) -> String {
 /// names a suite this tree does not track — see [`crate::suites::derive`], where
 /// all four are could-not-look and none is an empty corpus. An internal error
 /// when the corpus cannot be written.
-//MUTANT retired-bats-report-shadows-nextest|s@^    if tracked.is_empty() {$@    if !root.join(crate::suites::REPORT).is_file() {@|a_retired_bats_report_does_not_shadow_the_nextest_one
 pub fn run_suites(write: bool, out: &mut dyn Write, err: &mut dyn Write) -> Result<ExitCode> {
     let root = git::repo_root(Path::new("."))?;
     let root = Path::new(&root);
@@ -761,7 +786,7 @@ pub fn run(
             let fetch = forge_fetch(fetch, fanin, answered.as_deref())?;
             run_forge(&reference, fetch.as_ref(), overrides, err)
         }
-        crate::cli::RecordCommand::Plan => run_plan(),
+        crate::cli::RecordCommand::Plan { replace } => run_plan(replace, out),
         crate::cli::RecordCommand::Closes => run_closes(overrides),
         crate::cli::RecordCommand::Named { family } => run_named(&family),
         crate::cli::RecordCommand::Derive { family, inputs } => {
@@ -899,157 +924,6 @@ fn claim_of(git_dir: &Path, branch: &str) -> Option<String> {
     crate::claim::claimed_token(&git_dir.join("batten-receipts"), branch)
 }
 
-/// The record names this crate's own VERBS write, as opposed to the ones a
-/// `[[recorder]]` row mints from a tool envelope (CLOUD-472).
-///
-/// # Why a verb writes this at all, which is the whole design decision
-///
-/// A hook mediates a call the agent makes to somebody ELSE's tool, so it is
-/// per-harness by nature: `TaskCreate`/`TaskUpdate` here, `write_todos` on
-/// Gemini CLI, `todowrite` on `OpenCode`, `update_plan` on Codex. Recording from
-/// those envelopes needs a spelling per host, and its failure mode is the one
-/// this whole module exists to name — an unsurveyed harness, a tool a setting
-/// switched off, and an agent that did as it was told all produce NOTHING, so the gate reads
-/// clean. `OpenCode` makes that concrete: `todowrite` is denied to subagents at
-/// session creation regardless of configuration.
-///
-/// A verb inverts the direction. The agent TELLS the engine, so a missing record
-/// refuses on every harness identically — no survey, no per-host spelling, and no
-/// setting that can quietly disarm it. Discovery still has a job (reporting which
-/// native surface exists, so a mirror can be kept for the human's benefit), but
-/// the gate reads this store and only this store.
-/// `claim` is here for a second reason worth stating: `claim check` writes it and
-/// nothing read it from a module before, but it is the honest signal for "this
-/// branch is doing tracked work". A gate that demands a plan from EVERY tree with
-/// a diff refuses every scratch fixture and every consumer checkout — measured,
-/// it reddened four `cli.rs` cases that only wanted to exercise other rules.
-/// Keyed to a claim, it asks the question exactly where the answer is owed.
-/// `lap` joins them for the same reason and with one difference worth stating:
-/// it is the only one of the three that is a HISTORY rather than a current
-/// state. `land::replay` appends a line per lap, and
-/// `replay halt conflict` reads the last one — so a conflict resolved by
-/// a later lap stops refusing, which a store keeping only the newest line could
-/// not express.
-pub const VERB_WRITTEN: &[&str] = &["claim", "plan", crate::land::LAP_RECORD];
-
-/// One family a producer writes through [`run_named`], declared by the consumer
-/// (CLOUD-1810).
-///
-/// # The gap this closes, and why neither existing surface could
-///
-/// [`run_named`] writes a branch-keyed store, and until this existed nothing
-/// could read one. [`crate::rules`]' projection builds the set of families it
-/// hands a module as the declared [`crate::recorder::Declared`] rows unioned with
-/// [`VERB_WRITTEN`], and a caller-named family is in neither:
-///
-/// - [`VERB_WRITTEN`] is a fixed list because the ENGINE owns both halves of
-///   those three stores. A consumer's family cannot join it without this crate
-///   knowing a consumer's name, which non-negotiable rule 1 forbids outright.
-/// - A `[[recorder]]` cannot express one either: [`crate::recorder::Declared`]
-///   requires `tool`, because that table selects on a mediated tool call. A
-///   family a `mise` task writes answers to no tool call at all.
-///
-/// So the store was written, the row was registered, the module read
-/// `input.tree.records["<family>"]` — and the key was absent, every rule beneath
-/// it undefined, and the gate green. Measured over `branch-age`: a record naming
-/// a 36-day branch against a two-day threshold, `batten check` exit `0`. That is
-/// CLOUD-1707's dead gate one surface over.
-///
-/// # Declared rather than swept, which is the whole design
-///
-/// The projection could have read whatever files happen to sit in the store
-/// directory. It must not, for the reason [`crate::rules`] already gives about a
-/// sibling fact: a family set cannot become an ambient sweep of whatever records
-/// happen to be on disk, because then a leftover file from a retired producer
-/// answers as a live measurement and nothing names what SHOULD be there.
-///
-/// A declaration is also what makes could-not-look readable. An absent record
-/// under a DECLARED family is "the producer did not run"; the same absence under
-/// no declaration is not a reading at all, and collapsing the two is the error in
-/// the fact model this whole store exists to avoid.
-///
-/// # Config rather than a column on the rule that reads it
-///
-/// [`crate::rules`] settles this at its own call site: the fact is what THIS
-/// repository's producers accumulated, so a per-rule declaration would be a
-/// second place for the same answer to live. Two rules reading one family is
-/// ordinary; two rules disagreeing about what writes it is not expressible.
-#[derive(
-    Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize, schemars::JsonSchema,
-)]
-#[serde(deny_unknown_fields, rename_all = "kebab-case")]
-pub struct Declared {
-    /// The family name, which is also its file name under the store.
-    ///
-    /// Held to [`safe_component`]'s grammar at validation rather than at write
-    /// time alone, so a family that could never be written is refused while its
-    /// author is watching instead of on the first producer run.
-    pub record: String,
-    /// What writes it, as a runnable command.
-    ///
-    /// **Never executed, and that is not a gap.** House style §5 keeps the spawn
-    /// outside `check`, so this is a pointer — the job `[[verdict.route]]`'s
-    /// `target` already does. What it buys is that a declared family always says
-    /// who fills it: a store with no producer is a row that can only ever read
-    /// could-not-look, and the moment to catch that is at config load rather than
-    /// after a green run nobody questions.
-    pub writer: String,
-}
-
-/// Prove every declared family well formed (CLOUD-253's obligation).
-///
-/// # Errors
-///
-/// A [`UsageError`] (→ exit `1`) for a family whose name is not a single path
-/// component, for an empty `writer`, and for two rows naming one family — the
-/// last because a second row is a second answer to "who writes this", which is
-/// the one question the table exists to settle.
-pub fn validate(declared: &[Declared], recorders: &[crate::recorder::Declared]) -> Result<()> {
-    let mut seen: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
-    for family in declared {
-        // ONE NAME, ONE SOURCE. The projection resolves a `[[recorder]]` row's
-        // record, then a `[[record]]` family, then a verb-written store, and
-        // keeps the first — so a family sharing a name with either was silently
-        // shadowed, its producer writing a store no module reads as its own.
-        if VERB_WRITTEN.contains(&family.record.as_str()) {
-            return Err(UsageError::raise(format!(
-                "record `{}` is a store the engine writes itself; a declared family \
-                 of that name would be a second writer for it",
-                family.record
-            )));
-        }
-        if recorders
-            .iter()
-            .any(|recorder| recorder.record == family.record)
-        {
-            return Err(UsageError::raise(format!(
-                "record `{}` is already a `[[recorder]]` row's record; a declared family \
-                 of that name would be shadowed by it",
-                family.record
-            )));
-        }
-        // The same grammar the writer enforces, checked here so the refusal lands
-        // at load. A name that escapes its store is why `safe_component` exists;
-        // reaching it only from `run_named` would let a config sit green until a
-        // producer ran.
-        safe_component("record", &family.record)?;
-        if family.writer.trim().is_empty() {
-            return Err(UsageError::raise(format!(
-                "record `{}`: `writer` names what fills this store and is empty, so the \
-                 family could only ever read could-not-look",
-                family.record
-            )));
-        }
-        if !seen.insert(family.record.as_str()) {
-            return Err(UsageError::raise(format!(
-                "record `{}` is declared twice; one family has one writer",
-                family.record
-            )));
-        }
-    }
-    Ok(())
-}
-
 /// The statuses a plan entry may carry.
 ///
 /// The vocabulary four harnesses already converged on, which is what makes a
@@ -1060,13 +934,20 @@ const PLAN_STATUSES: [&str; 4] = ["pending", "in_progress", "completed", "delete
 
 /// Record this branch's plan: one `<id> <status>` line per entry.
 ///
+/// MERGED BY ID, never replaced unless asked (CLOUD-2807): recording ten new
+/// entries used to wipe the 28 already in the store, with exit 0 and no
+/// output, and `plan declare held` reads that store, so a dropped entry was a
+/// declared item silently no longer held. Each input line now sets its id's
+/// status and every id it does not name is kept; `--replace` keeps the
+/// whole-store rewrite for a deliberate one. One count line says what moved.
+///
 /// # Errors
 ///
 /// A [`UsageError`] when a line is not `<id> <status>`, when a status is not one
 /// of [`PLAN_STATUSES`], or when there is no branch to key on — a detached HEAD
 /// has nothing to record against, exactly as the claim receipt has nothing to key
 /// on there. An internal error when the store cannot be written.
-pub fn run_plan() -> Result<ExitCode> {
+pub fn run_plan(replace: bool, out: &mut dyn Write) -> Result<ExitCode> {
     let raw = verdict_lines()?;
     plan_validated(&raw)?;
 
@@ -1082,11 +963,156 @@ pub fn run_plan() -> Result<ExitCode> {
         ));
     };
     let claim = claim_of(&git_dir, &branch);
-    store(
-        &crate::recorder::record_path(&git_dir, "plan", &branch, claim.as_deref()),
-        &raw,
+    let path = crate::recorder::record_path(&git_dir, "plan", &branch, claim.as_deref());
+    let held = if replace {
+        String::new()
+    } else {
+        crate::fsio::read_to_string(&path).unwrap_or_default()
+    };
+    let merged = plan_merged(&held, &raw);
+    store(&path, &merged.body)?;
+    writeln!(
+        out,
+        "record plan: added {}, changed {}, kept {}",
+        merged.added, merged.changed, merged.kept
     )?;
     Ok(ExitCode::Success)
+}
+
+/// A plan store with new lines merged in by id, and what the merge moved.
+#[derive(Debug, PartialEq, Eq)]
+struct PlanMerge {
+    /// The store's new text: one `<id> <status>` line per entry.
+    body: String,
+    /// Ids the store did not hold.
+    added: usize,
+    /// Held ids whose status the input changed.
+    changed: usize,
+    /// Held ids the input left as they were, named or not.
+    kept: usize,
+}
+
+/// `held` with each `incoming` line setting its id's status. Held entries keep
+/// their order; new ids follow in input order; a repeated id takes its last
+/// line. Blank lines are dropped.
+fn plan_merged(held: &str, incoming: &str) -> PlanMerge {
+    let entry = |line: &str| {
+        let mut words = line.split_whitespace();
+        Some((words.next()?.to_owned(), words.next()?.to_owned()))
+    };
+    let mut entries: Vec<(String, String)> = held.lines().filter_map(entry).collect();
+    let mut news: Vec<(String, String)> = Vec::new();
+    for (id, status) in incoming.lines().filter_map(entry) {
+        match news.iter_mut().find(|(seen, _)| *seen == id) {
+            Some(slot) => slot.1 = status,
+            None => news.push((id, status)),
+        }
+    }
+    let (mut added, mut changed) = (0, 0);
+    for (id, status) in news {
+        match entries.iter_mut().find(|(held_id, _)| *held_id == id) {
+            Some(slot) if slot.1 != status => {
+                slot.1 = status;
+                changed += 1;
+            }
+            Some(_) => {}
+            None => {
+                entries.push((id, status));
+                added += 1;
+            }
+        }
+    }
+    let kept = entries.len() - added - changed;
+    let body = entries
+        .iter()
+        .fold(String::new(), |mut text, (id, status)| {
+            let _ = writeln!(text, "{id} {status}");
+            text
+        });
+    PlanMerge {
+        body,
+        added,
+        changed,
+        kept,
+    }
+}
+
+/// Where `record named <family>` keeps `family` for `branch`: the same
+/// claim-partitioned path its writer derives, so a reader cannot point at a
+/// different file than the verb wrote.
+#[must_use]
+pub fn family_path(git_dir: &Path, branch: &str, family: &str) -> PathBuf {
+    let claim = claim_of(git_dir, branch);
+    crate::recorder::record_path(git_dir, family, branch, claim.as_deref())
+}
+
+/// The bullets under a row body's "Mechanism (decided)" heading (CLOUD-2810).
+///
+/// The heading is matched by its words at any markdown level or in bold
+/// (`## Mechanism (decided)`, `**Mechanism (decided)**`). A bullet is a line
+/// beginning `* ` or `- ` at column zero; an indented line continues the bullet
+/// above it, never a new one. The section ends at the next heading or bold line.
+#[must_use]
+pub fn mechanism_bullets(body: &str) -> usize {
+    let heading = |line: &str| {
+        line.trim_start_matches('#')
+            .trim()
+            .trim_matches('*')
+            .trim()
+            .eq_ignore_ascii_case("Mechanism (decided)")
+    };
+    let mut lines = body.lines().skip_while(|line| !heading(line));
+    if lines.next().is_none() {
+        return 0;
+    }
+    lines
+        .take_while(|line| !line.starts_with('#') && !line.starts_with("**"))
+        .filter(|line| line.starts_with("* ") || line.starts_with("- "))
+        .count()
+}
+
+/// Record each claimed row's decided-mechanism bullets as `pending` plan
+/// entries keyed `<row>-<n>` (CLOUD-2810), so `plan declare held` holds the lap
+/// until each is built, as it does for any entry.
+///
+/// An id the store already holds KEEPS ITS STATUS: re-claiming re-derives the
+/// entries without reopening a completed one. Returns how many were added.
+///
+/// # Errors
+///
+/// An internal error when the store cannot be written.
+pub fn plan_mechanisms(git_dir: &Path, branch: &str, rows: &[(&str, &str)]) -> Result<usize> {
+    let incoming: String = rows
+        .iter()
+        .flat_map(|(id, body)| {
+            (1..=mechanism_bullets(body)).map(move |n| format!("{id}-{n} pending\n"))
+        })
+        .collect();
+    if incoming.is_empty() {
+        return Ok(0);
+    }
+    let claim = claim_of(git_dir, branch);
+    let path = crate::recorder::record_path(git_dir, "plan", branch, claim.as_deref());
+    let held = crate::fsio::read_to_string(&path).unwrap_or_default();
+    let held_ids: std::collections::BTreeSet<&str> = held
+        .lines()
+        .filter_map(|line| line.split_whitespace().next())
+        .collect();
+    let fresh: String = incoming
+        .lines()
+        .filter(|line| {
+            line.split_whitespace()
+                .next()
+                .is_some_and(|id| !held_ids.contains(id))
+        })
+        .fold(String::new(), |mut text, line| {
+            text.push_str(line);
+            text.push('\n');
+            text
+        });
+    let merged = plan_merged(&held, &fresh);
+    store(&path, &merged.body)?;
+    Ok(merged.added)
 }
 
 /// Refuse a plan whose line is not `<id> <status>` or whose status is not one
@@ -1142,29 +1168,6 @@ const JOURNAL_STORE: &str = "batten-journals";
 /// writer (the reclaim census) lands where `record fold` reads.
 pub(crate) fn journal_store(git_dir: &Path, family: &str) -> PathBuf {
     git_dir.join(JOURNAL_STORE).join(family)
-}
-
-/// A family name that cannot escape its store.
-///
-/// **A path component, checked rather than trusted.** The family and the key both
-/// reach this from a caller's argv, and a `..` or a `/` in either would put a
-/// record outside the store the reader looks in — which is not a security
-/// boundary here so much as a silent miss: the write succeeds, the read finds
-/// nothing, and the gate reads clean.
-pub(crate) fn safe_component(what: &str, value: &str) -> Result<String> {
-    let clean = value.trim();
-    if clean.is_empty()
-        || clean == "."
-        || clean == ".."
-        || clean.contains('/')
-        || clean.contains('\\')
-        || clean.contains('\0')
-    {
-        return Err(UsageError::raise(format!(
-            "the {what} must be one path component and must not be `.`, `..`, or contain a separator"
-        )));
-    }
-    Ok(clean.to_owned())
 }
 
 /// The `--input <key>=<value>` tokens a `record` leaf was handed, as a map.
@@ -1341,9 +1344,6 @@ fn graph_for(
 
 // The resolution's mutation rows. Each is caught by the compiled case it names,
 // which drives a scratch crate through the real `cargo`.
-//MUTANT-SUITE crates/batten/tests/it/evaluator_closure.rs
-//MUTANT resolve-unlocked|s@\["cargo", "metadata", "--locked", "--format-version", "1"\]@["cargo", "metadata", "--format-version", "1"]@|a_resolution_that_would_rewrite_the_lockfile_is_could_not_look
-//MUTANT resolve-ignored|s@^    let Some(platform) = inputs.get("resolve") else {$@    let Some(platform) = inputs.get("no-such-input") else {@|the_engine_resolves_a_locked_crate_itself
 
 /// Derive one family's record from its input and write it.
 ///
@@ -1478,9 +1478,6 @@ pub enum Decision {
 ///
 /// As [`run_derive`]: a [`UsageError`] for an unknown family, a malformed input
 /// or a tree with no branch to key on; an internal error for an unwritable store.
-//MUTANT-SUITE crates/batten/tests/it/finding_sink.rs
-//MUTANT subdirectory-decides|s@^        && !Path::new(crate::config::CONFIG_FILE).is_file()$@        \&\& false@|a_session_in_a_subdirectory_abstains_rather_than_failing
-//MUTANT subdirectory-keeps-stale|s@^            remove_stale(&path)?;$@            let _ = \&path;@|a_subdirectory_abstention_clears_a_record_left_at_the_root
 pub fn decide_record(family: &str, inputs: &[String], overrides: &Overrides) -> Result<Decision> {
     let inputs = inputs_of("record decide", inputs)?;
     let family = safe_component("family", family)?;
@@ -1511,7 +1508,7 @@ pub fn decide_record(family: &str, inputs: &[String], overrides: &Overrides) -> 
     // and the abstention stands rather than becoming that key's usage error.
     if overrides.config_from.is_none()
         && overrides.config_in.is_none()
-        && !Path::new(crate::config::CONFIG_FILE).is_file()
+        && !Path::new(crate::config_model::CONFIG_FILE).is_file()
     {
         if let Ok(path) = named_path("record decide", &family) {
             remove_stale(&path)?;
@@ -1588,7 +1585,7 @@ fn turn_reading(
     let Some(path) = crate::turn::transcript_of(&stdin) else {
         return Ok(None);
     };
-    let Ok(body) = std::fs::read_to_string(&path) else {
+    let Ok(body) = crate::fsio::read_to_string(&path) else {
         return Ok(None);
     };
     let vocabulary = crate::turn::Vocabulary {
@@ -1689,6 +1686,7 @@ fn derive_reading(
         }
         "evaluator-closure" => evaluator_closure_reading(inputs, family, overrides, document)?,
         "macos-link" => macos_link_reading(inputs, family, overrides, document)?,
+        "crate-reach" => crate_reach_reading(inputs, family, document)?,
         // The `tracker-hygiene` preset's five readings (CLOUD-843). The module
         // owns the reading; this arm hands it the consumer's pattern table, the
         // checkout it walks, and stdin — nothing here spawns.
@@ -1801,6 +1799,53 @@ fn evaluator_closure_reading(
     Ok(reading)
 }
 
+/// Which workspace packages each workspace package reaches (CLOUD-2798).
+///
+/// One `reach <package> <reached,…>` line per member, both sorted, the reached
+/// list holding only OTHER workspace members in the activated graph
+/// ([`crate::cargo_graph`]'s activation rule). `crate reach unsafe` compares
+/// each line with that package's `crate-allow-<package>` pattern, so a
+/// `Cargo.toml` edge that regrows a cycle across a crate split is refused. No
+/// package name is written here: the members are the graph's own (rule 1).
+///
+/// # Errors
+///
+/// A [`UsageError`] for an unaccepted input or stdin that is not a `cargo
+/// metadata` document; an internal error when a `resolve` the engine ran could
+/// not look.
+fn crate_reach_reading(
+    inputs: &BTreeMap<String, String>,
+    family: &str,
+    document: Option<&str>,
+) -> Result<String> {
+    only_these_inputs(inputs, family, &["resolve"])?;
+    let graph = graph_for(inputs, family, document)?;
+    let members: BTreeMap<String, String> = graph
+        .member_roots()
+        .into_iter()
+        .filter_map(|id| graph.name_of(&id).map(|name| (name.to_owned(), id)))
+        .collect();
+    let member_ids: std::collections::BTreeSet<&str> =
+        members.values().map(String::as_str).collect();
+    let mut lines = String::new();
+    for (name, id) in &members {
+        let reached: std::collections::BTreeSet<&str> = graph
+            .reachable([id.clone()])
+            .iter()
+            .filter(|other| other.as_str() != id && member_ids.contains(other.as_str()))
+            .filter_map(|other| graph.name_of(other))
+            .collect();
+        lines.push_str("reach ");
+        lines.push_str(name);
+        if !reached.is_empty() {
+            lines.push(' ');
+            lines.push_str(&reached.into_iter().collect::<Vec<_>>().join(","));
+        }
+        lines.push('\n');
+    }
+    Ok(lines)
+}
+
 /// What this tree BUILDS, and which of it needs a platform SDK to link.
 ///
 /// [`evaluator_closure_reading`]'s sibling, and the two differ only in their
@@ -1836,8 +1881,10 @@ fn macos_link_reading(
     // THE WALK STARTS AT THE WORKSPACE MEMBERS, because the question is
     // about everything this tree builds — unlike `evaluator-closure`,
     // whose question is about one package's sub-closure. That is the
-    // only difference between the two callers of this graph.
-    let built = graph.reachable(graph.member_roots());
+    // only difference between the two callers of this graph. LINKED, not merely
+    // reachable: a proc-macro or build-only subgraph runs on the host and links
+    // nothing into the macOS artifact.
+    let built = graph.linked(graph.member_roots());
     let mut lines = format!("scanned {}\n", built.len());
     for (name, id) in graph.named_in_order(&built) {
         match graph.links_of(id) {
@@ -2007,7 +2054,7 @@ pub(crate) fn store_named(verb: &str, family: &str, body: &str) -> Result<()> {
 /// read — which is not the same answer as one that is absent.
 pub(crate) fn load_named(verb: &str, family: &str) -> Result<Option<String>> {
     let path = named_path(verb, family)?;
-    match std::fs::read_to_string(&path) {
+    match crate::fsio::read_to_string(&path) {
         Ok(body) => Ok(Some(body)),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(error) => Err(error).with_context(|| format!("read the record {}", path.display())),
@@ -2055,7 +2102,7 @@ pub(crate) fn clear_kind<'a>(
         // A FAMILY READ OFF THE RAW CONFIG is held to the grammar validation
         // holds it to, so it can never name a path outside the store.
         let path = named_path(verb, &safe_component("record family", family)?)?;
-        if std::fs::read_to_string(&path).is_ok_and(|body| body.starts_with(&line)) {
+        if crate::fsio::read_to_string(&path).is_ok_and(|body| body.starts_with(&line)) {
             remove_stale(&path)?;
         }
     }
@@ -2148,7 +2195,7 @@ fn keyed_path(git_dir: &Path, family: &str, key: &str) -> PathBuf {
 /// path a second time beside [`keyed_path`] would be a second spelling of the key
 /// the two verbs share. `family` must already be a single path component.
 pub(crate) fn keyed_read(git_dir: &Path, family: &str, key: &str) -> Option<String> {
-    std::fs::read_to_string(keyed_path(git_dir, family, key)).ok()
+    crate::fsio::read_to_string(keyed_path(git_dir, family, key)).ok()
 }
 
 /// Write one keyed record's value whole, through the same store as
@@ -2159,6 +2206,93 @@ pub(crate) fn keyed_read(git_dir: &Path, family: &str, key: &str) -> Option<Stri
 /// An internal error when the store cannot be written.
 pub(crate) fn keyed_write(git_dir: &Path, family: &str, key: &str, value: &str) -> Result<()> {
     store(&keyed_path(git_dir, family, key), value)
+}
+
+/// Remove one keyed record, where an absent one is already the answer.
+///
+/// # Errors
+///
+/// An internal error when a present record cannot be removed.
+pub(crate) fn keyed_remove(git_dir: &Path, family: &str, key: &str) -> Result<()> {
+    remove_stale(&keyed_path(git_dir, family, key))
+}
+
+/// The directory one group of a grouped family occupies.
+///
+/// A GROUPED FAMILY holds many records per group, one per key (CLOUD-2784): a
+/// step's receipts, one per key it passed under, so a return to a tree it
+/// already judged finds its receipt. Both components are digests, on
+/// [`keyed_path`]'s reason.
+fn keyed_group_dir(git_dir: &Path, family: &str, group: &str) -> PathBuf {
+    git_dir
+        .join(KEYED_STORE)
+        .join(family)
+        .join(crate::tools::digest(group.as_bytes()))
+}
+
+/// The record path for one (family, group, key) triple.
+fn keyed_group_path(git_dir: &Path, family: &str, group: &str, key: &str) -> PathBuf {
+    keyed_group_dir(git_dir, family, group).join(crate::tools::digest(key.as_bytes()))
+}
+
+/// One grouped record's value, or `None` where it is absent or unreadable.
+pub(crate) fn keyed_group_read(
+    git_dir: &Path,
+    family: &str,
+    group: &str,
+    key: &str,
+) -> Option<String> {
+    crate::fsio::read_to_string(keyed_group_path(git_dir, family, group, key)).ok()
+}
+
+/// Write one grouped record's value whole.
+///
+/// # Errors
+///
+/// An internal error when the store cannot be written.
+pub(crate) fn keyed_group_write(
+    git_dir: &Path,
+    family: &str,
+    group: &str,
+    key: &str,
+    value: &str,
+) -> Result<()> {
+    store(&keyed_group_path(git_dir, family, group, key), value)
+}
+
+/// Every record of one group, as (file name, value) pairs. An unreadable entry
+/// is left out: it is no receipt, and eviction ranks only what it can read.
+pub(crate) fn keyed_group_entries(
+    git_dir: &Path,
+    family: &str,
+    group: &str,
+) -> Vec<(String, String)> {
+    let Ok(entries) = std::fs::read_dir(keyed_group_dir(git_dir, family, group)) else {
+        return Vec::new();
+    };
+    entries
+        .filter_map(Result::ok)
+        .filter_map(|entry| {
+            let name = entry.file_name().to_str()?.to_owned();
+            let value = crate::fsio::read_to_string(entry.path()).ok()?;
+            Some((name, value))
+        })
+        .collect()
+}
+
+/// Remove one grouped record by its file name, as [`keyed_group_entries`]
+/// names it. An absent one is already the answer.
+///
+/// # Errors
+///
+/// An internal error when a present record cannot be removed.
+pub(crate) fn keyed_group_remove(
+    git_dir: &Path,
+    family: &str,
+    group: &str,
+    name: &str,
+) -> Result<()> {
+    remove_stale(&keyed_group_dir(git_dir, family, group).join(name))
 }
 
 /// Put one value into the keyed family, read from stdin.
@@ -2228,7 +2362,7 @@ pub fn run_journal(family: &str) -> Result<ExitCode> {
 pub fn run_keyed_show(family: &str, key: &str, out: &mut dyn std::io::Write) -> Result<ExitCode> {
     let family = safe_component("family", family)?;
     let git_dir = git::git_dir(Path::new("."))?;
-    match std::fs::read_to_string(keyed_path(&git_dir, &family, key)) {
+    match crate::fsio::read_to_string(keyed_path(&git_dir, &family, key)) {
         Ok(value) => {
             writeln!(out, "hit")?;
             write!(out, "{value}")?;
@@ -2269,7 +2403,7 @@ pub fn run_journal_show(family: &str, out: &mut dyn std::io::Write) -> Result<Ex
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
-
+    #[cfg(test)]
     /// A committed repository carrying `files`, entered as this case's working
     /// directory. nextest runs each case in its own process, so the move is
     /// this case's; its state root is contained for the same reason.
@@ -2353,6 +2487,26 @@ mod tests {
         assert!(plan_validated("a pending\n\nb completed\n").is_ok());
         assert!(plan_validated("a bogus\n").is_err());
         assert!(plan_validated("a\n").is_err());
+    }
+
+    /// Fails by: an id the input does not name dropped, a named one not
+    /// updated, or a count that disagrees with what moved (CLOUD-2807).
+    #[test]
+    fn a_merge_keeps_every_id_the_input_does_not_name() {
+        let merged = plan_merged(
+            "a completed\nb pending\nc pending\n",
+            "b completed\nc pending\nd pending\nd in_progress\n",
+        );
+        assert_eq!(
+            merged,
+            PlanMerge {
+                body: "a completed\nb completed\nc pending\nd in_progress\n".to_owned(),
+                added: 1,
+                changed: 1,
+                kept: 2,
+            }
+        );
+        assert_eq!(plan_merged("", "x pending\n").body, "x pending\n");
     }
 
     /// Fails by: a non-tracker family clearing the tracker records, or a
@@ -2528,6 +2682,55 @@ mod tests {
         );
     }
 
+    /// Fails by: a member's own name in its reach, an external package listed,
+    /// a transitive member missed, or the lines out of sorted order (CLOUD-2798).
+    #[test]
+    fn the_crate_reach_reading_lists_each_members_reached_members_sorted() {
+        enter_repo("record-crate-reach", &[("batten.toml", PATTERNS)]);
+        let package = |name: &str, deps: &[&str]| {
+            serde_json::json!({
+                "id": format!("{name} 1.0.0"),
+                "name": name,
+                "dependencies": deps.iter().map(|dep| serde_json::json!({ "name": dep })).collect::<Vec<_>>(),
+            })
+        };
+        let node = |name: &str, deps: &[&str]| {
+            serde_json::json!({
+                "id": format!("{name} 1.0.0"),
+                "features": [],
+                "deps": deps
+                    .iter()
+                    .map(|dep| serde_json::json!({ "pkg": format!("{dep} 1.0.0") }))
+                    .collect::<Vec<_>>(),
+            })
+        };
+        // `top` reaches `mid` directly and `low` through it; `ext` is not a
+        // member and is never listed.
+        let meta = serde_json::json!({
+            "packages": [
+                package("top", &["mid", "ext"]),
+                package("mid", &["low"]),
+                package("low", &[]),
+                package("ext", &[]),
+            ],
+            "resolve": { "nodes": [
+                node("top", &["mid", "ext"]),
+                node("mid", &["low"]),
+                node("low", &[]),
+                node("ext", &[]),
+            ] },
+            "workspace_members": ["top 1.0.0", "mid 1.0.0", "low 1.0.0"],
+        });
+        let reading = derive_reading(
+            "crate-reach",
+            &inputs(&[]),
+            &Overrides::default(),
+            Some(&meta.to_string()),
+        )
+        .unwrap();
+        assert_eq!(reading, "reach low\nreach mid low\nreach top low,mid\n");
+    }
+
     /// Fails by: a vendored `links` crate reported, an unvendored one missed,
     /// or a framework crate matched by anything but its pattern.
     #[test]
@@ -2637,5 +2840,62 @@ mod tests {
         run_suites(true, &mut out, &mut err).unwrap();
         assert!(out.is_empty());
         assert!(corpus.is_file());
+    }
+
+    /// Fails by: a group's records not listed (eviction ranks nothing and
+    /// the store grows a receipt per key), listed under another name than the
+    /// one `keyed_group_remove` takes, or another group's listed with them.
+    #[test]
+    fn a_groups_records_are_listed_by_the_name_that_removes_them() {
+        let git_dir = crate::scratch::scratch("record-keyed-group");
+        keyed_group_write(&git_dir, "fam", "g", "k1", "one").unwrap();
+        keyed_group_write(&git_dir, "fam", "g", "k2", "two").unwrap();
+        keyed_group_write(&git_dir, "fam", "other", "k3", "three").unwrap();
+        let mut listed = keyed_group_entries(&git_dir, "fam", "g");
+        listed.sort();
+        let mut expected = vec![
+            (crate::tools::digest(b"k1"), String::from("one")),
+            (crate::tools::digest(b"k2"), String::from("two")),
+        ];
+        expected.sort();
+        assert_eq!(listed, expected);
+        keyed_group_remove(&git_dir, "fam", "g", &crate::tools::digest(b"k1")).unwrap();
+        assert_eq!(keyed_group_read(&git_dir, "fam", "g", "k1"), None);
+        assert_eq!(keyed_group_entries(&git_dir, "fam", "g").len(), 1);
+    }
+
+    /// Fails by: a `--config-in` authority ignored because the working
+    /// directory holds no `batten.toml` of its own, so the reading abstains
+    /// where the named authority should be read. With no inputs, reading it
+    /// stops at the first one the family requires.
+    #[test]
+    fn a_named_authority_is_read_where_the_directory_holds_none() {
+        let authority = crate::scratch::scratch("decide-config-in-authority").join("repo");
+        std::fs::create_dir_all(&authority).unwrap();
+        std::fs::write(
+            authority.join(crate::config_model::CONFIG_FILE),
+            "version = 1\n",
+        )
+        .unwrap();
+        crate::gitwrite::commit_paths(
+            &authority,
+            &[crate::config_model::CONFIG_FILE.to_owned()],
+            "authority",
+        )
+        .unwrap();
+        let repo = enter_repo("decide-config-in", &[("README.md", "x\n")]);
+        assert!(
+            !repo.join(crate::config_model::CONFIG_FILE).exists(),
+            "the premise: no authority here"
+        );
+        let overrides = Overrides {
+            config_in: Some(authority.display().to_string()),
+            ..Overrides::default()
+        };
+        let said = decide_record(TURN_FAMILY, &[], &overrides)
+            .map(|decision| format!("{decision:?}"))
+            .unwrap_err()
+            .to_string();
+        assert!(said.contains("--input citation="), "{said}");
     }
 }

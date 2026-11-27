@@ -25,6 +25,31 @@ fn root_table() -> RootExports {
     }
 }
 
+/// Every root name the crate root re-exports from a WORKSPACE crate: the leaf
+/// of each `pub use batten_<x>::<name>;`, read off the root's own `use` edges.
+fn workspace_shims() -> std::collections::BTreeSet<String> {
+    let members: std::collections::BTreeSet<String> = std::fs::read_dir("..")
+        .expect("the workspace's crates directory")
+        .flatten()
+        .filter(|entry| entry.path().join("Cargo.toml").is_file())
+        .filter_map(|entry| {
+            entry
+                .file_name()
+                .to_str()
+                .map(|name| name.replace('-', "_"))
+        })
+        .collect();
+    let source = std::fs::read_to_string("src/lib.rs").expect("the crate root is readable");
+    let Look::Is(edges) = use_edges(&source) else {
+        panic!("the crate root must parse");
+    };
+    edges
+        .into_iter()
+        .filter(|edge| edge.origin == Origin::External && members.contains(&edge.to))
+        .map(|edge| edge.item)
+        .collect()
+}
+
 /// Every module's resolved edges, keyed by file name.
 fn resolved_tree() -> BTreeMap<String, Vec<UseEdge>> {
     let root = root_table();
@@ -65,7 +90,9 @@ fn resolved_tree() -> BTreeMap<String, Vec<UseEdge>> {
 /// suite. A count over a class every new module joins is a maintenance tax that
 /// looks like a measurement. The bound that survives is the one the class is:
 /// every phantom edge is a root name the root itself imported from ANOTHER crate,
-/// and `Result` is the only such name in this tree.
+/// and those names are `Result` plus the split's shims: each module cut into a
+/// lower package keeps its old root name (CLOUD-2789), read off the root's own
+/// `use` edges by `workspace_shims` rather than listed.
 ///
 /// **The discriminator is `via_root`, not the item's case, and that correction
 /// came from the tree.** The first version of this case asked whether a resolved
@@ -84,7 +111,10 @@ fn the_syntactic_tier_diverges_in_two_classes() {
     let mut phantom_internal = Vec::new();
     let mut unresolved = Vec::new();
     for (file, edges) in &tree {
-        for edge in edges {
+        // The classes are about what a LINE PREDICATE over `use` statements
+        // misreads, so the qualified-path edges (no `use` line at all) are not in
+        // this population.
+        for edge in edges.iter().filter(|edge| !edge.qualified) {
             match edge.origin {
                 // Resolved out of the root table: the text named no module.
                 Origin::Internal if edge.via_root => {
@@ -110,9 +140,18 @@ fn the_syntactic_tier_diverges_in_two_classes() {
          of these sites, and an empty set means the root table stopped resolving them rather than \
          that the tree stopped having them"
     );
+    // The split's shims (CLOUD-2789): each module cut into a lower package is
+    // re-exported at the root under its old name (`pub use batten_core::git;`),
+    // so `use crate::git` reaches another crate — a phantom edge BY DESIGN, read
+    // off the root's own `use` edges rather than listed here. What stays a new
+    // class is a root name re-exported from a crate OUTSIDE the workspace.
+    let shims = workspace_shims();
     let foreign: Vec<&String> = phantom_internal
         .iter()
-        .filter(|site| !site.ends_with(" Result"))
+        .filter(|site| {
+            let name = site.rsplit(' ').next().unwrap_or_default();
+            name != "Result" && !shims.contains(name)
+        })
         .collect();
     assert!(
         foreign.is_empty(),
@@ -131,7 +170,7 @@ fn the_syntactic_tier_diverges_in_two_classes() {
 #[test]
 fn the_hidden_edges_resolve_to_the_module_the_text_never_names() {
     let tree = resolved_tree();
-    for file in ["trust.rs", "output.rs"] {
+    for file in ["trust_pin.rs", "output.rs"] {
         let edges = tree.get(file).expect("the module is in the tree");
         assert!(
             edges
@@ -198,6 +237,59 @@ fn an_unparseable_file_could_not_look_rather_than_having_no_edges() {
     assert!(root_exports("fn f( {{{").could_not_look());
 }
 
+/// A qualified path in code is an edge, exactly as a `use` is. Before the
+/// `qualified` field the fact read `use` items alone, so `config.rs` reached
+/// about thirty modules by `crate::m::f()` while its edges named seven, and every
+/// closure over the fact judged a graph missing most of its edges.
+#[test]
+fn a_qualified_path_in_code_is_an_edge() {
+    let source = "fn f() -> crate::model::Config {\n\
+                  crate::check::validate();\n\
+                  crate::check::validate();\n\
+                  let _ = \"crate::string::not_an_edge\";\n\
+                  // crate::comment::not_an_edge\n\
+                  crate::model::Config::default()\n}\n";
+    let Look::Is(edges) = use_edges(source) else {
+        panic!("the fixture parses");
+    };
+    let mut reached: Vec<(&str, &str)> = edges
+        .iter()
+        .filter(|edge| edge.qualified && edge.origin == Origin::Internal)
+        .map(|edge| (edge.to.as_str(), edge.item.as_str()))
+        .collect();
+    reached.sort_unstable();
+    // `validate` written twice is one dependency; the string and the comment are
+    // no edge at all.
+    assert_eq!(
+        reached,
+        [
+            ("check", "validate"),
+            ("model", "Config"),
+            ("model", "default")
+        ]
+    );
+    // A `use` edge is never marked qualified.
+    let Look::Is(used) = use_edges("use crate::model::Config;") else {
+        panic!("the fixture parses");
+    };
+    assert!(used.iter().all(|edge| !edge.qualified));
+}
+
+/// A grouped `use crate::{a::B}` steps into `a` and names `B`, exactly as the
+/// ungrouped spelling does. Fails by: the group's first segment read past the
+/// path's end, so the edge names the module where it should name the item.
+#[test]
+fn a_grouped_crate_import_names_its_leaf() {
+    let Look::Is(edges) = use_edges("use crate::{a::B};") else {
+        panic!("the fixture parses");
+    };
+    let shape: Vec<(&str, &str, Origin)> = edges
+        .iter()
+        .map(|edge| (edge.to.as_str(), edge.item.as_str(), edge.origin))
+        .collect();
+    assert_eq!(shape, [("a", "B", Origin::Internal)]);
+}
+
 /// Module identity is stable across two runs over identical bytes, so a
 /// consumer's set lookup is deterministic (§7c).
 #[test]
@@ -241,5 +333,43 @@ fn the_documented_layerings_hold_over_this_tree() {
     assert!(
         broken.is_empty(),
         "documented layerings this tree violates: {broken:#?}"
+    );
+}
+
+/// Fails by: a two-segment `crate::Item` path outside a `use` left uncounted,
+/// which drops every root item an expression names directly.
+#[test]
+fn a_two_segment_crate_path_is_a_root_item_edge() {
+    let Look::Is(edges) = use_edges("fn f() { crate::helper(); }\n") else {
+        panic!("the fixture parses");
+    };
+    assert!(
+        edges.iter().any(|edge| edge.item == "helper"
+            && matches!(edge.origin, Origin::RootItem)
+            && edge.to.is_empty()),
+        "{edges:?}"
+    );
+}
+
+/// A grouped `use crate::{…}` is one edge per leaf, each onto the module its
+/// own path names and carrying its own item.
+///
+/// Fails by: a leaf under a group read as naming its module rather than its
+/// item, the step index miscounted inside the group.
+#[test]
+fn a_grouped_crate_use_names_each_leafs_module_and_item() {
+    let Look::Is(edges) = use_edges("use crate::{model::Config, check::validate};") else {
+        panic!("the fixture parses");
+    };
+    let reached: Vec<(&str, &str, Origin)> = edges
+        .iter()
+        .map(|edge| (edge.to.as_str(), edge.item.as_str(), edge.origin))
+        .collect();
+    assert_eq!(
+        reached,
+        [
+            ("model", "Config", Origin::Internal),
+            ("check", "validate", Origin::Internal)
+        ]
     );
 }

@@ -190,7 +190,7 @@ adapters := {
 
 module_of(path) := name if {
 	parts := split(path, "/")
-	file := parts[count(parts) - 1]
+	file = parts[count(parts) - 1]
 	name := substring(file, 0, count(file) - 3)
 }
 

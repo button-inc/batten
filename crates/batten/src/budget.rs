@@ -55,108 +55,25 @@
 //! when asked is a gate nobody runs.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::fs;
 use std::path::Path;
 
 use anyhow::Result;
-use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
+#[cfg(test)]
+use crate::config_check::budget::validate;
+use crate::config_model::{Budget, BudgetSet, EmbeddedDecl};
 use crate::error::UsageError;
+use crate::findings::Finding;
+use crate::git::tree_files;
 use crate::identity::{self, FindingKind, StoredIdentity};
-use crate::rules::{Finding, glob_match, tree_files};
+use crate::selector::glob_match;
 use crate::severity::RuleSeverity;
 
 /// Bytes per estimated token. A convention-level constant, not a
 /// literature-backed claim — see the module docs for why an approximation is the
 /// right shape here.
 const BYTES_PER_TOKEN: usize = 4;
-
-/// The `[budget]` table: **named** file sets and what each may cost.
-///
-/// A map, not a struct with a field per set. The set name is the *consumer's*
-/// — `[budget.instructions]` is this repository's name for its always-loaded
-/// context, and an engine type carrying that name would be a consumer-specific
-/// identifier in `crates/batten` (non-negotiable rule 1). A second consumer
-/// budgeting a different surface declares `[budget.<their-name>]` and needs no
-/// engine change; before this it needed a new field.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
-#[serde(transparent)]
-pub struct Budget(pub BTreeMap<String, BudgetSet>);
-
-impl Budget {
-    /// The declared sets, in name order — the fixed evaluation and report order.
-    pub fn sets(&self) -> impl Iterator<Item = (&String, &BudgetSet)> {
-        self.0.iter()
-    }
-
-    /// Whether the table declares nothing.
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.0.is_empty()
-    }
-}
-
-/// One `[budget.<name>]` table.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct BudgetSet {
-    /// The counted file set, as globs over repo-relative `/`-separated paths.
-    /// Every entry must match at least one file — see the module docs. Defaulted
-    /// because a set may count only `embedded` entries; the two being empty
-    /// *together* is what `measure` refuses.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub files: Vec<String>,
-    /// The ceiling on estimated tokens over the whole set. The boundary is
-    /// `<=`: exactly at budget passes.
-    pub max_tokens: usize,
-    /// The optional ceiling on loaded lines, the second predicate the shell gate
-    /// this replaces carried. Absent means unenforced — a threshold nobody
-    /// declared is not a threshold of zero.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub max_lines: Option<usize>,
-    /// The optional ceiling on ONE file's loaded bytes (CLOUD-1934).
-    ///
-    /// **A different question from `max_tokens`, not a finer one.** The total
-    /// bounds what a set costs when all of it loads, which is the right question
-    /// for an always-loaded surface. A file that is read ON DEMAND, one call at a
-    /// time, costs nothing until it is read and then fails whole if it is larger
-    /// than one read can return — so its ceiling is per file, and a set total can
-    /// be comfortably under budget while every read of its largest member fails.
-    ///
-    /// Bytes rather than estimated tokens because the ceiling it stands for is
-    /// MEASURED in bytes: the largest file a host returned whole. Absent means
-    /// unenforced, and the boundary is `<=` like every other one here.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub max_bytes_per_file: Option<usize>,
-    /// Always-loaded strings carried *inside* a config file rather than in a
-    /// file of their own. Empty by default: a repository with no such surface
-    /// declares nothing (CLOUD-298).
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub embedded: Vec<EmbeddedDecl>,
-}
-
-/// One `[[budget.<name>.embedded]]` entry: a string inside a config file that a
-/// host loads on every session.
-///
-/// Both fields are the **consumer's**. A host that always injects a key from its
-/// own config — Serena's project file, an editor's workspace settings — is a
-/// property of the repository using that host, not of Batten, so naming either
-/// one in `crates/batten` would be the consumer-specific identifier
-/// non-negotiable rule 1 forbids. The engine knows only "parse this file, read
-/// this key, count the string".
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct EmbeddedDecl {
-    /// The repo-relative, `/`-separated path of the config file to read. A
-    /// literal path and never a glob: a key is read from one document, and a
-    /// pattern would leave "which file's key" unanswered.
-    pub path: String,
-    /// The key whose string value is counted. Dotted for a nested key
-    /// (`a.b.c`); the engine walks maps only, so a key under a sequence is a
-    /// miss rather than a guess.
-    pub key: String,
-}
 
 /// One measured file. Pointer-only: a path and its counts, never a byte of the
 /// content that produced them (non-negotiable rule 4).
@@ -206,8 +123,6 @@ pub struct Report {
 ///
 /// Its own function so the boundary is stated once and a mutation of it has one
 /// place to land: `<=` passes, exactly as every other ceiling in this module.
-//MUTANT-SUITE crates/batten/tests/it/memories.rs
-//MUTANT memory-ceiling-off-by-one|s@    bytes > ceiling@    bytes >= ceiling@|a_memory_exactly_at_the_ceiling_passes
 const fn over_file_ceiling(bytes: usize, ceiling: usize) -> bool {
     bytes > ceiling
 }
@@ -494,7 +409,7 @@ fn find_line_anchored(haystack: &str, needle: &str) -> Option<usize> {
 /// one, which is the same false green a dead glob produced (CLOUD-298).
 fn embedded_value(root: &Path, name: &str, decl: &EmbeddedDecl) -> Result<Option<String>> {
     let full = root.join(&decl.path);
-    let text = match fs::read_to_string(&full) {
+    let text = match crate::fsio::read_to_string(&full) {
         Ok(text) => text,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             return Err(UsageError::raise(format!(
@@ -633,7 +548,7 @@ pub fn measure(root: &Path, name: &str, budget: &BudgetSet) -> Result<Report> {
     let mut lines = 0;
     // `BTreeSet` iterates in sorted order, which is the fixed reporting order.
     for path in selected {
-        let text = fs::read_to_string(root.join(&path))?;
+        let text = crate::fsio::read_to_string(root.join(&path))?;
         let loaded = loaded(&text);
         let file = FileCount {
             path,
@@ -709,29 +624,12 @@ pub fn measure_all(root: &Path, budget: Option<&Budget>) -> Result<Vec<Report>> 
         .collect()
 }
 
-/// Validate the `[budget]` table at load.
-///
-/// # Errors
-///
-/// Returns a [`UsageError`] (→ exit `1`) for a `[budget]` table declaring no
-/// budget. A table that parses and gates nothing is the half-change
-/// non-negotiable rule 2 exists to refuse.
-pub fn validate(budget: Option<&Budget>) -> Result<()> {
-    let Some(budget) = budget else {
-        return Ok(());
-    };
-    if budget.is_empty() {
-        return Err(UsageError::raise(
-            "budget: the table declares no set; remove it or declare [budget.<name>]".to_owned(),
-        ));
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+    #[cfg(test)]
+    use std::fs;
 
     #[test]
     fn frontmatter_is_stripped_only_as_a_leading_fence() {
@@ -1172,4 +1070,145 @@ mod tests {
         let directory = embedded_value(&dir, "set", &decl("dir.json")).unwrap_err();
         assert!(directory.downcast_ref::<UsageError>().is_none());
     }
+
+    /// Fails by: a call that holds a measure counted as growing it.
+    #[test]
+    fn only_a_strictly_larger_projection_grew() {
+        assert!(grew(5, 6));
+        assert!(!grew(5, 5));
+        assert!(!grew(5, 4));
+    }
+
+    /// Fails by: any one member, the current text or the projection dropped
+    /// from, or combined other than by sum into, the set's totals.
+    #[test]
+    fn a_projection_totals_every_member_with_each_side_of_the_call() {
+        let set = BudgetSet {
+            files: vec!["a.md".to_owned()],
+            max_tokens: 1_000,
+            max_lines: None,
+            max_bytes_per_file: None,
+            embedded: vec![],
+        };
+        let counted = |text: &str| {
+            let text = loaded(text);
+            (estimate_tokens(&text), count_lines(&text))
+        };
+        let members = BTreeMap::from([
+            ("b.md".to_owned(), "aaaaaaaaaaaa\n".to_owned()),
+            ("c.md".to_owned(), "bbbbbbbbbbbbbbbb\nc\n".to_owned()),
+        ]);
+        let (current, projected) = ("dddddddd\n", "eeeeeeeeeeeeeeeeeeee\nf\ng\n");
+        let parts = [
+            counted("aaaaaaaaaaaa\n"),
+            counted("bbbbbbbbbbbbbbbb\nc\n"),
+            counted(current),
+            counted(projected),
+        ];
+        assert!(parts.iter().all(|&(tokens, lines)| tokens > 0 && lines > 0));
+        let others = (parts[0].0 + parts[1].0, parts[0].1 + parts[1].1);
+        let measure = project("set", &set, Some(current), projected, Some(&members));
+        assert_eq!(
+            measure.totals,
+            Some((
+                (others.0 + parts[2].0, others.1 + parts[2].1),
+                (others.0 + parts[3].0, others.1 + parts[3].1),
+            ))
+        );
+    }
+}
+
+// --- CLOUD-2661: a budget judged at the call --------------------------------
+
+/// Whether a `files` entry names one path rather than a pattern: none of the
+/// characters globset treats as syntax.
+#[must_use]
+pub fn literal_entry(entry: &str) -> bool {
+    !entry.contains(['*', '?', '[', '{', '\\'])
+}
+
+/// Whether a measure grew: a call that holds or shrinks an over-budget set is
+/// its repair, and refusing it would wedge the agent.
+#[must_use]
+pub const fn grew(current: usize, projected: usize) -> bool {
+    projected > current
+}
+
+/// One set's measures before and after a call, as [`project`] counted them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CallMeasure {
+    /// The set's name, `<name>` in `[budget.<name>]`.
+    pub name: String,
+    /// The set's (tokens, lines) at current and projected, or `None` where the
+    /// totals cannot be judged at the call (a glob, an `embedded` entry, or a
+    /// member that could not be read).
+    pub totals: Option<((usize, usize), (usize, usize))>,
+    /// The target's loaded bytes at current and projected.
+    pub bytes: (usize, usize),
+    /// The set's ceilings.
+    pub max_tokens: usize,
+    /// The set's line ceiling, if any.
+    pub max_lines: Option<usize>,
+    /// The set's per-file byte ceiling, if any.
+    pub max_bytes_per_file: Option<usize>,
+}
+
+/// Measure a set at a call that writes `target`: `current` its text now
+/// (`None` where it does not exist), `projected` the text the call lands, and
+/// `members` every OTHER member's text, or `None` where the totals cannot be
+/// judged. Counted as [`measure`] counts, over [`loaded`] text.
+#[must_use]
+pub fn project(
+    name: &str,
+    set: &BudgetSet,
+    current: Option<&str>,
+    projected: &str,
+    members: Option<&BTreeMap<String, String>>,
+) -> CallMeasure {
+    let counts = |text: &str| {
+        let loaded = loaded(text);
+        (estimate_tokens(&loaded), count_lines(&loaded), loaded.len())
+    };
+    let before = counts(current.unwrap_or(""));
+    let after = counts(projected);
+    let totals = members.map(|members| {
+        let (tokens, lines) = members.values().fold((0, 0), |(tokens, lines), text| {
+            let (more_tokens, more_lines, _) = counts(text);
+            (tokens + more_tokens, lines + more_lines)
+        });
+        (
+            (tokens + before.0, lines + before.1),
+            (tokens + after.0, lines + after.1),
+        )
+    });
+    CallMeasure {
+        name: name.to_owned(),
+        totals,
+        bytes: (before.2, after.2),
+        max_tokens: set.max_tokens,
+        max_lines: set.max_lines,
+        max_bytes_per_file: set.max_bytes_per_file,
+    }
+}
+
+/// The first ceiling the call breaches AND grows past, as (projected, max).
+#[must_use]
+pub fn breach(measure: &CallMeasure) -> Option<(usize, usize)> {
+    let over = |current: usize, projected: usize, max: usize| {
+        (projected > max && grew(current, projected)).then_some((projected, max))
+    };
+    if let Some(((tokens, lines), (after_tokens, after_lines))) = measure.totals {
+        if let Some(hit) = over(tokens, after_tokens, measure.max_tokens) {
+            return Some(hit);
+        }
+        if let Some(hit) = measure
+            .max_lines
+            .and_then(|max| over(lines, after_lines, max))
+        {
+            return Some(hit);
+        }
+    }
+    measure
+        .max_bytes_per_file
+        .and_then(|max| over(measure.bytes.0, measure.bytes.1, max))
 }

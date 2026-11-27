@@ -45,7 +45,7 @@
 #MUTANT warmed-family-may-be-written|s@not reads_only(step)@false@|a_pull_request_writer_of_a_warmed_family_is_refused
 #MUTANT orphaned-reader-may-pass|s@^\tnot \[shared_key(step), arch(runner(path, name))\] in warmed$@\tfalse@|a_read_only_consumer_of_an_unwarmed_family_is_refused
 #MUTANT cargo-reach-unbounded|s@\tsome reached in graph.reachable(task_graph, \[name\])@\tsome reached in [name]@|a_cargo_reach_deeper_than_the_old_bound_is_seen
-#MUTANT scheduled-writer-may-not-warm|s@trunk_writer(path) if _ := triggers(path).schedule@trunk_writer(path) if false@|a_scheduled_trunk_writer_warms_the_family
+#MUTANT scheduled-writer-may-not-warm|s@trunk_writer(path) if _ = triggers(path).schedule@trunk_writer(path) if false@|a_scheduled_trunk_writer_warms_the_family
 
 # METADATA
 # description: |
@@ -102,11 +102,11 @@ workflow[path] := doc if {
 governed if count(object.keys(workflow)) > 0
 
 triggers(path) := t if {
-	t := workflow[path].on
+	t = workflow[path].on
 	is_object(t)
 }
 
-on_pull_request(path) if _ := triggers(path).pull_request
+on_pull_request(path) if _ = triggers(path).pull_request
 
 # A TRUNK WRITER IS ONE THAT RUNS ON THE TRUNK, AND THE TRIGGER IS NOT WHAT
 # DECIDES THAT. The earlier version of this predicate read `push` only and
@@ -125,9 +125,9 @@ on_pull_request(path) if _ := triggers(path).pull_request
 # and CLOUD-1342 settled `perf`'s BASE ARM, a separate entry keyed to the merge
 # base (`ci.yml:1129-1145`), which no clause here reaches. Naming it in defence of
 # excluding `perf-` conflated two caches that share a job and nothing else.
-trunk_writer(path) if _ := triggers(path).push
+trunk_writer(path) if _ = triggers(path).push
 
-trunk_writer(path) if _ := triggers(path).schedule
+trunk_writer(path) if _ = triggers(path).schedule
 
 # --- the steps, and the two facts a cache step carries ------------------------
 
@@ -182,7 +182,10 @@ reads_only(step) if object.get(step, ["with", "save-if"], null) == "false"
 # and never the finding: each rule below emits one refusal per placed line, plus
 # a path-only arm for the case where none could be placed.
 key_line contains [path, number] if {
-	some index, line in input.tree.lines[path]
+	# The path bound by its own `some`: the bytecode compiler does not hoist an
+	# unbound key out of `some … in x[path]` (#1276).
+	some path, lines in input.tree.lines
+	some index, line in lines
 	startswith(trim_space(line), "shared-key:")
 	contains(line, "hashFiles")
 	number := index + 1
@@ -212,7 +215,7 @@ job_placed(path, name) if {
 hash_keyed(path) if {
 	some entry in job_step
 	entry[0] == path
-	key := shared_key(entry[2])
+	key = shared_key(entry[2])
 	contains(key, "hashFiles")
 }
 
@@ -226,7 +229,7 @@ violation contains {
 	hash_keyed(path)
 	some placement in key_line
 	placement[0] == path
-	number := placement[1]
+	number = placement[1]
 }
 
 violation contains {
@@ -274,7 +277,7 @@ depends_of(name) := deps if {
 	deps := [dep |
 		some entry in declared
 		is_string(entry)
-		dep := split(trim_space(entry), " ")[0]
+		dep = split(trim_space(entry), " ")[0]
 	]
 }
 
@@ -311,9 +314,9 @@ invokes_cargo(name) if contains(task_run(name), "cargo")
 # OTHER predicate in the same module, silently, at exit 0. An unresolvable
 # `mise.toml` must leave this rule undefined — which Rego reads as *does not
 # hold* — never fault the bundle that contains it.
-declared_tasks := tasks if {
-	tasks := input.tree.documents["mise.toml"].tasks
-	is_object(tasks)
+declared_tasks := manifest_tasks if {
+	manifest_tasks = input.tree.documents["mise.toml"].tasks
+	is_object(manifest_tasks)
 }
 
 task_graph[name] := depends_of(name) if {
@@ -337,11 +340,11 @@ reaches_cargo(name) if {
 # regex and the module is refused at load, naming `run` as the expression.
 job_task contains [path, name, task] if {
 	some entry in job_step
-	path := entry[0]
-	name := entry[1]
+	path = entry[0]
+	name = entry[1]
 	body := object.get(entry[2], "run", "")
 	some fragment in regex.find_n(data.batten.patterns["mise-run-task"], body, -1)
-	task := split(fragment, " ")[2]
+	task = split(fragment, " ")[2]
 }
 
 declares_a_cache(path, name) if {
@@ -360,9 +363,9 @@ uncached(path, name, task) if {
 
 reach contains [path, name, task] if {
 	some entry in job_task
-	path := entry[0]
-	name := entry[1]
-	task := entry[2]
+	path = entry[0]
+	name = entry[1]
+	task = entry[2]
 }
 
 violation contains {
@@ -372,14 +375,14 @@ violation contains {
 } if {
 	governed
 	some entry in reach
-	path := entry[0]
-	name := entry[1]
-	task := entry[2]
+	path = entry[0]
+	name = entry[1]
+	task = entry[2]
 	uncached(path, name, task)
 	some placement in job_line
 	placement[0] == path
 	placement[1] == name
-	number := placement[2]
+	number = placement[2]
 }
 
 violation contains {
@@ -389,9 +392,9 @@ violation contains {
 } if {
 	governed
 	some entry in reach
-	path := entry[0]
-	name := entry[1]
-	task := entry[2]
+	path = entry[0]
+	name = entry[1]
+	task = entry[2]
 	uncached(path, name, task)
 	not job_placed(path, name)
 }
@@ -434,8 +437,8 @@ runner(path, name) := label if {
 warmed contains [key, where] if {
 	some entry in job_step
 	trunk_writer(entry[0])
-	key := shared_key(entry[2])
-	where := arch(runner(entry[0], entry[1]))
+	key = shared_key(entry[2])
+	where = arch(runner(entry[0], entry[1]))
 }
 
 contested(path, name) if {
@@ -443,7 +446,7 @@ contested(path, name) if {
 	some entry in job_step
 	entry[0] == path
 	entry[1] == name
-	step := entry[2]
+	step = entry[2]
 	[shared_key(step), arch(runner(path, name))] in warmed
 	not reads_only(step)
 }
@@ -455,13 +458,13 @@ violation contains {
 } if {
 	governed
 	some job in job_of
-	path := job[0]
-	name := job[1]
+	path = job[0]
+	name = job[1]
 	contested(path, name)
 	some placement in job_line
 	placement[0] == path
 	placement[1] == name
-	number := placement[2]
+	number = placement[2]
 }
 
 violation contains {
@@ -471,8 +474,8 @@ violation contains {
 } if {
 	governed
 	some job in job_of
-	path := job[0]
-	name := job[1]
+	path = job[0]
+	name = job[1]
 	contested(path, name)
 	not job_placed(path, name)
 }
@@ -515,7 +518,7 @@ orphaned(path, name) if {
 	some entry in job_step
 	entry[0] == path
 	entry[1] == name
-	step := entry[2]
+	step = entry[2]
 	reads_only(step)
 	not [shared_key(step), arch(runner(path, name))] in warmed
 }
@@ -527,13 +530,13 @@ violation contains {
 } if {
 	governed
 	some job in job_of
-	path := job[0]
-	name := job[1]
+	path = job[0]
+	name = job[1]
 	orphaned(path, name)
 	some placement in job_line
 	placement[0] == path
 	placement[1] == name
-	number := placement[2]
+	number = placement[2]
 }
 
 violation contains {
@@ -543,8 +546,8 @@ violation contains {
 } if {
 	governed
 	some job in job_of
-	path := job[0]
-	name := job[1]
+	path = job[0]
+	name = job[1]
 	orphaned(path, name)
 	not job_placed(path, name)
 }

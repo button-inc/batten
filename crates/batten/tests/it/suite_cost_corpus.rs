@@ -16,7 +16,7 @@
 //! as mechanism — a consumer with a bats lane still has a report to read — and
 //! this tier keeps holding it to the report it reads and the path it writes.
 //
-// carried: mise-tasks/suite-bench.sh crates/batten/src/suites.rs kind:verb crates/batten/tests/it/suite_cost_corpus.rs runs:batten+record+suites
+// carried: mise-tasks/suite-bench.sh crates/batten-base/src/suites.rs kind:verb crates/batten/tests/it/suite_cost_corpus.rs runs:batten+record+suites
 //
 // THE HISTORICAL LEDGER, KEPT AS WRITTEN. The rows below record where the retired
 // shell gate's cases went under CLOUD-1753; the module they name retired under
@@ -38,8 +38,8 @@
 // carried: "a corpus with no rows is could-not-look, not an empty suite set" policy/suite-cost-corpus.rego
 // carried: "no tracked suite at all is could-not-look" policy/suite-cost-corpus.rego
 // carried: "output is a pointer — no duration is echoed" policy/suite-cost-corpus.rego
-// carried: "a report naming a suite the tree does not track is could-not-look" crates/batten/src/suites.rs kind:verb crates/batten/tests/it/suite_cost_corpus.rs runs:batten+record+suites
-// carried: "a report naming only tracked suites derives a corpus" crates/batten/src/suites.rs kind:verb crates/batten/tests/it/suite_cost_corpus.rs runs:batten+record+suites
+// carried: "a report naming a suite the tree does not track is could-not-look" crates/batten-base/src/suites.rs kind:verb crates/batten/tests/it/suite_cost_corpus.rs runs:batten+record+suites
+// carried: "a report naming only tracked suites derives a corpus" crates/batten-base/src/suites.rs kind:verb crates/batten/tests/it/suite_cost_corpus.rs runs:batten+record+suites
 
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -84,7 +84,7 @@ fn record(dir: &Path, write: bool) -> Output {
     }
     command
         .current_dir(dir)
-        .output()
+        .streamed_output()
         .expect("run batten record suites")
 }
 

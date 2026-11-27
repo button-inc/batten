@@ -31,8 +31,10 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 
+use batten::config_model::Rule;
+use batten::findings::Finding;
 use batten::identity::{self, CountChange, Fingerprint};
-use batten::rules::{self, Finding, Rule};
+use batten::rules;
 use batten::{Config, config};
 
 use common::Fixture;
@@ -55,7 +57,7 @@ pattern = \"TODO\"
 /// structs, so a fixture cannot pass against a rule the loader would reject.
 fn rules_of(text: &str) -> Vec<Rule> {
     let config: Config = config::parse(text, "identity-churn fixture").unwrap();
-    config.rules
+    config.rules.to_vec()
 }
 
 /// One scan of a tree: what the engine found, and the identity multiset those

@@ -68,8 +68,9 @@ use std::path::{Path, PathBuf};
 use anyhow::Result;
 
 use crate::facts::Look;
+use crate::git::tree_files;
 use crate::identity::surface_fingerprint;
-use crate::rules::{glob_match, tree_files};
+use crate::selector::glob_match;
 
 /// The directory, under the git dir, holding one snapshot per session.
 ///
@@ -90,7 +91,7 @@ const SHARED_KEY: &str = "shared";
 ///
 /// **There is no field a file's content could occupy**, which is what makes rule
 /// 4 structural here rather than a property of the renderer — the same shape
-/// [`crate::rules::Finding`] has for matched bytes.
+/// [`crate::findings::Finding`] has for matched bytes.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ChangeSet {
     /// Repo-relative paths whose bytes moved, and which the session read an
@@ -172,7 +173,7 @@ pub fn surface(root: &Path, tracked: &[String]) -> Result<Look<Manifest>> {
             if manifest.contains_key(path) {
                 continue;
             }
-            let contents = std::fs::read(root.join(path))?;
+            let contents = crate::fsio::read(root.join(path))?;
             // The whole-set fingerprint over ONE entry: the path is hashed
             // alongside the bytes, and the same normalization every other
             // identity in the engine uses, so a CRLF checkout does not report
@@ -249,7 +250,7 @@ fn snapshot_path(git_dir: &Path, session: Option<&str>) -> PathBuf {
 /// has already read the new files and must not be nudged about them.
 #[must_use]
 pub fn previous(git_dir: &Path, session: Option<&str>) -> Look<Manifest> {
-    let Ok(text) = std::fs::read_to_string(snapshot_path(git_dir, session)) else {
+    let Ok(text) = crate::fsio::read_to_string(snapshot_path(git_dir, session)) else {
         return Look::CouldNotLook;
     };
     let mut manifest = Manifest::new();
@@ -311,7 +312,6 @@ pub fn record(git_dir: &Path, session: Option<&str>, manifest: &Manifest) -> Res
 /// sentences that used to follow each section — a `changed` path is a rule held
 /// in its old form, an `added` one new capability never read — are the class's
 /// own doc now, delivered once per window rather than on every notice.
-//MUTANT contract-drift-misclassed|s@^    let class = crate::verdict::Native::ContractReadStale;$@    let class = crate::verdict::Native::RunBroken;@|a_moved_contract_file_is_reported_in_band
 #[must_use]
 pub fn render(change: &ChangeSet, wiring: &[String]) -> crate::refusal::Refusal {
     // ADDED FIRST (CLOUD-490): a new path is an OFFER rather than an
@@ -347,7 +347,7 @@ pub fn render(change: &ChangeSet, wiring: &[String]) -> crate::refusal::Refusal 
     if touched {
         subjects.push(crate::verdict::artifact("hook wiring moved"));
     }
-    let class = crate::verdict::Native::ContractReadStale;
+    let class = crate::error::Native::ContractReadStale;
     crate::refusal::Refusal::engine(class, &subjects, crate::refusal::Fix::None)
 }
 
@@ -401,7 +401,7 @@ pub fn render(change: &ChangeSet, wiring: &[String]) -> crate::refusal::Refusal 
 #[must_use]
 pub fn unmediated_session() -> crate::refusal::Refusal {
     crate::refusal::Refusal::engine(
-        crate::verdict::Native::HookRunMissing,
+        crate::error::Native::HookRunMissing,
         &[crate::verdict::artifact(
             "SessionStart registration did not run",
         )],
@@ -413,7 +413,7 @@ pub fn unmediated_session() -> crate::refusal::Refusal {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
-
+    #[cfg(test)]
     fn manifest(rows: &[(&str, &str)]) -> Manifest {
         rows.iter()
             .map(|(path, hash)| ((*path).to_owned(), (*hash).to_owned()))

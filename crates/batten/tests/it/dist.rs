@@ -123,7 +123,7 @@ fn dist(bench: &Bench, args: &[&str], env: &[(&str, &str)]) -> Output {
     for (name, value) in env {
         command.env(name, value);
     }
-    command.output().expect("run batten dist")
+    command.streamed_output().expect("run batten dist")
 }
 
 /// Every stub invocation, in order.
@@ -483,7 +483,7 @@ fn outside_a_workspace_is_could_not_look() {
     let output = batten()
         .current_dir(&dir)
         .args(["dist", "x86_64-unknown-linux-gnu", "--stem"])
-        .output()
+        .streamed_output()
         .expect("run batten dist");
     assert_eq!(output.status.code(), Some(ExitCode::Internal.code()));
     assert!(stdout(&output).is_empty(), "{}", stdout(&output));

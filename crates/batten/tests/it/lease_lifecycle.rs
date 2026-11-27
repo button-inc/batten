@@ -33,8 +33,8 @@
 //! turns a reading into a verdict, and it is the case a simplification would
 //! delete first.
 
-// carried: mise-tasks/land-lock.sh crates/batten/src/lease.rs kind:verb crates/batten/tests/it/lease_lifecycle.rs runs:batten+lease
-// carried: tests/land-lock.bats crates/batten/src/lease.rs kind:verb crates/batten/tests/it/lease_lifecycle.rs
+// carried: mise-tasks/land-lock.sh crates/batten-core/src/lease.rs kind:verb crates/batten/tests/it/lease_lifecycle.rs runs:batten+lease
+// carried: tests/land-lock.bats crates/batten-core/src/lease.rs kind:verb crates/batten/tests/it/lease_lifecycle.rs
 //
 // AND ONE CASE FROM `tests/reclaim-census.bats`, which reached into
 // `mise-tasks/land-lock.sh` to count the hold loop's own beat records, so the
@@ -49,88 +49,84 @@
 // field is the suite path is indexed as another arm for it and the deletion
 // reads as `shell retire unclear`.
 //
-// carried: "an unheld lease reports unheld, and says so at exit 0" crates/batten/src/lease.rs kind:verb
-// carried: "acquire on a free lease wins and creates the ref" crates/batten/src/lease.rs kind:verb
-// carried: "THE CLAIM: a rival cannot acquire a live lease" crates/batten/src/lease.rs kind:verb
-// carried: "acquire is re-entrant for the holder, so a retry is not a deadlock" crates/batten/src/lease.rs kind:verb
-// carried: "held is the holder's yes and the rival's no" crates/batten/src/lease.rs kind:verb
-// carried: "release by the holder frees the lease for the next claimant" crates/batten/src/lease.rs kind:verb
-// carried: "THE DEFECT: a released lease's status names the last holder, never an epoch" crates/batten/src/lease.rs kind:verb
-// carried: "THE DEFECT: releasing an already-released lease says so, and reports no epoch age" crates/batten/src/lease.rs kind:verb
+// carried: "an unheld lease reports unheld, and says so at exit 0" crates/batten-core/src/lease.rs kind:verb
+// carried: "acquire on a free lease wins and creates the ref" crates/batten-core/src/lease.rs kind:verb
+// carried: "THE CLAIM: a rival cannot acquire a live lease" crates/batten-core/src/lease.rs kind:verb
+// carried: "acquire is re-entrant for the holder, so a retry is not a deadlock" crates/batten-core/src/lease.rs kind:verb
+// carried: "held is the holder's yes and the rival's no" crates/batten-core/src/lease.rs kind:verb
+// carried: "release by the holder frees the lease for the next claimant" crates/batten-core/src/lease.rs kind:verb
+// carried: "THE DEFECT: a released lease's status names the last holder, never an epoch" crates/batten-core/src/lease.rs kind:verb
+// carried: "THE DEFECT: releasing an already-released lease says so, and reports no epoch age" crates/batten-core/src/lease.rs kind:verb
 // withdrawn: "THE DEFECT: a first sighting of a sha emits no shell error on stderr" mise-tasks/land-lock.sh
-// carried: "THE DEFECT: a LIVE lease is sighted, so the corroboration clock is already running when it expires" crates/batten/src/lease.rs kind:verb
-// carried: "THE DEFECT: a lease sighted before it expired is taken on the first check after" crates/batten/src/lease.rs kind:verb
-// carried: "a released lease is not still held by its releaser" crates/batten/src/lease.rs kind:verb
-// carried: "release by a non-holder is a silent no-op, never a theft" crates/batten/src/lease.rs kind:verb
-// carried: "renew extends the lease and moves the ref" crates/batten/src/lease.rs kind:verb
-// carried: "a non-holder cannot renew, so a heartbeat cannot steal" crates/batten/src/lease.rs kind:verb
-// carried: "an expired lease is taken once its death is corroborated, not waited out forever" crates/batten/src/lease.rs kind:verb
-// carried: "a live lease is NOT stolen — expiry is the only steal condition" crates/batten/src/lease.rs kind:verb
-// carried: "THE FENCE: a holder whose lease was stolen reports not-held" crates/batten/src/lease.rs kind:verb
-// carried: "an expired lease reads as free, and still names who left it" crates/batten/src/lease.rs kind:verb
-// carried: "FAIL CLOSED: an unreachable remote is exit 2, never 'unheld'" crates/batten/src/lease.rs kind:verb
-// carried: "an unreachable remote fails acquire closed too" crates/batten/src/lease.rs kind:verb
+// carried: "THE DEFECT: a LIVE lease is sighted, so the corroboration clock is already running when it expires" crates/batten-core/src/lease.rs kind:verb
+// carried: "THE DEFECT: a lease sighted before it expired is taken on the first check after" crates/batten-core/src/lease.rs kind:verb
+// carried: "a released lease is not still held by its releaser" crates/batten-core/src/lease.rs kind:verb
+// carried: "release by a non-holder is a silent no-op, never a theft" crates/batten-core/src/lease.rs kind:verb
+// carried: "renew extends the lease and moves the ref" crates/batten-core/src/lease.rs kind:verb
+// carried: "a non-holder cannot renew, so a heartbeat cannot steal" crates/batten-core/src/lease.rs kind:verb
+// carried: "an expired lease is taken once its death is corroborated, not waited out forever" crates/batten-core/src/lease.rs kind:verb
+// carried: "a live lease is NOT stolen — expiry is the only steal condition" crates/batten-core/src/lease.rs kind:verb
+// carried: "THE FENCE: a holder whose lease was stolen reports not-held" crates/batten-core/src/lease.rs kind:verb
+// carried: "an expired lease reads as free, and still names who left it" crates/batten-core/src/lease.rs kind:verb
+// carried: "FAIL CLOSED: an unreachable remote is exit 2, never 'unheld'" crates/batten-core/src/lease.rs kind:verb
+// carried: "an unreachable remote fails acquire closed too" crates/batten-core/src/lease.rs kind:verb
 // changed: "an unknown verb is exit 2 and names the usage" crates/batten/src/cli.rs kind:verb
 // carried: "POINTER, NEVER PAYLOAD: output carries ids and seconds, never the lease body" crates/batten/src/lib.rs kind:verb
-// carried: "THE EXPECTED VALUE IS EXPLICIT — a bare --force-with-lease is two holders" crates/batten/src/lease.rs kind:verb
-// carried: "SHA AND BODY COME FROM ONE SOURCE — never ls-remote paired with FETCH_HEAD" crates/batten/src/lease.rs kind:verb
-// changed: "observe leaves no per-process ref behind" crates/batten/src/lease.rs kind:verb
+// carried: "THE EXPECTED VALUE IS EXPLICIT — a bare --force-with-lease is two holders" crates/batten-core/src/lease.rs kind:verb
+// carried: "SHA AND BODY COME FROM ONE SOURCE — never ls-remote paired with FETCH_HEAD" crates/batten-core/src/lease.rs kind:verb
+// changed: "observe leaves no per-process ref behind" crates/batten-core/src/lease.rs kind:verb
 // carried: "the fence demands MARGIN, not merely an unexpired lease" crates/batten/src/lib.rs kind:verb
-// carried: "an expired lease is not stolen on the first sighting — clocks are not shared" crates/batten/src/lease.rs kind:verb
-// carried: "a dead lease IS taken once the sha has demonstrably stopped moving" crates/batten/src/lease.rs kind:verb
-// carried: "NO GIT IDENTITY: the lease is takeable on a machine with no user.email" crates/batten/src/lease.rs kind:verb
-// carried: "A FAILED MINT IS A REFUSED SWAP, NEVER A DELETE" crates/batten/src/lease.rs kind:verb
-// carried: "a hold whose land died releases within a beat instead of renewing for nobody" crates/batten/src/lease.rs kind:verb
-// carried: "a live land keeps its heartbeat renewing — the tether never fires on a healthy hold" crates/batten/src/lease.rs kind:verb
-// carried: "a pid recycled into something that is not a land reads as gone" crates/batten/src/lease.rs kind:verb
-// carried: "an unset holder pid keeps today's behaviour, so no other caller changes" crates/batten/src/lease.rs kind:verb
-// carried: "THE ACCEPTANCE CASE: a land that stops advancing loses its lease and is stopped" crates/batten/src/lease.rs kind:verb
-// carried: "a land whose phase keeps changing is never bailed on" crates/batten/src/lease.rs kind:verb
-// carried: "RE-STATING A PHASE IS NOT ADVANCING IT, or a wedged land renews forever" crates/batten/src/lease.rs kind:verb
-// carried: "a loop that stops turning is caught by the shorter hang bound" crates/batten/src/lease.rs kind:verb
-// carried: "THE HANG BOUND DOES NOT REACH A PHASE WITH NO LOOP, or verify is killed for running" crates/batten/src/lease.rs kind:verb
-// carried: "no registry entry is no verdict — an unregistered land is not a stalled one" crates/batten/src/lease.rs kind:verb
-// carried: "A RIVAL MAY REAP A LEASE THAT BEATS WITHOUT PROGRESSING" crates/batten/src/lease.rs kind:verb
-// carried: "a lease that carries no progress token is never stall-stealable" crates/batten/src/lease.rs kind:verb
-// carried: "authorises: an absent lease lets any branch run" crates/batten/src/lease.rs kind:verb
-// carried: "authorises: the branch the lease names may run" crates/batten/src/lease.rs kind:verb
+// carried: "an expired lease is not stolen on the first sighting — clocks are not shared" crates/batten-core/src/lease.rs kind:verb
+// carried: "a dead lease IS taken once the sha has demonstrably stopped moving" crates/batten-core/src/lease.rs kind:verb
+// carried: "NO GIT IDENTITY: the lease is takeable on a machine with no user.email" crates/batten-core/src/lease.rs kind:verb
+// carried: "A FAILED MINT IS A REFUSED SWAP, NEVER A DELETE" crates/batten-core/src/lease.rs kind:verb
+// carried: "a hold whose land died releases within a beat instead of renewing for nobody" crates/batten-core/src/lease.rs kind:verb
+// carried: "a live land keeps its heartbeat renewing — the tether never fires on a healthy hold" crates/batten-core/src/lease.rs kind:verb
+// carried: "a pid recycled into something that is not a land reads as gone" crates/batten-core/src/lease.rs kind:verb
+// carried: "an unset holder pid keeps today's behaviour, so no other caller changes" crates/batten-core/src/lease.rs kind:verb
+// carried: "THE ACCEPTANCE CASE: a land that stops advancing loses its lease and is stopped" crates/batten-core/src/lease.rs kind:verb
+// carried: "a land whose phase keeps changing is never bailed on" crates/batten-core/src/lease.rs kind:verb
+// carried: "RE-STATING A PHASE IS NOT ADVANCING IT, or a wedged land renews forever" crates/batten-core/src/lease.rs kind:verb
+// carried: "a loop that stops turning is caught by the shorter hang bound" crates/batten-core/src/lease.rs kind:verb
+// carried: "THE HANG BOUND DOES NOT REACH A PHASE WITH NO LOOP, or verify is killed for running" crates/batten-core/src/lease.rs kind:verb
+// carried: "no registry entry is no verdict — an unregistered land is not a stalled one" crates/batten-core/src/lease.rs kind:verb
+// carried: "A RIVAL MAY REAP A LEASE THAT BEATS WITHOUT PROGRESSING" crates/batten-core/src/lease.rs kind:verb
+// carried: "a lease that carries no progress token is never stall-stealable" crates/batten-core/src/lease.rs kind:verb
+// carried: "authorises: an absent lease lets any branch run" crates/batten-core/src/lease.rs kind:verb
+// carried: "authorises: the branch the lease names may run" crates/batten-core/src/lease.rs kind:verb
 // changed: "THE STOP: a branch the lease does not name is refused with exit 3" crates/batten/src/lib.rs kind:verb
-// carried: "authorises: a released lease stops nobody" crates/batten/src/lease.rs kind:verb
-// carried: "authorises: an expired lease stops nobody" crates/batten/src/lease.rs kind:verb
-// carried: "FAIL OPEN: a lease carrying no branch runs rather than guessing" crates/batten/src/lease.rs kind:verb
-// carried: "FAIL OPEN: an unreachable remote runs, where every other verb refuses" crates/batten/src/lease.rs kind:verb
+// carried: "authorises: a released lease stops nobody" crates/batten-core/src/lease.rs kind:verb
+// carried: "authorises: an expired lease stops nobody" crates/batten-core/src/lease.rs kind:verb
+// carried: "FAIL OPEN: a lease carrying no branch runs rather than guessing" crates/batten-core/src/lease.rs kind:verb
+// carried: "FAIL OPEN: an unreachable remote runs, where every other verb refuses" crates/batten-core/src/lease.rs kind:verb
 // changed: "authorises: a missing branch argument is exit 2, never a verdict" crates/batten/src/cli.rs kind:verb
-// carried: "the lease body carries the branch it authorises, and still ends with the nonce" crates/batten/src/lease.rs kind:verb
-// carried: "the lease's own ref name is never mistaken for the branch it authorises" crates/batten/src/lease.rs kind:verb
-// carried: "acquire leaves a receipt carrying the instant the lease expires" crates/batten/src/lease.rs kind:verb
-// carried: "a renew REFRESHES the receipt — a lease held for a long lap is still held" crates/batten/src/lease.rs kind:verb
-// carried: "release REMOVES the receipt rather than letting it age out" crates/batten/src/lease.rs kind:verb
-// carried: "A REFUSED ACQUIRE LEAVES NO RECEIPT — the whole point of the predicate" crates/batten/src/lease.rs kind:verb
-// carried: "the lease body carries the head that is about to become main" crates/batten/src/lease.rs kind:verb
+// carried: "the lease body carries the branch it authorises, and still ends with the nonce" crates/batten-core/src/lease.rs kind:verb
+// carried: "the lease's own ref name is never mistaken for the branch it authorises" crates/batten-core/src/lease.rs kind:verb
+// carried: "acquire leaves a receipt carrying the instant the lease expires" crates/batten-core/src/lease.rs kind:verb
+// carried: "a renew REFRESHES the receipt — a lease held for a long lap is still held" crates/batten-core/src/lease.rs kind:verb
+// carried: "release REMOVES the receipt rather than letting it age out" crates/batten-core/src/lease.rs kind:verb
+// carried: "A REFUSED ACQUIRE LEAVES NO RECEIPT — the whole point of the predicate" crates/batten-core/src/lease.rs kind:verb
+// carried: "the lease body carries the head that is about to become main" crates/batten-core/src/lease.rs kind:verb
 // carried: "peek prints the field alone, so a caller never parses a sentence" crates/batten/src/lib.rs kind:verb
 // carried: "peek on an absent lease is silent and 0 — a reading, not an error" crates/batten/src/lib.rs kind:verb
 // changed: "peek on an unknown field is exit 2, never an empty answer" crates/batten/src/cli.rs kind:verb
-// carried: "reserve admits a waiter as the successor behind the holder" crates/batten/src/lease.rs kind:verb
-// carried: "THE BOUND: a second waiter cannot take a slot that is already filled" crates/batten/src/lease.rs kind:verb
-// carried: "reserve is idempotent for the branch already holding the slot" crates/batten/src/lease.rs kind:verb
-// carried: "RESERVING IS NOT STEALING: the holder keeps the lease and every other field" crates/batten/src/lease.rs kind:verb
-// carried: "a reservation does not extend the holder's lease" crates/batten/src/lease.rs kind:verb
-// carried: "authorises admits the holder AND its one admitted successor" crates/batten/src/lease.rs kind:verb
-// carried: "THE STOP STILL STOPS: a third branch is refused while two are admitted" crates/batten/src/lease.rs kind:verb
-// carried: "reserve refuses when no lease is held — acquire is the right verb then" crates/batten/src/lease.rs kind:verb
-// carried: "reserve refuses to reserve behind yourself, which would consume the slot" crates/batten/src/lease.rs kind:verb
-// carried: "THE HEARTBEAT CARRIES THE RESERVATION, or it erases it within a beat" crates/batten/src/lease.rs kind:verb
-// carried: "ACQUIRE CLEARS IT: a new turn does not inherit the last one's successor" crates/batten/src/lease.rs kind:verb
-// carried: "a lease minted before this change carries no next, and admits no successor" crates/batten/src/lease.rs kind:verb
-// carried: "AGING: an aged waiter probes a freed lease sooner than a fresh one" crates/batten/src/lease.rs kind:verb
-// carried: "a non-numeric age is read as zero rather than crashing the backoff" crates/batten/src/lease.rs kind:verb
-// changed: "PRESSURE: two waiters against one holder produce exactly ONE winner" crates/batten/src/lease.rs kind:verb
-// changed: "PRESSURE: the lease passes to exactly one waiter after release, not both" crates/batten/src/lease.rs kind:verb
+// carried: "reserve admits a waiter as the successor behind the holder" crates/batten-core/src/lease.rs kind:verb
+// carried: "THE BOUND: a second waiter cannot take a slot that is already filled" crates/batten-core/src/lease.rs kind:verb
+// carried: "reserve is idempotent for the branch already holding the slot" crates/batten-core/src/lease.rs kind:verb
+// carried: "RESERVING IS NOT STEALING: the holder keeps the lease and every other field" crates/batten-core/src/lease.rs kind:verb
+// carried: "a reservation does not extend the holder's lease" crates/batten-core/src/lease.rs kind:verb
+// carried: "authorises admits the holder AND its one admitted successor" crates/batten-core/src/lease.rs kind:verb
+// carried: "THE STOP STILL STOPS: a third branch is refused while two are admitted" crates/batten-core/src/lease.rs kind:verb
+// carried: "reserve refuses when no lease is held — acquire is the right verb then" crates/batten-core/src/lease.rs kind:verb
+// carried: "reserve refuses to reserve behind yourself, which would consume the slot" crates/batten-core/src/lease.rs kind:verb
+// carried: "THE HEARTBEAT CARRIES THE RESERVATION, or it erases it within a beat" crates/batten-core/src/lease.rs kind:verb
+// carried: "ACQUIRE CLEARS IT: a new turn does not inherit the last one's successor" crates/batten-core/src/lease.rs kind:verb
+// carried: "a lease minted before this change carries no next, and admits no successor" crates/batten-core/src/lease.rs kind:verb
+// carried: "AGING: an aged waiter probes a freed lease sooner than a fresh one" crates/batten-core/src/lease.rs kind:verb
+// carried: "a non-numeric age is read as zero rather than crashing the backoff" crates/batten-core/src/lease.rs kind:verb
+// changed: "PRESSURE: two waiters against one holder produce exactly ONE winner" crates/batten-core/src/lease.rs kind:verb
+// changed: "PRESSURE: the lease passes to exactly one waiter after release, not both" crates/batten-core/src/lease.rs kind:verb
 
-/*
-#MUTANT-SUITE crates/batten/tests/it/lease_lifecycle.rs
-#MUTANT rebuild-the-lease-time-inline|s@        time: crate::git::utc_at(seconds),@        time: gix::date::Time { seconds, offset: 3600 },@|a_lease_object_is_stamped_in_utc
-*/
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 

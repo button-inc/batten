@@ -22,5 +22,20 @@ Record that a step passed, refusing when its inputs changed since the paired che
 batten\-step\-run(1)
 Run a step\*(Aqs command only when its receipt misses, and record the receipt when it passes
 .TP
+batten\-step\-graph(1)
+Schedule the step table\*(Aqs rows as a graph
+.TP
+batten\-step\-cover(1)
+Say whether every required CI check passed at HEAD or is exempt, naming each that did not
+.TP
+batten\-step\-base(1)
+Print one `base <path> <id>` line per path, read at the merge base of HEAD and a ref
+.TP
+batten\-step\-env(1)
+Print the sorted `env` lines a declared environment keys, the step cache\*(Aqs answer to the tool line
+.TP
+batten\-step\-exists(1)
+Print the presence lines a step\*(Aqs probed pathspecs select, the step cache\*(Aqs answer to the tool line
+.TP
 batten\-step\-help(1)
 Print this message or the help of the given subcommand(s)

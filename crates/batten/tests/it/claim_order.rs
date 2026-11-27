@@ -25,7 +25,7 @@
 //! # What this row does NOT decide
 //!
 //! Whether a given session actually claimed before branching. That is not a
-//! property of the tree, and a rule resolving to it would be the model verdict
+//! property of the tree, and a rule resolving to it would be the gated-model verdict
 //! non-negotiable rule 3 forbids. The prose carries the position; this keeps the
 //! prose from evaporating.
 
@@ -37,7 +37,8 @@ use crate::common;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use batten::rules::{self, Rule};
+use batten::config_model::Rule;
+use batten::rules;
 
 /// The row as `batten.toml` declares it, deserialized rather than
 /// struct-literalled: `Rule` carries `deny_unknown_fields`, so this goes through

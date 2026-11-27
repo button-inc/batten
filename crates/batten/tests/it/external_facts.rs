@@ -193,7 +193,7 @@ fn check(repo: &Path, root: Option<&Path>) -> Output {
         // said nothing.
         None => command.env_remove(ROOT_VAR),
     };
-    command.output().expect("run batten check")
+    command.streamed_output().expect("run batten check")
 }
 
 #[test]

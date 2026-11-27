@@ -10,9 +10,12 @@ project's direction lives on its issue board.
   consumer's own `batten.toml`.
 - **Rules ship with their mechanism.** A new rule without a gate (a runnable
   check with an exit code) is only half a change.
-- **Gates decide, they do not estimate.** A predicate that only approximates its
-  own question — a model judgement, or a match over open-ended content — may
-  advise; it never blocks.
+- **Gates decide, they do not estimate.** A gate never blocks on the judgement
+  of the model it gates — the agent's own, or an external judge's; those may
+  advise. A Batten-managed model is a command and may decide: pinned by digest,
+  deterministic, run inside `batten`, its text kept in the engine with only a
+  typed label reaching a module, a remedy that is an action, and precision
+  measured on a committed corpus.
 - Machine-readable output must be **byte-stable** and pointer-only for sensitive
   checks — never emit the sensitive content itself.
 

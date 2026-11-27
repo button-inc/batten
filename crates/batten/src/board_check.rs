@@ -89,6 +89,7 @@
 //! and the reading carries none of them either: a claim is its key and column,
 //! a citation its token or path.
 
+use crate::preset::ManifestExt as _;
 use std::collections::BTreeSet;
 use std::io::Write;
 use std::path::Path;
@@ -349,18 +350,18 @@ fn undeclared(key: &str) -> anyhow::Error {
 }
 
 /// A list of globs, compiled.
-fn selectors(globs: &[String]) -> Result<Vec<crate::rules::Selector>> {
+fn selectors(globs: &[String]) -> Result<Vec<crate::selector::Selector>> {
     globs
         .iter()
-        .map(|glob| crate::rules::Selector::new(glob.as_str()))
+        .map(|glob| crate::selector::Selector::new(glob.as_str()))
         .collect()
 }
 
 /// Every tracked path one of `keep` selects and none of `drop` does.
 fn corpus_paths(
     root: &Path,
-    keep: &[crate::rules::Selector],
-    drop: &[crate::rules::Selector],
+    keep: &[crate::selector::Selector],
+    drop: &[crate::selector::Selector],
 ) -> std::result::Result<Vec<String>, String> {
     let tracked = crate::git::tracked_paths(root).map_err(|_| {
         "no repository root to scan — this reads the tree and must not guess".to_owned()
@@ -431,11 +432,11 @@ fn sort_lines(lines: &mut [String]) {
 /// `Err` is could-not-look: the preset is missing from the build, will not
 /// compile, or faulted over the reading.
 fn decide(family: &str, lines: &[String]) -> std::result::Result<Decided, String> {
-    let manifest = crate::preset::MANIFESTS
+    let manifest = crate::preset_catalog::MANIFESTS
         .iter()
         .find(|manifest| manifest.name == PRESET)
         .ok_or_else(|| format!("this build ships no `{PRESET}` preset to decide with"))?;
-    let sources = manifest.modules_at(crate::rules::RuleScope::Tree);
+    let sources = manifest.modules_at(crate::preset_catalog::RuleScope::Tree);
     let bundle = crate::policy::compile(PRESET, &sources, &Value::Object(serde_json::Map::new()))
         .map_err(|_| format!("the `{PRESET}` preset does not compile"))?;
     let mut records = serde_json::Map::new();
@@ -587,7 +588,18 @@ impl<'a> Row<'a> {
                     .filter(|url| crate::landed::is_pull_request_url(url))
                     .count()
             });
+        // LINEAR OMITS A NULL FIELD, so a row with no milestone arrives with no
+        // `projectMilestone` key at all, from `get_issue` and from the declared
+        // `list_issues` projection alike (measured on #1276: 1 of 17 listed rows
+        // carried the key; `get_issue` on that one carried it, on the rest it was
+        // missing). Reading every missing key as could-not-look left `board
+        // check` unable to judge 83 of 85 rows. The key's absence asserts "none"
+        // only where the payload carries the row's project, which Linear sends
+        // whenever there is one; with neither, it is still a fetch that did not
+        // look, never a pass.
+        let carries_project = object.contains_key("project") || object.contains_key("projectId");
         let milestone = match object.get("projectMilestone") {
+            None if carries_project => Presence::Empty,
             None => Presence::Absent,
             Some(value) if present(value) => Presence::Set,
             Some(_) => Presence::Empty,
@@ -715,10 +727,6 @@ pub struct Reading {
 // every row in this file: `batten mutate` judges a row under the `MUTANT-SUITE`
 // line above it (CLOUD-2193), and this is the file's only one. No pattern or
 // case here carries a `|`: the row is split on it.
-//MUTANT-SUITE crates/batten/tests/it/board_check.rs
-//MUTANT blocker-edges-unread|s@^            lines.push(format!("edge\\t{}\\t{}\\t{}", from, field(to), by_num(to).0));$@            let _ = to;@|a_blocked_by_cycle_is_reported_with_its_members
-//MUTANT claim-scan-unread|s@^                        "claim\\t{}\\t{}\\t{}",$@                        "unread\\t{}\\t{}\\t{}",@|a_body_claiming_a_column_the_board_contradicts_is_reported
-//MUTANT readiness-unread|s@^        if \["ready", "review"\].contains(.column) {$@        if false {@|a_todo_issue_with_no_ready_block_is_refused
 
 /// Read the graph over a payload set.
 ///
@@ -824,7 +832,6 @@ pub fn read_graph(
 /// column nobody occupies, is the preset's to decide. A scan whose expressions
 /// will not compose extracted nothing, which is not the same as finding nothing,
 /// so it says `scan broken`.
-//MUTANT empty-column-claims|s@^                if !cited.is_empty() \&\& !claimed.is_empty() {$@                if !cited.is_empty() {@|a_set_with_no_status_scans_a_bare_mention_as_no_claim
 fn read_claims(
     rows: &[Row<'_>],
     grammar: &Grammar,
@@ -1040,9 +1047,6 @@ fn graph(
     Ok(ExitCode::Success)
 }
 
-//MUTANT receipt-carries-no-ids|s@^        if declared.grammar.key_of(id).is_none() {$@        if true {@|a_coherent_board_records_one_receipt_per_id_it_judged
-//MUTANT receipt-mints-any-value|s@^        if declared.grammar.key_of(id).is_none() {$@        if false {@|a_value_that_is_not_an_issue_key_mints_nothing_so_it_cannot_become_a_path
-
 /// One receipt per judged id, the trigger a move guard reads (CLOUD-512).
 ///
 /// MINTED ONLY ON THE SUCCESS PATH: a board carrying violations must not
@@ -1086,8 +1090,8 @@ struct Cites {
     obligations: Regex,
     cited_test: Regex,
     cited_path: Regex,
-    corpus: Vec<crate::rules::Selector>,
-    exclude: Vec<crate::rules::Selector>,
+    corpus: Vec<crate::selector::Selector>,
+    exclude: Vec<crate::selector::Selector>,
     prospective: Option<String>,
 }
 
@@ -1098,10 +1102,6 @@ struct CiteReading {
     cited: usize,
     history: bool,
 }
-
-//MUTANT fixtures-satisfy-a-citation|s@^        let drop = &self.exclude;$@        let drop: \&[crate::rules::Selector] = \&[];@|a_citation_that_resolves_only_in_a_fixture_and_nowhere_else_is_refused
-//MUTANT superseded-block-is-judged|s@^            start = Some(at);$@            start = start.or(Some(at));@|the_last_opener_is_the_live_block_and_an_earlier_one_is_history
-//MUTANT marker-never-read|s@^                Some(marker) => text.contains(.format!("`{path}` {marker}")),$@                Some(_) => false,@|a_citation_the_block_marks_new_is_prospective_not_fatal
 
 impl Cites {
     fn resolve(declared: &Declared<'_>) -> Result<Self> {
@@ -1155,7 +1155,7 @@ impl Cites {
         }
         let contents: Vec<String> = paths
             .iter()
-            .filter_map(|path| std::fs::read(declared.root.join(path)).ok())
+            .filter_map(|path| crate::fsio::read(declared.root.join(path)).ok())
             .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
             .collect();
         let history = !crate::git::is_shallow(declared.root).unwrap_or(true);
@@ -1370,7 +1370,7 @@ fn render_cites(
 struct Refs {
     citation: Regex,
     tag: Regex,
-    exclude: Vec<crate::rules::Selector>,
+    exclude: Vec<crate::selector::Selector>,
 }
 
 /// One clause citation in the tree: where, which issue, which clause.
@@ -1405,11 +1405,11 @@ impl Refs {
     ///
     /// A file carrying a NUL byte is binary and skipped, `grep -I`'s reading.
     fn hits(&self, root: &Path) -> std::result::Result<BTreeSet<Hit>, String> {
-        let everything = [crate::rules::Selector::new("**")
+        let everything = [crate::selector::Selector::new("**")
             .map_err(|_| "the whole-tree glob does not compile".to_owned())?];
         let mut hits = BTreeSet::new();
         for path in corpus_paths(root, &everything, &self.exclude)? {
-            let Ok(bytes) = std::fs::read(root.join(&path)) else {
+            let Ok(bytes) = crate::fsio::read(root.join(&path)) else {
                 continue;
             };
             if bytes.contains(&0) {
@@ -1566,6 +1566,7 @@ mod tests {
         declared_row, field, graph, graph_findings, payload_set, present, read_claims, readiness,
         render_cites, render_refs, sort_lines,
     };
+    #[cfg(test)]
     use crate::board::Board;
     use crate::exit::ExitCode;
     use crate::pattern::NamedPattern;
@@ -1741,6 +1742,23 @@ mod tests {
         assert_eq!(read(&value), Some(Presence::Empty));
         value["projectMilestone"] = json!({"name": "M1"});
         assert_eq!(read(&value), Some(Presence::Set));
+    }
+
+    /// Fails by: a row Linear sent without the key (it omits nulls) read as a
+    /// fetch that did not look, which blinded the check on every milestone-less
+    /// row; or a payload carrying no project read as judged, which would pass
+    /// a projection that never asked for the field.
+    #[test]
+    fn a_missing_milestone_on_a_row_with_a_project_is_empty() {
+        let read = |value: &Value| Row::read(value).map(|row| row.milestone);
+        let mut value = row("CLOUD-1", "Todo", "");
+        value["project"] = json!("Batten");
+        assert_eq!(read(&value), Some(Presence::Empty));
+        let mut by_id = row("CLOUD-1", "Todo", "");
+        by_id["projectId"] = json!("p-1");
+        assert_eq!(read(&by_id), Some(Presence::Empty));
+        let bare = row("CLOUD-1", "Todo", "");
+        assert_eq!(read(&bare), Some(Presence::Absent));
     }
 
     #[test]

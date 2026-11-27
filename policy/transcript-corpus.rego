@@ -93,8 +93,8 @@ violation contains {
 	"verdict": "prose measure partial",
 	"subjects": [{"count": sessions}, {"count": threshold}],
 } if {
-	sessions := counted("sessions")
-	threshold := counted("threshold")
+	sessions = counted("sessions")
+	threshold = counted("threshold")
 	sessions < threshold
 }
 

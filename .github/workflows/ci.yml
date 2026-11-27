@@ -4,6 +4,9 @@ name: CI
 # (checkout, fetch, toolchain, caches, `mise run mutant:changed`); it runs
 # behind `ci`, so it carries no landing-lease shell of its own. CLOUD-2588 adds
 # one `actions/cache` step to it, a `uses:` step with no shell body.
+# CLOUD-2789 adds the `mutants-reach` job, argv steps only on the same terms
+# (checkout, fetch, toolchain, caches, `mise run mutant:changed`), and splits
+# the shards' verdict cache into `uses:` restore and save steps.
 
 # CI minutes cost money; an agent's local execution does not. So CI runs as
 # rarely as correctness allows:
@@ -245,6 +248,16 @@ jobs:
         run: sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/share/boost /usr/share/swift
       - name: Disk after the reclaim
         run: df -h /
+      # THE STEP TRACER, SO ITS TRACED ARM RUNS HERE (CLOUD-2784). `batten step
+      # run` traces a miss with `strace` and fails a read outside the row's
+      # declared inputs; each trace-lint case branches on whether a tracer
+      # answers, so on a runner without one only the untraced arm is checked.
+      # A bare step for the reclaim's reason above, and required: an install
+      # that silently failed would turn every traced case into its other arm.
+      - name: Refresh the package index for the step tracer
+        run: sudo apt-get update -q
+      - name: Install the step tracer
+        run: sudo apt-get install -y -q --no-install-recommends strace
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -538,6 +551,14 @@ jobs:
       # reaches through the same task `verify:gated` names, so `ci-local-parity`
       # property 3 holds. Gated on the same verdict as the step above: the quick
       # tier runs no suite that could write.
+      # THE TRACED BRANCH (CLOUD-2789): under `CI=true` `mise run ci` runs the
+      # suite OUTSIDE `step run` (bypassed here), so with the `strace` installed
+      # above its cases already take their traced branches; `verify`'s suite
+      # runs under `step run`'s tracer and takes only the fallback. This task
+      # is the lane `verify` runs those branches in, run here too for parity,
+      # and it fails rather than fall back where it cannot trace.
+      - run: mise run test:traced
+        if: steps.slow.outputs.needed == 'true'
       - run: mise run tree-clean
         if: steps.slow.outputs.needed == 'true'
       # THE OTHER BRANCH, and it is not merely `ci` minus the slow steps.
@@ -838,13 +859,16 @@ jobs:
       # release-shaped, or for any head while the release guard's settings are
       # not green.
       #
-      # THE ONE EXCEPTION IS B1 ITSELF: its trunk has no `release path` verb, so
-      # nothing is posted and nothing is sealed. That is harmless while the
-      # status is not required, and B1 changes no pin.
+      # UNCONDITIONAL (CLOUD-2851). B1's trunk had no `release path` verb, so
+      # this step was guarded by a hash of the file the predicate lived in, and
+      # that guard named ONE path: a pull request moving the module made it name
+      # the head's path rather than the trunk's, and the step skipped on that
+      # pull request's own run, grading nothing, silently. Every trunk now
+      # carries the verb wherever the module sits, so a trunk without it fails
+      # here as a usage error rather than skipping as if graded.
       - name: Check out the trunk's predicate beside the head
         run: git worktree add trunk-predicate origin/main
       - name: Grade the head with the trunk's predicate, post release-path, and seal final
-        if: hashFiles('trunk-predicate/crates/batten/src/release_path.rs') != ''
         env:
           BATTEN_GITHUB_TOKEN: ${{ github.token }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
@@ -1088,9 +1112,11 @@ jobs:
   # cargo-mutants book's PR recipe does: `--in-diff`, split across a matrix.
   # `MUTANT_SHARD` slices the cargo-mutants mutants and the declared rows alike
   # (`run_mutate_sweep`; by row, not by gate, since CLOUD-2533 measured one
-  # 45-row gate holding a shard past this job's bound), and a shard skips the
-  # baseline the unsharded local run
-  # already took. Measured locally on #1209: 22 mutants plus 3 declared rows in
+  # 45-row gate holding a shard past this job's bound). A shard does NOT skip
+  # the schema build or the unmutated baseline (the reach run): each shard used
+  # to pay both itself, which is why `mutants-reach` below builds and reaches
+  # once and hands the mirror to every shard. Measured locally on #1209: 22
+  # mutants plus 3 declared rows in
   # 32m41s serially, so four shards bring CI's share to about a quarter of that
   # on top of each shard's warm build. The #1132 matrix this replaces in spirit
   # was removed because it ran where `verify` never did; this one runs the task
@@ -1102,28 +1128,133 @@ jobs:
   #
   # IN `final`'s `needs:` AND IN `CI_REQUIRED_CHECKS`, for `batten-check`'s
   # reason above.
+  #
+  # THE SCHEMA BUILD AND THE REACH RUN ONCE, NOT ONCE PER SHARD (CLOUD-2789).
+  # Every shard builds and reaches over the WHOLE listing and judges only its
+  # slice, so each would compute the same mirror; this job computes it once
+  # with `MUTANT_PHASE=reach`, which stops the sweep after the reach run is
+  # sealed, and saves under this run's key what the shards need and nothing
+  # more: the sealed reach record and its context, the journal, and the reuse
+  # record with its PACKED binaries, the test binaries and what they launch,
+  # tagged with the rendered tree they were built from. A shard whose rendering
+  # matches takes the build as made, puts the binaries back and runs no cargo;
+  # the reach run resumes from its seal. NOT THE WHOLE MIRROR: its target was
+  # 6 GB on #1276, over half the repository's 10 GB cache store, and saved per
+  # run it evicted the Rust caches every other job restores; the pack measured
+  # 146 MB gzipped for `batten`'s set. NOT A GATE ON THE SHARDS: they run when
+  # it fails, and then build and reach themselves, as they did before it.
+  mutants-reach:
+    name: mutants (reach)
+    if: ${{ github.event.pull_request.draft == false }}
+    runs-on: ubuntu-24.04-arm
+    # MEASURED COLD (CLOUD-2882): under CI no journal names what the build
+    # refuses (CLOUD-2850), so the schema build rediscovers it round by round.
+    # On #1276's 13,805 mutants, with `CI=true MUTANT_PHASE=reach` on a 4-core
+    # box: 11 rounds and 1,058s with no cargo cache (12 rounds and 488s warm,
+    # the round cap being 12), then the reach run's 1,590s over 11,335 sites,
+    # 107s of listing and engine, and 38s of job setup. The 45 minutes this
+    # replaced would have cut the cold run off inside its reach.
+    timeout-minutes: 140 # budget: p95=2793s x3 measured=2026-11-24
+    # BEHIND `ci`, FOR THE `mutants` JOB'S REASON: no lease step of its own.
+    needs: [ci]
+    permissions:
+      contents: read
+    steps:
+      # THE `ci` JOB'S RECLAIM, FOR ITS REASON (CLOUD-2882): the schema build's
+      # target reached 6 GB on #1276, and a hand-back's build needs another
+      # 6.2 GB (`MUTANT_JOB_DISK_MB`); a runner that ran out recorded mutants
+      # unviable. Bare steps and `continue-on-error`, exactly as there.
+      - name: Disk before the reclaim
+        run: df -h /
+      - name: Reclaim runner disk before the build
+        continue-on-error: true
+        run: sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/share/boost /usr/share/swift
+      - name: Disk after the reclaim
+        run: df -h /
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+      - name: Fetch the comparison base refs
+        run: git fetch origin main:refs/remotes/origin/main
+      - uses: jdx/mise-action@3c2e0cf82a5b2e5249f0d3635a4d83d0ae861518 # v4.2.5 (CLOUD-404 retry fix, now a release)
+        with:
+          version: 2026.9.1
+          # The `mutants` job's list, for its reason: the reach run is the suite.
+          install_args: rust hk aqua:cli/cli github:nextest-rs/nextest aqua:EmbarkStudios/cargo-deny aqua:koalaman/shellcheck aqua:mvdan/sh aqua:tamasfe/taplo aqua:rhysd/actionlint aqua:jqlang/jq aqua:anchore/syft aqua:open-policy-agent/opa aqua:open-policy-agent/regal pkl deno node npm:prettier npm:renovate uv pipx:ntia-conformance-checker aqua:axodotdev/cargo-dist
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.pkl/cache
+          key: pkl-${{ runner.os }}-${{ hashFiles('hk.pkl') }}
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: mutants-
+          save-if: false
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.local/share/batten/*/provision
+          key: provision-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('batten.toml') }}
+          restore-keys: provision-${{ runner.os }}-${{ runner.arch }}-
+      - run: mise run mutant:changed
+        env:
+          MUTANT_PHASE: reach
+          DOCTOR_TARGETS: ""
+      # THIS RUN'S BUILD AND REACH, FOR THIS RUN'S SHARDS: keyed on the run, so
+      # no other run reads it, and the pull request's ref scopes it
+      # (`cache-sweep.yml` reclaims such entries).
+      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.local/share/batten/*/mutate/schema/reuse
+            ~/.local/share/batten/*/mutate/schema/reach
+          key: mutant-mirror-${{ runner.os }}-${{ runner.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
+
   mutants:
     name: mutants (${{ matrix.shard }})
-    if: ${{ github.event.pull_request.draft == false }}
+    # `!cancelled()`, NOT THE DEFAULT `success()`: `mutants-reach` is a saving,
+    # never a verdict, so a shard runs whatever it answered — success, failure,
+    # cancelled (its own timeout) or skipped — and builds for itself whenever
+    # the mirror is absent (CLOUD-2851: admitting only two let a reach timeout
+    # skip all four shards and turn `final` red on a non-verdict). Both
+    # dependencies named, so the condition visibly answers for each (`job
+    # require unseen`); `!cancelled()` still stops them when the RUN is.
+    if: ${{ !cancelled() && github.event.pull_request.draft == false && needs.ci.result == 'success' && (needs.mutants-reach.result == 'success' || needs.mutants-reach.result == 'failure' || needs.mutants-reach.result == 'cancelled' || needs.mutants-reach.result == 'skipped') }}
     strategy:
       fail-fast: false
       matrix:
-        shard: [0, 1, 2, 3]
+        # SIXTEEN, FROM THE JUDGING TIME (CLOUD-2882). The #1276 census ran
+        # this listing (13,734 mutants, 2,177 unviable, 266 classic) as 16
+        # shards: each judged ~701 switched mutants at ~2.4s and ~15 hand-backs
+        # at ~125s, 3,092-3,550s a shard. Eight would put a shard's x3 budget
+        # over the hosted 360-minute ceiling. Sixteen is also the most the
+        # account's 20 concurrent jobs hold: a shard starts only after `ci` and
+        # `mutants (reach)`, and by then every other job of the pull request's
+        # run has ended (the longest, dist's windows-gnu leg, at 1,616s).
+        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
     runs-on: ubuntu-24.04-arm
-    # DERIVED, NOT OBSERVED: a warm build of the engine and the staged suite,
-    # about 600s, plus a quarter of the 1961s local run. 1200s, x3. Re-derive
-    # from `mise run timeout-drift` once this job has 25 runs.
-    timeout-minutes: 60 # budget: p95=1200s x3 measured=2026-10-17
+    # MEASURED: the census's slowest 16th judged in 3,550s, and a shard's
+    # fixed cost was 523s on run 42306940892 (38s of setup, 485s of
+    # `mutant:changed` over a near-empty listing). The reach job's build is
+    # taken as made (CLOUD-2882), so a shard builds nothing.
+    timeout-minutes: 204 # budget: p95=4073s x3 measured=2026-11-24
     # BEHIND `ci`, SO IT CARRIES NO LEASE STEP OF ITS OWN. `ci-local-parity`
     # property 7 puts the landing lease first in every job that starts at once,
     # and a fourth copy of its twelve shell lines is growth `no-new-shell`
     # refuses with no override route. A job that `needs:` `ci` starts only after
     # `ci`'s own lease has run, and a declined run has already been cancelled by
     # then. The cost is `ci`'s wall time ahead of the shards.
-    needs: [ci]
+    needs: [ci, mutants-reach]
     permissions:
       contents: read
     steps:
+      # `mutants (reach)`'s reclaim, for its reason: a shard builds every
+      # hand-back in its slice, at 6.2 GB each (CLOUD-2882).
+      - name: Disk before the reclaim
+        run: df -h /
+      - name: Reclaim runner disk before the build
+        continue-on-error: true
+        run: sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/share/boost /usr/share/swift
+      - name: Disk after the reclaim
+        run: df -h /
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           # `MUTANT_CHANGED_SINCE=origin/main` diffs the branch against trunk.
@@ -1170,6 +1301,15 @@ jobs:
           path: ~/.local/share/batten/*/provision
           key: provision-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('batten.toml') }}
           restore-keys: provision-${{ runner.os }}-${{ runner.arch }}-
+      # THE REACH JOB'S BUILD AND REACH: its packed binaries, its sealed reach
+      # record and the context the seal is read in. Absent when that job
+      # failed, and the sweep then builds and reaches here, as it did before it.
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.local/share/batten/*/mutate/schema/reuse
+            ~/.local/share/batten/*/mutate/schema/reach
+          key: mutant-mirror-${{ runner.os }}-${{ runner.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
       - run: mise run mutant:changed
         env:
           # Both halves from `strategy`, so another matrix axis cannot leave a

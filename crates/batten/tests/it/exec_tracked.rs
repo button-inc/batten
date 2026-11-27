@@ -28,7 +28,7 @@ fn exec(dir: &Path, args: &[&str]) -> Output {
         .arg("exec")
         .args(args)
         .current_dir(dir)
-        .output()
+        .streamed_output()
         .expect("run batten exec")
 }
 
@@ -80,7 +80,7 @@ fn a_teed_child_is_reaped_when_its_output_cannot_be_written() {
         .args(["exec", "--", "sleep", &marker])
         .current_dir(&dir)
         .state_dir(&data)
-        .output()
+        .streamed_output()
         .expect("run batten exec");
     let survivors = carrying(&marker);
     for pid in &survivors {

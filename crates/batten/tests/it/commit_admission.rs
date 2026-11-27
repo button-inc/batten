@@ -188,6 +188,23 @@ fn an_unarticulated_protected_write_is_refused() {
     );
 }
 
+/// The `--message` half judges the STAGED set as the range half judges a
+/// commit: a protected write staged under a message with no block is refused.
+#[test]
+fn a_staged_protected_write_under_a_bare_message_is_refused() {
+    let dir = fixture("commit-admits-message");
+    write(&dir, GUARDED, "original = 2\n");
+    git_in(&dir, &["add", "-A"]);
+    write(&dir, "msg", "fix(config): change the guarded file\n");
+    let output = run(&dir, &["commit", "check", "--message", "msg"]);
+    assert_eq!(output.status.code(), Some(2), "{}", stdout(&output));
+    assert!(
+        stdout(&output).contains(&format!("admits {GUARDED}")),
+        "{}",
+        stdout(&output)
+    );
+}
+
 #[test]
 fn an_articulated_protected_write_passes() {
     let dir = fixture("commit-admits-present");
@@ -380,4 +397,31 @@ fn the_clause_needs_no_store_to_decide() {
         Some(0),
         "the block verifies with the store deleted: {report}"
     );
+}
+
+/// The spent ledger admits the Edit; it never excuses the COMMIT (CLOUD-2779).
+/// A protected admission now outlives the commits that do not touch its path, so
+/// the commit carrying the change still owes the block the spend printed, and
+/// that block names the path's blob rather than a HEAD.
+///
+/// Fails by: a `call:<head>` block (the anchor before this change), or a commit
+/// clause that consults the store and lets the spent record stand in for the
+/// block a reviewer reads.
+#[test]
+fn a_spent_admission_does_not_excuse_a_commit_that_omits_its_block() {
+    let dir = fixture("commit-admits-spent-no-block");
+    let block = articulate(&dir, GUARDED);
+    assert!(
+        block.contains("Admits-anchor: inputs:"),
+        "the block binds the inputs the decision read, not the HEAD: {block}"
+    );
+    write(&dir, GUARDED, "original = 2\n");
+    let range = commit(&dir, "fix(config): change the guarded file");
+    let (code, report) = check(&dir, &range);
+    assert_eq!(
+        code,
+        Some(2),
+        "a spent admission is not the commit's block: {report}"
+    );
+    assert!(report.contains(&format!("admits {GUARDED}")), "{report}");
 }

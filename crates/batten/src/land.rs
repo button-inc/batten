@@ -44,7 +44,10 @@ use std::path::Path;
 
 use anyhow::{Context as _, Result};
 
+use crate::config_model::BRANCH_KEYED_RECEIPTS;
+use crate::config_model::LAP_RECORD;
 use crate::gitwrite::{self, Rebase};
+use crate::preset_catalog::RED_HEAD;
 
 /// What one replay did.
 ///
@@ -206,7 +209,6 @@ pub enum Linearity {
 /// the fetch is HTTPS-only (`fetch::get`), and this is the half that decides.
 // A merge commit is a history the integration tier builds, so that tier judges
 // this function's mutants.
-//MUTANT-SUITE crates/batten/tests/it/linear_check.rs
 #[must_use]
 pub fn linearity(root: &Path, tip: &str, head: &str, requires_line: bool) -> Linearity {
     if !gitwrite::carries(root, tip, head) {
@@ -264,8 +266,6 @@ pub fn requires_line(root: &Path) -> Result<bool> {
 /// # Errors
 ///
 /// When the repository cannot be read or the ref cannot be written.
-//MUTANT-SUITE crates/batten/tests/it/land_tracking.rs
-//MUTANT landed-trunk-left-stale|s@^    gitwrite::set_ref(root, \&tracking_ref(reference), \&head)?;$@@|a_landed_branch_leaves_the_tracking_ref_at_the_landed_head
 pub fn record_landed_trunk(root: &Path, reference: &str, branch: &str) -> Result<bool> {
     let Some(head) = crate::git::resolve_ref(root, &format!("refs/heads/{branch}"))? else {
         return Ok(false);
@@ -591,13 +591,105 @@ pub fn record(root: &Path, branch: &str, outcome: &Replay) -> Result<()> {
 }
 
 /// Append the disk watcher's lines (`disk-collected …`, `disk-unlink-ms …`) to
-/// this branch's lap record, once the landing has returned (CLOUD-2197).
+/// this branch's lap record as each collection ends (CLOUD-2197, CLOUD-2782):
+/// the watcher's record sink calls it from the collection's own thread, one
+/// batched append per collection, so its lines never interleave with a lap's.
 ///
 /// # Errors
 ///
 /// A record that cannot be written.
 pub fn record_disk(root: &Path, branch: &str, lines: &[String]) -> Result<()> {
     append(root, branch, lines)
+}
+
+/// Whether `step`'s answer ends a held lap, and with which code (CLOUD-2783).
+///
+/// Only a FINAL verify does: `0` green or `2` refused. A verify's `3` is not a
+/// verdict — a reclaimed or voided gate laps exactly as it does unheld — and no
+/// other step holds, so the replay before it still runs and nothing after it
+/// (the lease, the push, the ready) is ever entered.
+#[must_use]
+pub fn held_after(step: Step, code: crate::exit::ExitCode) -> Option<crate::exit::ExitCode> {
+    use crate::exit::ExitCode;
+    (step == Step::Verify && matches!(code, ExitCode::Success | ExitCode::Violation))
+        .then_some(code)
+}
+
+/// A held lap's record line: its head, then the wall time of its entry and of
+/// each step it ran, in order (CLOUD-2783). The phase that dominates an
+/// unchanged-head lap is read off this line, never guessed.
+#[must_use]
+pub fn held_line(head: &str, entry_ms: u128, phases: &[(Step, u128)]) -> String {
+    phases.iter().fold(
+        format!("held {head} entry-ms={entry_ms}"),
+        |mut line, (step, ms)| {
+            use std::fmt::Write as _;
+            let _ = write!(line, " {}-ms={ms}", step.as_str());
+            line
+        },
+    )
+}
+
+/// `land lap --hold` and its clock (CLOUD-2783): whether a final verify ends
+/// the landing, and what the entry and each step of the last lap cost.
+#[derive(Debug)]
+pub struct Hold {
+    on: bool,
+    started: std::time::Instant,
+    entry_ms: Option<u128>,
+    phases: Vec<(Step, u128)>,
+}
+
+impl Hold {
+    /// A landing that began now, held or not.
+    #[must_use]
+    pub fn new(on: bool) -> Self {
+        Self {
+            on,
+            started: std::time::Instant::now(),
+            entry_ms: None,
+            phases: Vec::new(),
+        }
+    }
+
+    /// A lap opens: the entry is the time to the first one, and each lap's
+    /// phases start afresh.
+    pub fn lap(&mut self) {
+        let started = self.started;
+        self.entry_ms
+            .get_or_insert_with(|| started.elapsed().as_millis());
+        self.phases.clear();
+    }
+
+    /// Run one step, keeping its wall time.
+    pub fn time<T>(&mut self, step: Step, run: impl FnOnce() -> T) -> T {
+        let began = std::time::Instant::now();
+        let answer = run();
+        self.phases.push((step, began.elapsed().as_millis()));
+        answer
+    }
+
+    /// The code a held lap ends with after `step` answered `code`, or `None`.
+    #[must_use]
+    pub fn after(&self, step: Step, code: crate::exit::ExitCode) -> Option<crate::exit::ExitCode> {
+        held_after(step, code).filter(|_| self.on)
+    }
+
+    /// The held lap's record line for `head`.
+    #[must_use]
+    pub fn line(&self, head: &str) -> String {
+        held_line(head, self.entry_ms.unwrap_or_default(), &self.phases)
+    }
+}
+
+/// Append one line (a held lap, an engine use) to this branch's lap record, through the record's
+/// one door.
+///
+/// # Errors
+///
+/// A record that cannot be written.
+pub fn record_line(root: &Path, branch: &str, line: &str) -> Result<()> {
+    append(root, branch, &[line.to_owned()])
 }
 
 /// Append `lines` to this branch's lap record.
@@ -618,7 +710,7 @@ pub fn record_disk(root: &Path, branch: &str, lines: &[String]) -> Result<()> {
 /// lap reading both sides would also produce.
 ///
 /// The one public door is [`record_disk`]: the watcher's lines reach the record
-/// through it, after the landing, so the record keeps one writer.
+/// through it as each collection ends, so the record keeps one writer.
 fn append(root: &Path, branch: &str, lines: &[String]) -> Result<()> {
     let Ok(git_dir) = crate::git::git_dir(root) else {
         return Ok(());
@@ -691,7 +783,7 @@ fn branch_lap_lines(root: &Path, branch: &str) -> Vec<String> {
     files.sort();
     files
         .iter()
-        .filter_map(|(_, path)| std::fs::read_to_string(path).ok())
+        .filter_map(|(_, path)| crate::fsio::read_to_string(path).ok())
         .flat_map(|text| text.lines().map(str::to_owned).collect::<Vec<_>>())
         .collect()
 }
@@ -720,10 +812,6 @@ fn contains(root: &Path, tip: &str, ancestor: &str) -> bool {
 /// An absent remote ref is admitted: there is nothing to lose, and the
 /// receive-pack CAS still refuses if it appears before the swap.
 #[must_use]
-//MUTANT admits-ignored|s@^    if last_pushed.as_deref() == Some(remote) {$@    if true {@|a_sibling_commit_on_the_branch_is_never_admitted
-//MUTANT replay-chain-unfollowed|s@^    for line in lines.iter().rev() {$@    for line in lines.iter() {@|a_branch_replayed_twice_replaces_its_first_pre_rebase_head
-//MUTANT patch-identity-unasked|s@^    if crate::git::patches_contained(root, head, remote) {$@    if false {@|a_hand_pushed_head_replayed_onto_trunk_is_admitted
-//MUTANT lease-reads-one-partition|s@^    let prefix = format!("{name}.");$@    let prefix = format!("{name}.unread.");@|a_replay_recorded_before_a_re_claim_still_admits_its_pre_rebase_head
 pub fn admitted(root: &Path, branch: &str, remote: &str, head: &str) -> bool {
     if remote == crate::lease::ZERO || contains(root, head, remote) {
         return true;
@@ -766,10 +854,6 @@ pub fn admitted(root: &Path, branch: &str, remote: &str, head: &str) -> bool {
     }
     reached[1..].iter().any(|tip| contains(root, tip, remote))
 }
-
-/// The record this module writes, and the one `record::VERB_WRITTEN` names so a
-/// module can read it back.
-pub const LAP_RECORD: &str = "lap";
 
 /// Which arm of the lap's raced wait an answer came from (CLOUD-1338).
 ///
@@ -913,8 +997,6 @@ pub enum Waited {
 ///
 /// An UNREAD wait keeps its runs too (CLOUD-1215): nobody read them, so nothing
 /// says they are waste.
-//MUTANT-SUITE crates/batten/tests/it/land_lap.rs
-//MUTANT unread-wait-abandons-its-runs|s@    !matches!(seen, Some(TapVerdict::Red \x7c TapVerdict::Unread))@    !matches!(seen, Some(TapVerdict::Red))@|an_unread_wait_neither_re_drafts_nor_cancels
 #[must_use]
 pub const fn abandons_the_runs(seen: Option<TapVerdict>) -> bool {
     !matches!(seen, Some(TapVerdict::Red | TapVerdict::Unread))
@@ -1311,17 +1393,6 @@ pub fn record_wait(root: &Path, branch: &str, answers: &[Answered]) -> Result<()
     )
 }
 
-/// The receipt family recording a head whose wait stopped red (CLOUD-2270).
-///
-/// Branch-keyed, `red-head.<slug>`, and REPLACED rather than appended: it
-/// answers "what does this branch's head owe a push", which is current state,
-/// never history. `red-head` reads it as a mediated fact.
-///
-/// Also the PRESET's name, by construction rather than coincidence: the
-/// manifest spells itself with this constant, so the landing's "is the preset
-/// enabled" lookup and the record cannot be renamed apart.
-pub const RED_HEAD: &str = "red-head";
-
 /// A red reading's two pointer lists: each failed required check's newest run
 /// as `(id, name)`, and each required check whose newest run is still going.
 ///
@@ -1355,7 +1426,6 @@ pub fn red_runs(
 /// record and every name a single path component.
 // The record's writer, reader and clear are judged over the compiled binary and
 // the real post-tool mint, which only the integration tier runs (CLOUD-2270).
-//MUTANT-SUITE crates/batten/tests/it/head_push_unread.rs
 #[must_use]
 pub fn red_head_slug(branch: &str) -> String {
     branch.replace('%', "%25").replace('/', "%2F")
@@ -1495,7 +1565,7 @@ fn read_red_head(root: &Path, branch: &str) -> crate::facts::Look<RedHead> {
     let Some(path) = red_head_path(root, branch) else {
         return crate::facts::Look::CouldNotLook;
     };
-    let text = match std::fs::read_to_string(&path) {
+    let text = match crate::fsio::read_to_string(&path) {
         Ok(text) => text,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             return crate::facts::Look::IsNot;
@@ -1631,6 +1701,56 @@ impl Pushed {
 /// resolve. A rejected update is [`Pushed::Raced`] rather than an error.
 pub fn push(root: &Path, remote: &str, branch: &str) -> Result<Pushed> {
     let head = crate::git::head_commit(root).context("land: read this clone's HEAD")?;
+    push_commit(root, remote, branch, head)
+}
+
+/// The head this branch's most recent gate run passed, or `None` when its
+/// most recent run did not pass or it has none (#1276).
+///
+/// **THE LATEST VERDICT, NOT THE LATEST PASS:** a head that passed and was
+/// then refused is not one to publish, so a refused or stalled run after a
+/// clean one answers `None`.
+#[must_use]
+pub fn last_verified(root: &Path, branch: &str) -> Option<String> {
+    let lines = branch_lap_lines(root, branch);
+    let latest = lines
+        .iter()
+        .rev()
+        .find(|line| line.starts_with("verify "))?;
+    let mut columns = latest.split_whitespace().skip(1);
+    match (columns.next(), columns.next()) {
+        (Some("clean"), Some(sha)) => Some(sha.to_owned()),
+        _ => None,
+    }
+}
+
+/// Push the head this lap's gate passed — never whatever `HEAD` is by the time
+/// the push runs (#1276).
+///
+/// The lap used to push `HEAD`, so a commit made mid-gate was published,
+/// readied and spent a matrix on with no local verdict at all. A remote someone
+/// pushed past the verified head refuses the swap ([`Pushed::Raced`]), and the
+/// lap goes round again.
+///
+/// **A COMMIT MADE WHILE THE GATE RUNS IS NOT A WORKFLOW** (CLOUD-2781). This
+/// doc used to call pushing a draft mid-lap the workflow, which held for the
+/// push and not for the gate: every stage reads the working tree, so the edit
+/// reached the stages still to run and the verdict judged a tree no stage saw
+/// whole. [`verify`] now voids a gate whose tree moved ([`tree_moved`]), and a
+/// live lap refuses writes into its checkout.
+///
+/// # Errors
+///
+/// No passing verdict on record for this branch, or [`push`]'s.
+pub fn push_verified(root: &Path, remote: &str, branch: &str) -> Result<Pushed> {
+    let verified = last_verified(root, branch).with_context(|| {
+        format!("land: {branch}'s latest gate run did not pass, so there is no head to push")
+    })?;
+    push_commit(root, remote, branch, verified)
+}
+
+/// Push `head` to `branch`'s own ref under receive-pack's compare-and-swap.
+fn push_commit(root: &Path, remote: &str, branch: &str, head: String) -> Result<Pushed> {
     let reference = format!("refs/heads/{branch}");
     let admit = |old: &str| admitted(root, branch, old, &head);
     let outcome = crate::lease::push(remote, root, &reference, &head, &admit)
@@ -1642,9 +1762,60 @@ pub fn push(root: &Path, remote: &str, branch: &str) -> Result<Pushed> {
         // predicate: a free-form string in a fixed-column record is a channel
         // for prose to travel down, which rule 4 refuses.
         crate::lease::Outcome::Rejected { .. } => Pushed::Raced,
+        // The error a non-200 answer always was on this path (CLOUD-2729): a
+        // lap that could not push has not raced, and the loop's own stop is
+        // what handles a forge that will not take it.
+        crate::lease::Outcome::Throttled { .. } => {
+            return Err(anyhow::anyhow!(
+                "land: push {reference}: the forge throttled the request"
+            ));
+        }
     };
     append(root, branch, std::slice::from_ref(&pushed.line()))?;
     Ok(pushed)
+}
+
+/// The variable the lap's own gate runs under (CLOUD-2707): set by
+/// `run_land_verify_seen` on the gate it spawns, and read by `land placed`, so
+/// the lap's own gate is never advised to run the lap.
+pub const LAP_GATE: &str = "BATTEN_LAND_GATE";
+
+/// The pid of the lap whose gate a process runs under (CLOUD-2783): set by
+/// `run_land_verify_seen` beside [`LAP_GATE`], and read by the write hold so a
+/// call is exempt only from ITS OWN lap. Not a marker but an identity: a suite
+/// case that takes the singleton with its own pid is still held by it, and the
+/// suite's scrub of [`LAP_GATE`] (CLOUD-2707) does not reach it.
+pub const LAP_PID: &str = "BATTEN_LAND_LAP";
+
+/// Where a gate run stands relative to `land` (CLOUD-2707).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Placement {
+    /// The lap itself is running the gate.
+    Lap,
+    /// The head is still being iterated: uncommitted work, or commits on no
+    /// remote, or a clone whose remotes could not be read.
+    Iterating,
+    /// A committed, pushed head outside the lap: the run is legitimate, and
+    /// `land` is the step after it, answering this head from the run's receipt.
+    BeforeLand,
+}
+
+/// Decide where a gate run stands (CLOUD-2707). It only chooses whether to
+/// advise; nothing here refuses, and could-not-look is iterating, so an
+/// unreadable remote says nothing rather than something false.
+#[must_use]
+pub const fn placement(
+    under_lap: bool,
+    uncommitted: usize,
+    on_a_remote: Option<bool>,
+) -> Placement {
+    if under_lap {
+        Placement::Lap
+    } else if uncommitted > 0 || !matches!(on_a_remote, Some(true)) {
+        Placement::Iterating
+    } else {
+        Placement::BeforeLand
+    }
 }
 
 /// What the lap's verification said about this head.
@@ -1746,6 +1917,38 @@ pub enum Refusal {
         /// composed here: which reclaim to run is that repository's vocabulary.
         remedy: String,
     },
+    /// **THE CHECKOUT MOVED UNDER THE GATE, WHICH LAPS RATHER THAN STOPPING**
+    /// (CLOUD-2781). Every stage the gate dispatches reads the working tree, so a
+    /// commit or an edit made while it ran reached the stages after it: its
+    /// verdict is about a tree no stage saw whole. Not a refusal of the tree,
+    /// so it laps like [`Self::Moved`]; and never clean, so the moved head is
+    /// never recorded as verified.
+    Voided {
+        /// HEAD when the gate returned, or `-` where it could not be read.
+        to: String,
+        /// Paths dirty when the gate returned; `usize::MAX` where unreadable.
+        dirty: usize,
+    },
+}
+
+/// Whether the checkout moved under a gate that started at HEAD `start` with
+/// `start_dirty` dirty paths: HEAD read at its return differs, or the dirty
+/// count does. A lap's entry refuses a dirty tree, so under `land` the start is
+/// always 0 and this is "any path dirty at return"; [`verify`] is public, so the
+/// count is compared rather than assumed. A reading that could not be taken is a
+/// move, since a verdict over a tree nobody could read back is not one to record.
+#[must_use]
+pub fn tree_moved(
+    (start, start_dirty): (&str, Option<usize>),
+    end: Option<String>,
+    dirty: Option<usize>,
+) -> Option<Refusal> {
+    let to = end.unwrap_or_else(|| String::from("-"));
+    let unmoved = to == start && dirty.is_some() && dirty == start_dirty;
+    (!unmoved).then_some(Refusal::Voided {
+        to,
+        dirty: dirty.unwrap_or(usize::MAX),
+    })
 }
 
 impl Verified {
@@ -1841,7 +2044,7 @@ pub fn verify(
     branch: &str,
     command: &[String],
     published: &[(String, String)],
-    environment: &[crate::outputs::OutputPattern],
+    environment: &[crate::config_model::OutputPattern],
 ) -> Result<Verified> {
     if command.is_empty() {
         return Err(crate::error::UsageError::raise(String::from(
@@ -1909,6 +2112,13 @@ pub fn verify(
     // sibling that answers it. Both readings from one function would produce
     // opposite verdicts over identical bytes.
     let mut log = Vec::new();
+    // THE TREE IT STARTS ON, READ BEFORE IT RUNS (CLOUD-2780). Read after, the
+    // start count equalled the end count, so an edit left by the gate's own
+    // stages compared unmoved and was recorded against HEAD.
+    let start = head.clone();
+    let start_dirty = crate::git::uncommitted(&started).ok();
+    // THE GATE'S OWN WINDOW: the low-water mark it is judged by is read from here.
+    crate::low_water::reset();
     let classified =
         crate::exec::classify_in_env(&started, command, environment, &VERIFY_SETTINGS, published)
             .map(|(code, found, handles)| {
@@ -1916,8 +2126,17 @@ pub fn verify(
                 (code, found)
             });
     let verified = match classified {
-        Ok(ran) => gate_said(head, ran, environment),
+        Ok(ran) => gate_said(head, ran, environment, crate::low_water::read()),
         Err(problem) => return Err(problem.context("land: run the configured verify command")),
+    };
+    // THE TREE THE GATE JUDGED MUST BE THE TREE IT STARTED ON (CLOUD-2781).
+    let verified = match tree_moved(
+        (&start, start_dirty),
+        crate::git::head_commit(root).ok(),
+        crate::git::uncommitted(&started).ok(),
+    ) {
+        Some(cause) => Verified::Refused { sha: start, cause },
+        None => verified,
     };
     let mut lines = vec![verified.line()];
     if !log.is_empty() {
@@ -1934,9 +2153,13 @@ pub fn verify(
 /// a restated default is a field whose deletion changes nothing (CLOUD-2509);
 /// the assertion below pins it at compile time, so a default flipped for
 /// another caller cannot stream a gate log into the lap.
-const VERIFY_SETTINGS: crate::exec::ExecConfig = crate::exec::ExecConfig {
+const VERIFY_SETTINGS: crate::config_model::ExecConfig = crate::config_model::ExecConfig {
     manage_process_group: true,
-    ..crate::exec::ExecConfig::DEFAULT
+    // EACH STAGE'S RESULT AS IT LANDS (#1276): the log stays stored and named
+    // by a pointer at the end, but a lap that ran an hour said nothing until
+    // then. One line per stage and per mutant row, never the payload.
+    progress: crate::config_model::ExecProgress::Echo,
+    ..crate::config_model::ExecConfig::DEFAULT
 };
 const _: () = assert!(VERIFY_SETTINGS.manage_process_group && !VERIFY_SETTINGS.tee);
 
@@ -1948,7 +2171,8 @@ const _: () = assert!(VERIFY_SETTINGS.manage_process_group && !VERIFY_SETTINGS.t
 fn gate_said(
     head: String,
     ran: (i32, Vec<crate::outputs::Hit>),
-    environment: &[crate::outputs::OutputPattern],
+    environment: &[crate::config_model::OutputPattern],
+    low_water: Option<u64>,
 ) -> Verified {
     match ran {
         (0, _) => Verified::Clean(head),
@@ -1986,6 +2210,20 @@ fn gate_said(
                 ),
             },
         },
+        // A FULL VOLUME IS MEASURED, NEVER MATCHED IN TEXT (#1276). The disk
+        // watcher read the volume throughout the gate ([`disk_watch::low_water`]);
+        // a gate that refused while free space reached zero refused for the
+        // environment, whatever its log says, and one that refused with space to
+        // spare refused the tree, whatever its log says. The `disk-full` text row
+        // matched a mutant's diff on #1276 while the watcher read gigabytes free.
+        (_, _) if low_water == Some(0) => Verified::Refused {
+            sha: head,
+            cause: Refusal::Environment {
+                remedy: String::from(
+                    "the volume's free space reached 0 MiB while the gate ran, as the disk watcher measured it, so this is the environment rather than your branch: free space outside the declared [prune] roots, or lower [prune] max_free_mb so collection starts sooner",
+                ),
+            },
+        },
         (_, found) => Verified::Refused {
             sha: head,
             // THE FIRST DECLARED ROW THAT MATCHED, in declaration order, and one
@@ -2014,8 +2252,6 @@ const VERIFY_LOG: &str = "verify-log";
 /// The gate's output is stored, not streamed: measured on #1132, one task log
 /// read whole was 57,764 tokens, of which two lines were the verdict. This is the
 /// pointer the driver prints in its place.
-//MUTANT-SUITE crates/batten/tests/it/land_verify_advice.rs
-//MUTANT verify-log-unrecorded|s@^        lines.push(format!("{VERIFY_LOG} {} {}", verified.sha(), log.join(" ")));$@        drop(log.join(" "));@|a_gate_s_output_is_stored_and_pointed_at
 #[must_use]
 pub fn verify_log(root: &Path, branch: &str, sha: &str) -> Vec<String> {
     branch_lap_lines(root, branch)
@@ -2089,7 +2325,7 @@ pub fn verify_raced(
     branch: &str,
     command: &[String],
     published: &[(String, String)],
-    environment: &[crate::outputs::OutputPattern],
+    environment: &[crate::config_model::OutputPattern],
     trunk: Option<(&crate::main_watch::Config, &str)>,
     stall: Option<&Stall>,
 ) -> Result<Verified> {
@@ -2249,6 +2485,24 @@ fn settle_race(settle: &Settle<'_>, raced: Option<Raced>) -> Result<Verified> {
             )?;
             Ok(verified)
         }
+        // A GATE STEP ANSWERED RED FROM ITS RECEIPT (CLOUD-2253) is a refusal
+        // of this tree, recorded with the step and whether the cancel landed.
+        Some(Raced::Red(step)) => {
+            let verified = Verified::Refused {
+                sha: settle.head.clone(),
+                cause: Refusal::Tree,
+            };
+            let reclaimed = settle.reclaimed.try_recv().unwrap_or(false);
+            append(
+                settle.root,
+                settle.branch,
+                &[
+                    verified.line(),
+                    format!("{LAP_RECORD} gate-red {step} {reclaimed}"),
+                ],
+            )?;
+            Ok(verified)
+        }
         // BOTH ARMS CLOSED WITHOUT ANSWERING is could-not-look about the RACE,
         // never a clean tree: the gate is the arm that cannot abstain, so this is
         // reachable only if its thread died without sending.
@@ -2283,8 +2537,6 @@ fn settle_race(settle: &Settle<'_>, raced: Option<Raced>) -> Result<Verified> {
 /// claim is unconfirmed and the refusal stays the tree's. A lap that stopped
 /// where it could have lapped costs one re-run; a lap that lapped a refused tree
 /// costs the whole budget, which is the defect this exists to keep closed.
-//MUTANT-SUITE crates/batten/src/land.rs
-//MUTANT unconfirmed-move-laps|s@                cause: if moved { Refusal::Moved } else { Refusal::Tree },@                cause: Refusal::Moved,@|an_unconfirmed_move_is_a_refusal_of_the_tree
 fn confirmed(
     verified: Verified,
     watched: Option<&(&crate::main_watch::Config, String)>,
@@ -2353,8 +2605,6 @@ pub fn still(run: Option<Still>, seen: Option<String>) -> Option<Still> {
 /// reports no step under the task leaves the stamp as it found it however long
 /// it runs, so a still stamp is evidence of a stall only from a gate that has
 /// shown it reports at all.
-//MUTANT self-stall-never-wins|s@^    beats > 0 \&\& matches!(run, Some(run) if run.reported \&\& run.beats >= beats)$@    false@|a_frozen_advance_stalls_and_a_moving_one_does_not
-//MUTANT self-stall-on-silence|s@ if run.reported \&\& @ if @|a_frozen_advance_stalls_and_a_moving_one_does_not
 #[must_use]
 pub const fn stalled(run: Option<&Still>, beats: u32) -> bool {
     beats > 0 && matches!(run, Some(run) if run.reported && run.beats >= beats)
@@ -2389,8 +2639,6 @@ pub enum Reconcile {
 ///   diverged branch, and could-not-tell is never a cancel. `Leave`.
 /// - Ready on a strict ancestor: this branch's own superseded push, whose runs
 ///   grade a tree it will never land. `AbandonAndRedraft`.
-//MUTANT reconcile-ignores-a-stale-head|s@if head != local_head \&\& superseded@if head != local_head \&\& false@|entry_reconcile_cancels_only_a_superseded_ready_head
-//MUTANT reconcile-cancels-a-foreign-head|s@if head != local_head \&\& superseded@if head != local_head@|entry_reconcile_cancels_only_a_superseded_ready_head
 #[must_use]
 pub fn entry_reconcile(pr: Option<(bool, &str)>, local_head: &str, superseded: bool) -> Reconcile {
     match pr {
@@ -2419,6 +2667,9 @@ pub struct Stall {
     /// whole seconds and a step can start within the second the lap entered
     /// verify.
     pub progress: fn(&std::path::Path, u32) -> Option<String>,
+    /// The gate step answered from a failure receipt under the task, if any
+    /// (CLOUD-2253): read each beat, it cancels the gate at once.
+    pub red: fn(&std::path::Path, u32) -> Option<String>,
 }
 
 /// Which arm of a raced gate answered. The gate's `Result` travels whole so a
@@ -2427,6 +2678,8 @@ enum Raced {
     Gate(Result<Verified>),
     Moved(String),
     Stalled(u32),
+    /// A gate step answered from its failure receipt (CLOUD-2253).
+    Red(String),
 }
 
 /// Where the racing arms (watcher and stall) report, bundled so their
@@ -2540,6 +2793,12 @@ fn win(root: &Path, arms: &Arms<'_>, raced: Raced) {
 fn stall_arm(root: &Path, stall: &Stall, seed: Option<Still>, arms: &Arms<'_>) {
     let mut run = seed;
     while !arms.stop.load(std::sync::atomic::Ordering::Relaxed) {
+        // A KNOWN-RED STEP ENDS THE GATE AT ONCE (CLOUD-2253): its siblings'
+        // minutes would only say red again, so the lap does not wait for them.
+        if let Some(step) = (stall.red)(&stall.git_dir, stall.pid) {
+            win(root, arms, Raced::Red(step));
+            return;
+        }
         run = still(run, (stall.progress)(&stall.git_dir, stall.pid));
         if stalled(run.as_ref(), stall.beats) {
             win(root, arms, Raced::Stalled(stall.beats));
@@ -2803,8 +3062,6 @@ impl Basis {
 /// Pure, and free-standing rather than a branch inside the lap, so the cell can
 /// be decided in a test instead of only through a git resolution and a
 /// filesystem write.
-//MUTANT-SUITE crates/batten/tests/it/lease_lifecycle.rs
-//MUTANT poison-never-recorded|s@    matches!(@    !matches!(@|a_red_wait_on_this_clones_own_base_is_what_poisons_it
 #[must_use]
 pub const fn poisons_this_clone(
     step: Step,
@@ -2831,8 +3088,6 @@ pub const fn poisons_this_clone(
 /// CI checks reading, latched across steps and read by the tap and the undo, and
 /// a local gate that stalled is not a fact about any check. Only the verify
 /// raises it; the same exit 3 without it is a reclaimed gate, which laps.
-//MUTANT-SUITE crates/batten/src/land.rs
-//MUTANT stall-laps|s@^    if gate_stalled {$@    if false {@|a_stalled_verify_stops_the_landing
 #[must_use]
 pub const fn lap_progress(
     step: Step,
@@ -3134,49 +3389,6 @@ pub struct Retired {
     pub receipts: usize,
 }
 
-/// The receipt families keyed by BRANCH NAME rather than by sha.
-///
-/// **A sha-keyed receipt dies with its sha and needs no sweep; these do not.**
-/// Each of these records something about a branch's whole filing history, so the
-/// next piece of work to reuse the name would be judged against rows that belong
-/// to the last one (CLOUD-774).
-///
-/// `filed-here-nudged` and `filed-set-nudged` are no longer written: the Stop
-/// ladder stopped withholding its pointers (CLOUD-2078). They stay listed so a
-/// clone that ran an older engine still has its leftovers swept when the branch
-/// lands, rather than keeping them forever.
-/// `unlanded-nudged` was missing once (CLOUD-1390). `unlanded_pointer` writes
-/// `unlanded-nudged.<slug>` under this same directory, keyed by the completion
-/// finding's own fingerprint, and `turn mint ahead` reads it as its
-/// `while_marker`: the claim was told.
-///
-/// **What a missed family costs is a marker that outlives the work it was
-/// about.** Left behind, the next piece of work to reuse the name inherits it,
-/// and is judged as though it had already been told what the last one was.
-///
-/// **`pub(crate)` because a `while_marker` row is validated against it**
-/// (CLOUD-1390). A marker that landing does not sweep is a refusal with no spend:
-/// the row fires, the work lands, the file survives, and the next branch to reuse
-/// the name is denied for a punt it did not commit. `Rule::validate_marker`
-/// refuses that row at load rather than letting the pair drift, which is the same
-/// discipline this list's own header records having needed twice already.
-pub(crate) const BRANCH_KEYED_RECEIPTS: &[&str] = &[
-    "board-writes",
-    "filed-here-nudged",
-    "filed-set-nudged",
-    "unlanded-nudged",
-    "unlanded-spoken",
-    // The Stop refusal's bound and its dispatch excuse (CLOUD-2441): left behind,
-    // a reused branch name would inherit a spent refusal or a free Stop.
-    "unlanded-refused",
-    "land-dispatched",
-    // `pr-open`, minted from `create_pull_request`'s own result: this branch has an
-    // unlanded pull request, so opening a second one is the bundle split
-    // AGENTS.md's "one PR all of it" refuses. Landing sweeps it here, which is what
-    // lets the NEXT branch open its one PR.
-    "pr-open",
-];
-
 /// Retire a branch whose pull request has merged.
 ///
 /// # This is only ever reached from the LANDED path, and that is the whole guard
@@ -3476,8 +3688,6 @@ pub struct Ledger {
     pub fresh_ready: bool,
 }
 
-//MUTANT-SUITE crates/batten/tests/it/land.rs
-//MUTANT lease-loss-charges-a-lap|s@^        self.laps < budget$@        self.laps.saturating_add(self.lease_waits) < budget@|a_lap_lost_to_the_lease_leaves_the_lap_budget_unchanged
 impl Ledger {
     /// Open a lap.
     pub const fn attempt(&mut self) {
@@ -3877,8 +4087,6 @@ pub fn closes_the_tap(state: &Tap) -> bool {
 /// Pure, and separate from [`wait`] for the reason [`worthless`] is separate
 /// from [`abandon`]: the mapping is the decision, and a decision reachable only
 /// through a network call is a decision nothing tests.
-//MUTANT-SUITE crates/batten/tests/it/land_lap.rs
-//MUTANT unread-wait-reads-as-pending|s@        Waited::Unread => Some(TapVerdict::Unread),@        Waited::Unread => Some(TapVerdict::Pending),@|an_unread_wait_neither_re_drafts_nor_cancels
 #[must_use]
 pub const fn tap_verdict(waited: &Waited) -> Option<TapVerdict> {
     match waited {
@@ -4165,7 +4373,7 @@ mod mutate_tests {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod forge_tests {
     use super::*;
-
+    #[cfg(test)]
     #[test]
     fn a_draft_state_mutation_takes_by_graphql_or_else_by_the_proxy_route() {
         let took =
@@ -4405,7 +4613,7 @@ mod forge_tests {
         drop(arms);
         let moved = won.try_iter().find_map(|answer| match answer {
             Raced::Moved(base) => Some(base),
-            Raced::Gate(_) | Raced::Stalled(_) => None,
+            Raced::Gate(_) | Raced::Stalled(_) | Raced::Red(_) => None,
         });
         (moved, paused.into_inner())
     }
@@ -4423,9 +4631,105 @@ mod forge_tests {
         );
     }
 
+    /// A FULL VOLUME IS WHAT THE WATCHER MEASURED, NOT WHAT THE LOG SAYS (#1276).
+    ///
+    /// Fails by: the measured arm removed (a full volume reads as the tree's), or
+    /// the comparison loosened (a volume with space read as full). The text that
+    /// misread lap 2 has no row to match any more (CLOUD-2781), so a gate whose
+    /// log says `No space left on device` over a volume with room is the tree's.
+    #[test]
+    fn a_full_volume_is_measured_and_never_read_from_the_log() {
+        let tree = |verified: Verified| {
+            matches!(
+                verified,
+                Verified::Refused {
+                    cause: Refusal::Tree,
+                    ..
+                }
+            )
+        };
+        let measured_full = |verified: Verified| {
+            matches!(
+                verified,
+                Verified::Refused { cause: Refusal::Environment { ref remedy }, .. }
+                    if remedy.contains("disk watcher measured")
+            )
+        };
+        // The volume filled, and the log never said so.
+        assert!(measured_full(gate_said(
+            String::from("h"),
+            (1, Vec::new()),
+            &[],
+            Some(0)
+        )));
+        // A megabyte left is not full.
+        assert!(tree(gate_said(
+            String::from("h"),
+            (1, Vec::new()),
+            &[],
+            Some(1)
+        )));
+        // The log says full, no row reads it, and the volume had room: the tree's.
+        assert!(tree(gate_said(
+            String::from("h"),
+            (1, Vec::new()),
+            &[],
+            Some(5_000)
+        )));
+        // Unwatched decides nothing about the volume.
+        assert!(tree(gate_said(
+            String::from("h"),
+            (1, Vec::new()),
+            &[],
+            None
+        )));
+        // A clean gate is clean on a full volume.
+        assert!(matches!(
+            gate_said(String::from("h"), (0, Vec::new()), &[], Some(0)),
+            Verified::Clean(_)
+        ));
+    }
+
+    /// A GATE JUDGES THE TREE IT STARTED ON (CLOUD-2781): a head that moved, a
+    /// path left dirty, or a reading that could not be taken voids it.
+    ///
+    /// Fails by: the comparison skipped (a moved tree passes), the dirty count
+    /// ignored, or an unreadable state read as unmoved.
+    #[test]
+    fn a_gate_whose_tree_moved_is_voided() {
+        let clean = ("h1", Some(0));
+        let h1 = || Some(String::from("h1"));
+        assert_eq!(tree_moved(clean, h1(), Some(0)), None);
+        // A tree that started dirty and stayed so is unmoved (a direct `verify`).
+        assert_eq!(tree_moved(("h1", Some(2)), h1(), Some(2)), None);
+        assert!(matches!(
+            tree_moved(clean, Some(String::from("h2")), Some(0)),
+            Some(Refusal::Voided { ref to, dirty: 0 }) if to == "h2"
+        ));
+        assert!(matches!(
+            tree_moved(clean, h1(), Some(3)),
+            Some(Refusal::Voided { dirty: 3, .. })
+        ));
+        assert!(matches!(
+            tree_moved(clean, None, Some(0)),
+            Some(Refusal::Voided { ref to, .. }) if to == "-"
+        ));
+        assert!(matches!(
+            tree_moved(("h1", None), h1(), Some(0)),
+            Some(Refusal::Voided { .. })
+        ));
+        assert!(matches!(
+            tree_moved(clean, h1(), None),
+            Some(Refusal::Voided {
+                dirty: usize::MAX,
+                ..
+            })
+        ));
+    }
+
     #[test]
     fn a_gate_that_could_not_judge_is_an_environment_refusal_and_not_the_tree_s() {
-        let said = |code: i32| gate_said(String::from("h"), (code, Vec::new()), &[]);
+        let said = |code: i32| gate_said(String::from("h"), (code, Vec::new()), &[], None);
         assert!(matches!(said(0), Verified::Clean(_)));
         assert!(matches!(
             said(2),
@@ -4526,6 +4830,31 @@ mod forge_tests {
 mod lap_tests {
     use super::{Basis, Progress, Step, lap_progress, progress, progress_of, stalled, still};
     use crate::exit::ExitCode::{Internal, Success, Usage, Violation};
+
+    /// CLOUD-2707: only a committed, pushed head outside the lap is advised
+    /// toward `land`; the lap, a dirty tree, an unpushed head and an unreadable remote
+    /// each run the gate.
+    #[test]
+    fn only_a_clean_pushed_head_outside_the_lap_is_before_land() {
+        use super::{Placement, placement};
+        assert_eq!(placement(false, 0, Some(true)), Placement::BeforeLand);
+        assert_eq!(placement(true, 0, Some(true)), Placement::Lap, "the lap");
+        assert_eq!(
+            placement(false, 1, Some(true)),
+            Placement::Iterating,
+            "dirty"
+        );
+        assert_eq!(
+            placement(false, 0, Some(false)),
+            Placement::Iterating,
+            "unpushed"
+        );
+        assert_eq!(
+            placement(false, 0, None),
+            Placement::Iterating,
+            "unreadable"
+        );
+    }
 
     /// CLOUD-2371: only this branch's own superseded ready head is cancelled
     /// and re-drafted; every other state is left as it was.
@@ -4677,7 +5006,7 @@ mod lap_tests {
     }
 
     /// **A GATE'S `2` WITH NO BASE TO READ IS A REFUSAL OF THE TREE** (CLOUD-843),
-    /// and `#MUTANT unconfirmed-move-laps` reddens here.
+    /// and a mutant that laps on an unconfirmed move reddens here.
     ///
     /// The consumer's `verify` no longer re-numbers a policy verdict to `1`, so a
     /// `2` is not by itself evidence that trunk moved; reading it as that is
@@ -4849,6 +5178,7 @@ mod lap_tests {
             query: Vec::new(),
             probe: Vec::new(),
             nothing_graded: None,
+            source: Vec::new(),
         });
         let config = crate::pr_watch::Config {
             sha: String::from("0000000000000000000000000000000000000000"),
@@ -4913,6 +5243,70 @@ mod lap_tests {
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
+
+    #[cfg(test)]
+    /// A HELD LAP ENDS ONLY ON A FINAL VERIFY (CLOUD-2783): green holds with
+    /// `0`, refused with `2`; a verify's `3` laps as it does unheld, and no
+    /// other step holds, so the replay still runs and nothing after the verify
+    /// is entered.
+    ///
+    /// Fails by: a hold on a could-not-look verify (it would report a lap that
+    /// decided nothing), or on any step but verify.
+    #[test]
+    fn held_after_ends_a_held_lap_only_on_a_final_verify() {
+        use super::{Step, held_after};
+        use crate::exit::ExitCode;
+        assert_eq!(
+            held_after(Step::Verify, ExitCode::Success),
+            Some(ExitCode::Success)
+        );
+        assert_eq!(
+            held_after(Step::Verify, ExitCode::Violation),
+            Some(ExitCode::Violation)
+        );
+        assert_eq!(held_after(Step::Verify, ExitCode::Internal), None);
+        assert_eq!(held_after(Step::Verify, ExitCode::Usage), None);
+        for step in [
+            Step::Replay,
+            Step::Lease,
+            Step::Push,
+            Step::Ready,
+            Step::Wait,
+        ] {
+            assert_eq!(held_after(step, ExitCode::Success), None, "{step:?}");
+        }
+    }
+
+    /// Fails by: `Hold::after` answering `None` for a held landing, so a
+    /// final verify never ends a held lap; or answering for an unheld one
+    /// (CLOUD-2789).
+    #[test]
+    fn only_a_held_landing_ends_on_its_final_verify() {
+        use super::{Hold, Step};
+        use crate::exit::ExitCode;
+        assert_eq!(
+            Hold::new(true).after(Step::Verify, ExitCode::Violation),
+            Some(ExitCode::Violation)
+        );
+        assert_eq!(
+            Hold::new(false).after(Step::Verify, ExitCode::Success),
+            None
+        );
+    }
+
+    /// The held line names the head, the entry, and each step in the order run.
+    #[test]
+    fn a_held_line_carries_every_phase_in_order() {
+        use super::{Step, held_line};
+        assert_eq!(
+            held_line("abc", 12, &[(Step::Replay, 34), (Step::Verify, 56)]),
+            format!(
+                "held abc entry-ms=12 {}-ms=34 {}-ms=56",
+                Step::Replay.as_str(),
+                Step::Verify.as_str()
+            )
+        );
+    }
 
     /// EVERY STEP HAS A DISTINCT, STABLE PHASE TOKEN.
     ///
@@ -5366,9 +5760,87 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    /// Fails by: a line handed to the record's public door never written, so
+    /// the branch's lap record reads back without it.
+    #[test]
+    fn a_recorded_line_reads_back_from_the_branchs_lap_record() {
+        let root = crate::scratch::scratch("land-record-line");
+        crate::gitwrite::init_on_main(&root).unwrap();
+        crate::gitwrite::commit_paths(&root, &[], "base").unwrap();
+        assert!(super::branch_lap_lines(&root, "work").is_empty());
+        super::record_line(&root, "work", "engine used x").unwrap();
+        assert_eq!(
+            super::branch_lap_lines(&root, "work"),
+            [String::from("engine used x")]
+        );
+    }
+
     /// A remote this clone never saw is refused; one it pushed, or one a
     /// recorded replay of this head rewrote, is admitted. Only a well-formed
     /// line of the right kind admits.
+    #[test]
+    fn the_verified_head_is_the_latest_verdict_and_only_a_clean_one() {
+        let root = crate::scratch::scratch("land-verified");
+        crate::gitwrite::init_on_main(&root).unwrap();
+        crate::gitwrite::commit_paths(&root, &[], "base").unwrap();
+        let verified = |lines: &[String]| {
+            super::record_disk(&root, "work", lines).unwrap();
+            super::last_verified(&root, "work")
+        };
+        assert_eq!(super::last_verified(&root, "work"), None, "no run, no head");
+        assert_eq!(
+            verified(&[Verified::Clean(String::from("aaa")).line()]).as_deref(),
+            Some("aaa")
+        );
+        // A push line between does not hide the verdict before it.
+        assert_eq!(
+            verified(&[String::from("push landed bbb -")]).as_deref(),
+            Some("aaa")
+        );
+        assert_eq!(
+            verified(&[Verified::Clean(String::from("ccc")).line()]).as_deref(),
+            Some("ccc"),
+            "a later pass supersedes an earlier one"
+        );
+        assert_eq!(
+            verified(&[String::from("verify refused ddd -")]),
+            None,
+            "a refusal after a pass leaves nothing to publish"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A draft pushed while the gate ran is never rewound by the lap's push of
+    /// the verified head (#1276): the swap is not admitted, so it races and the
+    /// lap verifies the newer head instead. The same head, pushed once verified,
+    /// is admitted.
+    #[test]
+    fn a_head_pushed_mid_gate_is_raced_never_rewound_by_the_verified_push() {
+        let root = crate::scratch::scratch("land-mid-gate");
+        crate::gitwrite::init_on_main(&root).unwrap();
+        let tip = || crate::git::resolve_ref(&root, "HEAD").unwrap().unwrap();
+        std::fs::write(root.join("a.txt"), "verified\n").unwrap();
+        crate::gitwrite::commit_paths(&root, &[String::from("a.txt")], "verified").unwrap();
+        let verified = tip();
+        super::record_disk(&root, "work", &[Verified::Clean(verified.clone()).line()]).unwrap();
+        std::fs::write(root.join("b.txt"), "pushed mid-gate\n").unwrap();
+        crate::gitwrite::commit_paths(
+            &root,
+            &[String::from("a.txt"), String::from("b.txt")],
+            "mid-gate",
+        )
+        .unwrap();
+        let newer = tip();
+        assert_eq!(super::last_verified(&root, "work"), Some(verified.clone()));
+        assert!(
+            !super::admitted(&root, "work", &newer, &verified),
+            "the verified push would rewind a head pushed while the gate ran"
+        );
+        super::record_disk(&root, "work", &[Verified::Clean(newer.clone()).line()]).unwrap();
+        assert!(super::admitted(&root, "work", &verified, &newer));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     #[test]
     fn a_remote_is_admitted_only_by_this_clone_s_own_record_of_it() {
         let root = crate::scratch::scratch("land-admit");
@@ -6522,6 +6994,72 @@ mod tests {
             stale_tracking(&local, &[], "refs/remotes/origin/").len(),
             1,
             "so a caller that could not read the remote must not call this"
+        );
+    }
+}
+
+/// The held landing's timings (CLOUD-2783).
+#[cfg(test)]
+mod hold_tests {
+    use super::{Hold, Step};
+    #[cfg(test)]
+    /// Fails by: a lap that keeps the last lap's phases, or records no entry.
+    #[test]
+    fn a_lap_opens_with_its_entry_and_no_phases() {
+        let mut hold = Hold::new(true);
+        hold.time(Step::Verify, || ());
+        assert_eq!(hold.phases.len(), 1);
+        hold.lap();
+        assert!(hold.phases.is_empty(), "each lap's phases start afresh");
+        assert!(
+            hold.entry_ms.is_some(),
+            "the entry is the time to the first lap"
+        );
+    }
+
+    /// Fails by: the held lap's record line replaced, so the head, the entry
+    /// and each step's cost are not what the record carries.
+    #[test]
+    fn a_held_line_names_the_head_the_entry_and_each_step() {
+        let mut hold = Hold::new(true);
+        hold.entry_ms = Some(5);
+        hold.phases = vec![(Step::Verify, 7)];
+        assert_eq!(
+            hold.line("abc"),
+            format!("held abc entry-ms=5 {}-ms=7", Step::Verify.as_str())
+        );
+    }
+
+    /// Fails by: a hold's record line emptied, or not the held line of its own
+    /// entry and phases.
+    #[test]
+    fn a_holds_line_is_the_held_line_of_its_entry_and_phases() {
+        let mut hold = Hold::new(true);
+        hold.entry_ms = Some(7);
+        hold.phases = vec![(Step::Verify, 3)];
+        assert_eq!(
+            hold.line("abc"),
+            super::held_line("abc", 7, &[(Step::Verify, 3)])
+        );
+        assert!(hold.line("abc").starts_with("held abc entry-ms=7 "));
+    }
+
+    /// Fails by: `Hold::after` answering `None`, so a held lap never ends on
+    /// its final verify and runs on as if unheld.
+    #[test]
+    fn a_held_lap_ends_on_its_final_verify_and_an_unheld_one_does_not() {
+        use crate::exit::ExitCode;
+        assert_eq!(
+            Hold::new(true).after(Step::Verify, ExitCode::Success),
+            Some(ExitCode::Success)
+        );
+        assert_eq!(
+            Hold::new(true).after(Step::Verify, ExitCode::Violation),
+            Some(ExitCode::Violation)
+        );
+        assert_eq!(
+            Hold::new(false).after(Step::Verify, ExitCode::Success),
+            None
         );
     }
 }

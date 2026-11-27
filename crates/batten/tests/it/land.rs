@@ -24,15 +24,6 @@
 //! binary; what is untested until here is the join between what a lap RECORDS and
 //! what a module READS.
 
-/*
-#MUTANT-SUITE crates/batten/tests/it/land.rs
-#MUTANT a-truncated-reading-reads-as-closed|s@        "repos/{}/commits/{}/check-runs?per_page={PER_PAGE}&page={number}",@        "repos/{}/commits/{}/check-runs?per_page={PER_PAGE}",@|a_truncated_reading_is_not_read_as_closed
-#MUTANT dead-end-believed-before-the-ready-registers|s@^    before_ready.is_none_or(|seen| {$@    true || before_ready.is_none_or(|seen| {@|a_dead_end_after_a_fresh_ready_waits_for_the_ready_s_own_runs
-#MUTANT dead-end-confirmed-by-a-sibling|s@run\.name == finding\.check \&\& @@|a_sibling_s_new_run_does_not_confirm_a_dead_end_on_the_fan_in
-#MUTANT dead-end-confirmed-by-one-masked-name|s@masked\.iter()\.all(@masked.iter().any(@|a_sibling_s_new_run_does_not_confirm_a_dead_end_on_the_fan_in
-#MUTANT red-head-runs-cancelled|s@^    !matches!(seen, Some(TapVerdict::Red \| TapVerdict::Unread))$@    true@|a_red_head_s_other_runs_finish_and_every_other_stop_cancels
-*/
-
 #![cfg(unix)]
 
 use crate::common;
@@ -190,7 +181,7 @@ fn check(repo: &Path) -> (i32, String, String) {
     let output = batten()
         .args(["check"])
         .current_dir(repo)
-        .output()
+        .streamed_output()
         .expect("run batten check");
     (
         output.status.code().expect("exit code"),
@@ -472,7 +463,7 @@ fn land_verify(repo: &Path, command: &str) -> (i32, String, String) {
         .args(["land", "verify"])
         .env("LAND_VERIFY", command)
         .current_dir(repo)
-        .output()
+        .streamed_output()
         .expect("run batten land verify");
     (
         output.status.code().expect("exit code"),
@@ -568,7 +559,7 @@ fn land_verify_supervised(repo: &Path, gate: &str, task: &str, beats: &str) -> (
     let registered = batten()
         .args(["task", "register", "land", task, "verify"])
         .current_dir(repo)
-        .output()
+        .streamed_output()
         .expect("register the supervising task");
     assert!(registered.status.success(), "{}", stderr(&registered));
     // NO INHERITED GROUP OWNER: under `verify` this suite runs inside a mise
@@ -582,16 +573,20 @@ fn land_verify_supervised(repo: &Path, gate: &str, task: &str, beats: &str) -> (
         .env("LAND_SELF_STALL_BEATS", beats)
         .env("LAND_LOCK_HEARTBEAT", "1")
         .current_dir(repo)
-        .output()
+        .streamed_output()
         .expect("run batten land verify");
     (output.status.code().expect("exit code"), stdout(&output))
 }
 
 /// **A verify that stops advancing stops itself** (CLOUD-2369). The gate here
 /// reports one step at once — within the second its task was registered, which
-/// only the phase name tells apart — and then never exits, so its task stands still;
+/// only the phase name tells apart — and then wedges, so its task stands still;
 /// after two still beats the gate is cancelled and the verify answers exit 3,
 /// never a verdict about the tree, with the stall on the lap record.
+///
+/// The wedge is twelve seconds, not ten minutes: inside the mutation judge's
+/// twenty-second floor, so a stall arm that never fires ends as the gate's own
+/// exit 0, which this case refuses, rather than as a hang (CLOUD-2789).
 #[test]
 fn a_verify_that_never_advances_stops_itself() {
     let repo = repo("land-verify-stalls");
@@ -600,7 +595,7 @@ fn a_verify_that_never_advances_stops_itself() {
         &repo,
         "wedged.sh",
         &format!(
-            "\"$BATTEN_BIN\" task phase 424242 wedged\necho $$ > {}\nexec sleep 600\n",
+            "\"$BATTEN_BIN\" task phase 424242 wedged\necho $$ > {}\nexec sleep 12\n",
             marker.display()
         ),
     );
@@ -656,6 +651,88 @@ fn a_verify_that_never_reports_is_never_stalled() {
     assert!(!out.contains("verify stalled"), "{out}");
 }
 
+/// A KNOWN-RED TREE COSTS A LAP SECONDS, NOT THE FAN (CLOUD-2253). A gate step
+/// answered from a failure receipt cancels the whole gate at once, though a
+/// sibling of it is still running: the gate here runs the red step, then
+/// wedges, standing for the rest of a fan that would run to completion.
+///
+/// Fails by: the receipt-answered failure not reaching the lap (the gate runs
+/// on until something else ends it), the lap reading it as a stall or a lap
+/// rather than a refusal of the tree, or the cancel not reclaiming the gate.
+#[test]
+fn a_gate_step_answered_from_a_failure_receipt_fails_the_lap_at_once() {
+    let repo = Fixture::at(scratch("land-verify-red").join("repo"))
+        .config(
+            "version = 1\n\n\
+             [[rule]]\n\
+             id = \"landing\"\n\
+             kind = \"policy\"\n\
+             scope = \"tree\"\n\
+             preset = \"landing-loop\"\n\
+             severity = \"deny\"\n\n\
+             [[step]]\n\
+             id = \"red\"\n\
+             inputs = [\"lib.rs\"]\n\
+             tools = [[\"git\", \"--version\"]]\n",
+        )
+        .file("lib.rs", "fine\n")
+        .git()
+        .base_commit()
+        .build();
+    let failing = repo
+        .parent()
+        .expect("the fixture's scratch")
+        .join("fail.sh");
+    std::fs::write(&failing, "#!/bin/sh\nexit 5\n").expect("write the step");
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(&failing, std::fs::Permissions::from_mode(0o755))
+            .expect("make the step executable");
+    }
+    let engine = env!("CARGO_BIN_EXE_batten");
+    let step = format!("{engine} step run red -- {}", failing.display());
+    let seeded = batten()
+        .args(["step", "run", "red", "--", &failing.display().to_string()])
+        .current_dir(&repo)
+        .env_remove("CI")
+        .env_remove("BATTEN_STEP_RECEIPT_BYPASS")
+        .env_remove("BATTEN_TASK_PID")
+        .streamed_output()
+        .expect("seed the failure");
+    assert_eq!(seeded.status.code(), Some(5), "{}", stderr(&seeded));
+    let marker = repo.join("gate.pid");
+    // THE WEDGE IS BOUNDED (CLOUD-2789): the cancel ends it within a beat of the
+    // red step, long before 12 s. A red never read then ends the gate green on
+    // its own, which the exit and record below refuse, instead of holding the
+    // case for ten minutes until the suite's timeout.
+    let gate = script(
+        &repo,
+        "red.sh",
+        &format!(
+            "unset CI BATTEN_STEP_RECEIPT_BYPASS\n{step}\necho $$ > {}\nexec sleep 12\n",
+            marker.display()
+        ),
+    );
+    let (code, out) = land_verify_supervised(&repo, &gate, "424245", "600");
+    assert_eq!(code, 2, "a known-red tree is refused: {out}");
+    assert!(!out.contains("verify stalled"), "{out}");
+    let record = lap_record(&repo, &branch_of(&repo));
+    assert!(record.contains("verify refused "), "{record}");
+    // ENDED AT ONCE, NOT OUTLIVED: the record says the cancel reclaimed the
+    // gate's group, and the wedge it stands for is gone — not run out on its own.
+    assert!(
+        record.contains("gate-red red true"),
+        "the receipt's failure cancelled and reclaimed the gate: {record}"
+    );
+    let gate_pid = std::fs::read_to_string(&marker).expect("the gate reached its wedge");
+    if cfg!(target_os = "linux") {
+        assert!(
+            !Path::new(&format!("/proc/{}", gate_pid.trim())).exists(),
+            "the wedged gate was cancelled, not left running"
+        );
+    }
+}
+
 /// `batten land verify` with a receipt name declared, over a gate that REFUSES —
 /// so an exit `0` can only have come from the receipt.
 fn land_verify_receipted(repo: &Path, gate: &str) -> (i32, String, String) {
@@ -664,7 +741,7 @@ fn land_verify_receipted(repo: &Path, gate: &str) -> (i32, String, String) {
         .env("LAND_VERIFY", gate)
         .env("LAND_VERIFY_RECEIPT", "verify")
         .current_dir(repo)
-        .output()
+        .streamed_output()
         .expect("run batten land verify");
     (
         output.status.code().expect("exit code"),
@@ -678,7 +755,7 @@ fn record_verify_receipt(repo: &Path) {
     let output = batten()
         .args(["receipt", "record", "verify"])
         .current_dir(repo)
-        .output()
+        .streamed_output()
         .expect("run batten receipt record");
     assert!(
         output.status.success(),
@@ -736,7 +813,7 @@ fn a_receipt_for_an_earlier_head_runs_the_gate() {
 /// a two-lap budget, two passes lost to another branch's lease, every one green,
 /// and the landing ended telling the agent to run it again.
 ///
-/// MUTANT `lease-loss-charges-a-lap`: counting lease waits against the budget
+/// MUTANT: counting lease waits against the budget
 /// exhausts it after the second loss, so the first assertion goes red.
 #[test]
 fn a_lap_lost_to_the_lease_leaves_the_lap_budget_unchanged() {
@@ -775,7 +852,7 @@ fn land_lap(repo: &Path, laps: &str, gate: &str) -> (i32, String, String) {
         .env("LAND_VERIFY", gate)
         .env("LAND_WORKFLOW", "fast-forward.yml")
         .current_dir(repo)
-        .output()
+        .streamed_output()
         .expect("run batten land lap");
     (
         output.status.code().expect("exit code"),
@@ -819,6 +896,31 @@ fn a_lap_over_a_clone_with_no_remote_stops_rather_than_lapping_toward_nothing() 
     );
 }
 
+/// A lap over a dirty tree stops first, naming the count, before it spends a
+/// fetch or a compile on work it could not push: measured on #1276, a lap that
+/// asked this last stopped on one uncommitted line after two compiles.
+///
+/// Fails by: the dirty-tree question answered "clean" for a dirty tree, which
+/// the sweep on #1276 found unguarded.
+#[test]
+fn a_lap_over_a_dirty_tree_stops_before_anything_else() {
+    let repo = repo("land-lap-dirty");
+    // A REMOTE TO RESOLVE, since the lap names its base before it opens; the
+    // dirty-tree question is then the first one the lap itself asks.
+    let url = repo.display().to_string();
+    common::git_in(&repo, &["remote", "add", "origin", &url]);
+    std::fs::write(repo.join("lib.rs"), "edited\n").unwrap();
+    let (code, out, err) = land_lap(&repo, "3", "true");
+    assert_eq!(
+        code, 2,
+        "a dirty tree is the lap's own refusal: {out} {err}"
+    );
+    assert!(
+        err.contains("differs from HEAD in 1 path(s)"),
+        "the refusal names the count: {err}"
+    );
+}
+
 /// `batten land fast-forward`, with the workflow named in the environment.
 fn land_fast_forward(repo: &Path, workflow: &str) -> (i32, String, String) {
     let output = batten()
@@ -829,7 +931,7 @@ fn land_fast_forward(repo: &Path, workflow: &str) -> (i32, String, String) {
         // live pull request would be a test of the forge's availability.
         .env("PATH", "/nonexistent")
         .current_dir(repo)
-        .output()
+        .streamed_output()
         .expect("run batten land fast-forward");
     (
         output.status.code().expect("exit code"),

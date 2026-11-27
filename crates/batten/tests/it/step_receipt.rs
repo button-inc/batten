@@ -71,9 +71,18 @@ const OK: &str = "#!/bin/sh\necho ran >>bin/ran.log\n";
 /// A step command that fails with the code the case chooses.
 const FAIL: &str = "#!/bin/sh\necho 'stub failure detail' >&2\nexit \"${STUB_CODE:-2}\"\n";
 
+/// A step command that leaves a mark each time it RUNS and exits with the code
+/// the case chooses, so a failure answered from its receipt is observable.
+const RED: &str =
+    "#!/bin/sh\necho ran >>bin/red.log\necho 'red detail' >&2\nexit \"${STUB_CODE:-0}\"\n";
+
 /// A step command that PASSES after leaving the committed authority unloadable,
 /// so the record after it cannot recompute the key.
 const BREAK: &str = "#!/bin/sh\necho ran >>bin/ran.log\nprintf 'version = [\\n' >batten.toml\n";
+
+/// A `cargo` standing in for nextest: it logs the argv it was handed, so a
+/// case can see whether the journal's `--config-file` was added to it.
+const CARGO: &str = "#!/bin/sh\necho \"$@\" >>bin/cargo.log\n";
 
 /// A committed authority that will not parse.
 const UNLOADABLE: &str = "version = [\n";
@@ -100,6 +109,27 @@ tools = [["toolv"]]
 id = "declared"
 inputs = ["input.txt"]
 tools = [["toolv"], ["decl", "bin/taskfile"]]
+
+[[step]]
+id = "traced"
+inputs = ["input.txt"]
+tools = [["toolv"]]
+
+[[step]]
+id = "based"
+inputs = ["input.txt"]
+tools = [["toolv"], ["batten", "step", "base", "--ref", "trunk", "--", "src"]]
+
+[[step]]
+id = "based-by-commit"
+inputs = ["input.txt"]
+tools = [["toolv"], ["git", "merge-base", "HEAD", "trunk"]]
+
+[[step]]
+id = "journaled"
+inputs = ["input.txt"]
+tools = [["toolv"]]
+journal = "nextest"
 "#;
 
 /// Where the keyed family keeps its records.
@@ -117,7 +147,9 @@ impl Repo {
             ("bin/decl", DECL),
             ("bin/ok", OK),
             ("bin/fail", FAIL),
+            ("bin/red", RED),
             ("bin/break", BREAK),
+            ("bin/cargo", CARGO),
         ] {
             common::write(&dir, file, body);
             #[cfg(unix)]
@@ -155,7 +187,7 @@ impl Repo {
         for (name, value) in env {
             command.env(name, value);
         }
-        command.output().expect("run batten")
+        command.streamed_output().expect("run batten")
     }
 
     /// `step check`, asserting the exit-0 contract and returning the first word.
@@ -207,10 +239,19 @@ impl Repo {
         assert_eq!(self.record(&["mystep"]), Some(0));
     }
 
+    /// Every receipt file, across the step groups of the grouped family
+    /// (CLOUD-2784): `step-receipts/<digest(step)>/<digest(key)>`.
     fn receipts(&self) -> Vec<PathBuf> {
-        std::fs::read_dir(self.dir.join(STORE).join("steps"))
-            .map(|entries| entries.map(|entry| entry.unwrap().path()).collect())
-            .unwrap_or_default()
+        let mut found: Vec<PathBuf> = std::fs::read_dir(self.dir.join(STORE).join("step-receipts"))
+            .map(|groups| {
+                groups
+                    .flat_map(|group| std::fs::read_dir(group.unwrap().path()).unwrap())
+                    .map(|entry| entry.unwrap().path())
+                    .collect()
+            })
+            .unwrap_or_default();
+        found.sort();
+        found
     }
 
     fn stage(&self, contents: &str) {
@@ -395,6 +436,27 @@ fn an_untracked_file_inside_the_specs_is_no_key() {
     assert_eq!(repo.check(&["whole"]), "miss");
 }
 
+/// ONE RUNNER PER STEP (CLOUD-2783): the step's command runs under the
+/// step's lock, so the lock's file is in the git dir while it runs.
+///
+/// Fails by: no lock taken, so a second runner of the same step would run
+/// beside this one instead of waiting for its receipt.
+#[test]
+fn a_step_runs_under_its_lock() {
+    let repo = Repo::new("locked");
+    let out = repo.run_step(
+        &["never-declared"],
+        &["sh", "-c", "ls .git | grep -q '^batten-step-lock-'"],
+        &[],
+    );
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "the lock is held while the command runs: {}",
+        common::stderr(&out)
+    );
+}
+
 #[test]
 fn an_undeclared_step_always_runs() {
     let repo = Repo::new("unknown");
@@ -502,16 +564,37 @@ fn the_bypass_behaves_like_ci() {
     );
 }
 
+// A RETURN TO A JUDGED TREE IS A HIT (CLOUD-2784). This case used to pin the
+// opposite, `one_receipt_per_step_a_new_pass_replaces_the_old_key`: one record
+// per step, so passing B discarded A's receipt and a lap on A, B, A re-ran every
+// step on the third. Keeping a receipt per key is the change.
 #[test]
-fn one_receipt_per_step_a_new_pass_replaces_the_old_key() {
-    let repo = Repo::new("one-per-step");
+fn a_step_keeps_a_receipt_per_key_so_a_return_hits() {
+    let repo = Repo::new("per-key");
     repo.pass_once();
-    let first = read(&repo.receipts()[0]);
     repo.stage("two\n");
     repo.pass_once();
-    let receipts = repo.receipts();
-    assert_eq!(receipts.len(), 1, "{receipts:?}");
-    assert_ne!(read(&receipts[0]), first, "the new pass replaced the key");
+    assert_eq!(repo.receipts().len(), 2, "{:?}", repo.receipts());
+    repo.stage("one\n");
+    assert_eq!(
+        repo.check(&["mystep"]),
+        "hit",
+        "the first tree's receipt answers"
+    );
+}
+
+// THE SUPERSEDED STORE IS EMPTIED, NOT ORPHANED (CLOUD-2784): one receipt per
+// step lived at `steps/<digest(step)>`, and nothing reads it now.
+#[test]
+fn old_receipts_are_removed_on_the_first_new_write() {
+    let repo = Repo::new("old-store");
+    let old = repo.dir.join(STORE).join("steps");
+    std::fs::create_dir_all(&old).unwrap();
+    let digest = batten::tools::digest(b"mystep");
+    std::fs::write(old.join(&digest), "2026-01-01T00:00:00Z deadbeef\n").unwrap();
+    repo.pass_once();
+    assert!(!old.join(&digest).exists(), "the old receipt is gone");
+    assert_eq!(repo.receipts().len(), 1, "and the step recorded");
 }
 
 #[test]
@@ -575,12 +658,15 @@ fn a_hit_does_not_run_the_command() {
 }
 
 #[test]
-fn a_failing_command_passes_its_code_through_and_records_nothing() {
+fn a_failing_command_passes_its_code_through_and_records_no_pass() {
     // CLOUD-1090's property, now the verb's: the child's `2` stays `2` rather
-    // than folding onto a runner's `1`, and a denied run leaves no receipt the
-    // next run could answer from.
+    // than folding onto a runner's `1`, and a denied run leaves no PASS receipt
+    // the next run could answer from. Each code is a different input state:
+    // over the same one the second run would be answered from the first's
+    // failure receipt (CLOUD-2253).
     let repo = Repo::new("run-fails");
-    for code in ["2", "7"] {
+    for (input, code) in [("one\n", "2"), ("two\n", "7")] {
+        repo.stage(input);
         let out = repo.run_step(&["mystep"], &["fail"], &[("STUB_CODE", code)]);
         assert_eq!(
             out.status.code().map(|code| code.to_string()).as_deref(),
@@ -589,7 +675,15 @@ fn a_failing_command_passes_its_code_through_and_records_nothing() {
             common::stderr(&out)
         );
     }
-    assert!(repo.receipts().is_empty(), "{:?}", repo.receipts());
+    let receipts = repo.receipts();
+    assert_eq!(
+        receipts.len(),
+        2,
+        "one failure receipt per key: {receipts:?}"
+    );
+    for receipt in &receipts {
+        assert!(read(receipt).contains(" exit "), "{}", read(receipt));
+    }
     assert_eq!(repo.check(&["mystep"]), "miss");
 }
 
@@ -616,6 +710,37 @@ fn an_undeclared_step_still_runs_its_command_and_records_nothing() {
     assert_eq!(out.status.code(), Some(0), "{}", common::stderr(&out));
     assert_eq!(repo.runs(), 1);
     assert!(repo.receipts().is_empty(), "{:?}", repo.receipts());
+}
+
+// --- the case journal is the row's choice, never the argv's (CLOUD-2785) ----
+
+/// Fails by: the journal keyed off anything but the row, so a row that
+/// declares `journal = "nextest"` runs its nextest argv without the journal's
+/// config, and a stopped run re-runs every case it had passed.
+#[test]
+fn a_declared_nextest_row_journals() {
+    let repo = Repo::new("journal-declared");
+    let out = repo.run_step(&["journaled"], &["cargo", "nextest", "run"], &[]);
+    assert_eq!(out.status.code(), Some(0), "{}", common::stderr(&out));
+    let argv = read(&repo.path("bin/cargo.log"));
+    assert!(
+        argv.starts_with("nextest run --config-file "),
+        "the declared row runs under the journal's config: {argv:?}"
+    );
+}
+
+/// Fails by: the argv sniff coming back, so a row that declares no journal is
+/// journaled because its command happens to start `cargo nextest run`.
+#[test]
+fn an_undeclared_nextest_argv_is_not_journaled() {
+    let repo = Repo::new("journal-undeclared");
+    let out = repo.run_step(&["mystep"], &["cargo", "nextest", "run"], &[]);
+    assert_eq!(out.status.code(), Some(0), "{}", common::stderr(&out));
+    assert_eq!(
+        read(&repo.path("bin/cargo.log")),
+        "nextest run\n",
+        "a row with no `journal` runs its command exactly as declared"
+    );
 }
 
 // --- the table is the keyed tree's own, and a failure to read it runs the step -
@@ -766,11 +891,710 @@ fn every_step_a_task_names_is_declared_and_the_retired_task_is_gone() {
             "`batten step … {name}` names no `[[step]]` row, so it can never hit"
         );
     }
+    // A GRAPH NODE IS NAMED BY ITS GROUP (CLOUD-2785): a schedule-only row is
+    // reached through `step graph run <group>`, never `step run <id>`, so it is
+    // an orphan only when no line runs its group.
+    let groups: Vec<String> = manifest
+        .lines()
+        .filter(|line| !line.trim_start().starts_with('#'))
+        .flat_map(common::graph_groups)
+        .collect();
+    let reached = |id: &str| {
+        declared["step"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .any(|row| {
+                row["id"].as_str() == Some(id)
+                    && row
+                        .get("group")
+                        .and_then(toml::Value::as_str)
+                        .is_some_and(|group| groups.iter().any(|named| named == group))
+            })
+    };
     for id in &ids {
         assert!(
-            named.iter().any(|name| name == id),
-            "`[[step]] {id}` is named by no task, so it caches nothing: {named:?}"
+            named.iter().any(|name| name == id) || reached(id),
+            "`[[step]] {id}` is named by no task and in no group a task runs, so it \
+             does nothing: {named:?} {groups:?}"
         );
     }
     assert!(!named.is_empty(), "the scan must find the call sites");
+    // THE LAP'S FOUR TIERS ARE `verify:gated`'s RUN ENTRIES, IN ORDER, while the
+    // engine pin cannot read the graph rows' `group` (they are withheld until
+    // the pin bump restores `step graph run verify-1 … verify-4`). Each tier is
+    // one entry, found by a task only it runs.
+    let gated =
+        common::task_block_template("verify:gated").expect("`[tasks.\"verify:gated\"]` exists");
+    let entry = |task: &str| {
+        let found: Vec<usize> = gated
+            .lines()
+            .filter(|line| line.trim_start().starts_with("\"mise run "))
+            .enumerate()
+            .filter(|(_, line)| {
+                line.trim()
+                    .trim_matches(|c| c == '"' || c == ',')
+                    .split(" ::: ")
+                    .any(|member| member.split_whitespace().any(|word| word == task))
+            })
+            .map(|(index, _)| index)
+            .collect();
+        assert_eq!(found.len(), 1, "one run entry runs {task}: {gated}");
+        found[0]
+    };
+    let tiers = [
+        entry("batten-check"),
+        entry("semver"),
+        entry("verify:ci-suite"),
+        entry("perf-gate"),
+    ];
+    assert!(
+        tiers.windows(2).all(|pair| pair[0] < pair[1]),
+        "the lap runs its four tiers in order: {tiers:?}\n{gated}"
+    );
+    assert!(
+        gated.contains("--continue-on-error verify:commit-lint")
+            && gated.contains("--continue-on-error --jobs 2 semver")
+            && gated.contains("--continue-on-error --jobs 1 verify:ci-suite"),
+        "every multi-task tier is a `--continue-on-error` fan: {gated}"
+    );
+}
+
+/// The seconds a `stage <step> <how> <seconds>` line on stderr reports.
+fn stage_seconds(err: &str, step: &str, how: &str) -> Option<f64> {
+    let prefix = format!("stage {step} {how} ");
+    err.lines()
+        .find_map(|line| line.strip_prefix(&prefix)?.trim().parse().ok())
+}
+
+/// Fails by: a run's wall time not written onto its receipt, or the `stage`
+/// line reporting something other than the time the command took (CLOUD-2776).
+#[test]
+fn a_step_record_carries_its_wall_time() {
+    // `sh` and `sleep`: a unix contract, compiled everywhere.
+    if !cfg!(unix) {
+        return;
+    }
+    let repo = Repo::new("wall-time");
+    let out = repo.run_step(&["mystep"], &["sh", "-c", "sleep 0.3"], &[]);
+    assert_eq!(out.status.code(), Some(0), "{}", common::stderr(&out));
+    let body = read(&repo.receipts()[0]);
+    let millis: u64 = body
+        .split_whitespace()
+        .find_map(|field| field.strip_suffix("ms")?.parse().ok())
+        .unwrap_or_else(|| panic!("the receipt carries its run's time: {body}"));
+    assert!(millis >= 300, "the run slept 300ms: {body}");
+    let said = stage_seconds(&common::stderr(&out), "mystep", "ran")
+        .unwrap_or_else(|| panic!("a stage line: {}", common::stderr(&out)));
+    assert!(said >= 0.3, "{said}");
+}
+
+/// Fails by: a hit reporting its own few milliseconds, which makes a resumed
+/// lap look faster than the work it stands for, or reporting nothing.
+#[test]
+fn a_hit_reports_the_recorded_runs_time_not_its_own() {
+    if !cfg!(unix) {
+        return;
+    }
+    let repo = Repo::new("hit-time");
+    let first = repo.run_step(&["mystep"], &["sh", "-c", "sleep 0.3"], &[]);
+    assert_eq!(first.status.code(), Some(0), "{}", common::stderr(&first));
+    let hit = repo.run_step(&["mystep"], &["sh", "-c", "sleep 0.3"], &[]);
+    let err = common::stderr(&hit);
+    assert!(
+        stage_seconds(&err, "mystep", "ran").is_none(),
+        "a hit runs nothing: {err}"
+    );
+    let said =
+        stage_seconds(&err, "mystep", "hit").unwrap_or_else(|| panic!("a hit's stage line: {err}"));
+    assert!(said >= 0.3, "the hit reports the recorded run: {err}");
+}
+
+// ---- the trace lint (CLOUD-2784) -------------------------------------------
+//
+// Each case branches on the tracer INSIDE the case and never returns early: on
+// a host with `strace` the lint is what is asserted, and on one without it the
+// untraced arm is, so no host passes a case by skipping it.
+
+impl Repo {
+    /// A step command at `bin/<name>`, git-ignored with the rest of `bin/`.
+    fn script(&self, name: &str, body: &str) {
+        common::write(&self.dir, &format!("bin/{name}"), body);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            std::fs::set_permissions(
+                self.dir.join("bin").join(name),
+                std::fs::Permissions::from_mode(0o755),
+            )
+            .expect("chmod");
+        }
+    }
+
+    /// `step run traced -- <name>`, then the first word of the same run again:
+    /// `hit` iff the first recorded. The same command, because `step run`
+    /// keys on it and a bare `step check` does not.
+    fn traced_run(&self, name: &str) -> (Output, String) {
+        let out = self.run_step(&["traced"], &[name], &[]);
+        let again = self.run_step(&["traced"], &[name], &[]);
+        let after = common::stderr(&again)
+            .split_whitespace()
+            .next()
+            .unwrap_or_default()
+            .to_owned();
+        (out, after)
+    }
+}
+
+#[test]
+fn an_undeclared_read_fails_a_traced_miss() {
+    let repo = Repo::new("trace-undeclared");
+    common::write(&repo.dir, "other.txt", "other\n");
+    common::git_in(&repo.dir, &["add", "other.txt"]);
+    repo.script("readb", "#!/bin/sh\ncat input.txt other.txt >/dev/null\n");
+    let (out, after) = repo.traced_run("readb");
+    if batten::mutate::trace::Host::here().tracer().is_some() {
+        assert_eq!(out.status.code(), Some(2), "{}", common::stderr(&out));
+        let stderr = common::stderr(&out);
+        assert!(
+            stderr.contains("step run: traced read 1 path(s) outside its inputs; read "),
+            "{stderr}"
+        );
+        let listing = stderr
+            .lines()
+            .find_map(|line| {
+                line.split_once("outside its inputs; read ")
+                    .map(|(_, at)| at)
+            })
+            .expect("the line points at the listing");
+        assert_eq!(
+            std::fs::read_to_string(listing.trim()).unwrap(),
+            "other.txt\n"
+        );
+        assert!(
+            !std::path::Path::new(listing.trim())
+                .with_extension("trace")
+                .exists(),
+            "the trace is removed once read; only the listing stays"
+        );
+        assert_eq!(after, "miss", "an undeclared read records nothing");
+    } else {
+        assert_eq!(out.status.code(), Some(0), "{}", common::stderr(&out));
+        assert_eq!(after, "hit", "untraced, the step records as before");
+    }
+}
+
+/// A STEP RUN ALREADY UNDER A TRACER RUNS UNTRACED (CLOUD-2784): ptrace takes
+/// one tracer, so a second `strace` cannot attach. The read is undeclared, so a
+/// run that tried to trace anyway fails either way — it could not attach, or it
+/// saw the read — and only the untraced arm exits 0.
+#[test]
+fn a_step_run_already_under_a_tracer_runs_untraced() {
+    let repo = Repo::new("trace-nested");
+    common::write(&repo.dir, "other.txt", "other\n");
+    common::git_in(&repo.dir, &["add", "other.txt"]);
+    repo.script("readb", "#!/bin/sh\ncat input.txt other.txt >/dev/null\n");
+    // NO TRACER ON THIS HOST: nothing is nested, and the plain run records.
+    // Both arms assert; neither returns early (`silent_skip`).
+    if let Some(strace) = batten::mutate::trace::Host::here().tracer() {
+        nested_run_passes(&repo, &strace);
+    } else {
+        let (out, after) = repo.traced_run("readb");
+        assert_eq!(out.status.code(), Some(0), "{}", common::stderr(&out));
+        assert_eq!(after, "hit");
+    }
+}
+
+/// `readb` run by batten under `strace -f`: the nested run is untraced.
+fn nested_run_passes(repo: &Repo, strace: &str) {
+    let out = common::task_bash(
+        &repo.dir,
+        &format!(
+            "exec {strace} -f -qq -o /dev/null {} step run traced -- readb",
+            env!("CARGO_BIN_EXE_batten")
+        ),
+    )
+    .env_remove("CI")
+    .env_remove("BATTEN_STEP_RECEIPT_BYPASS")
+    .env_remove("BATTEN_TASK_PID")
+    .streamed_output()
+    .expect("run batten under a tracer");
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "a nested run is untraced and passes: {}",
+        common::stderr(&out)
+    );
+    // UNTRACED, NOT TRACED BADLY: a nested run that tried a second tracer
+    // could not attach, read its trace as unfinished and minted no receipt
+    // (lap 27's survivors in `tracer`/`traced_already`), so the next run must
+    // be a hit.
+    let again = repo.run_step(&["traced"], &["readb"], &[]);
+    assert_eq!(
+        common::stderr(&again).split_whitespace().next(),
+        Some("hit"),
+        "the nested run recorded its receipt: {}",
+        common::stderr(&out)
+    );
+}
+
+#[test]
+fn a_probe_for_a_missing_path_outside_the_inputs_is_undeclared() {
+    let repo = Repo::new("trace-probe");
+    repo.script(
+        "probe",
+        "#!/bin/sh\ncat input.txt >/dev/null\ntest -e c\nexit 0\n",
+    );
+    let (out, after) = repo.traced_run("probe");
+    if batten::mutate::trace::Host::here().tracer().is_some() {
+        assert_eq!(out.status.code(), Some(2), "{}", common::stderr(&out));
+        assert!(
+            common::stderr(&out).contains("read 1 path(s) outside its inputs"),
+            "{}",
+            common::stderr(&out)
+        );
+        assert_eq!(after, "miss");
+    } else {
+        assert_eq!(out.status.code(), Some(0), "{}", common::stderr(&out));
+        assert_eq!(after, "hit");
+    }
+}
+
+#[test]
+fn a_declared_ignored_or_outside_read_records_under_trace() {
+    // `input.txt` is declared, `bin/taskfile` is git-ignored, `/etc/passwd` is
+    // outside the worktree, and `.` is the root: none is undeclared.
+    let repo = Repo::new("trace-declared");
+    repo.script(
+        "readok",
+        "#!/bin/sh\ncat input.txt bin/taskfile /etc/passwd >/dev/null\ntest -d .\n",
+    );
+    let (out, after) = repo.traced_run("readok");
+    assert_eq!(out.status.code(), Some(0), "{}", common::stderr(&out));
+    assert!(
+        !common::stderr(&out).contains("outside its inputs"),
+        "{}",
+        common::stderr(&out)
+    );
+    assert_eq!(after, "hit", "traced or not, a declared run records");
+}
+
+/// A TWO-TREE STEP KEYS ITS BASE BY CONTENT (CLOUD-2787): `based` declares its
+/// base half as `step base` over `src`, so a rebase onto a trunk commit that
+/// touched only `docs` hits. `based-by-commit` keys the merge base's commit id,
+/// the shape this replaces, and misses on the same rebase — which is what makes
+/// the first assertion discriminate.
+#[test]
+fn a_rebase_onto_an_unrelated_trunk_commit_hits() {
+    let repo = Repo::new("rebase-unrelated");
+    common::write(&repo.dir, "src/a.rs", "fn a() {}\n");
+    common::write(&repo.dir, "docs/a.md", "one\n");
+    common::git_in(&repo.dir, &["add", "-A"]);
+    common::git_in(&repo.dir, &["commit", "-qm", "trunk"]);
+    let branch = common::git_in(&repo.dir, &["rev-parse", "--abbrev-ref", "HEAD"]);
+    common::git_in(&repo.dir, &["branch", "trunk"]);
+    common::write(&repo.dir, "feature.txt", "work\n");
+    common::git_in(&repo.dir, &["add", "feature.txt"]);
+    common::git_in(&repo.dir, &["commit", "-qm", "feature"]);
+
+    for step in ["based", "based-by-commit"] {
+        let first = repo.run_step(&[step], &["ok"], &[]);
+        assert_eq!(first_word(&first), "miss", "{}", common::stderr(&first));
+        let again = repo.run_step(&[step], &["ok"], &[]);
+        assert_eq!(
+            first_word(&again),
+            "hit",
+            "the premise: {}",
+            common::stderr(&again)
+        );
+    }
+
+    common::git_in(&repo.dir, &["checkout", "-q", "trunk"]);
+    common::write(&repo.dir, "docs/a.md", "two\n");
+    common::git_in(&repo.dir, &["commit", "-qam", "docs only"]);
+    common::git_in(&repo.dir, &["checkout", "-q", &branch]);
+    common::git_in(&repo.dir, &["rebase", "-q", "trunk"]);
+
+    let based = repo.run_step(&["based"], &["ok"], &[]);
+    assert_eq!(first_word(&based), "hit", "{}", common::stderr(&based));
+    let by_commit = repo.run_step(&["based-by-commit"], &["ok"], &[]);
+    assert_eq!(
+        first_word(&by_commit),
+        "miss",
+        "the control: a commit-id base moves on the same rebase: {}",
+        common::stderr(&by_commit)
+    );
+}
+
+// ---- a commit-metadata step keys its commits (CLOUD-2897) ------------------
+
+/// This repository's own `[[step]]` row `id`, as a fixture authority holding it
+/// alone: the case judges the row as declared, never a copy of it.
+fn declared_step_table(id: &str) -> String {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../batten.toml");
+    let authority: toml::Table = std::fs::read_to_string(path)
+        .expect("this repository's batten.toml")
+        .parse()
+        .expect("this repository's batten.toml parses");
+    let row = authority["step"]
+        .as_array()
+        .expect("a [[step]] table")
+        .iter()
+        .find(|row| row.get("id").and_then(toml::Value::as_str) == Some(id))
+        .unwrap_or_else(|| panic!("a [[step]] row `{id}`"))
+        .clone();
+    let mut table = toml::Table::new();
+    table.insert(String::from("version"), toml::Value::Integer(1));
+    table.insert(String::from("step"), toml::Value::Array(vec![row]));
+    toml::to_string(&table).expect("the row renders")
+}
+
+/// A COMMIT-METADATA STEP KEYS WHAT IT JUDGES (CLOUD-2897). `commit-attribution`
+/// judges each commit's author and committer identity and its message;
+/// `commit-check` judges each message. Both are handed refs (`origin/main..HEAD`),
+/// so a row keyed on files and tool versions alone keeps its key across a rewrite
+/// that leaves the tree identical, and replays the verdict of commits that no
+/// longer exist: measured on #1276, a committer rewrite replayed `commit own
+/// refused` for the rewritten sha while `attribution check` over the range
+/// exited 0.
+///
+/// Fails by: either row's key unmoved by a rewrite of exactly what it judges,
+/// so the second run answers from the first run's failure instead of running.
+#[test]
+fn a_rewrite_of_what_a_commit_step_judges_misses_though_the_tree_is_identical() {
+    // (row, the rewrite of only what that row judges)
+    let rewrites: [(&str, &[&str]); 2] = [
+        (
+            "commit-attribution",
+            &[
+                "-c",
+                "user.name=Owner",
+                "-c",
+                "user.email=owner@example.com",
+                "commit",
+                "-q",
+                "--amend",
+                "--no-edit",
+                "--reset-author",
+            ],
+        ),
+        (
+            "commit-check",
+            &[
+                "commit",
+                "-q",
+                "--amend",
+                "-m",
+                "feat: the subject, rewritten",
+            ],
+        ),
+    ];
+    for (step, rewrite) in rewrites {
+        let repo = Repo::new(&format!("commit-keyed-{step}"));
+        common::write(&repo.dir, "batten.toml", &declared_step_table(step));
+        // A `cargo` that answers its version, as the row's tool probe asks.
+        common::write(&repo.dir, "bin/cargo", "#!/bin/sh\necho 'cargo 1.0.0'\n");
+        common::git_in(&repo.dir, &["commit", "-qam", "the row"]);
+        common::git_in(
+            &repo.dir,
+            &["update-ref", "refs/remotes/origin/main", "HEAD"],
+        );
+        common::write(&repo.dir, "input.txt", "two\n");
+        common::git_in(
+            &repo.dir,
+            &[
+                "-c",
+                "user.name=Vendor",
+                "-c",
+                "user.email=vendor@example.com",
+                "commit",
+                "-qam",
+                "feat: the subject",
+            ],
+        );
+        let tree = common::git_in(&repo.dir, &["rev-parse", "HEAD^{tree}"]);
+
+        let refused = repo.run_step(&[step], &["red"], &[("STUB_CODE", "1")]);
+        assert_eq!(
+            refused.status.code(),
+            Some(1),
+            "{step}: {}",
+            common::stderr(&refused)
+        );
+        let replayed = repo.run_step(&[step], &["red"], &[("STUB_CODE", "0")]);
+        assert_eq!(
+            read(&repo.path("bin/red.log")).lines().count(),
+            1,
+            "{step}: the premise: an unchanged range answers from its receipt: {}",
+            common::stderr(&replayed)
+        );
+
+        common::git_in(&repo.dir, rewrite);
+        assert_eq!(
+            common::git_in(&repo.dir, &["rev-parse", "HEAD^{tree}"]),
+            tree,
+            "{step}: the rewrite leaves the tree identical"
+        );
+        let rerun = repo.run_step(&[step], &["red"], &[("STUB_CODE", "0")]);
+        assert_eq!(
+            (
+                rerun.status.code(),
+                read(&repo.path("bin/red.log")).lines().count()
+            ),
+            (Some(0), 2),
+            "{step}: a rewrite of what the step judges runs it again: {}",
+            common::stderr(&rerun)
+        );
+    }
+}
+
+// ---- the write hazard (CLOUD-2786) -----------------------------------------
+//
+// The read half was already there: `record` refuses when the key moved while
+// the step ran. A step that writes a declared input and restores it before it
+// exits leaves the key unmoved, so only the trace can see it.
+
+/// Fails by: a write to a declared input that was put back minting a receipt
+/// (its verdict judged bytes the tree never held), the line not pointing at a
+/// listing naming the input, or an untraced host refusing a run it cannot see.
+#[test]
+fn a_step_that_rewrites_a_declared_input_and_restores_it_takes_no_receipt() {
+    let repo = Repo::new("trace-rewrite");
+    repo.script(
+        "rewrite",
+        "#!/bin/sh\ncp input.txt bin/saved\necho changed >input.txt\ncp bin/saved input.txt\n",
+    );
+    let (out, after) = repo.traced_run("rewrite");
+    assert_eq!(
+        read(&repo.path("input.txt")),
+        "one\n",
+        "the premise: restored"
+    );
+    if batten::mutate::trace::Host::here().tracer().is_some() {
+        let stderr = common::stderr(&out);
+        assert_eq!(out.status.code(), Some(2), "{stderr}");
+        let listing = stderr
+            .lines()
+            .find_map(|line| line.split_once("step run: traced wrote 1 declared input(s); read "))
+            .map_or_else(
+                || panic!("the line points at the listing: {stderr}"),
+                |(_, at)| at.trim().to_owned(),
+            );
+        assert_eq!(std::fs::read_to_string(&listing).unwrap(), "input.txt\n");
+        assert!(
+            !stderr.contains("outside its inputs"),
+            "the write is reported before any read: {stderr}"
+        );
+        assert_eq!(after, "miss", "a written input records nothing");
+    } else {
+        assert_eq!(out.status.code(), Some(0), "{}", common::stderr(&out));
+        assert_eq!(after, "hit", "untraced, the step records as before");
+    }
+}
+
+/// Fails by: a write under a git-ignored path that a declared pathspec
+/// selects (a build's `target/`) read as a hazard, so no whole-tree step ever
+/// recorded again.
+#[test]
+fn a_write_under_an_ignored_path_is_not_a_hazard() {
+    let repo = Repo::new("trace-ignored-write");
+    repo.script(
+        "build",
+        // A PLAIN `mkdir`, NEVER `-p`: coreutils' `-p` changes directory to
+        // make each component, and a `chdir` leaves every bare relative path
+        // in the trace unresolvable — the reader's stated limit, not this case.
+        // `unlink` and `rmdir`, NEVER `rm -r`, for the same reason: `rm` is
+        // whatever `PATH` resolves, and a hosted session puts a shell stand-in
+        // first that changes directory (measured: two `chdir`s from it turned
+        // this trace unread). The writes are the same two syscalls.
+        "#!/bin/sh\ncat input.txt >/dev/null\nmkdir bin/out\necho artefact >bin/out/a\nunlink bin/out/a\nrmdir bin/out\n",
+    );
+    let out = repo.run_step(&["whole"], &["build"], &[]);
+    let again = repo.run_step(&["whole"], &["build"], &[]);
+    assert_eq!(out.status.code(), Some(0), "{}", common::stderr(&out));
+    assert!(
+        !common::stderr(&out).contains("declared input(s)"),
+        "{}",
+        common::stderr(&out)
+    );
+    assert_eq!(
+        common::stderr(&again).split_whitespace().next(),
+        Some("hit"),
+        "traced or not, an ignored write records: {}",
+        common::stderr(&out)
+    );
+}
+
+// --- a failed run is a verdict too (CLOUD-2253) --------------------------------
+//
+// A receipt written only on success left a failed check with no record of its
+// inputs, so a lap on a known-red tree re-ran the whole fan to say red again.
+
+/// The `step run` of the `red` stub over `mystep`, exiting `code` if it runs.
+fn red_run(repo: &Repo, code: &str, env: &[(&str, &str)]) -> Output {
+    let mut env = env.to_vec();
+    env.push(("STUB_CODE", code));
+    repo.run_step(&["mystep"], &["red"], &env)
+}
+
+/// How many times the `red` stub has run.
+fn red_runs(repo: &Repo) -> usize {
+    read(&repo.path("bin/red.log")).lines().count()
+}
+
+/// Fails by: a failure leaving no receipt (the command re-runs and its new
+/// code wins), the recorded code not the one returned, or the answer printing
+/// the log's bytes rather than a pointer to them.
+#[test]
+fn a_failed_run_is_not_re_run_on_unchanged_inputs_and_returns_its_code() {
+    let repo = Repo::new("red-kept");
+    let first = red_run(&repo, "7", &[]);
+    assert_eq!(first.status.code(), Some(7), "{}", common::stderr(&first));
+    let again = red_run(&repo, "0", &[]);
+    let err = common::stderr(&again);
+    assert_eq!(again.status.code(), Some(7), "the recorded code: {err}");
+    assert_eq!(
+        red_runs(&repo),
+        1,
+        "answered from the failure receipt: {err}"
+    );
+    assert_eq!(
+        err.split_whitespace().next(),
+        Some("red"),
+        "the answer says red first: {err}"
+    );
+    let pointer = err
+        .lines()
+        .find_map(|line| line.strip_prefix("step run: mystep failed with exit 7; read "))
+        .unwrap_or_else(|| panic!("the answer points at the failed run's log: {err}"));
+    assert!(pointer.contains("stderr:"), "a capture handle: {pointer}");
+    assert!(
+        !err.contains("red detail"),
+        "a pointer, never the log: {err}"
+    );
+}
+
+/// Fails by: a failure receipt answering for inputs it never judged.
+#[test]
+fn a_changed_input_re_runs_a_failed_step() {
+    let repo = Repo::new("red-moved");
+    assert_eq!(red_run(&repo, "7", &[]).status.code(), Some(7));
+    repo.stage("two\n");
+    let out = red_run(&repo, "0", &[]);
+    assert_eq!(out.status.code(), Some(0), "{}", common::stderr(&out));
+    assert_eq!(red_runs(&repo), 2);
+}
+
+/// Fails by: the bypass answered from a failure receipt, or a bypassed run
+/// writing a receipt over the failure.
+#[test]
+fn the_bypass_re_runs_a_failed_step() {
+    let repo = Repo::new("red-bypass");
+    assert_eq!(red_run(&repo, "7", &[]).status.code(), Some(7));
+    let bypassed = red_run(&repo, "0", &[("BATTEN_STEP_RECEIPT_BYPASS", "1")]);
+    assert_eq!(
+        bypassed.status.code(),
+        Some(0),
+        "{}",
+        common::stderr(&bypassed)
+    );
+    assert_eq!(red_runs(&repo), 2, "the bypass forces a run");
+    let after = red_run(&repo, "0", &[]);
+    assert_eq!(
+        after.status.code(),
+        Some(7),
+        "a bypassed pass records nothing"
+    );
+    assert_eq!(red_runs(&repo), 2);
+}
+
+/// Fails by: a failure receipt the engine released before it (which reads the
+/// key as the last field of the first line) would read as a PASS.
+#[test]
+fn a_failure_receipt_never_reads_as_a_pass_to_the_key_reader() {
+    let repo = Repo::new("red-shape");
+    assert_eq!(red_run(&repo, "7", &[]).status.code(), Some(7));
+    let receipts = repo.receipts();
+    assert_eq!(receipts.len(), 1, "{receipts:?}");
+    let body = read(&receipts[0]);
+    let first = body.lines().next().unwrap_or_default();
+    let key = first.split_whitespace().nth(2).unwrap_or_default();
+    assert_eq!(key.len(), 64, "the key rides the first line: {body}");
+    assert_ne!(first.split_whitespace().last(), Some(key), "{body}");
+}
+
+/// What in a `tests/it` module's source makes one of its cases reach a tracer
+/// (CLOUD-2789): the case asks itself, or it spawns a `step run` (which traces
+/// a miss) or a mutation sweep (whose reach traces each case).
+const REACHES_A_TRACER: [&str; 6] = [
+    "common::traced()",
+    "trace::Host::here()",
+    "\"step\", \"run\"",
+    "\"mutate\"",
+    "RUN_ARG",
+    "__mutate-schema",
+];
+
+/// Every `tests/it` module whose source holds a [`REACHES_A_TRACER`] marker,
+/// sorted.
+fn modules_reaching_a_tracer() -> Vec<String> {
+    let dir = common::at_root("crates/batten/tests/it");
+    let mut out: Vec<String> = std::fs::read_dir(&dir)
+        .expect("list tests/it")
+        .map(|entry| entry.expect("a tests/it entry").path())
+        .filter(|path| path.extension().is_some_and(|ext| ext == "rs"))
+        .filter(|path| path.file_stem().is_some_and(|stem| stem != "main"))
+        .filter(|path| {
+            let source = std::fs::read_to_string(path).expect("read a tests/it module");
+            REACHES_A_TRACER
+                .iter()
+                .any(|marker| source.contains(marker))
+        })
+        .map(|path| path.file_stem().unwrap().to_string_lossy().into_owned())
+        .collect();
+    out.sort();
+    out
+}
+
+/// THE TRACED LANE RUNS EVERY MODULE THAT REACHES A TRACER, as CI's `ci` job
+/// does (CLOUD-2789). There, under `CI=true`, the suite runs outside `step run`
+/// and each such case takes its traced branch; locally the suite runs under
+/// `step run`'s tracer and takes only the fallback, so `test:traced` is the
+/// one local place those branches run.
+///
+/// Fails by: a module that reaches a tracer missing from the lane (its traced
+/// branch first judged on CI), a module the lane names that no longer does, or
+/// the lane run without CI's `CI=true` or the required-trace guard.
+#[test]
+fn the_traced_lane_runs_every_module_that_reaches_a_tracer() {
+    let manifest: toml::Table = std::fs::read_to_string(common::at_root("mise.toml"))
+        .expect("read mise.toml")
+        .parse()
+        .expect("mise.toml is TOML");
+    let task = manifest
+        .get("tasks")
+        .and_then(|tasks| tasks.get("test:traced"))
+        .expect("a `test:traced` task");
+    let suite = task
+        .get("run")
+        .and_then(toml::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(toml::Value::as_str)
+        .find(|argv| argv.contains("--test it"))
+        .expect("a `test:traced` argv over the `it` binary");
+    let mut named: Vec<String> = suite
+        .split_whitespace()
+        .filter_map(|word| word.strip_suffix("::"))
+        .map(str::to_owned)
+        .collect();
+    named.sort();
+    assert_eq!(named, modules_reaching_a_tracer());
+    let env = task.get("env").expect("`test:traced` sets its env");
+    assert_eq!(env.get("CI").and_then(toml::Value::as_str), Some("true"));
+    assert_eq!(
+        env.get(common::TRACED_REQUIRED)
+            .and_then(toml::Value::as_str),
+        Some("1")
+    );
 }

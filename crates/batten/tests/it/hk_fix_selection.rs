@@ -55,11 +55,13 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
+use batten::capture::Streamed as _;
 
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use batten::rules::{self, Rule};
+use batten::config_model::Rule;
+use batten::rules;
 
 /// The row as `batten.toml` declares it, deserialized rather than
 /// struct-literalled: `Rule` carries `deny_unknown_fields`, so this goes through
@@ -386,7 +388,6 @@ const PKL_ROUTE: &str = "  [\"deno-fmt\"] = gate[\"deno-fmt\"]\n";
 /// Evaluate the committed predicate beside `config`: whether it passed, and
 /// everything it printed.
 fn fix_selection(name: &str, config: &str) -> (bool, String) {
-    let pkl = common::require_tool("pkl");
     let root = common::scratch(&format!("hk-fix-selection-pkl-{name}"));
     common::write(&root, "hk.pkl", config);
     fs::copy(
@@ -394,15 +395,10 @@ fn fix_selection(name: &str, config: &str) -> (bool, String) {
         root.join("hk-fix-selection.pkl"),
     )
     .expect("install the committed predicate");
-    #[expect(
-        clippy::disallowed_types,
-        reason = "stays — CLOUD-1991: the predicate is evaluated by `pkl`, which the engine does not host; this is the task's own spawn"
-    )]
-    let output = std::process::Command::new(pkl)
-        .arg("eval")
+    let output = common::pkl_command()
         .arg(root.join("hk-fix-selection.pkl"))
         .current_dir(&root)
-        .output()
+        .streamed_output()
         .expect("pkl runs the predicate");
     let mut text = String::from_utf8_lossy(&output.stdout).into_owned();
     text.push_str(&String::from_utf8_lossy(&output.stderr));

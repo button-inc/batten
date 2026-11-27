@@ -110,7 +110,7 @@ fn allowed_backgrounded(command: &str) {
 #[test]
 fn a_local_step_skip_is_refused() {
     // The measured command, as it was actually run on this branch.
-    denied_by_this_row("HK_SKIP_STEPS=hooks-wiring-check git commit -m 'x'");
+    denied_by_this_row("HK_SKIP_STEPS=hooks-wiring-check git commit -m 'fix: x'");
     denied_by_this_row("HK_SKIP_STEPS=batten-check,test:cargo git commit --amend --no-edit");
 }
 
@@ -119,8 +119,8 @@ fn a_step_skip_behind_a_compound_command_is_still_reached() {
     // `input.call.segments`, not the first word of the line (CLOUD-857). A real
     // agent command is compound most of the time, and `git add -A && <skip> git
     // commit` is the exact shape this session ran.
-    denied_by_this_row("git add -A && HK_SKIP_STEPS=hooks-wiring-check git commit -m 'x'");
-    denied_by_this_row("cd /home/user/batten && HK_SKIP_STEPS=batten-check git commit -m 'x'");
+    denied_by_this_row("git add -A && HK_SKIP_STEPS=hooks-wiring-check git commit -m 'fix: x'");
+    denied_by_this_row("cd /home/user/batten && HK_SKIP_STEPS=batten-check git commit -m 'fix: x'");
 }
 
 #[test]
@@ -129,26 +129,29 @@ fn the_retired_carve_is_refused_like_any_other() {
     // (CLOUD-843), so an exemption for it would be dead policy surface. The
     // mutant `skip-pattern-unread` names this case: with the pattern unread,
     // nothing here is refused.
-    denied_by_this_row("HK_SKIP_STEPS=test:bats mise run ci");
+    denied_by_this_row("HK_SKIP_STEPS=test:bats git commit -m 'fix: x'");
     // The `ci` job's current carve, typed by an agent rather than set in the
-    // workflow's `env:`, is the incident this row was filed from.
-    denied_by_this_row("HK_SKIP_STEPS=batten-check mise run ci");
+    // workflow's `env:`, is the incident this row was filed from. Spelled before
+    // a command that reaches no land stage: `mise run ci` reaches `test:cargo`,
+    // and `mise run lint:clippy` is itself a `verify` stage run by hand, so
+    // `gate run twice` answers either first (step 14).
+    denied_by_this_row("HK_SKIP_STEPS=batten-check git commit -m 'fix: x'");
 }
 
 #[test]
 fn the_carve_with_a_step_appended_is_refused() {
     // Find the line in a workflow, add "just one more" step to it.
-    denied_by_this_row("HK_SKIP_STEPS=test:bats,batten-check mise run ci");
-    denied_by_this_row("HK_SKIP_STEPS=test:bats,hooks-wiring-check mise run verify");
+    denied_by_this_row("HK_SKIP_STEPS=test:bats,batten-check git commit -m 'fix: x'");
+    denied_by_this_row("HK_SKIP_STEPS=test:bats,hooks-wiring-check git commit -m 'fix: x'");
 }
 
 #[test]
 fn an_ordinary_command_is_allowed() {
     // ANTI-VACUITY. Without these the denies above are satisfied by a build that
     // refuses every command, which would name this row every time.
-    allowed("git commit -m 'an ordinary commit'");
-    allowed_backgrounded("mise run ci");
-    allowed("RUST_LOG=debug git commit -m 'another variable is not this one'");
+    allowed("git commit -m 'fix: an ordinary commit'");
+    allowed_backgrounded("mise run lint:clippy");
+    allowed("RUST_LOG=debug git commit -m 'fix: another variable is not this one'");
 }
 
 #[test]
@@ -156,4 +159,26 @@ fn a_quoted_mention_is_not_an_invocation() {
     // The tokenizer's own quoting, reached through the engine rather than
     // re-derived: prose naming the variable is not a command setting it.
     allowed("echo 'set HK_SKIP_STEPS=x to skip a step'");
+}
+
+#[test]
+fn a_plumbing_commit_is_refused() {
+    // CLOUD-2847, the measured route: a refused worktree pushed a subagent onto
+    // `merge-tree` / `commit-tree` / `update-ref`, and 18 commits reached pushed
+    // branches without one commit-time hook running.
+    denied_by_this_row("git commit-tree 4b825dc642cb6eb9a060e54bf8d69288fbee4904 -p HEAD -m x");
+    denied_by_this_row("cd /tmp && git -C /tmp/clone commit-tree 4b825dc -m x");
+}
+
+#[test]
+fn a_branch_ref_written_by_hand_is_refused() {
+    denied_by_this_row("git update-ref refs/heads/feat 4b825dc642cb6eb9a060e54bf8d69288fbee4904");
+}
+
+#[test]
+fn plumbing_that_mints_no_branch_commit_is_left_alone() {
+    // ANTI-VACUITY for the two clauses above: reading a log that names the
+    // command, and moving a ref outside `refs/heads/`, mint no unjudged commit.
+    allowed("git log --grep commit-tree");
+    allowed("git update-ref refs/notes/x 4b825dc642cb6eb9a060e54bf8d69288fbee4904");
 }

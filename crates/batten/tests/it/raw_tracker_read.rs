@@ -114,6 +114,38 @@ fn every_spelling_of_the_raw_read_is_refused() {
     }
 }
 
+/// THE ROW'S OWN REMEDY IS NEVER REFUSED BY IT (CLOUD-2789). Since every
+/// selector reads `batten mcp call <server> get_issue` as the `get_issue` it
+/// mediates, a row that steers the raw read ONTO that route must say it is
+/// about the direct route, or it refuses its own remedy: measured, a plan-mode
+/// `batten mcp call Linear get_issue` came back `issue read loose`.
+///
+/// Fails by: the row selecting the mediated read, so the verb it names as the
+/// remedy is refused under the row's own name.
+#[test]
+fn the_mediated_read_the_row_names_is_not_refused_by_it() {
+    let repo = repo("raw-read-mediated");
+    let command = r#"batten mcp call Linear get_issue '{"id":"CLOUD-1"}'"#;
+    let payload = serde_json::json!({
+        "hook_event_name": "PreToolUse",
+        "tool_name": "Bash",
+        "tool_input": {"command": command},
+    })
+    .to_string();
+    let output = run_with_stdin(&repo, &["adjudicate", "--harness", "exit-code"], &payload);
+    let rendered = format!(
+        "{}{}",
+        stderr(&output),
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert!(
+        !rendered.contains("issue read loose"),
+        "the remedy the row names must not be refused by it: {rendered}"
+    );
+    // THE PREMISE: the same read made direct is still refused.
+    assert_eq!(verdict(&repo, "mcp__Linear__get_issue"), Some(2));
+}
+
 /// THE ANTI-VACUITY MIRROR. A row that refused everything would pass every
 /// assertion above.
 ///

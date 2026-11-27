@@ -1,0 +1,6459 @@
+//! The fact model (CLOUD-757): what a fact costs, and where it may be resolved.
+//!
+//! Batten already runs resolve-at-the-boundary, evaluate-purely.
+//! [`crate::hook::adjudicate`] is contractually pure — no I/O, no environment,
+//! no clock — and every environmental answer it needs arrives as data the
+//! boundary looked up first. What did not exist until this module is a *stated*
+//! classification of those answers, so a new one could land unclassified and the
+//! promise that `batten hook` builds no runtime (CLOUD-745 item 5, CLOUD-747
+//! constraint 3) stayed an intention rather than a type.
+//!
+//! # Two axes, and why this is a product rather than a fifth rung
+//!
+//! The obvious model is one ladder — `free`, `read`, `effect`, `stateful` — with
+//! the mediated path allowed some prefix of it. That model cannot express the
+//! case that forced this issue. **Forge state** (a pull request's mergeability, a
+//! check run's conclusion) is bounded, cacheable and one API call: `read` by
+//! price. It is still barred from the mediated path, because reaching it means
+//! building an HTTP client, and the bound there is the **no-runtime assertion**
+//! rather than the price. A ladder has to lie about one of the two.
+//!
+//! So there are two independent axes:
+//!
+//! * [`Cost`] — what resolving this *spends*: `free` / `read` / `effect` /
+//!   `stateful`.
+//! * [`Surface`] — the **narrowest** surface on which it may be resolved:
+//!   `hook` / `check` / `verify-only`.
+//!
+//! | cost \ narrowest surface | hook | check | verify-only |
+//! | -- | -- | -- | -- |
+//! | free      | yes | yes | yes |
+//! | read      | yes | yes | forge facts live here |
+//! | effect    | no  | yes | yes |
+//! | stateful  | no  | no  | yes |
+//!
+//! Independence is the whole content of the table: `read` appears in three
+//! columns, so knowing the price tells you nothing about the surface, and that
+//! is exactly the pair — `read` × `verify-only` — a one-axis model collapses.
+//!
+//! # Composition takes the meet on **both** axes
+//!
+//! [`Class::meet`] is what a derived fact is classified by (CLOUD-773): at most
+//! as cheap as its **most expensive** input, and at most as wide as its
+//! **narrowest** input. A `read`-class rule therefore cannot silently inherit an
+//! `effect`-class dependency, and a hook-surface rule cannot silently inherit a
+//! verify-only one. Meeting on one axis and inheriting the other would be the
+//! same lie the ladder tells, one composition step later.
+//!
+//! Neither axis derives [`Ord`], deliberately. An ordering invites `a > b` and a
+//! bare `max`, which reads as arithmetic over two things that are not numbers;
+//! the ordering each axis does have is spelled out in its own exhaustive match,
+//! where a new variant stops the crate compiling instead of sorting itself into
+//! a silently wrong position.
+//!
+//! # Stated per fact, never inferred
+//!
+//! [`crate::rules::RuleKind::carries_ambient_authority`] is the shipped model and this
+//! copies it wholesale: every match over an axis is exhaustive with **no
+//! wildcard arm**, [`Cost::ALL`] / [`Surface::ALL`] / [`Fact::ALL`] keep the
+//! partitions total, and each fact's classification is a `const` written beside
+//! the fact rather than derived from its name or its type. A wildcard arm is
+//! what would let a new fact default to "cheap and hook-safe", which is the one
+//! direction the mistake is expensive in.
+//!
+//! # Three-valued by default
+//!
+//! [`Look`] states once what `receipts` has carried since it shipped: a fact
+//! distinguishes *is*, *is not*, and **could not look**. `None` in
+//! [`crate::hook::ReceiptFacts`] and [`crate::hook::KeyFacts`] is exactly
+//! [`Look::CouldNotLook`], and it allows — outside a checkout, on a detached
+//! HEAD, or against a base that does not resolve, a gate that cannot look must
+//! never become a gate that blocks everything. Naming the third value keeps that
+//! posture deliberate rather than an accident of `Option`.
+//!
+//! # The tree-surface boundary, named while still empty
+//!
+//! `check` and `enforce` have no `Facts` analogue: `rules::run_rule`
+//! reads the file list and dispatches. [`Surface::Check`] is the name that
+//! boundary carries. It was named while still EMPTY — stated before anything
+//! sat on it, which is what stopped the first fact to land there being
+//! classified by whoever happened to write it.
+//!
+//! **It is not empty, and this paragraph said it was for a day** (CLOUD-849).
+//! It read *"every fact classified today sits at [`Surface::Hook`] — which is
+//! itself the finding."* [`Fact::Document`] has not since CLOUD-772, and
+//! [`DOCUMENT`]'s own doc says so in the opposite words — *"the first fact whose
+//! narrowest surface is NOT the hook."* Two claims about one table, a few
+//! hundred lines apart, disagreeing: CLOUD-589's class, in the header every
+//! reader of this module starts from.
+//!
+//! The narrower claim is the one that still holds: everything `adjudicate`
+//! consumes is hook-resolvable, and the second axis exists for the facts the
+//! mediated path must not be made to pay for.
+
+/// Which half of a split `enforce` a fact belongs to (step 13a): see
+/// [`Fact::subject`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Subject {
+    /// A function of the indexed tree alone, so a tree-keyed receipt covers it.
+    Tree,
+    /// A function of anything else, or of something undeterminable.
+    Live,
+}
+
+/// What resolving a fact spends.
+///
+/// The narrow question — the price — with no claim about *where* it may be
+/// paid. [`Surface`] answers that, and the two are independent.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Cost {
+    /// Already in hand, merely unread: the envelope's own fields, the process's
+    /// own environment block. Nothing is spawned, opened, or waited on.
+    Free,
+    /// A bounded query — one file, one git plumbing call, one clock reading.
+    /// Bounded is the operative word: a `check` may hold it.
+    Read,
+    /// Resolving it runs a program, which is what house-style §5 splits on.
+    Effect,
+    /// Resolving it needs something warm and outliving the call (CLOUD-671).
+    Stateful,
+}
+
+impl Cost {
+    /// Every cost the model knows, so the partitions above are total.
+    ///
+    /// A new variant must be added here or `tests/facts.rs`'s
+    /// `all_covers_every_cost` fails
+    /// — the same guard `RuleKind::ALL` gives `carries_ambient_authority`.
+    pub const ALL: &'static [Cost] = &[Cost::Free, Cost::Read, Cost::Effect, Cost::Stateful];
+
+    /// The stable lowercase token (§6).
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Cost::Free => "free",
+            Cost::Read => "read",
+            Cost::Effect => "effect",
+            Cost::Stateful => "stateful",
+        }
+    }
+
+    /// The meet: the **more expensive** of the two.
+    ///
+    /// Written as an exhaustive match over the pair rather than a comparison, so
+    /// adding a rung is a deliberate act at every site that already decided one
+    /// — the alternative sorts the new variant into whatever position its
+    /// declaration order implies, silently.
+    #[must_use]
+    pub const fn meet(self, other: Cost) -> Cost {
+        match (self, other) {
+            (Cost::Free, Cost::Free) => Cost::Free,
+            (Cost::Free | Cost::Read, Cost::Read) | (Cost::Read, Cost::Free) => Cost::Read,
+            (Cost::Free | Cost::Read | Cost::Effect, Cost::Effect)
+            | (Cost::Effect, Cost::Free | Cost::Read) => Cost::Effect,
+            (Cost::Free | Cost::Read | Cost::Effect | Cost::Stateful, Cost::Stateful)
+            | (Cost::Stateful, Cost::Free | Cost::Read | Cost::Effect) => Cost::Stateful,
+        }
+    }
+}
+
+/// The narrowest surface on which a fact may be resolved.
+///
+/// Narrowest, not "where it happens to be resolved today": [`Surface::Hook`]
+/// means the mediated path may resolve it, and therefore so may every wider
+/// surface. [`Surface::VerifyOnly`] is the most restricted value, not the least.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Surface {
+    /// Resolvable on the mediated call itself, under CLOUD-689's 100ms budget
+    /// and CLOUD-747's no-runtime assertion — and therefore anywhere.
+    Hook,
+    /// Resolvable by the tree verbs. The boundary this names does not exist yet
+    /// (`rules::run_rule` dispatches straight off the file list); naming it is
+    /// what keeps the first fact that needs it from inventing its own.
+    Check,
+    /// Resolvable only where a runtime, a network client or a warm process is
+    /// admissible. Forge state lives here at [`Cost::Read`] — bounded, cheap,
+    /// and still barred from the hook, which is the pair the second axis exists
+    /// to express.
+    VerifyOnly,
+}
+
+impl Surface {
+    /// Every surface the model knows, so the partitions above are total.
+    pub const ALL: &'static [Surface] = &[Surface::Hook, Surface::Check, Surface::VerifyOnly];
+
+    /// The stable lowercase token (§6).
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Surface::Hook => "hook",
+            Surface::Check => "check",
+            Surface::VerifyOnly => "verify-only",
+        }
+    }
+
+    /// The meet: the **narrower** of the two.
+    ///
+    /// A derived fact is resolvable only where every input is, so composition
+    /// moves towards [`Surface::VerifyOnly`] and never away from it.
+    #[must_use]
+    pub const fn meet(self, other: Surface) -> Surface {
+        match (self, other) {
+            (Surface::Hook, Surface::Hook) => Surface::Hook,
+            (Surface::Hook | Surface::Check, Surface::Check) | (Surface::Check, Surface::Hook) => {
+                Surface::Check
+            }
+            (Surface::Hook | Surface::Check | Surface::VerifyOnly, Surface::VerifyOnly)
+            | (Surface::VerifyOnly, Surface::Hook | Surface::Check) => Surface::VerifyOnly,
+        }
+    }
+
+    /// Whether a fact narrowed to `self` may be resolved while running `on`.
+    #[must_use]
+    pub const fn admits(self, on: Surface) -> bool {
+        match (self, on) {
+            (Surface::Hook, Surface::Hook | Surface::Check | Surface::VerifyOnly)
+            | (Surface::Check, Surface::Check | Surface::VerifyOnly)
+            | (Surface::VerifyOnly, Surface::VerifyOnly) => true,
+            (Surface::Check | Surface::VerifyOnly, Surface::Hook)
+            | (Surface::VerifyOnly, Surface::Check) => false,
+        }
+    }
+}
+
+/// One fact's classification: a point in the [`Cost`] × [`Surface`] product.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct Class {
+    /// What resolving it spends.
+    pub cost: Cost,
+    /// The narrowest surface it may be resolved on.
+    pub surface: Surface,
+}
+
+impl Class {
+    /// Both axes, always. There is no constructor taking one.
+    #[must_use]
+    pub const fn new(cost: Cost, surface: Surface) -> Class {
+        Class { cost, surface }
+    }
+
+    /// The meet on **both** axes — the classification of a fact derived from
+    /// `self` and `other` (CLOUD-773).
+    ///
+    /// Meeting one axis and carrying the other through is the defect this
+    /// method's existence prevents: it is how a `read`-class rule acquires an
+    /// `effect`-class dependency while still reporting itself cheap.
+    #[must_use]
+    pub const fn meet(self, other: Class) -> Class {
+        Class::new(self.cost.meet(other.cost), self.surface.meet(other.surface))
+    }
+
+    /// Whether this fact may be resolved while running `on`.
+    #[must_use]
+    pub const fn resolvable_on(self, on: Surface) -> bool {
+        self.surface.admits(on)
+    }
+}
+
+/// A fact's three-valued answer: *is*, *is not*, and **could not look**.
+///
+/// The generalisation of the `receipts` contract, which has carried it since it
+/// shipped: `None` in [`crate::hook::ReceiptFacts`] is not "looked and found
+/// nothing", it is "the question could not be asked", and it **allows**. Keeping
+/// the two apart is what makes the fail-open posture a decision rather than a
+/// side effect of reaching for `Option`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Look<T> {
+    /// Looked, and the fact holds — carrying whatever the boundary read.
+    Is(T),
+    /// Looked, and the fact does not hold.
+    IsNot,
+    /// The question could not be asked: no checkout, no base ref, no store.
+    CouldNotLook,
+}
+
+impl<T> Look<T> {
+    /// The stable lowercase token for the arm (§6), never the value.
+    ///
+    /// Pointer-only by construction (rule 4): a fact's *content* can be a path,
+    /// a rev or a secret-adjacent string, and this reports which of the three
+    /// answers came back and nothing else.
+    #[must_use]
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            Look::Is(_) => "is",
+            Look::IsNot => "is-not",
+            Look::CouldNotLook => "could-not-look",
+        }
+    }
+
+    /// Whether the boundary failed to reach the question at all.
+    #[must_use]
+    pub const fn could_not_look(&self) -> bool {
+        match self {
+            Look::CouldNotLook => true,
+            Look::Is(_) | Look::IsNot => false,
+        }
+    }
+}
+
+/// What a rule PRODUCES — the third axis, and the one [`Cost`] structurally
+/// cannot carry (CLOUD-851).
+///
+/// # Why a separate axis rather than a `Cost` arm
+///
+/// `Cost` describes what resolving a fact SPENDS, and it has no arm meaning
+/// "mutates". [`Cost::Effect`] is the near miss and it cannot be repurposed:
+/// `rules::tests::the_two_axes_agree_about_every_kind` welds
+/// `Cost::Effect | Cost::Stateful` to `RuleKind::carries_ambient_authority()`
+/// over every kind x scope pairing, so a kind classified `Effect` that does not
+/// spawn goes red there. That test is right and stays. A sink is not a spawn.
+///
+/// # Three kinds, because the census found three
+///
+/// Eleven bash writers, sorted by what READS the thing written. That is the
+/// distinction that matters — not the file format, and not where it lives:
+///
+/// * nothing reads it back ([`Production::Journal`]),
+/// * a later run reads it back AS A FACT ([`Production::Baseline`]), which is the
+///   genuine ratchet and the only kind that makes a decision depend on a
+///   previous one,
+/// * only its own presence is read ([`Production::Marker`]).
+///
+/// # The write is the boundary's, always
+///
+/// A rule declaring a sink stays [`Cost::Read`] on the resolution axis, because
+/// it does not perform the write: the decision REQUESTS an effect and the
+/// boundary performs it, on [`crate::refusal::Fix::Run`]'s existing shape. That
+/// is what keeps `hook::adjudicate` pure with three of the four writing hook
+/// bodies on the mediated path.
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    serde::Deserialize,
+    serde::Serialize,
+    schemars::JsonSchema,
+)]
+#[serde(rename_all = "kebab-case")]
+pub enum Production {
+    /// An append-only audit trail. Nothing reads it back as a decision input, so
+    /// it can never change a verdict — which is exactly why it is the safe kind.
+    Journal,
+    /// A keyed baseline a LATER run reads back as a fact. The genuine ratchet:
+    /// `issue-read.<key>`, `claim.<branch>`, `batten-contract/<session-id>`.
+    Baseline,
+    /// "Have I already said this." Only presence is read, never content, so the
+    /// record is empty by construction and rule 4 holds without a digest.
+    Marker,
+}
+
+impl Production {
+    /// Every production kind the model knows, so a partition over it is total.
+    pub const ALL: &'static [Production] = &[
+        Production::Journal,
+        Production::Baseline,
+        Production::Marker,
+    ];
+
+    /// The stable lowercase token (§6) — the spelling a `batten.toml` writes.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Production::Journal => "journal",
+            Production::Baseline => "baseline",
+            Production::Marker => "marker",
+        }
+    }
+
+    /// Whether a later run reads this kind back, and therefore whether it may
+    /// reach the tree surface's input at all.
+    ///
+    /// **This is the predicate `sink::store` filters on, and for one turn it was
+    /// declared and called by nothing.** A journal was loaded into
+    /// `input.tree.produced` beside the baselines, so a module could decide on a
+    /// digest from a record this module's own doc calls "an audit trail nothing
+    /// reads back as a decision input". The statement and the behaviour
+    /// disagreed, and the statement was the one with no mechanism — which is
+    /// non-negotiable rule 2's failure exactly: a rule without a runnable gate is
+    /// half a change, and a predicate with no call site is prose.
+    ///
+    /// A MARKER READS BACK, and the first version said otherwise. Its content is
+    /// empty by construction, but its PRESENCE is the whole fact — "have I
+    /// already said this" is answered by the record existing. Excluding it would
+    /// have deleted the idempotence kind's only signal while looking like a
+    /// tightening.
+    #[must_use]
+    #[expect(
+        clippy::match_same_arms,
+        reason = "the two `true` arms are true for DIFFERENT reasons — a baseline's content is the fact, a marker's existence is — and collapsing them would delete the distinction that decides whether an empty record means anything"
+    )]
+    pub const fn reads_back(self) -> bool {
+        match self {
+            // The content is the fact.
+            Production::Baseline => true,
+            // The EXISTENCE is the fact; the content is empty.
+            Production::Marker => true,
+            // Write-only. Nothing may decide on it, which is what makes it the
+            // safe kind rather than merely the cheap one.
+            Production::Journal => false,
+        }
+    }
+}
+
+/// The facts `lib.rs`'s `Facts` bundle carries to [`crate::hook::adjudicate`] today.
+///
+/// One variant per field of that bundle, so "what does this call cost, and where
+/// may it be paid" is answerable without reading five modules.
+///
+/// **DELIBERATELY NOT `#[non_exhaustive]`, and that was tried and reverted.**
+/// Adding a variant to a closed enum is an API break, so the obvious move when
+/// ten families landed at once was to open it. It cannot be done: `tests/facts.rs`
+/// is a separate crate, so `non_exhaustive` forces its census match to carry a
+/// wildcard — and that match's whole value is that it has none, because a new
+/// fact then fails to COMPILE until somebody states its class. Opening the enum
+/// buys downstream compatibility by deleting the gate that makes the model honest
+/// (CLOUD-757), which is the wrong trade. The break is declared instead.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Fact {
+    /// The receipt verdicts a `requires_receipt` row is judged against.
+    Receipts,
+    /// The tracker-key evidence a `requires_key` row is judged against.
+    Keys,
+    /// The end-of-turn facts, default on every event but `Stop`.
+    Stop,
+    /// The rules a live waiver suppresses today, with each claimed expiry.
+    Waived,
+    /// A structured document, parsed once and addressed by node path (CLOUD-772).
+    Document,
+    /// The repository-relative paths the working-tree walk yields — see
+    /// [`TRACKED`] for the walk and its bound.
+    ///
+    /// **Not the git index, despite the token.** The walk honours `.gitignore`,
+    /// so an unignored file the index does not carry IS here and an ignored one
+    /// is not. `tracked` is the spelling `policy.rs`'s own example established
+    /// and consumer modules are written against; stating the difference beside
+    /// the variant is cheaper than a rename that would break them, and leaving
+    /// it unstated is how a module author writes a predicate about the index and
+    /// gets an answer about the checkout.
+    Tracked,
+    /// Each declared `[[traversal]]`'s answer per seed (CLOUD-1868), keyed
+    /// `input.tree.traversals["<id>"]["<seed>"]`: a reduction of the walk,
+    /// never the documents it read. `null` where nothing is declared.
+    Traversals,
+    /// A declared file's lines, unparsed.
+    Lines,
+    /// A **declared** file that lives OUTSIDE the repository root, parsed
+    /// (CLOUD-1167).
+    ///
+    /// **Not a filesystem scanner, and the bound is stated here rather than
+    /// trusted to the name** — [`Fact::Tracked`]'s doc is the precedent, and this
+    /// variant needs it for a stronger reason: a reader who assumes it reads
+    /// `$HOME` freely has assumed a scanner. What it reads is an `[[external]]`
+    /// row's `path`, resolved beneath the directory ONE named environment
+    /// variable holds. The engine knows how to expand a variable and nothing
+    /// else; which variable, and which path beneath it, are the consumer's facts
+    /// in the consumer's config, which is what keeps non-negotiable rule 1
+    /// satisfied. **A path no row declares is unreadable by any module** — that
+    /// negative half is the whole safety property.
+    External,
+    /// What a command the AGENT ran said, read off the post-tool result buffer
+    /// (CLOUD-776).
+    AgentSourced,
+    /// What a write is about to put on disk, before it happens (CLOUD-758).
+    Prospective,
+    /// What EARLIER runs produced, keyed (CLOUD-851) — the read half of
+    /// [`Production::Baseline`] and of [`Production::Marker`]'s presence test.
+    Produced,
+    /// Where HEAD is: its commit, the branch it is on, and whether it is
+    /// detached (CLOUD-907).
+    GitHead,
+    /// What the working tree looks like against the index: dirty, staged,
+    /// untracked (CLOUD-907).
+    GitStatus,
+    /// What this checkout is connected to: its remotes and HEAD's upstream
+    /// (CLOUD-907).
+    GitRemote,
+    /// What LINKED worktrees this repository has registered, and for each whether
+    /// the directory it records still exists (CLOUD-1424).
+    ///
+    /// A registration outlives the checkout it names, so removing a worktree
+    /// directory without clearing the registry leaves state git keeps and nothing
+    /// on disk answers for. That is not visible where it is created — it surfaces
+    /// later, in an unrelated command that resolves the registry and refuses over
+    /// a path no reader recognises.
+    ///
+    /// Carries an `id`, a `present` and a `locked` per registration, and no path:
+    /// a linked worktree may live anywhere on the machine, and the base is read to
+    /// decide `present` and dropped. Non-negotiable rule 4 at the boundary, and
+    /// the same reason [`Fact::External`] keys by a declared id.
+    GitWorktrees,
+    /// A **declared** ref, resolved — and whether HEAD descends from it
+    /// (CLOUD-907).
+    GitRef,
+    /// A **declared** commit range, as the commits in it (CLOUD-907).
+    GitRange,
+    /// A **declared** commit range, as each commit's IDENTITY fields — author,
+    /// committer and trailers, and no message body (CLOUD-1187).
+    ///
+    /// **The body's absence is structural, not a habit.** `git::CommitMeta` has
+    /// no such field, so a module cannot read one and a later projection cannot
+    /// leak one by forgetting to drop it. Non-negotiable rule 4 refuses tracked
+    /// content at the boundary rather than at the report, and a message body is
+    /// exactly that: prose the author wrote. An identity string and a
+    /// `Key: value` trailer are not, which is why these three are admissible and
+    /// `%B` is not.
+    CommitMeta,
+    /// Whether this branch's work is on each **declared** target, by patch
+    /// identity (CLOUD-880) — the landing question `Fact::GitRef` leaves open.
+    Landing,
+    /// A **declared** PATTERN's matching commits — every tag matching a glob, or
+    /// the commits that added or deleted a path (CLOUD-1200).
+    ///
+    /// **The half [`Fact::GitRef`] and [`Fact::GitRange`] structurally cannot
+    /// reach.** Those resolve what a rule NAMES; this resolves what it
+    /// DESCRIBES, because the answer set is not knowable at declaration time.
+    /// What stays declared is the pattern, so a pattern no row names resolves
+    /// nothing — the difference between a fact and a git shell.
+    ///
+    /// Widens WHICH commits are visible, never WHAT one carries: the per-entry
+    /// shape is a sha, a subject and (for a tag glob) the tag name.
+    GitHistory,
+    /// Every tag a **declared** glob matches, with the commit it peels to and
+    /// when it was cut (CLOUD-843).
+    ///
+    /// **Not [`Fact::GitHistory`]'s tag query with a date added, and the
+    /// difference is the shallow clone.** That family resolves `null` on a
+    /// shallow repository because a PATH query walks history it cannot see; a tag
+    /// listing walks no history at all, so it answers on the clone CI actually
+    /// checks out. The glob is also git's own listing match (`git tag --list`),
+    /// where a history pattern goes through the path selector.
+    GitTags,
+    /// **Declared** config keys, as git resolves them and per scope
+    /// (CLOUD-843).
+    ///
+    /// **The one git fact whose subject is partly OUTSIDE the checkout**, and
+    /// that is the point rather than a leak: a signing posture is broken exactly
+    /// when a global or system scope turns signing on and nothing local answers
+    /// it, so the per-scope split is the fact. The declaration bounds it — a key
+    /// no row names is never read, which is what keeps a credential in a config
+    /// file off the policy input.
+    GitConfig,
+    /// The index entries a **declared** pathspec selects, which of them the
+    /// working tree has diverged from, and the untracked paths beneath it
+    /// (CLOUD-843).
+    ///
+    /// **The index, and the working tree measured against it** — the three reads
+    /// a content-keyed step cache makes before it trusts a key. [`Fact::Tracked`]
+    /// is a walk and [`Fact::GitStatus`] compares against HEAD; neither answers
+    /// "what does the index record under these paths, and does the checkout still
+    /// agree with it".
+    GitIndex,
+    /// A **declared** path's STAGED bytes, parsed — `git show :<path>`, which
+    /// [`Fact::Tracked`] explicitly is not (CLOUD-1203).
+    ///
+    /// **The index, not the checkout, and the difference is the whole variant.**
+    /// `Tracked` walks the working tree; `GitStatus` names the paths that differ
+    /// and counts them. Neither can answer what a path SAYS at the point it was
+    /// staged, which is the question a gate judging the COMMIT rather than the
+    /// developer's working copy has to ask. A successor reading the worktree
+    /// instead passes over a staged-but-unsaved edit — a silent wrong answer.
+    ///
+    /// `Tracked` is deliberately NOT widened to mean this: that would change
+    /// every existing consumer's answer without any of them asking.
+    Staged,
+    /// The forge's verdict for a **declared** SHA, read back from a record a
+    /// producer wrote OUTSIDE the engine (CLOUD-1154).
+    ///
+    /// **The engine opens no socket, and that is the whole shape.** House style
+    /// §5 forbids an HTTP client here and the ~100ms mediated budget forbids it
+    /// twice over, so the fetch happens once somewhere else — a workflow step, an
+    /// agent call — and writes a keyed record this reads. That is
+    /// [`AGENT_SOURCED`]'s own argument moved from the hook surface to the tree
+    /// one: the same answer that is `verify-only` when the ENGINE would fetch it
+    /// is not when something else already did. `evaluator-io-check` stays the
+    /// gate on it.
+    ///
+    /// **Keyed by SHA, and the keying is the safety property.** A record taken
+    /// against a different commit is not evidence about this one, so it does not
+    /// answer — which is the difference between reading a verdict and inheriting
+    /// a stale one.
+    Forge,
+    /// A **third-party tool's** verdict, read back from a record keyed to the
+    /// tool, the version it was pinned at, and the digest of what it read
+    /// (CLOUD-1171).
+    ///
+    /// **[`Fact::Forge`]'s mechanism with a different key, and that is the whole
+    /// row.** The producer runs the tool once, outside — a `mise` task, a CI step
+    /// — and writes a keyed record; the engine reads it back and spawns nothing.
+    /// `check` is `read` and structurally incapable of running a validator, which
+    /// is why ~five governed programs that adjudicate one had no successor.
+    ///
+    /// **The key is a TRIPLE, and each component refuses a different lie.** The
+    /// TOOL and its PINNED VERSION, because one validator's answer at v1.1 is not
+    /// its answer at v1.2 — CLOUD-646's shape, closed for this path. The INPUT
+    /// DIGEST, because a verdict over bytes that have since changed is a verdict
+    /// about a file nobody is asking about. A record whose key differs in any
+    /// component lives under a different name and does not answer.
+    ///
+    /// **Deliberately not a benchmark record.** CLOUD-1171's own correction
+    /// withdraws that half: `batten perf` already ships and already spawns, so a
+    /// measurement was never blocked on a record family. A benchmark key would
+    /// also owe a machine identity and a declared null spread, which is a
+    /// different design and not this one.
+    ToolVerdict,
+    /// The adopted gate runner's EFFECTIVE plan for a declared surface
+    /// (CLOUD-949), acquired from the runner itself rather than re-derived.
+    ///
+    /// `Cost::Effect`, in [`Fact::Symbols`]' class and for its reason: what a
+    /// delegated tool would do is a property of that tool, and no walk of the
+    /// tree answers it. What separates it from [`Fact::ToolVerdict`] is WHERE the
+    /// answer comes from — a verdict is read back from a record a producer wrote,
+    /// where a plan is taken now, because a plan binds to the working tree and a
+    /// stored one would need every binding field compared before it could be
+    /// trusted.
+    Plan,
+    /// A **declared FIELD** of a receipt the mediated boundary already minted,
+    /// read on the TREE surface and bounded by how old the reading is
+    /// (CLOUD-1310).
+    ///
+    /// **[`Fact::Receipts`] is the same store and a different question, which is
+    /// why this is a second variant rather than a widened one.** That fact
+    /// answers *is this check's receipt valid for this call*, on
+    /// [`Surface::Hook`], as a validity token. This one answers *what did the
+    /// boundary record about this subject*, on [`Surface::Check`], as one
+    /// declared field. A tree-scoped module has no stdin and no mediated facts,
+    /// so before this the answer existed in the store with no route to a
+    /// predicate at all.
+    ///
+    /// **The bound is AGE, and it is why this is not [`Fact::Captured`].** The
+    /// capture store is keyed by CONTENT and carries no clock — that is what
+    /// makes a reduction byte-stable — so a mutable field answers from whichever
+    /// read sorts first by digest, which on any branch that read the subject
+    /// before working it is the state BEFORE the work. `batten.toml`'s
+    /// `claim-before-code` row records that measured: it asked exactly that at
+    /// first and `check` refused from a pre-claim capture. So staleness is keyed
+    /// IN here, [`Fact::ToolVerdict`]'s property rather than
+    /// [`Fact::Captured`]'s: a reading older than the row declares does not
+    /// answer, and absent is could-not-look rather than agreement.
+    ///
+    /// **Positional, because that is how this store is already read.**
+    /// `claim::read_baseline` takes its digest with `nth(3)` over one
+    /// whitespace-split line; a body template is the consumer's, so the engine
+    /// cannot know a field by name without inventing a second schema for it.
+    ///
+    /// **Nothing here names a tracker** (non-negotiable rule 1). A mint name, a
+    /// field index and an age are the whole vocabulary; which mint, and what its
+    /// fields mean, is the consumer's `batten.toml`.
+    Minted,
+    /// A **declared** reduction over a response the agent already captured
+    /// (CLOUD-1188).
+    ///
+    /// **The reduction is part of the fact, and that is the whole design.** Ten
+    /// board gates are pure predicates that exist as CLI verbs only because they
+    /// have nowhere to read from — they take a payload on stdin. A fact carrying
+    /// whole payloads would put a tracker's prose on the policy input where any
+    /// module can lift it into a `subjects` pointer, so non-negotiable rule 4
+    /// would be violated by construction rather than by carelessness. So a row
+    /// declares WHAT to reduce and HOW — present, count, or a bounded token — and
+    /// the projection carries the answer, never the text it came from.
+    ///
+    /// **The store, never stdin, and three independent reasons say so.** A
+    /// stdin-fed fact declared `Surface::Check` is dropped by
+    /// [`Surface::admits`] before projection, so the module silently sees
+    /// nothing. A payload on stdin is a payload something read, which is context
+    /// re-sent every turn. And the `batten step` key does not include stdin, so
+    /// two runs over different payloads on one tree hit one receipt and skip.
+    ///
+    /// [`crate::capture::list`] is sorted by handle rather than by time, so this
+    /// is a pure function of the store's bytes — which is what `Surface::Check`
+    /// requires and what stdin could never offer.
+    Captured,
+    /// The task runner's own argv, read back from a receipt minted OUTSIDE the
+    /// mediated call (CLOUD-856).
+    ///
+    /// **The `Document` arm stays `None`, and this is why it can.** A module
+    /// asking *is this argv a weaker form of a task's own* needs the manifest's
+    /// task bodies, and parsing a document of unbounded size on every mediated
+    /// call would spend the whole invocation budget. So the parse happens once,
+    /// at session start where a read of that size is admissible, and the call
+    /// reads one small keyed record.
+    ///
+    /// **Staleness is structural.** The record's key is recomputed at read time
+    /// from the manifest as it stands, so a record about a manifest that has
+    /// since moved does not answer — could-not-look, never a task table to be
+    /// trusted a little.
+    ///
+    /// `Read` × `Hook` is the honest pair: a file read the mediated path may
+    /// make, on the surface it is made from. The EFFECT — asking the runner
+    /// anything — is [`PINNED`]'s, already landed, and this does not repeat it.
+    Tasks,
+    /// The result of a **declared extractor** over the session's own transcript
+    /// (CLOUD-1172).
+    ///
+    /// **Not the transcript, and the distinction is the whole row.** A transcript
+    /// is the richest source of secrets the engine can be pointed at — every
+    /// command, every file body, every prompt — so a fact carrying its bytes
+    /// would be the most direct violation of non-negotiable rule 4 available,
+    /// worse than the commit body [`COMMIT_META`] declines to carry, because a
+    /// body is authored and a transcript is captured.
+    ///
+    /// **What reaches a module is a COUNT, and the type is the guarantee.** The
+    /// extractor set is closed and every member resolves to an integer over
+    /// [`crate::transcript`]'s TYPED events — a tool call's name, a result's
+    /// `is_error` flag, a hook run's exit code — never over prose. No span of
+    /// session text can reach the policy input by construction rather than by
+    /// this projection remembering to drop one.
+    ///
+    /// **Could-not-look is the COMMON case here** (CLOUD-388: transcripts die
+    /// with their container), and it has four distinguishable spellings —
+    /// unconfigured, absent, unreadable, and *the extractor ran and matched
+    /// nothing*. A gate that confused the first three with the fourth would
+    /// report "nothing was stranded" on every host that has no transcript at all.
+    Extracted,
+    /// The engine's own finding store, as the pointer lines a **declared** ref
+    /// accumulated (CLOUD-1203).
+    ///
+    /// **Not a [`Fact::Produced`] reading under another name**, which the row
+    /// required be asked before a variant was added. `Produced` reads a SINK the
+    /// consumer declared, keyed by the record's own name; this reads the store
+    /// the engine mints for itself, keyed by the REF a finding was observed on.
+    /// Different writer, different key, different lifetime — one variant cannot
+    /// answer both without a key that means two things.
+    State,
+    /// What a **declared** Rust source file's call sites invoke, and with what
+    /// literal arguments — the token's syntactic POSITION, which no line
+    /// predicate can see (CLOUD-914).
+    Invocations,
+    /// Every function, comment and string in a **declared** source file, as
+    /// CLOUD-1009 D4 nodes with amendment A2's counts (CLOUD-1008): Rust
+    /// through the one lossless parse, Rego through regorus.
+    Units,
+    /// The per-file facts a row declares, acquired at its declared `base` rev
+    /// instead of the working tree: head against base, read from git objects
+    /// (plan item 4, CLOUD-1008's base side; 4b's Rego ratchet reads it).
+    Base,
+    /// Architecture measures over the declared `use` graph, head and base:
+    /// Decoupling Level (Mo et al. 2016), propagation cost and the largest
+    /// component, from `coupling::measure` (plan step 3; 4b's ratchet reads it).
+    Coupling,
+    /// Which module a **declared** Rust source file reaches, resolved through the
+    /// crate root's own re-export table (CLOUD-762).
+    Uses,
+    /// Where the crate uses a type a delegated analyser resolved by NAME, rather
+    /// than by spelling (CLOUD-760). The first `Cost::Effect` fact.
+    Symbols,
+    /// That a **vendored** agent prompt was dispatched over a **declared**
+    /// subject, and what it pointed at (CLOUD-472).
+    ///
+    /// The second `Cost::Effect` fact, and the third adopter of `secrets.rs`'
+    /// delegated-analyser shape. What it answers is deliberately narrow: THAT a
+    /// particular prompt ran over these exact bytes. What the agent concluded
+    /// reaches the input as pointers and never as prose, and no gate may decide
+    /// on it — see [`REVIEW`] for why that bound is what makes an LLM in the
+    /// resolution path compatible with non-negotiable rule 3.
+    Review,
+    /// How the **declared** globs' paths differ from a **declared** base rev:
+    /// added, edited, deleted (CLOUD-1059).
+    BaseDelta,
+    /// Which lines of each declared `[census.shell]` home, and of each shell
+    /// file, are shell logic, on both sides of the delta (CLOUD-2625).
+    Shell,
+    /// The lines a **declared** `[[recorder]]` accumulated on this branch
+    /// (CLOUD-1051).
+    Records,
+    /// Which `[[recorder]]` rows SELECTED a call and could not answer it
+    /// (CLOUD-1126).
+    ///
+    /// **The could-not-look channel [`Records`] does not have.** A record absent
+    /// from that map could not be read; a record that is present and short is a
+    /// recorder that ran and found nothing. Neither says that a row's subject
+    /// arrived and the call failed to produce what the row reads — and that arm
+    /// is the one a gate downstream cannot re-derive, because the call is gone by
+    /// the time anything reads the store.
+    ///
+    /// Measured on PR #726: `pr-body-closes` selects a `gh pr view` and reads its
+    /// stdout, `gh` is absent from the web sandbox, so no `pr-closes` record could
+    /// exist and `filed-here`'s closes-the-row exemption was unreachable rather
+    /// than unsatisfied. The refusal fired on every subject while the PR body
+    /// carried the closing key throughout.
+    RecordsBlocked,
+    /// The instant the CALLER supplied, as data (CLOUD-1170).
+    ///
+    /// **Supplied, never read, and that verb is the whole variant.** A clock READ
+    /// is non-reproducible by construction: its value differs on every
+    /// evaluation, so §6's byte-stable output is unachievable and `replay` can
+    /// carry no case for it. Being HANDED an instant is not — the caller passes
+    /// one epoch second in, a module compares a recorded stamp against it, and a
+    /// fixture pins both. Evaluate twice with the same instant and the bytes are
+    /// identical, which is exactly what §6 asks. A clock is an integer input.
+    ///
+    /// So the engine calls no `SystemTime::now`, on any evaluation path, and that
+    /// is asserted rather than reviewed: `clippy.toml`'s `disallowed-methods`
+    /// carries the ban and `crates/batten/tests/clock_ban.rs` holds each reason to
+    /// a bound whose name resolves in the same file — CLOUD-1177's own mechanism,
+    /// one method over.
+    ///
+    /// **Absent is could-not-look, and it must stay distinguishable from an
+    /// instant of zero.** A caller that supplied none has not said "the epoch";
+    /// it has said nothing, and a predicate over an unsupplied instant does not
+    /// hold. `null` rather than a skipped key, for the invariant the git family
+    /// states: a key that comes and goes cannot be written against at all.
+    Instant,
+    /// The programs the project's pin puts on `PATH` (CLOUD-1028).
+    ///
+    /// **Read here, effect elsewhere, and the split is deliberate.** Asking the
+    /// pin runs a program, which the model bars from the mediated path — so what
+    /// this fact resolves on a call is the RECORD [`crate::pinned::refresh`]
+    /// wrote, keyed to the manifest and lockfile that decide the answer. The
+    /// same shape [`Fact::Stop`] takes: the price counted here is the price of
+    /// the reading, not of the thing being read.
+    Pinned,
+    /// The brief lint's report on the message a session-management call carries
+    /// (CLOUD-2858): whether it is clean, and the `missing` and `unrunnable`
+    /// section ids. Ids only, never a byte of the message (rule 4).
+    ///
+    /// Linted in process at pre-tool, so no receipt is read and no file is
+    /// stat'ed. `null` on every call that is not such a method, which raises
+    /// nothing.
+    DispatchBrief,
+    /// The root of a checkout the call writes in whose singleton a live `land`
+    /// lap holds, or `null` when no such lap is live (CLOUD-2781, CLOUD-2789).
+    /// One lock read and a pid probe under each written checkout's per-worktree
+    /// `$GIT_DIR`: the same reading `land` uses to refuse a second lap, so a
+    /// call is judged by the fact the lap itself trusts.
+    LandLive,
+    /// What the session's setup task is doing while this call runs, and which
+    /// of the call's command-position programs it may still be installing
+    /// (CLOUD-2840).
+    InstallPending,
+    /// The current branch's red-head record: the head a lap's wait stopped red
+    /// on, each failed check's newest run with whether its log was read, and
+    /// each check the stop abandoned still running (CLOUD-2270).
+    ///
+    /// A file read and one stat per failed run under `$GIT_DIR`. `null` when no
+    /// record exists — the branch owes no push a read.
+    RedHead,
+    /// Each pathspec a `git checkout`/`git restore` names, and whether it is
+    /// literal, tracked and clean (CLOUD-2684).
+    PathspecStatus,
+    /// Each `[budget.*]` set a write would change, measured before and after
+    /// the call (CLOUD-2661).
+    Budgeted,
+    /// Whether this call's write authors shell into the repository, and by
+    /// which arm: `shell-path` or `shebang` (CLOUD-2335).
+    ///
+    /// Decided in Rust by `batten_core::shell_logic`'s detector over the bytes the write
+    /// would land and the bytes on disk, so the policy input carries a reason
+    /// token and never the content (non-negotiable rule 4).
+    ShellIntroduced,
+}
+
+/// [`Fact::Receipts`] — a file and two git refs (`hook.rs`'s receipt read).
+/// Bounded plumbing, which is exactly what a `read`-classified verb may hold,
+/// and it is resolved on the mediated path today.
+pub const RECEIPTS: Class = Class::new(Cost::Read, Surface::Hook);
+
+/// [`Fact::Keys`] — a bounded `git log` against a base ref. Same shape as
+/// [`RECEIPTS`] and the same classification; the `None` both carry is
+/// [`Look::CouldNotLook`].
+pub const KEYS: Class = Class::new(Cost::Read, Surface::Hook);
+
+/// [`Fact::Stop`] — the at-risk report and the undischarged denials, read from
+/// the store on disk. A bounded read, on the mediated path.
+pub const STOP: Class = Class::new(Cost::Read, Surface::Hook);
+
+/// [`Fact::Waived`] — the waiver rows rode in with the already-loaded policy, so
+/// the one thing actually resolved here is the date, through `waiver::today`.
+/// A clock reading is bounded and is not free: it is the single boundary read
+/// that keeps *same commit + same date → same bytes* true.
+pub const WAIVED: Class = Class::new(Cost::Read, Surface::Hook);
+
+/// [`Fact::Document`] — a local file read and a parse, and the first fact whose
+/// narrowest surface is NOT the hook (CLOUD-772). It is `read` by price, exactly
+/// like [`RECEIPTS`], and still barred from the mediated path: parsing an
+/// arbitrary document is unbounded in the input's size where a git ref read is
+/// not, and CLOUD-689's 100ms budget is per mediated call. The two axes moving
+/// independently here is the model earning its second axis on a landed fact
+/// rather than on the forge facts that motivated it.
+pub const DOCUMENT: Class = Class::new(Cost::Read, Surface::Check);
+
+/// [`Fact::Tracked`] — the repository-relative paths the checkout carries
+/// (CLOUD-845).
+///
+/// `read` x `check`, and it sits beside [`DOCUMENT`] on both axes for the same
+/// reason: it is a walk of the working tree, unbounded in the size of the
+/// repository where a git ref read is not, and CLOUD-689's 100ms budget is per
+/// mediated call. A `check` may hold it because `check` is bounded by the
+/// repository it is pointed at and says so.
+///
+/// **It is paths, never content.** That is what keeps it a different fact from
+/// [`DOCUMENT`] rather than a cheaper mode of it, and it is what a whole class of
+/// gates actually needs — `no-docs-tree`-shaped predicates over *which files
+/// exist*. Rule 4 is structural here: there is no byte of any file to leak,
+/// because none is read.
+pub const TRACKED: Class = Class::new(Cost::Read, Surface::Check);
+
+/// [`Fact::Traversals`]: a bounded walk over tracked documents' frontmatter,
+/// read through the one document cache. The tree surface, like `tracked`.
+pub const TRAVERSALS: Class = Class::new(Cost::Read, Surface::Check);
+
+/// [`Fact::Lines`] — a declared file's lines, unparsed (CLOUD-846).
+///
+/// `read` x `check`, beside [`DOCUMENT`] and [`TRACKED`], and **Tree/Check only
+/// is stated here rather than inherited**: reading a file of unbounded size is
+/// unbounded in the input exactly as parsing one is, and CLOUD-689's 100ms
+/// budget is per mediated call. This must never be repointed at
+/// [`Surface::Hook`] to serve a hook body that wants to read a file.
+///
+/// **Why lines and not raw text, and why not matches.** Measured, 12 of the 20
+/// tree-scoped gates read content no fact could carry — markdown, `.bats`, Rust
+/// source — so the ceiling was not four formats' worth of parsing but the
+/// absence of any unstructured fact at all. Of the three shapes:
+///
+/// * **raw text** is the widest and the worst for rule 4: a policy body holding
+///   a file's contents is one `msg` away from a payload in a finding, which is
+///   why [`crate::policy::Module`] deliberately holds no `source`;
+/// * **matches** — the engine applies a declared pattern — is narrowest, and it
+///   moves the predicate half back OUT of Rego, which is what the retirement
+///   exists to stop;
+/// * **lines** is the widest shape that cannot put content into a finding by
+///   accident. A module can decide *line 42 matched* and report the path and the
+///   number; the content stays on the engine's side of the boundary.
+///
+/// **Not a fifth parser.** The four markdown gates read tables and headings out
+/// of prose; under a lines fact they are line predicates like the rest. A
+/// markdown AST would be a parser per prose convention.
+pub const LINES: Class = Class::new(Cost::Read, Surface::Check);
+
+/// [`Fact::External`] — a declared file outside the repository root, parsed
+/// (CLOUD-1167).
+///
+/// `read` x `check`, sitting beside [`DOCUMENT`] on both axes and for its
+/// reasons: it opens a file and parses it, which is unbounded in the input's
+/// size where a git ref read is not, and CLOUD-689's 100ms budget is per
+/// mediated call. **Never repoint this at [`Surface::Hook`]** — a hook body that
+/// wants to read a launcher's configuration file is precisely the shape the
+/// budget exists to refuse.
+///
+/// # Why this is a projection and not a scanner
+///
+/// Nine governed programs exist to compare against a file the repository does
+/// not contain — a harness's wiring, a toolchain's data directory, a launcher's
+/// cache — so each has a successor that cannot see its own subject. The
+/// admissible answer to that is **not** "let a module read any path". House
+/// style §5's read-only allowlist and non-negotiable rule 1 both refuse a
+/// filesystem scanner, and an unbounded `$HOME` read would make this crate know
+/// a consumer's directory layout.
+///
+/// So the bound is three-part and every part is load-time:
+///
+/// * the set is **declared** — one `[[external]]` row per readable file, and a
+///   path no row names resolves nothing for any module;
+/// * the root is **one environment variable**, named by the row. The engine
+///   expands a variable; it does not know what any particular variable means,
+///   which is the line non-negotiable rule 1 draws. A row naming a variable this
+///   machine does not set is [`Look::CouldNotLook`], never an absent file;
+/// * the path is **relative and downward** — absolute paths and `..` components
+///   are refused when the config loads, so a declaration cannot walk back out of
+///   the root it named.
+///
+/// # Content in, pointers out
+///
+/// The parsed node reaches a module exactly as [`DOCUMENT`]'s does, because a
+/// predicate that cannot see the file cannot decide anything about it. What rule
+/// 4 governs is the way OUT: a finding over this family carries the declared id
+/// and never a byte of the file, which matters more here than anywhere else in
+/// the model — these paths hold a consumer's permissions, connector rosters and
+/// credentials. The could-not-look channel carries the **id** for the same
+/// reason, where every other family carries a path: a resolved absolute path is
+/// a machine's home directory, and putting one on the policy input would leak
+/// the layout this bound exists to keep out.
+pub const EXTERNAL: Class = Class::new(Cost::Read, Surface::Check);
+
+/// [`Fact::Invocations`] — a declared Rust file's call sites, parsed (CLOUD-914).
+///
+/// `read` x `check`, for [`LINES`]' reasons exactly: parsing a file of unbounded
+/// size is unbounded in the input, and CLOUD-689's 100ms budget is per mediated
+/// call. Never repoint this at [`Surface::Hook`].
+///
+/// **What it adds over [`LINES`], stated as the thing a line predicate cannot
+/// do.** `lines` answers *does this token appear in this file*; this answers
+/// *does this token appear IN COMMAND POSITION*. The tree measures the
+/// difference rather than arguing it: five of `git.rs`'s seven source-scan
+/// gates assemble their needles by concatenation — `["merge", "-base"].concat()`
+/// — for one stated reason, that *"this assertion's own source is not a match
+/// for the gate it states"*. The two gates that do NOT obfuscate are exactly the
+/// two that never read their own module's source. A substring gate must hide its
+/// own literals precisely when its corpus includes itself, and that is the
+/// defect this fact retires.
+///
+/// **Only arguments, never receivers, and that is what makes the discriminator
+/// work.** A literal in a call's argument list is an invocation argument; a
+/// literal in an array initialiser, a `let` binding, or the receiver of a method
+/// call is not. So an `.arg(..)` carrying a banned token is reported and a
+/// needle array holding the same token is not — same bytes, same file, opposite
+/// verdicts, which is the test this fact lives or dies on. Comments never arrive
+/// at all: the parser discards them before this sees a token.
+///
+/// **This paragraph could not spell its own example, and that is the finding.**
+/// It first read `.arg("merge" + "-base")` with the token written plainly, and
+/// `git::tests::no_ancestry_decides_merged_ness` went red on `facts.rs` —
+/// against PROSE IN A DOC COMMENT, at no call site at all. The guard is behaving
+/// exactly as designed; the substring tier simply cannot tell a comment from a
+/// call. So the sentence above describes its example instead of writing it, for
+/// the same reason five of `git.rs`'s seven gates assemble their needles by
+/// concatenation. Measured while documenting the fact that retires the
+/// workaround — which is the strongest evidence this row could have asked for,
+/// and it arrived unprompted.
+///
+/// **Rust only, and deliberately.** CLOUD-310 rejected the tree-sitter route on
+/// a corpus of 46 extensionless shell programs, and both of its defects are
+/// artefacts of that corpus — file discovery, and the bash grammar's fit to
+/// `.bats`. Neither reaches `crates/**/*.rs`. What survives its rejection and
+/// binds here is the parse-coverage obligation: a file the parser cannot read is
+/// [`Look::CouldNotLook`], never an empty node set.
+pub const INVOCATIONS: Class = Class::new(Cost::Read, Surface::Check);
+
+/// [`Fact::Units`] — a declared source file's functions, comments and strings,
+/// as D4 nodes with counts (CLOUD-1008; CLOUD-1009 amendments A1, A2).
+///
+/// `read` x `check`, for [`INVOCATIONS`]' reason: a parse per declared file is
+/// unbounded in its input, so it never runs on a mediated call. Measurement
+/// only: integers, booleans and pointers, never a threshold and never a byte of
+/// source; the preset reading it decides (CLOUD-2821). A file its parser
+/// refuses is [`Look::CouldNotLook`], never an empty node set.
+pub const UNITS: Class = Class::new(Cost::Read, Surface::Check);
+
+/// [`Fact::Base`] — the per-file facts a row declares, at its `base` rev.
+///
+/// `read` x `check`, for [`UNITS`]' reason, and read from git OBJECTS rather
+/// than the working tree, so a base side cannot be changed by an edit in
+/// flight. A path the base does not hold, or whose blob its parser refuses, is
+/// absent — could-not-look — never an empty node set.
+pub const BASE: Class = Class::new(Cost::Read, Surface::Check);
+
+/// [`Fact::Coupling`] — measures derived from the projected `uses` edges.
+///
+/// `read` x `check`: computed from facts already acquired, no extra parse.
+pub const COUPLING: Class = Class::new(Cost::Read, Surface::Check);
+
+/// [`Fact::Uses`] — a declared Rust file's `use` edges, resolved (CLOUD-762).
+///
+/// `read` x `check`, and the classification is a MEASUREMENT rather than a
+/// judgement. CLOUD-762's reversal condition says a bounded, nameable error count
+/// puts this tier here and an unbounded one sends it to `Cost::Effect` behind a
+/// delegated analyser. Over `crates/batten/src/**` the count is **four**, in two
+/// classes, both re-exports — `crates/batten/tests/it/use_graph.rs` asserts it, so
+/// the number cannot rot into prose.
+///
+/// **What a line predicate gets wrong, and in both directions.** `trust.rs` and
+/// `output.rs` reach `error` through a name the root re-exports, so a layering
+/// gate reading lines is silently green on an edge it exists to judge;
+/// `policy.rs` and `sink.rs` read as internal where the root's own private import
+/// makes them external, so the same gate invents an edge. Aliases and glob
+/// imports move no top-level edge in this tree at all.
+///
+/// **Cheap AND correct, which the reversal condition did not anticipate.** The
+/// re-export table is itself syntax: resolving all four sites needs the crate
+/// root's `use` and `pub use` items and nothing else — no name resolution, no
+/// analyser, no `Cost::Effect`. Never repoint this at [`Surface::Hook`]; a
+/// whole-tree graph is not a per-call question and the 100ms budget is per call.
+pub const USES: Class = Class::new(Cost::Read, Surface::Check);
+
+/// [`Fact::AgentSourced`] — a small record under the git dir, written by the
+/// boundary from bytes the harness already handed it (CLOUD-776).
+///
+/// **This is the row that makes the second axis pay for itself.** The table above
+/// says forge facts are `read` × `verify-only`: bounded and cacheable by price,
+/// and barred from the mediated path because reaching them means building an
+/// HTTP client. That bound is about the ENGINE resolving them. An agent-sourced
+/// fact is not the engine resolving anything — the agent ran the command, the
+/// harness delivered the bytes, and Batten reads a file. So the same underlying
+/// answer that is `verify-only` when the engine would fetch it is `hook` when the
+/// agent sources it, and the price is a file read either way.
+///
+/// That is not a loophole in the table; it is the table being about *who
+/// resolves* rather than *what is known*, which is what having two axes was for.
+pub const AGENT_SOURCED: Class = Class::new(Cost::Read, Surface::Hook);
+
+/// [`Fact::Prospective`] — the content a `Write` or an `Edit` would land
+/// (CLOUD-758).
+///
+/// **`read`, and CLOUD-758's Ready block says `free`.** The correction is worth
+/// stating rather than quietly applying, because the issue's whole argument is
+/// that this is the cheapest fact in the system and the argument is *nearly*
+/// right.
+///
+/// A `Write` genuinely is free: `tool_input.content` was deserialized before
+/// [`crate::hook::adjudicate`] was called, and reading it spawns nothing and
+/// opens nothing. But the acceptance also demands *the computed post-edit
+/// content of an* `Edit`, and computing that means reading the file off disk —
+/// the envelope carries `old_string` and `new_string`, never the surrounding
+/// bytes. One bounded file read is exactly [`Cost::Read`], on the same standard
+/// that makes [`WAIVED`] `read` for a clock reading.
+///
+/// So the class is the **meet** of the two acquisition paths, which is what
+/// [`Class::meet`] says a composed fact is: at most as cheap as its most
+/// expensive input. Classifying it `free` on the strength of the cheaper arm is
+/// the ladder-shaped lie this module exists to refuse, one fact down.
+///
+/// [`Surface::Hook`] is unaffected and is the load-bearing half: the read is
+/// bounded, narrowed to calls a rule has already selected for, and needs no
+/// runtime — so it sits where [`RECEIPTS`] sits rather than where [`DOCUMENT`]
+/// does. Parsing an arbitrary document is unbounded in the input's size; reading
+/// the one file a call names is not.
+pub const PROSPECTIVE: Class = Class::new(Cost::Read, Surface::Hook);
+
+/// [`Fact::Produced`] — the keyed records earlier runs asked the boundary to
+/// write (CLOUD-851).
+///
+/// `read` x `check`, and both halves are stated rather than inherited.
+///
+/// `read`, because acquiring it is a bounded file read per declared key, the same
+/// price as [`RECEIPTS`] — and emphatically NOT the price of the write, which the
+/// rule never performs. A rule declaring a sink still costs a read; the boundary
+/// pays for the production separately and after the decision.
+///
+/// [`Surface::Check`] rather than [`Surface::Hook`], beside [`DOCUMENT`] and
+/// [`TRACKED`], because a tree run reads the store for every key its rules
+/// declare and that count is unbounded in the ruleset where a single named record
+/// is not — [`AGENT_SOURCED`]'s one file is the contrast, and CLOUD-689's 100ms
+/// budget is per mediated call. The censused writers this exists for are gate
+/// tasks, which is the tree surface; the four hook bodies among them want a
+/// hook-resolvable read of one named key, which is a narrower fact than this one
+/// and is not this row's to invent.
+pub const PRODUCED: Class = Class::new(Cost::Read, Surface::Check);
+
+// The five git facts (CLOUD-907). They are five rather than one BECAUSE THE
+// COSTS DIFFER, which is the whole content of CLOUD-757's cost x surface model:
+// a single `Fact::Git` would have to take the widest arm of the five, and the
+// widest is an unbounded worktree read that would then be legal on a 100ms
+// mediated call.
+//
+// The split is also what the measurement asked for. `bench/gates/RESULTS.md`
+// re-derived the corpus by command-position invocation: of the 52 git-bucket
+// gate tasks, 30 read git only to locate the repository or to list tracked
+// files -- both already resolved -- and the 22 that remain divide 15 head, 11
+// log, 4 remote, 2 status, 1 ancestry. A collapsed fact would price the 15
+// cheapest reads at the cost of the two most expensive.
+//
+// EVERY ONE OF THEM IS ACQUIRED ONLY WHEN A RULE DECLARES IT. That is not an
+// optimisation, it is what keeps `Cost::Read` honest -- and it is a lesson this
+// tree has already paid for once: locating the git dir and reading HEAD
+// unconditionally cost `check` a measured p50 of 4.76ms -> 10.01ms (2.103x) in
+// CLOUD-851, for a question no rule in the set had asked.
+
+/// [`Fact::GitHead`] — the commit HEAD names, the branch it is on, and whether
+/// it is detached.
+///
+/// `read`: one ref read, and the ref file is open-and-parse with no walk behind
+/// it. This is the cheapest of the five and the most asked for, and it is
+/// bounded in the same sense [`RECEIPTS`] is — the work does not grow with the
+/// repository.
+///
+/// An empty repository has no HEAD commit, and a detached HEAD has no branch.
+/// Both are [`Look::CouldNotLook`] rather than an empty string: Rego reads an
+/// undefined path as "does not hold", so a gate asking "is the branch protected"
+/// would pass on a detached HEAD if the two collapsed.
+///
+/// **`Surface::Check` DESPITE THE COST, and the reason is the one this row is
+/// named for.** `Surface` names the narrowest surface a fact MAY be resolved on,
+/// and by cost this belongs at [`Surface::Hook`] — one ref read, cheaper than
+/// [`RECEIPTS`]. It was written that way first, and that draft put `git-head`
+/// into `policy-call.schema.json` while the mediated boundary resolved it for
+/// nobody: a key `opa check -s` types green and the engine never fills, which is
+/// CLOUD-845's defect arriving through the schema built to prevent it. The
+/// census is why the gap is not worth closing speculatively — of the 22 gate
+/// tasks owing a git fact, every one is a `Gate`-described program `batten
+/// check` runs and none is a mediated call. The day a `scope = "mediated_call"`
+/// row declares one, this moves to `Hook` together with the narrowing that makes
+/// it true, and the wildcard-free matches over [`Fact::ALL`] are what force that
+/// edit to be deliberate.
+pub const GIT_HEAD: Class = Class::new(Cost::Read, Surface::Check);
+
+/// [`Fact::GitStatus`] — dirty, staged and untracked paths.
+///
+/// `read` x **`check`**, and the surface is the decision this const exists to
+/// record. `status` walks the working tree, so its cost grows with the
+/// checkout — the same unboundedness that puts [`DOCUMENT`] and [`TRACKED`] on
+/// the tree surface. CLOUD-689's 100ms budget is per mediated call, and a
+/// worktree walk inside one is how a `read` classification becomes a lie by
+/// degrees.
+pub const GIT_STATUS: Class = Class::new(Cost::Read, Surface::Check);
+
+/// [`Fact::GitRemote`] — the configured remotes and HEAD's upstream.
+///
+/// `read`: config file plus one ref. **No network, ever.** A remote's
+/// URL is a line of `.git/config`; asking the remote what it holds would be
+/// `Cost::Effect` and a different fact, which this one deliberately is not.
+/// A checkout with no remote is [`Look::CouldNotLook`], never an empty list —
+/// "there is no remote" and "I could not read the config" are different answers
+/// and only one of them should silence a gate.
+///
+/// `Surface::Check` rather than `Surface::Hook` for [`GIT_HEAD`]'s reason, which
+/// is about what the boundary resolves rather than about what this costs.
+pub const GIT_REMOTE: Class = Class::new(Cost::Read, Surface::Check);
+
+/// [`Fact::GitWorktrees`] — the linked worktree registrations, and whether each
+/// one's directory is still there.
+///
+/// `read`: a directory listing under the common dir, one small file per entry,
+/// and one `stat` per entry. No walk of any checkout — this asks whether a
+/// recorded directory EXISTS, never what is in it, which is what keeps it in the
+/// same cost class as [`GIT_REMOTE`] rather than [`GIT_STATUS`].
+///
+/// `Surface::Check` because the cost grows with the number of registrations and,
+/// more to the point, because the question is about the checkout's own hygiene.
+/// A mediated call is about somebody else's command; this is about the repository
+/// the gate is standing in.
+///
+/// **An empty list is an ANSWER here, unlike everywhere else in this family**,
+/// and the distinction is one level down rather than absent: the main checkout
+/// keeps no registration, so a repository with no linked worktrees genuinely has
+/// nothing to report. Could-not-look is the whole fact being `None`, and a
+/// registration whose own record will not read is dropped rather than reported as
+/// a directory that is gone.
+pub const GIT_WORKTREES: Class = Class::new(Cost::Read, Surface::Check);
+
+/// [`Fact::GitRef`] — each **declared** ref, resolved to the commit it names.
+///
+/// `read`, and DECLARATION is what makes that classification true. The
+/// cost is one ref resolution per declared name, so it is bounded by the ruleset
+/// rather than by the repository. An ambient sweep of `refs/` would be the same
+/// fact at a different price, which is exactly the drift `documents` is bounded
+/// against.
+///
+/// A ref that does not resolve is [`Look::CouldNotLook`], carried as absence
+/// from the map. `origin/main` missing in a shallow or freshly-cloned checkout
+/// is not an answer about that ref, and a gate reading a fabricated one would
+/// report a verdict with full confidence.
+///
+/// **THE COMMIT, AND NOT WHETHER HEAD DESCENDS FROM IT.** The first version
+/// carried the reachability answer beside the sha and
+/// `no_ancestry_decides_merged_ness` refused it: CLOUD-36 decides merged-ness by
+/// PATCH IDENTITY, because a rebased landing is invisible to ancestry. The
+/// landing question has an answer already — `git::landing` — and CLOUD-880 is
+/// the row that makes it a fact family.
+///
+/// `Surface::Check` rather than `Surface::Hook` for [`GIT_HEAD`]'s reason.
+pub const GIT_REF: Class = Class::new(Cost::Read, Surface::Check);
+
+/// [`Fact::GitRange`] — the commits in each **declared** range.
+///
+/// `read` x **`check`**. Declared, like [`GIT_REF`], but declaration does not
+/// bound it: `origin/main..HEAD` is one declaration and an unknown number of
+/// commits, so the surface is the tree's the way [`DOCUMENT`]'s is. The
+/// declaration bounds WHICH ranges are read, never how much each costs.
+///
+/// Pointer-only at the boundary (non-negotiable rule 4): a commit is its sha and
+/// its subject, and a subject is what the log renders as a pointer to the
+/// commit. No message body, no diff, no line of a tracked file.
+/// [`Fact::CommitMeta`] — a declared range's commits, as their identity fields
+/// (CLOUD-1187).
+///
+/// `read` x `check`, beside [`GIT_RANGE`], and the classification is the same
+/// claim one level down: the engine ALREADY computes these three fields in
+/// `git::commit_record`, in process via `gix` under `open::Options::isolated`,
+/// so there is no spawn and no cost-class change. What was missing was a
+/// projection.
+///
+/// **Cost, stated rather than borrowed.** Range length is unbounded per
+/// declaration — `origin/main..HEAD` is one declaration and an unknown number of
+/// commits — and this peels an object per commit where [`GIT_RANGE`] reads a
+/// subject, so it multiplies an already-unbounded term by more than a constant.
+/// The ~5.4 µs-per-document figure in `rules/rust.md` was measured over
+/// `documents` and does NOT cover this arm; measure it rather than quote it.
+/// That cost is why the declaration is its own column rather than riding
+/// `ranges`: a row wanting subjects must not be made to pay for it.
+pub const COMMIT_META: Class = Class::new(Cost::Read, Surface::Check);
+
+pub const GIT_RANGE: Class = Class::new(Cost::Read, Surface::Check);
+
+/// [`Fact::Landing`] — whether this branch's work is on each **declared** target,
+/// by patch identity (CLOUD-880).
+///
+/// **The fact [`GIT_REF`] deliberately does not carry.** That row's own header
+/// says so: it dropped the reachability answer because `no_ancestry_decides_
+/// merged_ness` refused it, since CLOUD-36 decides merged-ness by PATCH IDENTITY
+/// and a rebased landing is invisible to ancestry. `git::landing` has computed
+/// that answer since CLOUD-36; what it lacked was a way for a rule to ask.
+///
+/// `read`, and DECLARATION is what makes that honest, exactly as it does for
+/// [`GIT_REF`]. A run whose rules name no landing target resolves nothing, and
+/// the cost is one scan per declared target rather than a sweep of the trunk.
+///
+/// **The cost is real and the surface says so.** A scan walks the head-side
+/// commits and computes a patch id per commit, so this is `Surface::Check` and
+/// never `Hook` — not because the boundary declines to resolve it, but because a
+/// per-commit `git patch-id` inside a ~100ms mediated call is not a budget it
+/// fits. [`GIT_RANGE`] is classified on the same reading.
+///
+/// **Could-not-look is a distinct answer, and here it is the one that matters
+/// most.** An unresolvable target, an empty repository, or a scan that failed are
+/// absence from the map — never "nothing is landed". Rego reads an undefined path
+/// as *does not hold*, so a fabricated negative would report unlanded work with
+/// full confidence, which is the direction that lets a gate pass on ignorance.
+/// [`Fact::Staged`] — a declared path's staged bytes (CLOUD-1203).
+///
+/// `read` x `check`, beside [`DOCUMENT`] and for its reasons: it reads a blob of
+/// unbounded size, and CLOUD-689's 100ms budget is per mediated call.
+///
+/// **Bounded by declaration, like every other read in the family.** A path no
+/// row names is not staged-read, so this is a projection rather than an index
+/// dump — and the index is exactly as large as the tree.
+/// [`Fact::GitHistory`] — a declared pattern's matching commits (CLOUD-1200).
+///
+/// `read` x `check`, beside [`GIT_RANGE`], and in process via `gix` under the
+/// same isolated open — no spawn, no cost-class change.
+///
+/// **Cost, stated rather than borrowed.** A tag glob over a long history is
+/// unbounded per declaration, the same shape [`GIT_RANGE`]'s own comment records,
+/// and a path query WALKS that history comparing two trees per commit. The
+/// ~5.4 µs-per-document figure in `rules/rust.md` was measured over
+/// `documents` and does not cover this arm; measure it rather than quote it.
+///
+/// A shallow clone resolves the whole family as could-not-look rather than a
+/// partial answer, which is why this can be `Cost::Read` honestly: the expensive
+/// case is the one it refuses to half-answer.
+pub const GIT_HISTORY: Class = Class::new(Cost::Read, Surface::Check);
+
+/// [`Fact::GitTags`] — the declared globs' tags, with their dates (CLOUD-843).
+///
+/// `read` x `check`, beside [`GIT_HISTORY`]: a reference listing plus one object
+/// peel per tag, in process under the isolated open, no spawn. Unbounded in the
+/// number of tags a repository carries, which is a `check`-surface cost and not a
+/// mediated call's.
+pub const GIT_TAGS: Class = Class::new(Cost::Read, Surface::Check);
+
+/// [`Fact::GitConfig`] — the declared config keys, resolved and per scope
+/// (CLOUD-843).
+///
+/// `read` x `check`. By price this is [`GIT_REMOTE`]'s equal — config files
+/// read off disk, no network — and it sits on the tree surface for
+/// [`GIT_HEAD`]'s reason: no mediated row asks it, so a `Hook` class would put a
+/// key on `policy-call.schema.json` the mediated boundary never fills.
+pub const GIT_CONFIG: Class = Class::new(Cost::Read, Surface::Check);
+
+/// [`Fact::GitIndex`] — the declared pathspecs' index entries, divergence and
+/// untracked paths (CLOUD-843).
+///
+/// `read` x **`check`**, for [`GIT_STATUS`]'s reason: answering divergence hashes
+/// every selected file and the untracked half walks the working tree, so the cost
+/// grows with the checkout. The declaration bounds which files are HASHED; the
+/// walk happens either way.
+pub const GIT_INDEX: Class = Class::new(Cost::Read, Surface::Check);
+
+pub const STAGED: Class = Class::new(Cost::Read, Surface::Check);
+
+/// [`Fact::Forge`] — the forge's verdict for a declared SHA (CLOUD-1154).
+///
+/// `read` x `check`, beside [`PRODUCED`] and [`RECORDS`]: it reads a record off
+/// disk that something else wrote. **Not `verify-only`**, and that is the axis
+/// earning itself — forge state is `read` x `verify-only` when the engine would
+/// FETCH it, and this fact is what a producer already fetched, so the surface
+/// moves while the price does not.
+///
+/// The bound is the declaration: a SHA no row names resolves nothing, so this
+/// cannot become an ambient sweep of whatever records happen to be on disk.
+pub const FORGE: Class = Class::new(Cost::Read, Surface::Check);
+
+/// [`Fact::ToolVerdict`] — a third-party tool's verdict, per declared key
+/// (CLOUD-1171).
+///
+/// `read` x `check`, and it is [`FORGE`]'s argument a second time: the SPAWN is
+/// the producer's, outside the engine, so what remains here is a record off disk
+/// and a digest of the bytes it was taken over. Classifying it [`Cost::Effect`]
+/// would name a cost this fact does not pay and would put a validator inside
+/// `check`, which house style §5 makes structurally impossible.
+///
+/// The bound is the declaration: a tool no row names resolves nothing.
+pub const TOOL_VERDICT: Class = Class::new(Cost::Read, Surface::Check);
+
+/// [`Fact::Minted`] — a declared field of an already-minted receipt (CLOUD-1310).
+///
+/// `read` x `check`, and it is [`FORGE`]'s argument once more: the fetch that
+/// produced the record happened at the mediated boundary, in a session that had
+/// a credential, and what remains here is a line off disk plus a clock
+/// comparison. Nothing is fetched, so `check` stays `read`.
+///
+/// The bound is the declaration: a mint no row names resolves nothing, so this
+/// cannot become an ambient sweep of the receipt store.
+pub const MINTED: Class = Class::new(Cost::Read, Surface::Check);
+
+/// [`Fact::Captured`] — a declared reduction over a captured response
+/// (CLOUD-1188).
+///
+/// `read` x `check`, beside [`PRODUCED`] and [`RECORDS`]: a listing off disk that
+/// something else populated. **Not `verify-only`**, and that is [`FORGE`]'s
+/// argument once more — the same answer is `verify-only` when the ENGINE would
+/// fetch it and is not when the agent already did, because the table is about who
+/// resolves rather than about what is known.
+///
+/// The bound is the declaration AND the reduction: a key no row names resolves
+/// nothing, and what a named key yields is a token rather than a payload.
+pub const CAPTURED: Class = Class::new(Cost::Read, Surface::Check);
+
+/// [`Fact::Tasks`] — the task runner's argv, from a receipt (CLOUD-856).
+///
+/// `read` x `hook`, and both halves are the row's answer rather than a default.
+/// `Read` because the mediated path opens ONE small record: the manifest parse it
+/// replaces is where the unbounded cost lived, and that has moved to session
+/// start. `Hook` because the consumer is a mediated-call guard — and `Hook` is the
+/// NARROWEST surface a fact may be resolved on, so the tree surface may resolve it
+/// too if a gate ever wants it.
+///
+/// Deliberately NOT [`Cost::Effect`]: asking the runner is an effect and is
+/// [`PINNED`]'s, already landed under the same store. Classifying this one
+/// `Effect` would claim a cost it does not pay and put a spawn on the hot path.
+pub const TASKS: Class = Class::new(Cost::Read, Surface::Hook);
+
+/// [`Fact::Extracted`] — a declared extractor's result over the session's own
+/// transcript (CLOUD-1172).
+///
+/// `read` x `hook`. `Read` because it opens one path the HOST handed over and
+/// parses it; `Hook` because the transcript is a property of the session, and the
+/// session is what the mediated surface is inside. A tree-scoped run has no
+/// session to ask about, which is why this is the narrower surface rather than
+/// the wider one.
+pub const EXTRACTED: Class = Class::new(Cost::Read, Surface::Hook);
+
+/// [`Fact::State`] — the engine's own finding store, per declared ref
+/// (CLOUD-1203).
+///
+/// `read` x `check`, matching [`PRODUCED`] and [`RECORDS`], which are already
+/// out-of-tree keyed reads on the check surface. It is a listing off disk: no
+/// spawn, no network, and nothing a `check` is not already allowed to do.
+///
+/// **Keyed by ref, and that is the safety property.** A finding observed on
+/// another branch is not evidence about this one, so a listing keyed elsewhere
+/// simply is not in the map — the same shape `git-refs` uses, where a ref that
+/// does not resolve is absent rather than present with a null.
+pub const STATE: Class = Class::new(Cost::Read, Surface::Check);
+
+pub const LANDING: Class = Class::new(Cost::Read, Surface::Check);
+
+/// [`Fact::Symbols`] — **the first occupant of [`Cost::Effect`]**, and the
+/// reserved variant stops being empty for a stated reason.
+///
+/// `effect` x `check`, and each half is a decision rather than an inference.
+///
+/// **`Cost::Effect` because resolving it RUNS A PROGRAM**, which is the whole
+/// content of that variant and the only thing it claims. Every other fact in this
+/// table is `Free` or `Read`; this one spawns `cargo clippy` and waits for it.
+/// Naming that honestly is the point — a fact that spawned while classified
+/// `Read` would make the cost axis decorative.
+///
+/// **`Surface::Check`, and `Surface::Hook` is REFUSED.** `run_static` already
+/// refuses a spawning kind outright, and a fact resolvable on the mediated path
+/// would weaken that promise from a structural guarantee into a convention.
+/// `resolvable_on` is what enforces it, and `tests/facts.rs`'s exhaustive match
+/// is what keeps the refusal from being merely intended.
+///
+/// **`check` RESOLVES IT DIRECTLY rather than consuming a receipt, and that is
+/// the §5 decision CLOUD-760 left open.** The receipt route was the tempting one
+/// — `verify` already writes SHA-keyed receipts that `hook` reads — and it is
+/// refused here for a reason that is about honesty rather than machinery: a
+/// receipt-backed fact is a claim about a tree some EARLIER run saw, and `check`
+/// consuming one would report a census of a tree that is not the one in front of
+/// it. The cost axis exists precisely so an expensive fact can be declared
+/// expensive instead of being made to look cheap. A caller that cannot afford it
+/// does not ask for it; that is what `Class` is for.
+///
+/// The amortisation argument survives and is not this row's: a receipt-backed
+/// SECOND class of the same fact is buildable later, and would be a different
+/// `Class` rather than a quiet reinterpretation of this one.
+pub const SYMBOLS: Class = Class::new(Cost::Effect, Surface::Check);
+
+/// [`Fact::Plan`] — the adopted gate runner's effective plan for a declared
+/// surface (CLOUD-949).
+///
+/// `effect` x `check`, both halves for [`SYMBOLS`]' reasons: resolving it RUNS
+/// the runner, and `run_static` already refuses a spawning kind on the mediated
+/// path, so a fact resolvable there would weaken a structural guarantee into a
+/// convention.
+pub const PLAN: Class = Class::new(Cost::Effect, Surface::Check);
+
+/// [`Fact::Review`] — **the second occupant of [`Cost::Effect`]**, and the one
+/// that had to state why an LLM in the resolution path is not a gated-model verdict in
+/// a gate.
+///
+/// `effect` x `check`, both halves for [`SYMBOLS`]' reasons: resolving it RUNS A
+/// PROGRAM, and `run_static` already refuses a spawning kind on the mediated
+/// path, so a fact resolvable there would weaken a structural guarantee into a
+/// convention.
+///
+/// # What it answers, and the narrowness IS the mechanism
+///
+/// **THAT a vendored prompt ran over these exact bytes.** Not whether the review
+/// was good, not whether its findings are real, not whether the subject is ready.
+/// Those are judgements and non-negotiable rule 3 forbids a gate deciding any of
+/// them.
+///
+/// The distinction is what makes this fact legal at all. A gate reading this
+/// fact refuses **ABSENCE** — no record for this (prompt, subject) pair — which
+/// is a comparison of two digests and is as deterministic as any other fact
+/// here. A gate refusing on what the agent CONCLUDED would be a gated-model verdict
+/// wearing an exit code, and `review-dispatched.rego` is written so it cannot
+/// express one: the findings reach the module as pointers, and a pointer carries
+/// no claim to weigh.
+///
+/// **This is why the cheaper tiers do not substitute.** `ready-lint` gates the
+/// SHAPE of a refinement block, and shape is what an author optimises against
+/// once the gate exists — the measured failure that opened CLOUD-472, where
+/// every clause was present and none had been pressure-tested.
+/// `obligations-bound` binds a §7 entry to a killer mutation, but only at
+/// implementation time: at refinement there is no code, no case file and no
+/// `#MUTANT` row for it to reach. Confirming a named prompt ran over these bytes
+/// is a hash comparison that no better-shaped prose can satisfy, because the
+/// prose is the input to the hash.
+///
+/// # Keyed by (prompt digest, subject digest), for [`TOOL_VERDICT`]'s reason
+///
+/// The prompt is VENDORED — compiled into the binary the way
+/// `src/policy/presets/**` are — so its digest is a constant of this build and
+/// "a particular prompt" is a checkable claim rather than an intention. The
+/// subject's digest is the other half, so a record goes stale by construction
+/// the moment the thing reviewed changes: edit the ticket body or push a commit
+/// and the record no longer answers. That is the anti-staleness property a
+/// `status: clean` marker can never provide.
+///
+/// **Two subjects, one mechanism.** At refinement the subject is the body the
+/// TRACKER returned, which is the same forgery control the `verdict` recorder
+/// column earned; at landing it is the branch's delta.
+///
+/// # Three answers, and a gate that merges any two reports clean
+///
+/// `null` is could-not-look — no row declared a review, or no store is readable.
+/// A declared id ABSENT from the map has no record: the prompt never ran over
+/// these bytes, and that is the refusal. An id PRESENT with an empty findings
+/// object ran and pointed at nothing, which is clean. `forge-verdict-required`'s
+/// header states the same three and refuses the opposite one, and the asymmetry
+/// is deliberate: the forge is a third party that may legitimately not have
+/// judged yet, where a review this branch was supposed to dispatch and did not
+/// is the branch's own conduct.
+pub const REVIEW: Class = Class::new(Cost::Effect, Surface::Check);
+/// [`Fact::BaseDelta`] — how the **declared** globs' paths differ from a
+/// **declared** base rev (CLOUD-1059).
+///
+/// `read` x **`check`**, for [`GIT_RANGE`]'s reason and one of its own. Declared
+/// on both axes — which globs and which base — but neither declaration bounds the
+/// cost: a glob is a selection over the whole tree, and answering it walks the
+/// base tree once and the working tree once. That is a `check`-surface walk, not
+/// something a ~100ms mediated call absorbs.
+///
+/// Pointer-only at the boundary (non-negotiable rule 4): three lists of
+/// repo-relative paths. Never a hunk, never a line, never the content that
+/// changed — the same bound [`GIT_STATUS`] holds, and for the same reason, since
+/// a migration gate needs to know WHICH files moved and never what they say.
+pub const BASE_DELTA: Class = Class::new(Cost::Read, Surface::Check);
+
+/// [`Fact::Shell`] — the shell detector's answer over the declared homes'
+/// lines, on both sides of the delta (CLOUD-2625).
+///
+/// `read` x **`check`**, the meet of what it is derived from: [`LINES`] and
+/// [`DOCUMENT`] for the head and the declaration, [`BASE_DELTA`] for the base
+/// side. It reads nothing they did not, and parses every declared body with the
+/// grammar the mediation boundary uses — unbounded in the input for all three of
+/// their reasons, so never a mediated call's.
+///
+/// Pointer-only: a kind, a line number and the detector's reason per line.
+pub const SHELL: Class = Class::new(Cost::Read, Surface::Check);
+
+/// [`Fact::Records`] — the lines a declared recorder accumulated (CLOUD-1051).
+///
+/// `read` x **`check`**, and the second axis is the interesting one because the
+/// obvious reading is wrong. The record is ONE branch-keyed file, so by price
+/// this is [`RECEIPTS`]'s equal and the hook could hold it. It sits on `check`
+/// anyway, because the consumer decides at LANDING: the gate reading it asks
+/// whether a row this branch filed names code this branch has open, and that
+/// question needs the branch's whole diff beside it — a fact that is already
+/// `check`-only for its own unbounded-walk reason. Projecting the record onto a
+/// surface where its counterpart cannot follow would put half a predicate within
+/// reach and leave the gate unwritable.
+///
+/// Pointer-only holds by construction rather than by care: a recorder's columns
+/// are already whitespace-free tokens, and every one of them is a count, an id or
+/// a tracked path — never a line of the body that produced it.
+pub const RECORDS: Class = Class::new(Cost::Read, Surface::Check);
+
+/// [`Fact::RecordsBlocked`] — which declared rows could not answer (CLOUD-1126).
+///
+/// `read` x **`check`**, matching [`RECORDS`] because it is the same read: one
+/// branch-keyed file under the receipt store, opened where the tree surface is
+/// already opening its sibling.
+///
+/// Its own const rather than a share of [`RECORDS`]', which
+/// `every_class_arm_names_its_own_const` requires and which is right here for a
+/// reason beyond the gate: the two files are written at different moments — the
+/// record when a row answers, this when a row could not — so a later change to
+/// either one's cost has no business moving the other's.
+pub const RECORDS_BLOCKED: Class = Class::new(Cost::Read, Surface::Check);
+
+/// [`Fact::Instant`] — the epoch second the caller handed in (CLOUD-1170).
+///
+/// **`Free`, on [`BYPASS`]'s own reasoning.** The value arrives in `argv`, which
+/// the kernel handed the process at `exec`. Reading it spawns nothing, opens
+/// nothing and waits on nothing — the whole content of [`Cost::Free`]. The thing
+/// that WOULD cost something, asking the operating system what time it is, is the
+/// act this variant exists to keep out of the engine.
+///
+/// **`Check`, because the consumers are gates.** A lease predicate runs under
+/// `batten check`; a mediated call has no lease question to ask and no occasion
+/// to want an instant. Naming it `Surface::Hook` would widen the mediated
+/// document for a key nothing there reads.
+pub const INSTANT: Class = Class::new(Cost::Free, Surface::Check);
+
+/// [`Fact::Pinned`] — one file read under `$GIT_DIR`, keyed to the manifest and
+/// the lockfile.
+///
+/// **`Read`, not `Effect`, and the reason is which act this classifies.**
+/// Resolving the set from the pin spawns, and an `Effect` fact may not sit on
+/// the hook — so the spawn happens once, off this surface, and what a mediated
+/// call performs is the read of what it wrote. Classifying the read by the price
+/// of its producer would bar the fact from the only surface that has a consumer,
+/// and would say something false about what a call costs.
+pub const PINNED: Class = Class::new(Cost::Read, Surface::Hook);
+
+/// [`Fact::DispatchBrief`] — the brief lint over the call's own argument, in
+/// process (CLOUD-2858). A read, and asked only of the mediated call it is
+/// about.
+pub const DISPATCH_BRIEF: Class = Class::new(Cost::Read, Surface::Hook);
+/// [`Fact::LandLive`]: one lock read and a pid probe under `$GIT_DIR`, asked
+/// of the mediated call it would refuse (CLOUD-2781).
+pub const LAND_LIVE: Class = Class::new(Cost::Read, Surface::Hook);
+/// [`Fact::InstallPending`]: the task registry's records and a `PATH` walk
+/// per command-position program, asked of the mediated call it would hold
+/// (CLOUD-2840). No spawn: a stat per `PATH` entry, and none at all once the
+/// setup task has said `ok`.
+pub const INSTALL_PENDING: Class = Class::new(Cost::Read, Surface::Hook);
+
+/// [`Fact::RedHead`] — one record read and a stat per failed run under
+/// `$GIT_DIR` (CLOUD-2270). A read, asked of the mediated call it gates.
+pub const RED_HEAD: Class = Class::new(Cost::Read, Surface::Hook);
+
+/// [`Fact::PathspecStatus`]: one index and status read, only on a
+/// checkout or restore call (CLOUD-2684).
+pub const PATHSPEC_STATUS: Class = Class::new(Cost::Read, Surface::Hook);
+
+/// [`Fact::Budgeted`]: the target and a fixed count of literal members, each
+/// capped, only on a write a `[budget.*]` set selects (CLOUD-2661).
+pub const BUDGETED: Class = Class::new(Cost::Read, Surface::Hook);
+/// [`Fact::ShellIntroduced`] — one bounded read (1 MiB) of the file the call
+/// already names (CLOUD-2335). A read, asked only of a write.
+pub const SHELL_INTRODUCED: Class = Class::new(Cost::Read, Surface::Hook);
+
+impl Fact {
+    /// Every fact the boundary resolves today, so [`Fact::class`] is total.
+    pub const ALL: &'static [Fact] = &[
+        Fact::Receipts,
+        Fact::Keys,
+        Fact::Stop,
+        Fact::Waived,
+        Fact::Document,
+        Fact::Tracked,
+        Fact::Traversals,
+        Fact::Lines,
+        Fact::External,
+        Fact::AgentSourced,
+        Fact::Prospective,
+        Fact::Produced,
+        Fact::GitHead,
+        Fact::GitStatus,
+        Fact::GitRemote,
+        Fact::GitWorktrees,
+        Fact::GitRef,
+        Fact::GitRange,
+        Fact::CommitMeta,
+        Fact::Landing,
+        Fact::GitHistory,
+        Fact::GitTags,
+        Fact::GitConfig,
+        Fact::GitIndex,
+        Fact::Staged,
+        Fact::State,
+        Fact::Forge,
+        Fact::ToolVerdict,
+        Fact::Plan,
+        Fact::Minted,
+        Fact::Captured,
+        Fact::Tasks,
+        Fact::Extracted,
+        Fact::Invocations,
+        Fact::Units,
+        Fact::Base,
+        Fact::Coupling,
+        Fact::Uses,
+        Fact::Symbols,
+        Fact::Review,
+        Fact::BaseDelta,
+        Fact::Shell,
+        Fact::Records,
+        Fact::RecordsBlocked,
+        Fact::Instant,
+        Fact::Pinned,
+        Fact::DispatchBrief,
+        Fact::LandLive,
+        Fact::InstallPending,
+        Fact::RedHead,
+        Fact::PathspecStatus,
+        Fact::Budgeted,
+        Fact::ShellIntroduced,
+    ];
+
+    /// The stable lowercase token (§6) — the field name in `lib.rs`'s `Facts`.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Fact::Receipts => "receipts",
+            Fact::Keys => "keys",
+            Fact::Stop => "stop",
+            Fact::Waived => "waived",
+            Fact::Document => "document",
+            Fact::Tracked => "tracked",
+            Fact::Traversals => "traversals",
+            Fact::Lines => "lines",
+            Fact::External => "external",
+            Fact::AgentSourced => "agent-sourced",
+            Fact::Prospective => "prospective",
+            Fact::Produced => "produced",
+            Fact::GitHead => "git-head",
+            Fact::GitStatus => "git-status",
+            Fact::GitRemote => "git-remote",
+            Fact::GitWorktrees => "git-worktrees",
+            Fact::GitRef => "git-refs",
+            Fact::GitRange => "git-ranges",
+            Fact::CommitMeta => "commit-meta",
+            Fact::Landing => "landing",
+            Fact::GitHistory => "git-history",
+            Fact::GitTags => "git-tags",
+            Fact::GitConfig => "git-config",
+            Fact::GitIndex => "git-index",
+            Fact::Staged => "staged",
+            Fact::State => "state",
+            Fact::Forge => "forge",
+            Fact::ToolVerdict => "tool-verdict",
+            Fact::Plan => "plan",
+            Fact::Minted => "minted",
+            Fact::Captured => "captured",
+            Fact::Tasks => "tasks",
+            Fact::Extracted => "extracted",
+            Fact::Invocations => "invocations",
+            Fact::Units => "units",
+            Fact::Base => "base",
+            Fact::Coupling => "coupling",
+            Fact::Uses => "uses",
+            Fact::Symbols => "symbols",
+            Fact::Review => "review",
+            Fact::BaseDelta => "base-delta",
+            Fact::Shell => "shell",
+            Fact::Records => "records",
+            Fact::RecordsBlocked => "records-blocked",
+            Fact::Instant => "instant",
+            Fact::Pinned => "pinned-programs",
+            Fact::DispatchBrief => "dispatch-brief",
+            Fact::LandLive => "land-live",
+            Fact::InstallPending => "install-pending",
+            Fact::RedHead => "red-head",
+            Fact::PathspecStatus => "pathspec-status",
+            Fact::Budgeted => "budgeted",
+            Fact::ShellIntroduced => "shell-introduced",
+        }
+    }
+
+    /// This fact's classification — the stated `const` beside it, returned
+    /// rather than recomputed.
+    ///
+    /// The indirection is the point: the classification is written next to the
+    /// fact it describes, and this match is the only thing that could disagree
+    /// with it. `tests/facts.rs`'s `every_fact_returns_its_stated_const` closes that gap,
+    /// and the exhaustive match with no wildcard arm closes the other one — a
+    /// new variant fails to compile rather than defaulting to cheap.
+    #[must_use]
+    pub const fn class(self) -> Class {
+        match self {
+            Fact::Receipts => RECEIPTS,
+            Fact::Keys => KEYS,
+            Fact::Stop => STOP,
+            Fact::Waived => WAIVED,
+            Fact::Document => DOCUMENT,
+            Fact::Tracked => TRACKED,
+            Fact::Traversals => TRAVERSALS,
+            Fact::Lines => LINES,
+            Fact::External => EXTERNAL,
+            Fact::AgentSourced => AGENT_SOURCED,
+            Fact::Prospective => PROSPECTIVE,
+            Fact::Produced => PRODUCED,
+            Fact::GitHead => GIT_HEAD,
+            Fact::GitStatus => GIT_STATUS,
+            Fact::GitRemote => GIT_REMOTE,
+            Fact::GitWorktrees => GIT_WORKTREES,
+            Fact::GitRef => GIT_REF,
+            Fact::GitRange => GIT_RANGE,
+            Fact::CommitMeta => COMMIT_META,
+            Fact::Landing => LANDING,
+            Fact::GitHistory => GIT_HISTORY,
+            Fact::GitTags => GIT_TAGS,
+            Fact::GitConfig => GIT_CONFIG,
+            Fact::GitIndex => GIT_INDEX,
+            Fact::Staged => STAGED,
+            Fact::State => STATE,
+            Fact::Forge => FORGE,
+            Fact::ToolVerdict => TOOL_VERDICT,
+            Fact::Plan => PLAN,
+            Fact::Minted => MINTED,
+            Fact::Captured => CAPTURED,
+            Fact::Tasks => TASKS,
+            Fact::Extracted => EXTRACTED,
+            Fact::Invocations => INVOCATIONS,
+            Fact::Units => UNITS,
+            Fact::Base => BASE,
+            Fact::Coupling => COUPLING,
+            Fact::Uses => USES,
+            Fact::Symbols => SYMBOLS,
+            Fact::Review => REVIEW,
+            Fact::BaseDelta => BASE_DELTA,
+            Fact::Shell => SHELL,
+            Fact::Records => RECORDS,
+            Fact::RecordsBlocked => RECORDS_BLOCKED,
+            Fact::Instant => INSTANT,
+            Fact::Pinned => PINNED,
+            Fact::DispatchBrief => DISPATCH_BRIEF,
+            Fact::LandLive => LAND_LIVE,
+            Fact::InstallPending => INSTALL_PENDING,
+            Fact::RedHead => RED_HEAD,
+            Fact::PathspecStatus => PATHSPEC_STATUS,
+            Fact::Budgeted => BUDGETED,
+            Fact::ShellIntroduced => SHELL_INTRODUCED,
+        }
+    }
+
+    /// The fact named by a stable token, or `None` for a token no fact carries.
+    ///
+    /// Derived from [`Fact::ALL`] and [`Fact::as_str`], so the accepted spellings
+    /// are exactly the emitted ones by construction — [`crate::output::Verbosity`]'s
+    /// idiom, for its reason. A second table mapping tokens back to facts is a
+    /// second thing to drift, and this one cannot.
+    #[must_use]
+    pub fn from_token(token: &str) -> Option<Fact> {
+        Fact::ALL
+            .iter()
+            .copied()
+            .find(|fact| fact.as_str() == token)
+    }
+
+    /// Whether the **session-start chain** is what mints this fact (CLOUD-1760).
+    ///
+    /// # Why this is a property of the fact and not of a rule
+    ///
+    /// A mediated-call module reading a fact nothing minted sees `null`, treats it
+    /// as could-not-look, and stays silent — correctly, on its own terms: *"a
+    /// refusal on a failure to look would refuse the project."* Every such module
+    /// is right, and the COMPOSITION is what fails, because nothing asks whether
+    /// the thing they all depend on was ever produced. Answering that needs one
+    /// bit per fact, and it belongs here for [`Fact::class`]'s reason: the
+    /// vocabulary lives beside the fact, and every consumer reads it rather than
+    /// keeping a list.
+    ///
+    /// **Not derivable from [`Fact::class`], which is why it is its own row.**
+    /// `Class` is [`Cost`] x [`Surface`], and both session-start facts are
+    /// `Read` x `Hook` — the same pair as facts the boundary resolves per call
+    /// from the tree in front of it. The distinguishing property is WHO PRODUCES
+    /// the record and WHEN, which neither axis carries.
+    ///
+    /// Exhaustive with no wildcard arm, so a new fact must decide here rather than
+    /// defaulting to `false` — and `false` is the answer that makes this gate
+    /// silently stop covering it, which is the defect one layer up.
+    #[must_use]
+    pub const fn minted_at_session_start(self) -> bool {
+        match self {
+            // The two the chain produces by SPAWNING: resolving either asks the
+            // pin, which is an effect and may not sit on the mediated path, so the
+            // spawn happens once at session start and every call reads the record.
+            // That displacement is exactly what makes their absence invisible.
+            Fact::Tasks | Fact::Pinned => true,
+            Fact::Receipts
+            | Fact::Keys
+            | Fact::Stop
+            | Fact::Waived
+            | Fact::Document
+            | Fact::Tracked
+            | Fact::Traversals
+            | Fact::Lines
+            | Fact::External
+            | Fact::AgentSourced
+            | Fact::Prospective
+            | Fact::Produced
+            | Fact::GitHead
+            | Fact::GitStatus
+            | Fact::GitRemote
+            | Fact::GitWorktrees
+            | Fact::GitRef
+            | Fact::GitRange
+            | Fact::CommitMeta
+            | Fact::Landing
+            | Fact::GitHistory
+            | Fact::GitTags
+            | Fact::GitConfig
+            | Fact::GitIndex
+            | Fact::Staged
+            | Fact::State
+            | Fact::Forge
+            | Fact::ToolVerdict
+            | Fact::Plan
+            | Fact::Minted
+            | Fact::Captured
+            | Fact::Extracted
+            | Fact::Invocations
+            | Fact::Units
+            | Fact::Base
+            | Fact::Coupling
+            | Fact::Uses
+            | Fact::Symbols
+            | Fact::Review
+            | Fact::BaseDelta
+            | Fact::Shell
+            | Fact::Records
+            | Fact::RecordsBlocked
+            | Fact::DispatchBrief
+            | Fact::LandLive
+            | Fact::InstallPending
+            | Fact::RedHead
+            | Fact::PathspecStatus
+            | Fact::Budgeted
+            | Fact::ShellIntroduced
+            | Fact::Instant => false,
+        }
+    }
+
+    /// The key this fact is projected under in the **tree** input document, or
+    /// `None` for a fact the tree surface does not carry (CLOUD-845).
+    ///
+    /// **Why this is not [`Fact::as_str`].** The mediated document keys straight
+    /// off `as_str`, and the tree document would too if it were being designed
+    /// now — but `input.tree.documents` shipped in CLOUD-833 and consumer modules
+    /// are written against it. Renaming a shipped input key to save an accessor
+    /// would break every module the retirement campaign is about to write, so the
+    /// spelling is stated instead.
+    ///
+    /// **Stated beside the fact, exactly like [`Fact::class`].** The point of the
+    /// indirection is that the vocabulary lives in one place and the projection
+    /// reads it: `rules::tree_document` iterates [`Fact::ALL`] and asks this,
+    /// rather than hand-writing keys that then drift from the model. That drift
+    /// is precisely CLOUD-845 — `input.tree.tracked` was documented, never built,
+    /// and nothing could tell, because no table said what the tree emits.
+    ///
+    /// Exhaustive with no wildcard arm, so a new fact must decide here whether
+    /// the tree carries it rather than defaulting to absent — and absent is the
+    /// shape a Rego predicate reads as silently undefined.
+    #[must_use]
+    pub const fn tree_key(self) -> Option<&'static str> {
+        match self {
+            Fact::Document => Some("documents"),
+            Fact::Tracked => Some("tracked"),
+            Fact::Traversals => Some("traversals"),
+            Fact::Lines => Some("lines"),
+            // CLOUD-1167. Tree-only, like the three above and for their
+            // reason: opening and parsing a file is a `check`-surface cost.
+            // The key is the DECLARED ID rather than a path, which is what
+            // keeps a machine's home directory off the policy input.
+            Fact::External => Some("external"),
+            Fact::Produced => Some("produced"),
+            // The five git facts (CLOUD-907). All five reach the tree surface,
+            // and three of them are `Surface::Hook` — which is not a
+            // contradiction but the axis working as documented: `Hook` is the
+            // NARROWEST surface a fact may be resolved on, so every wider one
+            // may resolve it too. The consumers this row exists for are the 22
+            // gate tasks the census leaves owing a fact, and a gate is the tree
+            // surface.
+            Fact::GitHead => Some("git-head"),
+            Fact::GitStatus => Some("git-status"),
+            Fact::GitRemote => Some("git-remote"),
+            // CLOUD-1424. Tree-only, and for `GitStatus`'s reason rather than
+            // `GitHead`'s: the registry is read once and each row's base is
+            // stat'd, so the cost grows with how many linked worktrees exist.
+            // A mediated call has no occasion to ask this either — the question
+            // is about the checkout's own hygiene, which is a gate's subject.
+            Fact::GitWorktrees => Some("git-worktrees"),
+            Fact::GitRef => Some("git-refs"),
+            Fact::GitRange => Some("git-ranges"),
+            // CLOUD-1187. Tree-only like the rest of the family, and for a
+            // sharper reason: it peels a commit object per commit in the range.
+            Fact::CommitMeta => Some("commit-meta"),
+            // The landing family (CLOUD-880). A gate is the tree surface, and
+            // every consumer this row exists for -- the tasks that today read a
+            // sibling's exit code to learn whether work landed -- is one.
+            Fact::Landing => Some("landing"),
+            // CLOUD-1203. Tree-only: reading the index is a `check`-surface
+            // cost, and the store is a listing a mediated call has no occasion
+            // to want.
+            // CLOUD-1200. Tree-only: a history walk is a `check`-surface cost.
+            Fact::GitHistory => Some("git-history"),
+            // CLOUD-843. Tree-only, all three, and each for a family reason
+            // already stated: a tag listing grows with the repository, config
+            // has no mediated consumer (`GitHead`'s reason), and the index half
+            // hashes files and walks the checkout (`GitStatus`'s).
+            Fact::GitTags => Some("git-tags"),
+            Fact::GitConfig => Some("git-config"),
+            Fact::GitIndex => Some("git-index"),
+            Fact::Staged => Some("staged"),
+            Fact::State => Some("state"),
+            // CLOUD-1154. Tree-only: a mediated call has no SHA to ask about
+            // and no budget to read a record set.
+            Fact::Forge => Some("forge"),
+            // CLOUD-1171. Tree-only for `forge`'s reason and one more: the
+            // digest half opens the declared input, which is a `check`-surface
+            // cost and not a mediated call's.
+            Fact::ToolVerdict => Some("tool-verdict"),
+            Fact::Plan => Some("plan"),
+            Fact::Minted => Some("minted"),
+            // CLOUD-1188. Tree-only: reducing a response means reading and
+            // parsing every capture the store holds until a declared key
+            // matches, which is a `check`-surface cost. The consumers are board
+            // gates, and a gate is the tree surface by construction.
+            Fact::Captured => Some("captured"),
+            // Tree-only by construction (CLOUD-914): a call site is a property
+            // of committed source, and the mediated path has no budget to parse
+            // one.
+            Fact::Invocations => Some("invocations"),
+            // Tree-only for `Invocations`' reason: a parse per declared file.
+            Fact::Units => Some("units"),
+            Fact::Base => Some("base"),
+            Fact::Coupling => Some("coupling"),
+            Fact::Uses => Some("uses"),
+            // The resolved-symbol tier (CLOUD-760). Tree surface like the two
+            // above, and `Cost::Effect` where they are `Read` — the cost axis is
+            // independent of the surface one, which is exactly what makes the
+            // pair expressive rather than redundant.
+            Fact::Symbols => Some("symbols"),
+            // The dispatch tier (CLOUD-472). Tree surface for `Symbols`' reason
+            // — `run_static` refuses a spawning kind on the mediated path — and
+            // `Cost::Effect` for its own: resolving it runs an agent.
+            Fact::Review => Some("review"),
+            // Tree-only for the same reason (CLOUD-1059): the answer is a walk
+            // of the base tree and a walk of the working tree, which is a
+            // `check`-surface cost and not a mediated call's.
+            Fact::BaseDelta => Some("base-delta"),
+            // CLOUD-2625. Tree-only for `BaseDelta`'s and `Lines`' reasons: it
+            // is derived from both, and parses every declared body.
+            Fact::Shell => Some("shell"),
+            Fact::Records => Some("records"),
+            Fact::RecordsBlocked => Some("records-blocked"),
+            // Hook-surface facts. The tree engine resolves none of them, and
+            // naming them here as `None` is what lets the correspondence test
+            // assert the emitted key set in BOTH directions rather than only
+            // checking that what is emitted is legal.
+            // `Prospective` is here for a sharper reason than the rest, and it
+            // is worth stating rather than folding in: the others are hook-only
+            // because the tree engine has no occasion to resolve them, where
+            // this one is hook-only because THE QUESTION DOES NOT EXIST on the
+            // tree surface. A tree scan reads what a file contains; a
+            // prospective fact is what a file would contain if a call it has not
+            // made yet were allowed. Naming it `Some(..)` would invite a Rego
+            // predicate to ask the tree what a write is about to do, which is a
+            // question with no answer rather than an answer of none.
+            Fact::Receipts
+            | Fact::Keys
+            | Fact::Stop
+            | Fact::Waived
+            | Fact::AgentSourced
+            // Hook-only for CLOUD-856's own reason rather than by default: the
+            // record exists so the MEDIATED call need not parse a document, and
+            // a tree-scoped gate that wants the task table can declare the
+            // document directly and pay for it there.
+            | Fact::Tasks
+            // Hook-only, and structurally so (CLOUD-1172): the subject is THIS
+            // session's transcript, which the host hands to the boundary. A tree
+            // run has no session to ask about, so the question does not exist
+            // there rather than being one the tree declines to answer.
+            | Fact::Extracted
+            | Fact::Prospective
+            // CLOUD-1170, AND ITS `None` IS THE WHOLE OF THE DESIGN rather than
+            // a surface it happens to miss. Every other fact here is absent
+            // because the question does not arise on the tree; this one is
+            // absent because the instant is CONSUMED AT THE BOUNDARY and never
+            // reaches a module at all.
+            //
+            // `Fact::Waived` is the precedent, one fact over: a waiver lapses on
+            // a date, `today()` is handed in rather than taken inside, and what
+            // `adjudicate` receives is already-lapse-checked MEMBERSHIP — never
+            // a date to compare for itself. `receipt.rs` states the same
+            // division for `max_age`: *"a clock belongs where the waiver
+            // table's does, supplied by the boundary and never taken inside the
+            // decision"*, and a module reads the resolved `Validity`.
+            //
+            // Projecting the raw integer instead would put a second authority
+            // over time on the input — every module comparing in its own
+            // spelling — and would break §6 byte-stability by construction,
+            // because an integer that differs per invocation makes the same tree
+            // produce different bytes.
+            | Fact::Instant
+            // Hook-surface too, and deliberately not offered to the tree: the
+            // question it answers is about a COMMAND — was this program reached
+            // through the pin — and a tree walk has no command to ask it of. A
+            // gate wanting the same set asks the pin directly, which it may,
+            // being an `Effect` surface (CLOUD-1028).
+            | Fact::Pinned
+            // CLOUD-1978. Hook-only: the question is about THIS call's argument,
+            // and a tree walk has no call.
+            | Fact::DispatchBrief
+            // CLOUD-2781. Hook-only: whether a lap is live is asked of the call
+            // it would refuse, and a tree walk has none.
+            | Fact::LandLive
+            | Fact::InstallPending
+            // CLOUD-2270. Hook-only: what a push over this head owes is a
+            // question about the call, and a tree walk has none.
+            | Fact::RedHead
+            | Fact::PathspecStatus
+            | Fact::Budgeted
+            // CLOUD-2335. Hook-only for `Prospective`'s reason: what a write
+            // would introduce does not exist on the tree, whose own arms judge
+            // the shell already there.
+            | Fact::ShellIntroduced => None,
+        }
+    }
+
+    /// What this fact's answer is a function of: the committed tree, or the
+    /// world around it (step 13a).
+    ///
+    /// [`Subject::Tree`] means the answer is fixed by the indexed content of the
+    /// checkout, so a receipt keyed on that content may stand in for resolving
+    /// it again. [`Subject::Live`] is everything else — a ref, a remote, the
+    /// forge, the store, the clock, a session — and is the answer for anything
+    /// undeterminable, because the conservative side of an unreceipted half is
+    /// re-running it.
+    ///
+    /// Exhaustive with no wildcard arm, like [`Fact::tree_key`]: a new fact
+    /// decides here or fails to compile, rather than defaulting to `Tree` — the
+    /// default that would let a cached verdict hide a moved world.
+    #[must_use]
+    pub const fn subject(self) -> Subject {
+        match self {
+            Fact::Document
+            | Fact::Lines
+            | Fact::Traversals
+            | Fact::Invocations
+            | Fact::Units
+            | Fact::Base
+            | Fact::Coupling
+            | Fact::Shell
+            | Fact::Uses
+            | Fact::Tracked
+            | Fact::GitIndex
+            | Fact::Staged => Subject::Tree,
+            Fact::Receipts
+            | Fact::Keys
+            | Fact::Stop
+            | Fact::Waived
+            | Fact::External
+            | Fact::AgentSourced
+            | Fact::Prospective
+            | Fact::Produced
+            | Fact::GitHead
+            | Fact::GitStatus
+            | Fact::GitRemote
+            | Fact::GitWorktrees
+            | Fact::GitRef
+            | Fact::GitRange
+            | Fact::CommitMeta
+            | Fact::Landing
+            | Fact::GitHistory
+            | Fact::GitTags
+            | Fact::GitConfig
+            | Fact::State
+            | Fact::Forge
+            | Fact::ToolVerdict
+            | Fact::Plan
+            | Fact::Minted
+            | Fact::Captured
+            | Fact::Tasks
+            | Fact::Extracted
+            | Fact::Symbols
+            | Fact::Review
+            | Fact::BaseDelta
+            | Fact::Records
+            | Fact::RecordsBlocked
+            | Fact::Instant
+            | Fact::Pinned
+            | Fact::DispatchBrief
+            | Fact::LandLive
+            | Fact::InstallPending
+            | Fact::RedHead
+            | Fact::PathspecStatus
+            | Fact::Budgeted
+            | Fact::ShellIntroduced => Subject::Live,
+        }
+    }
+
+    /// The fact projected under `key` in the tree input document, or `None` for
+    /// a key no fact carries there — the inverse of [`Fact::tree_key`], derived
+    /// from it so the two cannot drift.
+    #[must_use]
+    pub fn from_tree_key(key: &str) -> Option<Fact> {
+        Fact::ALL
+            .iter()
+            .copied()
+            .find(|fact| fact.tree_key() == Some(key))
+    }
+
+    /// The JSON Schema fragment this fact is projected as, on whichever surface
+    /// carries it (CLOUD-879).
+    ///
+    /// **Stated beside the fact, for [`Fact::class`]'s reason and one more.**
+    /// The two schemas in `schema/` were hand-written, and a hand-written schema
+    /// beside a derived projection is the drift CLOUD-845 is: `input.tree.tracked`
+    /// was documented and never emitted, and nothing could tell. Deriving the
+    /// document from this makes a fact that gains a surface gain a schema entry in
+    /// the same edit, and `opa check -s` then refuses a module reading a key the
+    /// engine never emits — the build-time half CLOUD-876 bought.
+    ///
+    /// **Shape, never content.** A fragment constrains the container and says what
+    /// the fact is; it deliberately does not constrain what a consumer's document
+    /// holds inside it. Typing somebody else's TOML is not this schema's job, and
+    /// a fragment that tried would refuse valid consumer config at build time.
+    ///
+    /// Exhaustive with no wildcard arm, like the two matches above: a new fact
+    /// decides its schema here or fails to compile.
+    ///
+    /// The per-file source facts (`Units`, `Base`, `Invocations`, `Uses`) and
+    /// the engine-written stores (`Records`, `RecordsBlocked`, `Produced`) each
+    /// state their fragment in a function of their own (#1276): the match hit
+    /// its 100-line ceiling again, and the ceiling is right.
+    #[must_use]
+    pub fn schema_fragment(self) -> serde_json::Value {
+        match self {
+            Fact::Document => serde_json::json!({
+                "type": "object",
+                "description": "Fact::Document. Path -> the parsed node. Contents are arbitrary consumer TOML/YAML/JSON, so values are deliberately unconstrained; the schema's job here is the key set one level up, not the shape of somebody else's config.",
+                "additionalProperties": true,
+            }),
+            Fact::Traversals => serde_json::json!({
+                "type": ["object", "null"],
+                "description": "Fact::Traversals. Traversal id -> seed path -> {outcome, path|broke_at|bound|at, visited}. Pointers only: every node is a path or a register node name.",
+                "additionalProperties": {"type": "object", "additionalProperties": {"type": "object"}},
+            }),
+            Fact::Tracked => serde_json::json!({
+                "type": "array",
+                "description": "Fact::Tracked. Repository-relative paths the working-tree walk yields -- paths, never content.",
+                "items": {"type": "string"},
+            }),
+            Fact::Lines => serde_json::json!({
+                "type": "object",
+                "description": "Fact::Lines. Path -> the file's lines, unparsed (CLOUD-846).",
+                "additionalProperties": {"type": "array", "items": {"type": "string"}},
+            }),
+            Fact::External => Self::external_schema_fragment(),
+            Fact::Units => Self::units_schema_fragment(),
+            Fact::Coupling => serde_json::json!({
+                "type": "object",
+                "description": "Fact::Coupling (plan step 3). Measures over the row's declared `use` graph at file level, each an object {decoupling_level, propagation_cost, largest_component, files}: `head` over the working tree, `base` over the row's `base` rev (absent when the row declares none). Decoupling Level is Mo et al. ICSE 2016 §3.1 with SCCs standing in for Design Rule Hierarchy modules (checked against the paper's Figure 2); propagation cost is reported for a reader and falls as unconnected files are added, so a ratchet gates `decoupling_level`, never it.",
+                "properties": {
+                    "head": {"type": "object"},
+                    "base": {"type": "object"},
+                },
+            }),
+            Fact::Base => Self::base_schema_fragment(),
+            Fact::Invocations => Self::invocations_schema_fragment(),
+            Fact::Staged
+            | Fact::State
+            | Fact::Forge
+            | Fact::ToolVerdict
+            | Fact::Minted
+            | Fact::Captured => Self::keyed_read_schema_fragment(self),
+            Fact::Records => Self::records_schema_fragment(),
+            Fact::RecordsBlocked => Self::records_blocked_schema_fragment(),
+            Fact::Produced => Self::produced_schema_fragment(),
+            Fact::Symbols => Self::symbols_schema_fragment(),
+            Fact::Plan => Self::plan_schema_fragment(),
+            Fact::Review => Self::review_schema_fragment(),
+            Fact::Uses => Self::uses_schema_fragment(),
+            // The SCALAR family delegates (CLOUD-1170 split this out). Two facts
+            // whose value is one constrained primitive rather than a container
+            // keyed by a declared subject — which is a real seam and not a line
+            // count, and it is the seam this function's own doc says to split
+            // along. `Instant` arriving is what took it past its ceiling, exactly
+            // as `Landing` did for the git family.
+            Fact::Instant | Fact::DispatchBrief | Fact::LandLive | Fact::InstallPending => {
+                self.scalar_schema_fragment()
+            }
+            // The description-only family delegates, for the same reason and
+            // along the same kind of seam as the git family below: every one of
+            // these constrains nothing but its own prose, so a match arm each
+            // buys no readability that one table does not.
+            Fact::Receipts
+            | Fact::Keys
+            | Fact::Stop
+            | Fact::Waived
+            | Fact::AgentSourced
+            | Fact::Prospective
+            | Fact::Tasks
+            | Fact::Extracted => Self::described_schema_fragment(self),
+            Fact::Pinned => Self::pinned_schema_fragment(),
+            Fact::RedHead => Self::red_head_schema_fragment(),
+            Fact::PathspecStatus => Self::pathspec_status_schema_fragment(),
+            Fact::Budgeted => serde_json::json!({
+                "type": ["array", "null"],
+                "description": "Fact::Budgeted (CLOUD-2661) -- each `[budget.*]` set this write would change, by name, with whether the call breaches a ceiling it grows past; null when no set selects the call. Counts only, never content.",
+                "items": {"type": "object", "properties": {"name": {"type": "string"}, "breach": {"type": "boolean"}}, "required": ["name", "breach"], "additionalProperties": false},
+            }),
+            Fact::ShellIntroduced => Self::shell_introduced_schema_fragment(),
+            // The git and landing families delegate (CLOUD-880). Extracted
+            // because this function hit its own 100-line ceiling when `Landing`
+            // arrived, and the ceiling is right: a match arm per fact is readable
+            // and a match arm per fact for twenty facts is not. Split along the
+            // seam that already exists rather than by line count.
+            Fact::BaseDelta => Self::base_delta_schema_fragment(),
+            Fact::Shell => Self::shell_schema_fragment(),
+            Fact::GitHead
+            | Fact::GitStatus
+            | Fact::GitRemote
+            | Fact::GitWorktrees
+            | Fact::GitRef
+            | Fact::GitRange
+            | Fact::CommitMeta
+            | Fact::GitHistory
+            | Fact::Landing => Self::git_schema_fragment(self),
+            // CLOUD-843. Their own delegate for `git_schema_fragment`'s own
+            // reason one iteration later, on the seam the retirement drew: these
+            // are the repository's STATE as the retiring bodies read it — its
+            // tags, its config, its index — where that family is its history.
+            Fact::GitTags | Fact::GitConfig | Fact::GitIndex => {
+                Self::repository_schema_fragment(self)
+            }
+        }
+    }
+
+    /// [`Fact::Units`]'s fragment (CLOUD-1008).
+    fn units_schema_fragment() -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "description": "Fact::Units (CLOUD-1008). Path -> {nodes}: every function, comment and string literal in that source file as a D4 node `{kind, position, line, name, offset, bytes, counts}`. Rust is read through the one lossless parse; Rego through regorus, as `function` (counts.total: has a default or an else) and `binding` (a `:=` whose right side is a call, a lookup, or whose left side is `_`; name is a bare callee or empty, counts.lookup and counts.wildcard say which) nodes. Counts are integers and booleans only, never source text; a Rust `fn`'s counts carry `tokens` (o200k_base over its slice, the capture-view reader's counter). A path absent from this map is could-not-look; a path present with no nodes parsed and holds none.",
+            "additionalProperties": {
+                "type": "object",
+                "properties": {"nodes": {"type": "array", "items": {"type": "object"}}},
+                "required": ["nodes"],
+            },
+        })
+    }
+
+    /// [`Fact::Base`]'s fragment: the per-file facts at the row's `base` rev.
+    fn base_schema_fragment() -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "description": "Fact::Base (plan item 4, CLOUD-1008's base side). The per-file facts a row declares, acquired at the row's `base` rev from git objects rather than the working tree, keyed by family: `units` is Path -> {nodes} exactly as Fact::Units, at the base; `uses` is Path -> that file's `use` edges exactly as Fact::Uses, resolved against the BASE root's re-export table. A path the base does not hold, or whose blob its parser refused, is absent (could-not-look), never an empty node list.",
+            "properties": {
+                "units": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "object",
+                        "properties": {"nodes": {"type": "array", "items": {"type": "object"}}},
+                        "required": ["nodes"],
+                    },
+                },
+                "uses": {
+                    "type": "object",
+                    "additionalProperties": {"type": "array", "items": {"type": "object"}},
+                },
+            },
+        })
+    }
+
+    /// [`Fact::Invocations`]'s fragment (CLOUD-914).
+    fn invocations_schema_fragment() -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "description": "Fact::Invocations (CLOUD-914). Path -> the call sites in that Rust file, each `program` (the callee as written), `arguments` (the string literals it PASSES -- never its receiver) and `line`. A path absent from this map is could-not-look: the parser could not read it. A path present with an empty list is a file that parsed and calls nothing. Rego reads an undefined path as `does not hold`, so those two must never collapse.",
+            "additionalProperties": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "program": {"type": "string"},
+                        "arguments": {"type": "array", "items": {"type": "string"}},
+                        "line": {"type": "integer"},
+                    },
+                    "additionalProperties": false,
+                },
+            },
+        })
+    }
+
+    /// [`Fact::Uses`]'s fragment (CLOUD-762).
+    fn uses_schema_fragment() -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "description": "Fact::Uses (CLOUD-762). Path -> that file's `use` edges. `to` is the module or crate reached AFTER resolution through the crate root's re-export table; `item` the imported leaf name; `origin` one of internal/external/root-item/local; `via_root` whether resolution supplied `to` rather than the text, which is the flag that marks an edge a line predicate reads wrongly. `qualified` whether the edge was written as a qualified path in code (`crate::m::f()`, a `crate::m::T` type) rather than a `use` item; one per distinct (to, item) per file, and paths inside macro token streams are not seen. An edge still `root-item` is one the root's table could not name, and is could-not-look at the edge level rather than an edge onto nothing. A path absent from this map could not be parsed; a path present with an empty array imports nothing.",
+            "additionalProperties": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "to": {"type": "string"},
+                        "item": {"type": "string"},
+                        "origin": {"type": "string"},
+                        "via-root": {"type": "boolean"},
+                        "line": {"type": "integer"},
+                    },
+                    "additionalProperties": false,
+                },
+            },
+        })
+    }
+
+    /// [`Fact::Shell`]'s fragment (CLOUD-2625).
+    fn shell_schema_fragment() -> serde_json::Value {
+        let side = serde_json::json!({
+            "type": "object",
+            "additionalProperties": {
+                "type": "object",
+                "properties": {
+                    "kind": {"type": "string", "enum": ["manifest", "workflow", "file"]},
+                    "lines": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "line": {"type": "integer"},
+                                "reason": {"type": "string"},
+                            },
+                            "additionalProperties": false,
+                        },
+                    },
+                },
+                "additionalProperties": false,
+            },
+        });
+        serde_json::json!({
+            "type": "object",
+            "description": "Fact::Shell (CLOUD-2625). The shell detector's answer (`batten_core::shell_logic::logic`, decided on the `rable` AST) over the tree: `head` from `lines` and the delta's `added`, `base` from the delta's `base-lines`. Path -> {kind, lines}: `kind` is `manifest` or `workflow` for a declared `[census.shell]` home and `file` for a path that is shell by its extension or its shebang; `lines` holds each shell line's 1-based `line` and the detector's `reason`. A path absent from a side is no home there, or one that side could not read -- never a clean reading. For a row enabling `shell-hygiene` or handing over a `[census.shell]` table, `head` also reads every tracked file that can be shell, every declared manifest and every path a workflow glob selects (CLOUD-2628). `generated` is one {path, matches, check_found} per `[[census.shell.generated]]` entry: how many tracked paths its glob matches, and whether a line of its `check` file holds the test name (an unreadable file is false).",
+            "properties": {
+                "head": side.clone(),
+                "base": side,
+                "generated": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "path": {"type": "string"},
+                            "matches": {"type": "integer"},
+                            "check_found": {"type": "boolean"},
+                        },
+                        "additionalProperties": false,
+                    },
+                },
+                // CLOUD-2770: engine source spawning a shell. Absent when the
+                // fact did not read the whole tree.
+                "spawn": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "path": {"type": "string"},
+                            "line": {"type": "integer"},
+                            "function": {"type": "string"},
+                        },
+                        "additionalProperties": false,
+                    },
+                },
+            },
+            "additionalProperties": false,
+        })
+    }
+
+    /// [`Fact::BaseDelta`]'s fragment (CLOUD-1059), lifted out of
+    /// [`Fact::schema_fragment`] when CLOUD-843's three facts took that function
+    /// past its line ceiling. The shape is unchanged; only its address moved.
+    fn base_delta_schema_fragment() -> serde_json::Value {
+        serde_json::json!({
+            "type": ["object", "null"],
+            "description": "Fact::BaseDelta (CLOUD-1059). How the declared globs' paths differ from the declared base rev: `added` present now and not at base, `edited` present in both with different content, `deleted` present at base and not now. Repo-relative paths only -- never a hunk and never a line, non-negotiable rule 4. NULL when the base rev does not resolve, never an empty delta: `this branch changed nothing` and `I could not read the base` are the two answers a migration gate must keep apart, and a fabricated empty set passes the gate on ignorance.",
+            "properties": {
+                "added": {"type": "array", "items": {"type": "string"}},
+                "edited": {"type": "array", "items": {"type": "string"}},
+                "deleted": {"type": "array", "items": {"type": "string"}},
+                // CLOUD-1051. A subset of the three above: the paths whose
+                // non-comment remainder moved. Serialized as `code-changed`
+                // rather than `code_changed` because every other key in this
+                // document is hyphenated.
+                "code-changed": {"type": "array", "items": {"type": "string"}},
+                // CLOUD-1051. When the base rev was committed, strict
+                // ISO-8601 UTC and fixed width, so a consumer orders it
+                // lexicographically rather than parsing a date. `null` when
+                // the rev resolves to no commit — the path lists are still
+                // answered, because they were computable and this was not.
+                "base-date": {"type": ["string", "null"]},
+                // CLOUD-1051. What each EDITED path said at the base rev, so
+                // a predicate can ask what an edit REMOVED — the one question
+                // `input.tree.lines` cannot answer, because it is the head
+                // side. Bounded to `edited`: an added path has no base side
+                // and a deleted one has no head side. A path absent here is
+                // could-not-look, never a measured nothing.
+                "base-lines": {
+                    "type": "object",
+                    "additionalProperties": {"type": "array", "items": {"type": "string"}},
+                },
+                // CLOUD-1484. The identity of the branch's whole CHANGE
+                // against the base, so a module can ask whether THIS change
+                // was attested without re-deriving one from the path lists —
+                // which would be a second notion of `the same change`, free
+                // to disagree with `landing`'s about a rebase. A MERGE-BASE
+                // diff over COMMITTED bytes, where the lists beside it are a
+                // tip diff over the working tree: the two disagree on a stale
+                // or dirty branch, deliberately, because an attestation must
+                // not move when somebody saves a file. `null` is
+                // could-not-look AND covers the empty diff — a branch that
+                // changed nothing has no identity, so a predicate must not
+                // read it as `unattested`.
+                "patch-id": {"type": ["string", "null"]},
+            },
+            "additionalProperties": false,
+        })
+    }
+
+    /// The schema fragment for the `Cost::Effect` fact (CLOUD-760).
+    ///
+    /// Split out for [`Fact::git_schema_fragment`]'s reason — it is what pushed
+    /// [`Fact::schema_fragment`] past the line ceiling — but on a different seam,
+    /// and the seam is the one that matters here: **this is the only fragment
+    /// that has to describe a producer as well as a shape.** The `provenance`
+    /// half is not decoration. A fact whose value depends on which analyser at
+    /// which version resolved it is not byte-stable under §6 unless the document
+    /// says which one that was, so the tool, its version and the pinned
+    /// invocation travel inside the fact rather than beside it.
+    ///
+    /// `sites` is pointer-only, per non-negotiable rule 4: a path, a line and the
+    /// lint that fired. The analyser's message, and the source line it quoted,
+    /// are content and stay out of the policy input.
+    /// [`Fact::Plan`]'s fragment (CLOUD-949).
+    ///
+    /// Keyed by the declared row's `id`, like the read family: a module written
+    /// against one key does not have to be edited when a second consumer declares
+    /// another. NULLABLE at the leaf for [`Self::symbols_schema_fragment`]'s
+    /// reason — a plan that could not be acquired is `null`, and a schema typing
+    /// this as a bare object refuses the module that handles the arm.
+    fn plan_schema_fragment() -> serde_json::Value {
+        serde_json::json!({
+            "type": ["object", "null"],
+            "description": "Fact::Plan (CLOUD-949). Declared id -> the adopted gate runner's EFFECTIVE plan for that surface, acquired from the runner rather than re-derived. Bound to the invocation, the tool version and an `inputFingerprint` over HEAD and every differing path's current bytes -- HEAD alone is insufficient, because dirty and index state change the selection without moving HEAD. `required` and `prohibitedProfiles` are the consumer's own row, carried alongside so a module compares two halves of one document. Pointer-only: a step's identity, its status, the reason KIND (the first reason's, and every reason's in `reasonKinds`), its order, its group and a file COUNT -- never a command, a matched path, or a reason's prose. An id absent from the map could not be acquired, which is a reacquire and never a clean plan.",
+            "additionalProperties": {
+                "type": ["object", "null"],
+                "properties": {
+                    "hook": {"type": "string"},
+                    "runType": {"type": "string"},
+                    "profiles": {"type": "array", "items": {"type": "string"}},
+                    "invocation": {"type": "array", "items": {"type": "string"}},
+                    "toolVersion": {"type": "string"},
+                    "contractDigest": {"type": ["string", "null"]},
+                    "inputFingerprint": {"type": "string"},
+                    "required": {"type": "array", "items": {"type": "string"}},
+                    "prohibitedProfiles": {"type": "array", "items": {"type": "string"}},
+                    "steps": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "name": {"type": "string"},
+                                "status": {"type": "string"},
+                                "reasonKind": {"type": ["string", "null"]},
+                                "reasonKinds": {"type": "array", "items": {"type": "string"}},
+                                "orderIndex": {"type": "integer"},
+                                "parallelGroupId": {"type": "string"},
+                                "fileCount": {"type": "integer"},
+                            },
+                            "additionalProperties": false,
+                        },
+                    },
+                },
+                "additionalProperties": false,
+            },
+        })
+    }
+
+    fn symbols_schema_fragment() -> serde_json::Value {
+        serde_json::json!({
+            // NULLABLE, like the git family and for its reason: the projection
+            // emits `null` for both did-not-look answers, and a schema typing
+            // this as a bare object refuses the module that handles them. Caught
+            // by `opa check -s` -- which is the whole argument for deriving the
+            // schema from the fact rather than writing it beside it.
+            "type": ["object", "null"],
+            "description": "Fact::Symbols (CLOUD-760). The first Cost::Effect fact: where a delegated analyser resolved a named type, by NAME rather than by spelling. `provenance` records which tool at which version produced it, because a fact whose meaning depends on an unrecorded tool version is not canonical. `sites` is pointer-only -- a path, a line and the lint that fired, never the diagnostic's message or the source it quoted.",
+            "properties": {
+                "provenance": {
+                    "type": "object",
+                    "properties": {
+                        "tool": {"type": "string"},
+                        "version": {"type": "string"},
+                        "invocation": {"type": "array", "items": {"type": "string"}},
+                    },
+                    "additionalProperties": false,
+                },
+                "sites": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "path": {"type": "string"},
+                            "line": {"type": "integer"},
+                            "lint": {"type": "string"},
+                        },
+                        "additionalProperties": false,
+                    },
+                },
+            },
+            "additionalProperties": false,
+        })
+    }
+
+    /// The schema fragment for [`Fact::Review`] (CLOUD-472).
+    ///
+    /// **Every leaf is a pointer or a digest**, which is what makes rule 4
+    /// structural here rather than a habit the resolution has to keep: there is
+    /// no string field an agent's prose could occupy, so a module cannot lift a
+    /// sentence into a finding even if one were recorded.
+    fn review_schema_fragment() -> serde_json::Value {
+        serde_json::json!({
+            // NULLABLE for `symbols_schema_fragment`'s reason: the projection
+            // emits `null` for both did-not-look answers, and a schema typing
+            // this as a bare object refuses the module that handles them.
+            "type": ["object", "null"],
+            "description": "Fact::Review (CLOUD-472). Declared id -> the record that a VENDORED agent prompt was dispatched over that id's subject. The second Cost::Effect fact. KEYED BY (prompt digest, subject digest): the prompt is compiled into this binary so its digest is a constant of the build, and the subject's digest is the bytes reviewed -- so editing the ticket body or pushing a commit leaves the record under a different name where it does not answer. A declared id ABSENT from this map was never dispatched, and that absence is the only thing a gate may refuse on; an id PRESENT with an empty `findings` array ran and pointed at nothing. `null` is could-not-look. WHAT THE AGENT CONCLUDED IS NEVER HERE AS PROSE -- `findings` carries pointers, because a gate deciding on an agent's judgement would be a gated-model verdict wearing an exit code, which non-negotiable rule 3 forbids.",
+            "additionalProperties": {
+                "type": "object",
+                "properties": {
+                    "provenance": {
+                        "type": "object",
+                        "properties": {
+                            "tool": {"type": "string"},
+                            "version": {"type": "string"},
+                            "invocation": {"type": "array", "items": {"type": "string"}},
+                            "prompt": {"type": "string"},
+                        },
+                        "additionalProperties": false,
+                    },
+                    "subject": {
+                        "type": "object",
+                        "properties": {
+                            "kind": {"type": "string"},
+                            "digest": {"type": "string"},
+                        },
+                        "additionalProperties": false,
+                    },
+                    "findings": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "path": {"type": "string"},
+                                "line": {"type": "integer"},
+                                "clause": {"type": "string"},
+                            },
+                            "additionalProperties": false,
+                        },
+                    },
+                },
+                "additionalProperties": false,
+            },
+        })
+    }
+
+    /// The schema fragment for the facts whose value is ONE constrained scalar
+    /// (CLOUD-1170 split this out).
+    ///
+    /// **The seam is the shape, not the count.** Every other constrained fact is
+    /// a container keyed by a declared subject — a path, an id, a SHA — and its
+    /// fragment describes what the values under those keys look like. These two
+    /// have no subject at all: there is one hatch per process and one instant per
+    /// invocation, so the fragment constrains the value itself. That difference
+    /// is what makes this a family rather than a bucket.
+    ///
+    /// Unreachable for every other fact, and stated the way
+    /// [`Fact::described_schema_fragment`] states it: no `debug_assert`,
+    /// exhaustive arms, and a misrouted fact gets its own fragment rather than a
+    /// panic.
+    fn scalar_schema_fragment(self) -> serde_json::Value {
+        match self {
+            // NULL IS COULD-NOT-LOOK AND IS NOT AN INSTANT OF ZERO. A caller that
+            // supplied none has not named the epoch, it has said nothing, and a
+            // predicate over it must not hold. Collapsing the two would make
+            // `--instant` optional in the worst way: a forgotten flag would date
+            // every record to 1970 and report every lease expired.
+            Fact::DispatchBrief => serde_json::json!({
+                "type": ["object", "null"],
+                "description": "Fact::DispatchBrief (CLOUD-2858). The `batten lint brief` report on the message a session-management call (`create_session`, `send_message`) carries, linted in process at pre-tool: `clean`, and the `missing` and `unrunnable` section ids. Ids only, never a byte of the message. NULL on every call that is not such a method.",
+                "properties": {
+                    "clean": { "type": "boolean" },
+                    "missing": { "type": "array", "items": { "type": "string" } },
+                    "unrunnable": { "type": "array", "items": { "type": "string" } }
+                },
+                "required": ["clean", "missing", "unrunnable"],
+                "additionalProperties": false
+            }),
+            Fact::LandLive => serde_json::json!({
+                "type": ["string", "null"],
+                "description": "Fact::LandLive (CLOUD-2781, CLOUD-2789). The absolute root of a checkout this call WRITES in (a program's directory as its own options move it, an output redirection's target, a write tool's target) whose singleton lock a live `land` lap holds under the per-worktree git dir, by the same reading `land` uses to refuse a second lap (`task::singleton_holder`: the lock names a pid and that pid exists). NULL when no such lap is live or the lock could not be read. A path and nothing else: a module judges an absolute target by whether it lies under it.",
+            }),
+            Fact::InstallPending => serde_json::json!({
+                "type": ["object", "null"],
+                "description": "Fact::InstallPending (CLOUD-2840). The session's setup task, read from the task registry: `state` is `running`, `ok`, `failed` or `crashed` (the task's own last phase, or a pid gone without one), `task` its registry name and `pid` its pid. `pending` lists this call's command-position programs that resolve to nothing on PATH or resolve under the environment manager's install root -- what the task may still be installing -- and is empty once the task said `ok`, when nothing is resolved at all. NULL when no setup task is recorded or the registry could not be read.",
+                "properties": {
+                    "state": {"enum": ["running", "ok", "failed", "crashed"]},
+                    "task": {"type": "string"},
+                    "pid": {"type": "string"},
+                    "pending": {"type": "array", "items": {"type": "string"}},
+                },
+            }),
+            Fact::Instant => serde_json::json!({
+                "type": ["integer", "null"],
+                "description": "Fact::Instant (CLOUD-1170). The epoch second the CALLER supplied, as data -- never a clock the engine read. A module compares a recorded stamp against it and a fixture pins both, so the same instant yields byte-identical output, which is what a clock READ can never do. NULL when the caller supplied none: that is could-not-look, NOT the epoch, and a predicate over it must not hold.",
+            }),
+            // NOT THIS FAMILY, AND NAMED RATHER THAN WILDCARDED, for the reason
+            // the other delegates' tails state: `no_axis_match_carries_a_wildcard_arm`
+            // refuses a `_ =>`, and a wildcard would let a fact added later
+            // classify itself here instead of failing to compile.
+            Fact::Receipts
+            | Fact::Keys
+            | Fact::Stop
+            | Fact::Waived
+            | Fact::Document
+            | Fact::Tracked
+            | Fact::Traversals
+            | Fact::Lines
+            | Fact::External
+            | Fact::AgentSourced
+            | Fact::Prospective
+            | Fact::Produced
+            | Fact::GitHead
+            | Fact::GitStatus
+            | Fact::GitRemote
+            | Fact::GitWorktrees
+            | Fact::GitRef
+            | Fact::GitRange
+            | Fact::CommitMeta
+            | Fact::Landing
+            | Fact::GitHistory
+            | Fact::GitTags
+            | Fact::GitConfig
+            | Fact::GitIndex
+            | Fact::Staged
+            | Fact::State
+            | Fact::Forge
+            | Fact::ToolVerdict
+            | Fact::Minted
+            | Fact::Captured
+            | Fact::Tasks
+            | Fact::Extracted
+            | Fact::Invocations
+            | Fact::Units
+            | Fact::Base
+            | Fact::Coupling
+            | Fact::Uses
+            | Fact::Symbols
+            | Fact::Plan
+            | Fact::BaseDelta
+            | Fact::Shell
+            | Fact::Records
+            | Fact::RecordsBlocked
+            | Fact::Pinned
+            | Fact::RedHead
+            | Fact::PathspecStatus
+            | Fact::Budgeted
+            | Fact::ShellIntroduced
+            | Fact::Review => serde_json::json!({
+                "description": "unrouted fact -- schema_fragment delegated a fact scalar_schema_fragment does not own",
+            }),
+        }
+    }
+
+    /// The schema fragment for the facts that constrain nothing but their own
+    /// prose (CLOUD-1051 split this out; CLOUD-880 set the precedent).
+    ///
+    /// **The seam is a property of the fragment, not of the fact.** Every arm
+    /// here carries `description` and no `type`, deliberately: these are the
+    /// facts whose shape is not certain enough to constrain, and saying so once
+    /// is the statement. A fact that grows a constrained shape leaves this
+    /// function for an arm of its own, which is the edit rather than a comment.
+    ///
+    /// Unreachable for every other fact, and stated the way
+    /// [`Fact::git_schema_fragment`] states it: no `debug_assert`, exhaustive
+    /// arms, and a misrouted fact gets its own fragment rather than a panic.
+    fn described_schema_fragment(self) -> serde_json::Value {
+        match self {
+            Fact::Receipts => serde_json::json!({
+                "description": "Fact::Receipts -- check -> verdict token, or null for could-not-look.",
+            }),
+            Fact::Keys => serde_json::json!({
+                "description": "Fact::Keys -- the tracker-key evidence, or null for could-not-look.",
+            }),
+            Fact::Stop => serde_json::json!({
+                "description": "Fact::Stop -- the end-of-turn facts.",
+            }),
+            Fact::Waived => serde_json::json!({
+                "description": "Fact::Waived -- the rules a live waiver suppresses, with each claimed expiry.",
+            }),
+            Fact::AgentSourced => serde_json::json!({
+                "description": "Fact::AgentSourced -- what a command the AGENT ran said (CLOUD-776), or null.",
+            }),
+            Fact::Prospective => serde_json::json!({
+                "description": "Fact::Prospective -- the SHAPE of what a write would land (CLOUD-758): look, bytes, lines. Never the content, which is where rule 4 is decided rather than promised.",
+            }),
+            Fact::Extracted => serde_json::json!({
+                "type": ["object", "null"],
+                "description": "Fact::Extracted (CLOUD-1172). Declared extractor id -> its result, which is an INTEGER and can be nothing else: the extractor set is closed and every member counts TYPED events -- a tool call, a result the host flagged as an error, a hook run's exit code -- never prose. No span of session text can reach this document by construction. NULL for could-not-look, which is the COMMON case here rather than the edge one (CLOUD-388: transcripts die with their container): no transcript on the envelope, a host that keeps none, and one that would not parse are all null, and all three are DIFFERENT from an extractor that ran and counted zero. A gate that confused them reports `nothing was stranded` on every host that never had a transcript. An id no row declared is ABSENT from the map: an undeclared extractor yields nothing, which is what makes this a projection of a declared set rather than a reader of sessions.",
+                "additionalProperties": {"type": "integer"},
+            }),
+            Fact::Tasks => serde_json::json!({
+                "description": "Fact::Tasks (CLOUD-856). Task NAME -> its normalised argv as a word list, or null where the task exists and is not a single command -- a pipeline, a sequence, a multi-line body. Those two are different answers and a name ABSENT from the map is a third: the task is not defined. Read from a receipt minted OUTSIDE the mediated call, at session start, so this path parses no manifest, invokes no runner, probes no binary and walks no tree. The receipt's key is recomputed from the manifest as it stands, so a record about a manifest that has since moved does not answer -- null for the whole fact, never a task table trusted a little. Also null for an unwritten record, a schema this build does not read, and one past the size cap; a guard comparing against an empty table would permit every substitution it exists to refuse.",
+            }),
+            // Not this family: `schema_fragment` constrains this one itself,
+            // because its shape is certain. Named here rather than dropped for
+            // the reason the tail arm states — a wildcard would let a later fact
+            // classify itself instead of failing to compile.
+            Fact::Pinned => serde_json::json!({
+                "description": "unrouted fact -- schema_fragment does not delegate this one",
+            }),
+            // NOT THIS FAMILY, AND NAMED RATHER THAN WILDCARDED, for the reason
+            // `git_schema_fragment`'s tail states: `no_axis_match_carries_a_wildcard_arm`
+            // refuses a `_ =>`, and a wildcard would let a fact added later
+            // classify itself here instead of failing to compile.
+            Fact::Document
+            | Fact::Tracked
+            | Fact::Traversals
+            | Fact::Lines
+            | Fact::External
+            | Fact::Invocations
+            | Fact::Units
+            | Fact::Base
+            | Fact::Coupling
+            | Fact::Uses
+            | Fact::Produced
+            | Fact::Symbols
+            | Fact::Plan
+            | Fact::Review
+            | Fact::BaseDelta
+            | Fact::Shell
+            | Fact::Records
+            | Fact::RecordsBlocked
+            | Fact::GitHead
+            | Fact::GitStatus
+            | Fact::GitRemote
+            | Fact::GitWorktrees
+            | Fact::GitRef
+            | Fact::GitRange
+            | Fact::CommitMeta
+            | Fact::GitHistory
+            | Fact::GitTags
+            | Fact::GitConfig
+            | Fact::GitIndex
+            | Fact::Landing
+            | Fact::Staged
+            | Fact::State
+            | Fact::Forge
+            | Fact::ToolVerdict
+            | Fact::Minted
+            | Fact::Captured
+            | Fact::DispatchBrief
+            | Fact::LandLive
+            | Fact::InstallPending
+            | Fact::RedHead
+            | Fact::PathspecStatus
+            | Fact::Budgeted
+            | Fact::ShellIntroduced
+            | Fact::Instant => serde_json::json!({
+                "description": "unrouted fact -- schema_fragment delegated a fact described_schema_fragment does not own",
+            }),
+        }
+    }
+
+    /// The schema fragment for the pinned-program fact (CLOUD-1028).
+    ///
+    /// Its own function for `git_schema_fragment`'s reason rather than a new one:
+    /// `schema_fragment` hit its 100-line ceiling again when this arrived, and
+    /// the ceiling is right — an arm per fact is readable, and a function that
+    /// grows one every time the model does is not.
+    ///
+    /// CONSTRAINED, unlike the described-only family, because this shape IS
+    /// certain: a sorted array of program names, or `null`. Stating it buys the
+    /// build-time half CLOUD-876 wants — `opa check -s` then refuses a module
+    /// that iterates the fact without reading the null, which is exactly the
+    /// could-not-look arm a predicate over it must not skip.
+    fn pinned_schema_fragment() -> serde_json::Value {
+        serde_json::json!({
+            "type": ["array", "null"],
+            "items": {"type": "string"},
+            "description": "Fact::Pinned (CLOUD-1028) -- the program NAMES the project's pin puts on PATH, sorted, or null for could-not-look. Names only: what a program is for, and every byte it would print, is somebody else's fact.",
+        })
+    }
+
+    /// The schema fragment for [`Fact::RedHead`] (CLOUD-2270): the record's
+    /// shape, stated so `opa check -s` refuses a module that walks `failed`
+    /// without reading the `null` a branch with no red head carries.
+    fn pathspec_status_schema_fragment() -> serde_json::Value {
+        serde_json::json!({
+            "type": ["object", "null"],
+            "description": "Fact::PathspecStatus (CLOUD-2684) -- one entry per pathspec of every `git checkout`/`git restore` program in the call, or null when the call has none or one cannot be placed. `path` is repo-relative; `literal` is false for `.`, pathspec magic, a glob or a directory; `tracked` that the index holds a path under it; `clean` that HEAD, the index and the worktree agree there. Paths only, never content.",
+            "properties": {
+                "pathspecs": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "path": {"type": "string"},
+                            "literal": {"type": "boolean"},
+                            "tracked": {"type": "boolean"},
+                            "clean": {"type": "boolean"},
+                        },
+                        "required": ["path", "literal", "tracked", "clean"],
+                        "additionalProperties": false,
+                    },
+                },
+            },
+            "required": ["pathspecs"],
+            "additionalProperties": false,
+        })
+    }
+
+    fn red_head_schema_fragment() -> serde_json::Value {
+        serde_json::json!({
+            "type": ["object", "null"],
+            "description": "Fact::RedHead (CLOUD-2270) -- the current branch's red-head record, or null when none exists. `head` is the sha a lap's wait stopped red on; `failed` each failed required check's newest run, its id and name, and whether a check-log-read or check-run-read receipt keyed by that id exists; `running` each required check the stop abandoned unconcluded. Pointers only, never a log line.",
+            "properties": {
+                "head": {"type": "string"},
+                "failed": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "id": {"type": "string"},
+                            "name": {"type": "string"},
+                            "read": {"type": "boolean"},
+                        },
+                        "required": ["id", "name", "read"],
+                        "additionalProperties": false,
+                    },
+                },
+                "running": {"type": "array", "items": {"type": "string"}},
+            },
+            "required": ["head", "failed", "running"],
+            "additionalProperties": false,
+        })
+    }
+
+    /// The schema fragment for [`Fact::ShellIntroduced`] (CLOUD-2335): the look
+    /// and a reason token, stated so `opa check -s` refuses a module reading a
+    /// key the fact does not carry.
+    fn shell_introduced_schema_fragment() -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "description": "Fact::ShellIntroduced (CLOUD-2335) -- whether this call's write authors shell into the repository. `look` is is, is-not or could-not-look; `reason` is shell-path (the write creates an absent file at a shell path) or shebang (line 1 would name a shell and does not on disk) when `look` is is, else null. A token, never the content; the path is `call.writes`.",
+            "properties": {
+                "look": {"type": "string", "enum": ["is", "is-not", "could-not-look"]},
+                "reason": {"type": ["string", "null"], "enum": ["shell-path", "shebang", null]},
+            },
+            "required": ["look", "reason"],
+            "additionalProperties": false,
+        })
+    }
+
+    /// The schema fragment for the out-of-root family (CLOUD-1167).
+    ///
+    /// Its own function for [`Fact::pinned_schema_fragment`]'s reason:
+    /// [`Fact::schema_fragment`] hit its 100-line ceiling again when this
+    /// arrived, and the ceiling is right — an arm per fact is readable, and a
+    /// function that grows one every time the model does is not.
+    ///
+    /// It does NOT join the description-only family, because the CONTAINER's
+    /// shape is certain even though a consumer's document is not: this is an
+    /// object keyed by declared id, and stating that is what makes `opa check -s`
+    /// refuse a module that indexes it as an array. What stays unconstrained is
+    /// the value, for [`Fact::schema_fragment`]'s stated reason — typing somebody
+    /// else's configuration file is not this schema's job.
+    fn external_schema_fragment() -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "description": "Fact::External (CLOUD-1167). DECLARED ID -> the parsed node of a file outside the repository root. Keyed by the declaring row's id and NEVER by the resolved path, because a resolved path is a machine's home directory and rule 4 keeps one off this document. An id ABSENT from this map could not be looked at -- its root environment variable is unset, the file is missing, unreadable, or the parser refused it -- and `missing` names the id with the cause. Absent is never an empty node: a module handed one would decide over a file it never saw. A path no row declares is unreadable by any module, which is what makes this a projection of a declared set rather than a filesystem scan.",
+            "additionalProperties": true,
+        })
+    }
+
+    /// The schema fragment for the two KEYED READS outside the working tree
+    /// (CLOUD-1203).
+    ///
+    /// Their own function for [`Fact::pinned_schema_fragment`]'s reason:
+    /// [`Fact::schema_fragment`] hit its 100-line ceiling again, and the ceiling
+    /// is right — an arm per fact is readable, and a function that grows one
+    /// every time the model does is not.
+    ///
+    /// The seam is real rather than arbitrary. Both read something the working
+    /// tree does not carry — the index, and the engine's own store — and both are
+    /// NULLABLE for the same pair of could-not-look conditions: nobody declared
+    /// one, and the thing could not be opened. A schema typing either as a bare
+    /// object would refuse the module that handles them, which `opa check -s`
+    /// catches and which is the whole argument for deriving these from the fact.
+    ///
+    /// The stores the engine writes itself (`Records`, `RecordsBlocked`,
+    /// `Produced`) left for functions of their own (#1276): they are not reads
+    /// of a record a producer wrote outside the engine, which this family is.
+    fn keyed_read_schema_fragment(self) -> serde_json::Value {
+        match self {
+            Fact::Forge => serde_json::json!({
+                "type": ["object", "null"],
+                "description": "Fact::Forge (CLOUD-1154). Declared SHA -> the forge's check verdicts for it, as `name -> conclusion` TOKENS. Read back from a record a producer wrote OUTSIDE the engine: the engine opens no socket, which `evaluator-io-check` gates. KEYED BY SHA -- a record taken against a different commit is not evidence about this one, so it is simply not in the map; that keying is the safety property and the difference between reading a verdict and inheriting a stale one. Tokens only -- a check's name and its conclusion, never a check-run body or an annotation. NULL when no row declared a SHA and when no record store is readable; a declared SHA with no record is ABSENT from the map, and a declared SHA whose record holds no checks is present with an EMPTY object. Those three are different answers and a gate that confuses them reports green on a commit nothing ever judged.",
+                "additionalProperties": {
+                    "type": "object",
+                    "additionalProperties": {"type": "string"},
+                },
+            }),
+            Fact::ToolVerdict => serde_json::json!({
+                "type": ["object", "null"],
+                "description": "Fact::ToolVerdict (CLOUD-1171). Declared id -> a third-party tool's verdict for it, as `finding name -> pointer` TOKENS. Read back from a record a producer wrote OUTSIDE the engine, because `check` is read-only and structurally cannot run a validator. KEYED BY (tool, pinned version, input digest) -- a record from a differently-pinned tool, or one taken over bytes that have since changed, lives under a different name and does not answer; that keying is the safety property and closes CLOUD-646's shape for this path. Pointers only -- a finding id and a `path:line`, never a tool's report. NULL when no row declared a tool and when no record store is readable; a declared id whose key has no record is ABSENT from the map, and one whose record holds no findings is present with an EMPTY object. Those three are different answers and a gate that confuses them reports clean over a validator that never ran.",
+                "additionalProperties": {
+                    "type": "object",
+                    "additionalProperties": {"type": "string"},
+                },
+            }),
+            Fact::Minted => serde_json::json!({
+                "type": ["object", "null"],
+                "description": "Fact::Minted (CLOUD-1310). Declared id -> the field that row names, as `subject -> value` TOKENS, read off receipts the MEDIATED boundary already minted. The engine fetches nothing: the credential existed in the session that read the subject, and what happens here is a line off disk and a clock comparison. BOUNDED BY AGE -- a receipt older than the row's declared max_age is not evidence about now, so it is simply not in the map; that bound is why this is not Fact::Captured, whose store is keyed by content, carries no clock, and would answer from whichever read sorts first by digest. POSITIONAL, because `claim::read_baseline` already reads this store with nth() and a body template is the consumer's, so a field has an index and not a name. One token per subject -- never a line of the receipt and never the prose the subject came from. NULL when no row declared a mint and when no receipt store is readable; a subject with no receipt, or with one too old, is ABSENT from the map. Absent is could-not-look and never agreement: on a fresh clone or any CI runner the store is empty, so the ordinary answer here is that nobody has read this subject.",
+                "additionalProperties": {
+                    "type": "object",
+                    "additionalProperties": {"type": "string"},
+                },
+            }),
+            Fact::Captured => serde_json::json!({
+                "type": ["object", "null"],
+                "description": "Fact::Captured (CLOUD-1188). Declared id -> the REDUCTION that row asked for over a response the agent already captured: a boolean for `present`, an integer for `count`, a bounded whitespace-free string for `token`. THE REDUCTION IS PART OF THE FACT rather than the consumer's discipline -- a payload on this document could be lifted into a `subjects` pointer by any module, so non-negotiable rule 4 is decided here. A `token` reduction over a value that is not a bounded token is REFUSED and the id is absent, which is what makes `tokens, not prose` structural. Resolved from the capture store and NEVER from stdin: the store is sorted by handle, so two runs over unchanged bytes agree, which is what `Surface::Check` requires. NULL when no row declared a reduction and when no store is readable; a declared id no capture answers is ABSENT from the map, never a false negative.",
+                "additionalProperties": {"type": ["boolean", "integer", "string"]},
+            }),
+            Fact::Staged => serde_json::json!({
+                "type": ["object", "null"],
+                "description": "Fact::Staged (CLOUD-1203). Declared path -> its STAGED content, parsed by the path's format -- `git show :<path>`, which `tracked` explicitly is NOT: that fact walks the WORKING TREE. A path with no staged entry, one whose bytes are not UTF-8, and one whose format this build cannot parse are each ABSENT from this map rather than present with an empty node, and `missing` names the path with the cause. NULL when no row declared a staged read, so a module can tell `nobody asked` from `nothing is staged`.",
+                "additionalProperties": true,
+            }),
+            Fact::State => serde_json::json!({
+                "type": ["object", "null"],
+                "description": "Fact::State (CLOUD-1203). Declared ref -> the finding pointer lines the engine's own store accumulated on it, in `findings::pointer_lines`' own spelling: `<fingerprint> <rule> <ref> <count>`. The SAME shape `input.tree.records` carries, and the same reason -- these are the lines `unlanded-check` already reads, so a successor reads what the program read rather than a re-derivation that could disagree. KEYED BY REF: a finding observed on another branch is not evidence about this one, so a listing keyed elsewhere is simply not in the map. Pointers only -- a fingerprint, a rule id and a number, never a finding's message or the line it pointed at. NULL when no row declared a state read, or when no store is bound to this checkout: `nobody asked` and `nothing was ever recorded` are both could-not-look, and neither is an empty listing.",
+                "additionalProperties": {"type": "array", "items": {"type": "string"}},
+            }),
+            // NOT THIS FAMILY, AND NAMED RATHER THAN WILDCARDED, for
+            // `git_schema_fragment`'s tail's reason: a `_ =>` is refused by
+            // `no_axis_match_carries_a_wildcard_arm`, and a wildcard would let a
+            // fact added later classify itself here instead of failing to
+            // compile.
+            Fact::Receipts
+            | Fact::Keys
+            | Fact::Stop
+            | Fact::Waived
+            | Fact::Document
+            | Fact::Tracked
+            | Fact::Traversals
+            | Fact::Lines
+            | Fact::External
+            | Fact::AgentSourced
+            | Fact::Prospective
+            | Fact::Invocations
+            | Fact::Units
+            | Fact::Base
+            | Fact::Coupling
+            | Fact::Uses
+            | Fact::Symbols
+            | Fact::Plan
+            | Fact::Review
+            | Fact::BaseDelta
+            | Fact::Shell
+            | Fact::Pinned
+            | Fact::GitHead
+            | Fact::GitStatus
+            | Fact::GitRemote
+            | Fact::GitWorktrees
+            | Fact::GitRef
+            | Fact::GitRange
+            | Fact::CommitMeta
+            | Fact::GitHistory
+            | Fact::GitTags
+            | Fact::GitConfig
+            | Fact::GitIndex
+            | Fact::Tasks
+            | Fact::Extracted
+            | Fact::Landing
+            | Fact::DispatchBrief
+            | Fact::RedHead
+            | Fact::LandLive
+            | Fact::InstallPending
+            | Fact::PathspecStatus
+            | Fact::Budgeted
+            | Fact::ShellIntroduced
+            | Fact::Records
+            | Fact::RecordsBlocked
+            | Fact::Produced
+            | Fact::Instant => serde_json::json!({
+                "description": "unrouted fact -- schema_fragment delegated a fact keyed_read_schema_fragment does not own",
+            }),
+        }
+    }
+
+    /// [`Fact::RecordsBlocked`]'s fragment (CLOUD-1126).
+    fn records_blocked_schema_fragment() -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "description": "Fact::RecordsBlocked (CLOUD-1126). RECORDER id -> the reason class its selected call could not be answered, e.g. `required-absent`. The could-not-look channel `input.tree.records` does not have: a record ABSENT from that map could not be read and a short one is a recorder that ran and found nothing, while an entry HERE is a row whose subject arrived and whose call produced none of the inputs the row reads. Two pointers per entry -- a declared id and a class -- and never a byte of what the call produced (non-negotiable rule 4). An EMPTY object is an answer and means nothing was blocked on this branch: the store is written only when something is, so its absence and its emptiness are one fact. A recorder absent from the map is therefore NOT blocked, and a predicate must read a PRESENT entry rather than infer one from an absence.",
+            "additionalProperties": {"type": "string"},
+        })
+    }
+
+    /// [`Fact::Records`]'s fragment (CLOUD-1051).
+    fn records_schema_fragment() -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "description": "Fact::Records (CLOUD-1051). RECORD name -> the lines accumulated in it on this branch, in write order. Keyed by the record rather than by the recorder row because several rows may write one record. Each line is the recorder's own whitespace-free columns; the projection adds nothing and reads nothing out of them. A record ABSENT from this map could not be read; the collapse into an empty list is what this keeps open.",
+            "additionalProperties": {
+                "type": "array",
+                "items": {"type": "string"},
+            },
+        })
+    }
+
+    /// [`Fact::Produced`]'s fragment (CLOUD-851).
+    fn produced_schema_fragment() -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "description": "Fact::Produced. Sink key -> the record an earlier run's boundary wrote: a digest and a count for a baseline, the empty string for a marker. Never content -- non-negotiable rule 4 holds at the sink harder than at a report (CLOUD-851).",
+            "additionalProperties": {"type": "string"},
+        })
+    }
+
+    /// The schema fragment for the commit-metadata family (CLOUD-1187).
+    ///
+    /// Its own function rather than a `git_schema_fragment` arm, for that
+    /// function's own reason one iteration later: it hit the line ceiling when
+    /// this family arrived. The seam is the one the model already has — the git
+    /// family answers questions about the repository's SHAPE, and this one about
+    /// a commit's identity fields.
+    fn commit_meta_schema_fragment() -> serde_json::Value {
+        serde_json::json!({
+                "type": ["object", "null"],
+                "description": "Fact::CommitMeta (CLOUD-1187, widened by CLOUD-843). Declared range -> each NON-MERGE commit's identity fields: `commit` the sha, `subject` git's `%s`, `author` and `committer` as `Name <email>`, `authored` and `committed` as fixed-width ISO-8601 UTC, `signed` whether the commit HEADER carries a signature (`gpgsig`/`gpgsig-sha256`; presence, never validity), `paths` the sorted repo-relative paths it changed against its first parent (`show --name-only`), and `trailers` as whole `Key: value` lines. THERE IS NO MESSAGE BODY AND NO HUNK, and none can be added by accident -- `git::CommitMeta` has no such field, so non-negotiable rule 4 is decided by the type rather than by this projection remembering to drop something. A range whose endpoints do not resolve is ABSENT rather than an empty list, matching `git-ranges`: `no commits in this range` and `I could not look` are the two answers a history gate must keep apart. Declared separately from `git-ranges` because this peels an object and diffs a tree per commit, and a row wanting subjects must not pay for that.",
+                "additionalProperties": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "commit": {"type": "string"},
+                            "subject": {"type": "string"},
+                            "author": {"type": "string"},
+                            "committer": {"type": "string"},
+                            "authored": {"type": "string"},
+                            "committed": {"type": "string"},
+                            "signed": {"type": "boolean"},
+                            "paths": {"type": "array", "items": {"type": "string"}},
+                            "trailers": {"type": "array", "items": {"type": "string"}},
+                        },
+                        "additionalProperties": false,
+                    },
+                },
+        })
+    }
+
+    /// The schema fragment for the undeclarable-history family (CLOUD-1200).
+    ///
+    /// Its own function for [`Fact::commit_meta_schema_fragment`]'s reason one
+    /// iteration later: [`Fact::git_schema_fragment`] hit the line ceiling again
+    /// when this arrived. The seam is real — the git family answers what a
+    /// NAMED ref or range holds, and this one answers what a PATTERN matches,
+    /// which is the distinction the whole variant exists for.
+    fn history_schema_fragment() -> serde_json::Value {
+        serde_json::json!({
+                "type": ["object", "null"],
+                "description": "Fact::GitHistory (CLOUD-1200). Declared query id -> the commits its PATTERN matched: every tag matching a glob, or the commits that added or deleted a path. This is the half `git-refs` and `git-ranges` cannot reach -- they resolve what a rule NAMES, and here the answer set is not knowable at declaration time. Each entry is a sha, a subject, and the tag name for a tag query: a history fact widens WHICH commits are visible, never WHAT one carries, so there is no body and no hunk. NULL when no row declared a pattern AND when the repository is SHALLOW -- a shallow clone cannot see the history a path query walks, and a truncated walk reported as a result is a gate deciding over history it could not see. A declared pattern that matched nothing is present with an EMPTY list, which is a real answer and not could-not-look.",
+                "additionalProperties": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "commit": {"type": "string"},
+                            "subject": {"type": "string"},
+                            "tag": {"type": "string"},
+                        },
+                        "additionalProperties": false,
+                    },
+                },
+        })
+    }
+
+    /// The schema fragment for the worktree registry (CLOUD-1424).
+    ///
+    /// Its own function rather than a [`Fact::git_schema_fragment`] arm, for that
+    /// function's own reason one iteration later: it hit the line ceiling when
+    /// this fact arrived. The seam is the one that function's doc already draws —
+    /// its family answers questions about the repository's HISTORY, and this one
+    /// answers a question about the checkout's own registry, which is neither
+    /// history nor a file.
+    ///
+    /// Takes no `self`: it describes exactly one fact, so a parameter would be a
+    /// value it never reads and an arm nobody can reach.
+    fn worktree_schema_fragment() -> serde_json::Value {
+        serde_json::json!({
+            "type": ["object", "null"],
+            "description": "Fact::GitWorktrees (CLOUD-1424). `linked` is every LINKED worktree registration, ordered by id: `id` is the entry under the common dir's `worktrees/` directory, `present` whether the directory it records still exists, `locked` whether it is deliberately unavailable. There is no path field -- a linked worktree may live anywhere on the machine, so the base is read to decide `present` and dropped, which is non-negotiable rule 4 held at the boundary. An EMPTY `linked` is an answer (the main checkout keeps no registration, so there is genuinely nothing to report); could-not-look is the whole fact being null, and a registration whose own record will not read is dropped rather than reported as a directory that is gone.",
+            "properties": {
+                "linked": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "id": {"type": "string"},
+                            "present": {"type": "boolean"},
+                            "locked": {"type": "boolean"},
+                        },
+                        "additionalProperties": false,
+                    },
+                },
+            },
+            "additionalProperties": false,
+        })
+    }
+
+    /// The schema fragment for `Fact::GitRange` (CLOUD-907), split out of
+    /// [`Fact::git_schema_fragment`] as its siblings are, so that function stays
+    /// under `clippy::too_many_lines`.
+    fn range_schema_fragment() -> serde_json::Value {
+        serde_json::json!({
+            "type": ["object", "null"],
+            "description": "Fact::GitRange (CLOUD-907). Declared range -> the commits in it, each a sha and a subject. A range whose endpoints do not resolve is ABSENT rather than an empty list -- `no commits landed` and `I could not look` are the two answers this map must keep apart. Subject only: a message body or a diff would put tracked content on the input.",
+            "additionalProperties": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "commit": {"type": "string"},
+                        "subject": {"type": "string"},
+                    },
+                    "additionalProperties": false,
+                },
+            },
+        })
+    }
+
+    /// The schema fragment for the git and landing families (CLOUD-880).
+    ///
+    /// Split out of [`Fact::schema_fragment`] when `Landing` pushed it past the
+    /// line ceiling. The seam is the one the model already has — these six are the
+    /// facts that answer questions about the repository's history rather than about
+    /// its files — so this is a boundary rather than an arbitrary cut.
+    ///
+    /// **Every other fact is unreachable here and says so.** A `debug_assert`
+    /// would be a runtime claim about a compile-time property; instead the arms
+    /// are exhaustive and the non-family facts return their own fragment, so a new
+    /// fact routed here by mistake gets a wrong answer no test would pass rather
+    /// than a panic in the field.
+    fn git_schema_fragment(self) -> serde_json::Value {
+        match self {
+            Fact::GitHead => serde_json::json!({
+                "type": ["object", "null"],
+                "description": "Fact::GitHead (CLOUD-907). `commit` is HEAD's sha, `branch` the branch it is on, `detached` whether it is on one at all. `commit` is null in an empty repository and `branch` is null on a detached HEAD -- could-not-look, never an empty string, because Rego reads an undefined path as `does not hold`.",
+                "properties": {
+                    "commit": {"type": ["string", "null"]},
+                    "branch": {"type": ["string", "null"]},
+                    "detached": {"type": "boolean"},
+                },
+                "additionalProperties": false,
+            }),
+            Fact::GitStatus => serde_json::json!({
+                "type": ["object", "null"],
+                "description": "Fact::GitStatus (CLOUD-907). Repository-relative paths the working tree differs from HEAD on, plus a count of uncommitted entries. Paths, never a diff hunk and never a line -- non-negotiable rule 4.",
+                "properties": {
+                    "changed": {"type": "array", "items": {"type": "string"}},
+                    "uncommitted": {"type": "integer"},
+                },
+                "additionalProperties": false,
+            }),
+            Fact::GitRemote => serde_json::json!({
+                "type": ["object", "null"],
+                "description": "Fact::GitRemote (CLOUD-907). `remotes` is name -> URL as `.git/config` holds it and `upstream` is HEAD's tracking ref, null when it has none. Read from disk: asking a remote what it holds would be Cost::Effect and a different fact.",
+                "properties": {
+                    "remotes": {"type": "object", "additionalProperties": {"type": "string"}},
+                    "upstream": {"type": ["string", "null"]},
+                },
+                "additionalProperties": false,
+            }),
+            Fact::GitWorktrees => Self::worktree_schema_fragment(),
+            Fact::GitRef => serde_json::json!({
+                "type": ["object", "null"],
+                "description": "Fact::GitRef (CLOUD-907). Declared ref -> the commit it names. A ref that does not resolve is ABSENT from this map rather than present with a null: `origin/main` missing in a shallow clone is not an answer about that ref. Reachability is deliberately not here -- CLOUD-36 decides merged-ness by patch identity, because a rebased landing is invisible to ancestry.",
+                "additionalProperties": {"type": "string"},
+            }),
+            Fact::Landing => serde_json::json!({
+                "type": ["object", "null"],
+                "description": "Fact::Landing (CLOUD-880). Declared target -> whether this branch's work is on it, BY PATCH IDENTITY. `verdict` is the answer, `landed` whether there is no unlanded content, and `unlanded` the head-side commits with no proof on the target -- shas only. A target that does not resolve is ABSENT from this map rather than present with a negative: `nothing landed` and `I could not look` are the two answers a landing gate must never confuse, because the second read as the first passes a gate on ignorance. Ancestry is deliberately not the test -- CLOUD-36 decides merged-ness by patch identity, since a rebased landing is invisible to ancestry.",
+                "additionalProperties": {
+                    "type": "object",
+                    "properties": {
+                        "verdict": {"type": "string"},
+                        "landed": {"type": "boolean"},
+                        "unlanded": {"type": "array", "items": {"type": "string"}},
+                    },
+                    "additionalProperties": false,
+                },
+            }),
+            Fact::CommitMeta => Self::commit_meta_schema_fragment(),
+            Fact::GitHistory => Self::history_schema_fragment(),
+            Fact::GitRange => Self::range_schema_fragment(),
+            // NOT THIS FAMILY, AND NAMED RATHER THAN WILDCARDED. A `_ =>` here is
+            // refused by `no_axis_match_carries_a_wildcard_arm`, and the rule is
+            // right: exhaustiveness is a totality guarantee only while no arm is a
+            // wildcard, so a fact added later would classify itself instead of
+            // failing to compile. These are unreachable by construction —
+            // `schema_fragment` delegates six variants and only those — and
+            // spelling them out is what makes a seventh a compile error in both
+            // functions rather than a silent default in one.
+            Fact::Receipts
+            | Fact::Keys
+            | Fact::Stop
+            | Fact::Waived
+            | Fact::Document
+            | Fact::Tracked
+            | Fact::Traversals
+            | Fact::Lines
+            | Fact::External
+            | Fact::AgentSourced
+            | Fact::Prospective
+            | Fact::Produced
+            | Fact::Invocations
+            | Fact::Units
+            | Fact::Base
+            | Fact::Coupling
+            | Fact::Uses
+            | Fact::Symbols
+            | Fact::Plan
+            | Fact::Review
+            | Fact::BaseDelta
+            | Fact::Shell
+            | Fact::Records
+            | Fact::RecordsBlocked
+            | Fact::Staged
+            | Fact::State
+            | Fact::Forge
+            | Fact::ToolVerdict
+            | Fact::Minted
+            | Fact::Captured
+            | Fact::Tasks
+            | Fact::Extracted
+            | Fact::Pinned
+            | Fact::GitTags
+            | Fact::GitConfig
+            | Fact::GitIndex
+            | Fact::DispatchBrief
+            | Fact::RedHead
+            | Fact::LandLive
+            | Fact::InstallPending
+            | Fact::PathspecStatus
+            | Fact::Budgeted
+            | Fact::ShellIntroduced
+            | Fact::Instant => serde_json::json!({
+                "description": "unrouted fact -- schema_fragment delegated a fact git_schema_fragment does not own",
+            }),
+        }
+    }
+
+    /// The schema fragment for the repository-STATE family (CLOUD-843): its
+    /// tags, its config, its index.
+    ///
+    /// Its own function for [`Fact::git_schema_fragment`]'s reason — that
+    /// function is at its line ceiling — along the seam its doc already draws:
+    /// that family answers what the HISTORY holds, and these three what the
+    /// repository holds now, which is what the retiring bodies read git for.
+    ///
+    /// All three are NULLABLE at the top for the family's two could-not-look
+    /// conditions — nobody declared one, and the read failed — and each keys by
+    /// the declaration as written, so a module reads the answer to its own row.
+    fn repository_schema_fragment(self) -> serde_json::Value {
+        match self {
+            Fact::GitTags => Self::tags_schema_fragment(),
+            Fact::GitConfig => Self::config_schema_fragment(),
+            Fact::GitIndex => Self::index_schema_fragment(),
+            // NOT THIS FAMILY, AND NAMED RATHER THAN WILDCARDED, for
+            // `git_schema_fragment`'s tail's reason.
+            Fact::Receipts
+            | Fact::Keys
+            | Fact::Stop
+            | Fact::Waived
+            | Fact::Document
+            | Fact::Tracked
+            | Fact::Traversals
+            | Fact::Lines
+            | Fact::External
+            | Fact::AgentSourced
+            | Fact::Prospective
+            | Fact::Produced
+            | Fact::GitHead
+            | Fact::GitStatus
+            | Fact::GitRemote
+            | Fact::GitWorktrees
+            | Fact::DispatchBrief
+            | Fact::GitRef
+            | Fact::GitRange
+            | Fact::CommitMeta
+            | Fact::Landing
+            | Fact::GitHistory
+            | Fact::Staged
+            | Fact::State
+            | Fact::Forge
+            | Fact::ToolVerdict
+            | Fact::Plan
+            | Fact::Minted
+            | Fact::Captured
+            | Fact::Tasks
+            | Fact::Extracted
+            | Fact::Invocations
+            | Fact::Units
+            | Fact::Base
+            | Fact::Coupling
+            | Fact::Uses
+            | Fact::Symbols
+            | Fact::Review
+            | Fact::BaseDelta
+            | Fact::Shell
+            | Fact::Records
+            | Fact::RecordsBlocked
+            | Fact::Instant
+            | Fact::RedHead
+            | Fact::LandLive
+            | Fact::InstallPending
+            | Fact::PathspecStatus
+            | Fact::Budgeted
+            | Fact::ShellIntroduced
+            | Fact::Pinned => serde_json::json!({
+                "description": "unrouted fact -- schema_fragment delegated a fact repository_schema_fragment does not own",
+            }),
+        }
+    }
+
+    /// [`Fact::GitTags`]' fragment (CLOUD-843).
+    fn tags_schema_fragment() -> serde_json::Value {
+        serde_json::json!({
+            "type": ["object", "null"],
+            "description": "Fact::GitTags (CLOUD-843). Declared glob -> every tag it matches, by `git tag --list`'s own wildmatch over the short name: `tag` the name, `commit` the commit it peels to, `annotated` whether a tag object exists, `created` when it was cut (the tagger's time for an annotated tag, the commit's committer time for a lightweight one -- git's `creatordate`) and `committed` the commit's committer date. Dates are fixed-width ISO-8601 UTC, so `<` orders them. `created` is NULL for an annotated tag whose header carries no tagger, never a fabricated instant. Sorted by tag name, byte order; version order is a decision and belongs to the module. A glob that matched nothing is PRESENT with an EMPTY list, which is an answer. No tag message ever -- prose, which rule 4 refuses. NULL when no row declared a glob or the references could not be read. Unlike `git-history` this does NOT null on a shallow clone: a listing walks no history.",
+            "additionalProperties": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "tag": {"type": "string"},
+                        "commit": {"type": "string"},
+                        "annotated": {"type": "boolean"},
+                        "created": {"type": ["string", "null"]},
+                        "committed": {"type": "string"},
+                    },
+                    "additionalProperties": false,
+                },
+            },
+        })
+    }
+
+    /// [`Fact::GitConfig`]'s fragment (CLOUD-843).
+    fn config_schema_fragment() -> serde_json::Value {
+        // One config value's shape, inlined at both uses rather than behind a
+        // `$ref`: a fragment is embedded under the document's `tree` key, so a
+        // `#/$defs/...` pointer would resolve against the WHOLE document's root
+        // and name nothing.
+        let value = serde_json::json!({
+            "type": ["object", "null"],
+            "properties": {
+                "value": {"type": ["string", "null"]},
+                "boolean": {"type": ["boolean", "null"]},
+            },
+            "additionalProperties": false,
+        });
+        serde_json::json!({
+            "type": ["object", "null"],
+            "description": "Fact::GitConfig (CLOUD-843). Declared key -> how git resolves it. `effective` is the value in force (git's last-one-wins across every scope), NULL when no scope sets the key -- an ANSWER, because the config was read. `scopes` is scope -> the value that scope sets, keyed by git's own names (`system`, `global`, `local`, `worktree`, `command`); a scope that does not set the key is ABSENT. Each value carries `value`, the raw text or NULL for an IMPLICIT key written with no `=`, and `boolean`, git's `--type=bool` reading or NULL when the text is not a boolean git accepts -- normalised by git's own parser, so `1`, `on` and `yes` read true and `0`, `off`, `no` and the empty string read false. Only DECLARED keys are ever read, which is what keeps a credential in a config file off this document. NULL for the whole fact when no row declared a key or the repository could not be opened.",
+            "additionalProperties": {
+                "type": "object",
+                "properties": {
+                    "effective": value.clone(),
+                    "scopes": {
+                        "type": "object",
+                        "additionalProperties": value,
+                    },
+                },
+                "additionalProperties": false,
+            },
+        })
+    }
+
+    /// [`Fact::GitIndex`]' fragment (CLOUD-843).
+    fn index_schema_fragment() -> serde_json::Value {
+        serde_json::json!({
+            "type": ["object", "null"],
+            "description": "Fact::GitIndex (CLOUD-843). Declared pathspec -> what the INDEX records under it and whether the working tree still agrees. `entries` is `git ls-files -s -- <spec>`: `path`, `mode` (six octal digits), `oid` and `stage` (0, or 1-3 for a conflict's sides), in index order. `diverged` is `git diff --name-only -- <spec>`: tracked paths edited, deleted, re-typed, with a flipped executable bit where core.fileMode is on, or unmerged -- compared by content hash, with clean/smudge filters NOT applied, so it can over-report and never under-report. `untracked` is `git ls-files --others --exclude-standard -- <spec>` on the crate's one tree walker. Pathspecs are git's without magic: a literal selects itself and everything beneath it, a wildcard is git's wildmatch with `*` crossing `/`, `.` is everything; a `:`-magic spec is refused at load. Paths only -- never a byte of any file. NULL when no row declared a pathspec or the index could not be read; an EMPTY list in any member is an answer.",
+            "additionalProperties": {
+                "type": "object",
+                "properties": {
+                    "entries": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "path": {"type": "string"},
+                                "mode": {"type": "string"},
+                                "oid": {"type": "string"},
+                                "stage": {"type": "integer"},
+                            },
+                            "additionalProperties": false,
+                        },
+                    },
+                    "diverged": {"type": "array", "items": {"type": "string"}},
+                    "untracked": {"type": "array", "items": {"type": "string"}},
+                },
+                "additionalProperties": false,
+            },
+        })
+    }
+}
+
+/// The document formats the engine can parse — the **format** half of a document
+/// fact (CLOUD-772).
+///
+/// # Formats, never artifacts
+///
+/// Non-negotiable rule 1 decides this shape. A `parse the toolchain manifest`
+/// fact would name a consumer's toolchain choice inside `crates/batten`; the
+/// core knows only *formats*, and which paths carry which format is the
+/// consumer's `batten.toml`. That is why the variants below are TOML and YAML
+/// rather than any file name, and why
+/// `tests/document_facts.rs`'s `no_artifact_name_reaches_the_core` is a gate on
+/// it rather than a convention anyone has to remember.
+///
+/// # PKL is declarable and deliberately unparseable
+///
+/// It has no maintained Rust parser, and adopting one on speculation is the
+/// scope expansion this repository refuses. So it is a **variant** rather than
+/// an omission: a consumer that declares a PKL path gets [`Look::CouldNotLook`],
+/// exhaustively matched, instead of a fact that silently does not exist. An
+/// absent variant would answer the same declaration with "no rows", and the only
+/// way to find that out is that the rule never fires — which is the vacuous pass
+/// the whole issue is filed against.
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    Hash,
+    serde::Serialize,
+    serde::Deserialize,
+    schemars::JsonSchema,
+)]
+#[serde(rename_all = "lowercase")]
+pub enum Format {
+    /// TOML.
+    Toml,
+    /// YAML — one document per stream; a multi-document stream reads its first.
+    Yaml,
+    /// JSON.
+    Json,
+    /// JSON5: JSON with comments, trailing commas and unquoted keys.
+    Json5,
+    /// PKL. Declarable, never parsed — see the type's own note.
+    Pkl,
+    /// Markdown, read as its YAML **frontmatter** and never as its prose
+    /// (CLOUD-1787).
+    ///
+    /// Still a format and not an artifact: markdown is a markup language, the
+    /// same kind of name as TOML, and which paths carry it stays the consumer's
+    /// `batten.toml`.
+    ///
+    /// **Not a fifth parser**, which CLOUD-846 refused and this keeps refused.
+    /// The body is never handed to anything — headings and tables stay line
+    /// predicates. The fence's contents are YAML, parsed by the one YAML
+    /// authority this type already carries, so nothing here knows a second
+    /// grammar.
+    Markdown,
+}
+
+impl Format {
+    /// Every format the engine knows, so the partitions below are total.
+    pub const ALL: &'static [Format] = &[
+        Format::Toml,
+        Format::Yaml,
+        Format::Json,
+        Format::Json5,
+        Format::Pkl,
+        Format::Markdown,
+    ];
+
+    /// The stable lowercase token used in config and machine output (§6).
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Format::Toml => "toml",
+            Format::Yaml => "yaml",
+            Format::Json => "json",
+            Format::Json5 => "json5",
+            Format::Pkl => "pkl",
+            Format::Markdown => "markdown",
+        }
+    }
+
+    /// Whether this crate carries a parser for the format.
+    ///
+    /// Stated per variant rather than inferred from whether [`Format::read`]
+    /// happens to return a value, so adding a format is a deliberate act at both
+    /// sites and a declared-but-unparseable one cannot be mistaken for a bug.
+    #[must_use]
+    pub const fn parseable(self) -> bool {
+        match self {
+            Format::Toml | Format::Yaml | Format::Json | Format::Json5 | Format::Markdown => true,
+            Format::Pkl => false,
+        }
+    }
+
+    /// The format a path's extension names, when it names one this crate parses.
+    ///
+    /// **Extension-based, and only where the row did not say.** A
+    /// [`crate::rules::RuleKind::Document`] row states its `format` explicitly,
+    /// and that stays the authority there — the column exists because a file
+    /// named `.json` that is really JSON5 would parse-fail and report
+    /// "could not look" forever, blaming the file for the guess. A tree-scoped
+    /// `policy` row declares a LIST of documents rather than one, so a per-path
+    /// column would mean a parallel list nobody could keep aligned; the
+    /// extension is the honest default there, and a path whose extension names
+    /// nothing is [`Look::CouldNotLook`] rather than a guess.
+    ///
+    /// `Pkl` is deliberately absent: it is declarable and unparseable
+    /// ([`Format::parseable`]), so returning it here would promise a read that
+    /// cannot happen.
+    #[must_use]
+    pub fn for_path(path: &str) -> Option<Format> {
+        let extension = path.rsplit_once('.').map(|(_, ext)| ext)?;
+        // Searched over `ALL` rather than matched on the extension string, and
+        // that inversion is what keeps the axis total: a match on the extension
+        // needs a wildcard (there are infinitely many strings), and a wildcard
+        // is precisely what `no_axis_match_carries_a_wildcard_arm` refuses —
+        // a format added later would classify itself instead of failing to
+        // compile. Asking each variant which extensions it owns puts the
+        // decision back on the enum, where the compiler can insist on it.
+        Format::ALL
+            .iter()
+            .copied()
+            .find(|format| format.extensions().contains(&extension))
+    }
+
+    /// The filename extensions this format owns, without the dot.
+    ///
+    /// Beside the variant rather than in a lookup table, for
+    /// [`Format::parseable`]'s reason: adding a format has to be a deliberate
+    /// act at every site that classifies one, and a table somewhere else is a
+    /// second authority that goes stale silently.
+    ///
+    /// `Pkl` owns none deliberately — it is declarable and unparseable, so
+    /// claiming `.pkl` here would promise a read that cannot happen and turn
+    /// every `.pkl` in a declared list from an honest could-not-look into a
+    /// parse failure blamed on the file.
+    #[must_use]
+    pub const fn extensions(self) -> &'static [&'static str] {
+        match self {
+            Format::Toml => &["toml"],
+            Format::Yaml => &["yaml", "yml"],
+            Format::Json => &["json"],
+            Format::Json5 => &["json5"],
+            Format::Pkl => &[],
+            Format::Markdown => &["md"],
+        }
+    }
+
+    /// Parse `text` as this format.
+    ///
+    /// Three-valued by construction (CLOUD-757): a document that parses is
+    /// [`Look::Is`], and a syntax error, an empty YAML stream or a format this
+    /// crate cannot parse is [`Look::CouldNotLook`] — because a file failing to
+    /// parse says nothing at all about what it contains. That distinction is the
+    /// whole point: the hand-rolled readers this replaces default an empty
+    /// extraction to agreement, so a file they cannot read passes every gate
+    /// over it.
+    ///
+    /// # `IsNot` has exactly one meaning here, and only [`Format::Markdown`] has it
+    ///
+    /// This arm said *never* [`Look::IsNot`] until CLOUD-1787, and the reason it
+    /// gave still holds for every case it was written about: a **parse failure**
+    /// is not evidence of absence. Markdown is not that case. A well-formed
+    /// markdown file with no frontmatter fence is not one this reader failed on
+    /// — it is one it read completely, and there is no document in it. That is
+    /// *looked, and it is not there*, which is what [`Look::IsNot`] means.
+    ///
+    /// The vacuous pass the old wording guarded against is closed one layer up
+    /// rather than here: [`crate::rules::parse_node`] maps this `IsNot` to a
+    /// **`NotAcquired`** cause of its own, so a file with no frontmatter is a
+    /// non-answer a module must handle, never an empty document that satisfies
+    /// every predicate over it. Collapsing it into [`Look::CouldNotLook`]
+    /// instead would say the reader broke, and send an author looking for a
+    /// malformed fence that is simply absent — CLOUD-1787's own harm, one
+    /// argument over.
+    #[must_use]
+    pub fn read(self, text: &str) -> Look<Node> {
+        match self {
+            Format::Toml => match toml::from_str::<toml::Value>(text) {
+                Ok(value) => Look::Is(Node::from_toml(&value)),
+                Err(_) => Look::CouldNotLook,
+            },
+            Format::Yaml => read_yaml(text),
+            Format::Json => match serde_json::from_str::<serde_json::Value>(text) {
+                Ok(value) => Look::Is(Node::from_json(&value)),
+                Err(_) => Look::CouldNotLook,
+            },
+            Format::Json5 => match json5::from_str::<serde_json::Value>(text) {
+                Ok(value) => Look::Is(Node::from_json(&value)),
+                Err(_) => Look::CouldNotLook,
+            },
+            // Declared, and honestly unanswerable. See the type's own note.
+            Format::Pkl => Look::CouldNotLook,
+            // The fence, and only the fence. The body is never handed to a
+            // parser, which is the whole defect CLOUD-1787 reports: a markdown
+            // body is only accidentally valid YAML, so reading the file as one
+            // YAML stream makes every verdict depend on whether the prose
+            // happens to lex.
+            //
+            // WHICH syntax the fence encloses is the fence's own to say
+            // (CLOUD-1886), and the dialect routes straight back into the arms
+            // above rather than growing a second reader per syntax. The fence
+            // adds a CONTAINER, never a grammar — the same argument `read_yaml`
+            // makes one function down, now holding for three syntaxes instead of
+            // one.
+            Format::Markdown => match split_frontmatter(text) {
+                // Present and empty is an ANSWER, not a non-answer: a file whose
+                // fence is `---\n---` has frontmatter and it has no keys, which
+                // is a different authoring fault from having no fence at all and
+                // must be a different verdict.
+                //
+                // THIS CHECK SITS IN FRONT OF EVERY DIALECT, and must, because
+                // the three parsers disagree about empty input in three
+                // directions: an empty YAML stream is `CouldNotLook`, an empty
+                // TOML document is a valid empty table, and empty JSON is an EOF
+                // error. Dispatching first would make one fence concept answer
+                // three ways depending on which delimiter the author reached
+                // for, and `policy/rules-paths-trigger.rego` requires the empty
+                // fence and the missing fence to be separately decided.
+                Some(found) if found.block.trim().is_empty() => {
+                    Look::Is(Node::Map(std::collections::BTreeMap::new()))
+                }
+                Some(found) => found.dialect.format().read(found.block),
+                None => Look::IsNot,
+            },
+        }
+    }
+}
+
+/// The parseable extensions this build owns, as a prose list for a refusal.
+///
+/// Derived from [`Format::ALL`] rather than written out, so a format added
+/// later cannot leave a refusal naming a stale set — the class of defect the
+/// hardcoded "TOML, YAML, JSON and JSON5" was one instance of.
+#[must_use]
+pub fn parseable_extensions() -> String {
+    let mut names: Vec<&str> = Format::ALL
+        .iter()
+        .filter(|format| !format.extensions().is_empty())
+        .map(|format| format.as_str())
+        .collect();
+    names.sort_unstable();
+    names.join(", ")
+}
+
+/// Parse `text` as a YAML stream and answer with its first document.
+///
+/// Shared by [`Format::Yaml`] and [`Format::Markdown`] so there is exactly one
+/// YAML reader in this crate — the frontmatter format adds a *container*, never
+/// a grammar, and two spellings of one parse is how the two would drift into
+/// disagreeing about the same bytes.
+///
+/// The first document of the stream, and only it. A multi-document stream
+/// addressed as one would need a document index in every node path, which no
+/// consumer here has; taking the first is the narrow answer rather than a silent
+/// merge of several.
+fn read_yaml(text: &str) -> Look<Node> {
+    match yaml_rust2::YamlLoader::load_from_str(text) {
+        Ok(documents) => match documents.first() {
+            Some(document) => Look::Is(Node::from_yaml(document)),
+            None => Look::CouldNotLook,
+        },
+        Err(_) => Look::CouldNotLook,
+    }
+}
+
+/// Which syntax a frontmatter fence encloses.
+///
+/// # A syntax, never a generator (CLOUD-1886)
+///
+/// Every delimiter below was adopted from a static-site generator, and not one
+/// of them is named for it. The arms are `Yaml`, `Toml` and `Json` because that
+/// is what the bytes inside the fence are, and [`Format`]'s own note two
+/// hundred lines up — formats, never artifacts — is the rule this obeys. A
+/// `Hugo` arm would put a consumer's name in the core and would also be a lie:
+/// four tools write `---` and two write `+++`.
+///
+/// # Internal on purpose, and it must stay that way
+///
+/// [`Format`] derives `serde::Deserialize` and `schemars::JsonSchema`, which is
+/// what makes it a configurable vocabulary. This is the opposite kind of thing:
+/// an INFERENCE about bytes already read, which nobody declares and nothing may
+/// override. Deriving either here would put it in the generated schema and make
+/// the dialect a setting, widening a configuration surface the house style
+/// keeps narrow.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Dialect {
+    Yaml,
+    Toml,
+    Json,
+}
+
+impl Dialect {
+    /// The reader this dialect's block is handed to.
+    ///
+    /// **The cycle is unrepresentable rather than guarded.** There is no
+    /// `Dialect::Markdown`, so [`Format::Markdown`]'s arm cannot route back into
+    /// itself and no `unreachable!()` is needed to say so. A fourth dialect
+    /// would have to name a format that reads bytes, which is the property that
+    /// makes the recursion impossible.
+    const fn format(self) -> Format {
+        match self {
+            Dialect::Yaml => Format::Yaml,
+            Dialect::Toml => Format::Toml,
+            Dialect::Json => Format::Json,
+        }
+    }
+}
+
+/// One admitted fence: how it opens, what it encloses, and what closes it.
+struct Fence {
+    /// The whole first line, trailing whitespace already trimmed.
+    opener: &'static str,
+    dialect: Dialect,
+    /// Every line that ends this fence. A fence closed by a delimiter that is
+    /// not in its own list is not closed at all.
+    closers: &'static [&'static str],
+}
+
+/// The fenced frontmatter forms, as the tools that emit them actually write
+/// them (verified against each implementation's own source or documentation,
+/// CLOUD-1886).
+///
+/// # The asymmetries here are not tidiable, they are the formats
+///
+/// Three of these rows look like they want to be a rule and are not:
+///
+/// - **`---` closes on `...` and `+++` does not.** `...` is YAML's second
+///   document terminator, which Pandoc's metadata block requires a reader to
+///   accept. TOML has no such concept, so accepting `...` there would invent a
+///   grammar rather than admit one. (Hugo refuses `...` even for YAML; we do
+///   not follow it, because that would retire a spelling already shipped.)
+/// - **A TAGGED opener closes on the BARE delimiter.** `---toml` … `---`, not
+///   `---toml` … `---toml`. That is gray-matter's own shape — it reads the
+///   language as the remainder of the opening line and closes on the plain
+///   delimiter — and a reader that expected the tag at both ends would read
+///   nothing at all.
+/// - **`;;;` is JSON.** It is GitLab's documented spelling, not gray-matter's,
+///   which has no `;;;` anywhere.
+///
+/// An unrecognised tag (`---xml`) matches no row and is therefore not a fence.
+/// Guessing which parser an unknown tag meant is the same error as guessing
+/// where an unterminated fence ends.
+const FENCES: &[Fence] = &[
+    Fence {
+        opener: "---",
+        dialect: Dialect::Yaml,
+        closers: &["---", "..."],
+    },
+    Fence {
+        opener: "+++",
+        dialect: Dialect::Toml,
+        closers: &["+++"],
+    },
+    Fence {
+        opener: ";;;",
+        dialect: Dialect::Json,
+        closers: &[";;;"],
+    },
+    Fence {
+        opener: "---yaml",
+        dialect: Dialect::Yaml,
+        closers: &["---"],
+    },
+    Fence {
+        opener: "---toml",
+        dialect: Dialect::Toml,
+        closers: &["---"],
+    },
+    Fence {
+        opener: "---json",
+        dialect: Dialect::Json,
+        closers: &["---"],
+    },
+];
+
+/// The contents of a leading frontmatter fence, if `text` opens with one.
+///
+/// **Strict, and the strictness is the point.** The fence opens on the FIRST
+/// line or there is none: a `---` further down is a horizontal rule, and a
+/// reader that went looking for one would turn ordinary prose into a document
+/// and decide over it. A UTF-8 byte-order mark may precede it and nothing else,
+/// because a BOM is invisible to the author and refusing it would blame a file
+/// for its encoding. (Hugo additionally skips leading blank lines and spaces
+/// before the delimiter. We do not: a blank first line is prose, and widening
+/// this is how a `---` that opens a section becomes a document.)
+///
+/// Which delimiters open and close which dialect is [`FENCES`]'s to say, plus
+/// the one unfenced form in [`split_json_object`]. Without a terminator there is
+/// no frontmatter: guessing where an unterminated fence ends is the same error
+/// as finding one mid-file.
+///
+/// `\r\n` is accepted throughout, and trailing whitespace on a delimiter line is
+/// ignored — an editor that strips or adds it is not an authoring fault.
+///
+/// Returns its parts as NAMED fields rather than a tuple, because the two
+/// callers want opposite ones — [`Format::Markdown`] reads the block and
+/// [`crate::budget`] drops it and counts the body — and a tuple would have each
+/// of them spell a wildcard element, which
+/// `no_axis_match_carries_a_wildcard_arm` refuses in this file for an unrelated
+/// and better reason.
+#[must_use]
+pub fn split_frontmatter(text: &str) -> Option<Frontmatter<'_>> {
+    let text = text.strip_prefix('\u{feff}').unwrap_or(text);
+    if let Some(found) = split_json_object(text) {
+        return Some(found);
+    }
+    let opened = open_fence(text)?;
+    let mut offset = 0usize;
+    for line in opened.rest.split_inclusive('\n') {
+        let bare = line.strip_suffix('\n').unwrap_or(line);
+        let bare = bare.strip_suffix('\r').unwrap_or(bare);
+        if opened.fence.closers.contains(&bare.trim_end()) {
+            return Some(Frontmatter {
+                dialect: opened.fence.dialect,
+                block: &opened.rest[..offset],
+                body: &opened.rest[offset + line.len()..],
+            });
+        }
+        offset += line.len();
+    }
+    None
+}
+
+/// A fence this text opens with, and everything after its opening line.
+struct Opened<'a> {
+    fence: &'static Fence,
+    rest: &'a str,
+}
+
+/// Match `text`'s first line against [`FENCES`].
+///
+/// A file with no newline at all opens no fence: the opener line is not
+/// terminated, so neither is anything after it.
+fn open_fence(text: &str) -> Option<Opened<'_>> {
+    let end = text.find('\n')?;
+    let first = text[..end].trim_end();
+    let fence = FENCES.iter().find(|fence| fence.opener == first)?;
+    Some(Opened {
+        fence,
+        rest: &text[end + 1..],
+    })
+}
+
+/// Hugo's unfenced JSON frontmatter: a leading JSON object, and no delimiter.
+///
+/// # Terminated by a real parse, never by counting braces
+///
+/// Hugo finds the end of this block with a hand-rolled brace counter carrying
+/// its own quote and backslash-escape state. That is precisely the state machine
+/// this crate's own document tests mock as the thing every implementation gets
+/// wrong, and `Cargo.toml` already records the general form of the argument
+/// where it chose a real YAML parser over a line scan. So the end of the object
+/// is wherever the JSON parser says the value ended.
+///
+/// Three properties of `byte_offset` this leans on:
+///
+/// - It indexes the slice the deserializer was handed. That slice is already
+///   BOM-stripped by the caller, so the offsets below are into `text` and never
+///   into the original bytes.
+/// - `next()` is called EXACTLY once. A second call would try to read another
+///   value and fail on whatever prose follows — while the first value, and the
+///   offset just past it, are already correct.
+/// - Its documented future change (counting syntactically valid JSON skipped
+///   after a type error) cannot reach us, because deserializing to
+///   `serde_json::Value` admits no type error.
+///
+/// # Only an object, and that narrowing is load-bearing
+///
+/// This is the one admitted form with no delimiter, so it is the only one that
+/// can claim bytes an author did not offer — and [`crate::budget`] shares this
+/// split, so a false positive here stops a file being charged for its own
+/// content. Requiring an object means a leading `[` or a bare scalar stays
+/// prose, which is what a markdown file plausibly opens with.
+fn split_json_object(text: &str) -> Option<Frontmatter<'_>> {
+    if !text.starts_with('{') {
+        return None;
+    }
+    let mut stream = serde_json::Deserializer::from_str(text).into_iter::<serde_json::Value>();
+    let value = stream.next()?.ok()?;
+    if !value.is_object() {
+        return None;
+    }
+    let end = stream.byte_offset();
+    let body = &text[end..];
+    let body = body
+        .strip_prefix("\r\n")
+        .or_else(|| body.strip_prefix('\n'))
+        .unwrap_or(body);
+    Some(Frontmatter {
+        dialect: Dialect::Json,
+        block: &text[..end],
+        body,
+    })
+}
+
+/// A markdown file split at its frontmatter fence, by [`split_frontmatter`].
+#[derive(Debug)]
+pub struct Frontmatter<'a> {
+    /// Which syntax [`Self::block`] is written in.
+    pub dialect: Dialect,
+    /// What the fence encloses, without either delimiter line. For the unfenced
+    /// JSON form there are no delimiter lines to remove, so this is the object
+    /// itself, braces included — which is what a JSON reader wants anyway.
+    pub block: &'a str,
+    /// Everything after the closing delimiter.
+    pub body: &'a str,
+}
+
+/// A parsed document, canonicalised into one shape whatever it was written in.
+///
+/// # One tree, four syntaxes
+///
+/// The point of a document fact is that a node path means the same thing in
+/// TOML and in JSON5, so every format lands here rather than each rule learning
+/// four libraries' value types. That is also what makes a rule portable across
+/// an artifact that changes format.
+///
+/// # Byte-stability is structural, not careful (§6)
+///
+/// [`Node::Map`] is a [`BTreeMap`], so iteration order is the keys' order and
+/// never the file's — two runs over identical bytes produce identical output,
+/// key ordering included, without any call site having to sort. And a number is
+/// carried as its **source text** rather than as `f64`: re-formatting a parsed
+/// float is the classic place a value stops round-tripping, and a version pin is
+/// exactly the kind of number that must survive as written.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Node {
+    /// An explicit null.
+    Null,
+    /// A boolean.
+    Bool(bool),
+    /// A number, carried verbatim as the source wrote it.
+    Number(String),
+    /// A string, or any scalar the format does not distinguish further.
+    Text(String),
+    /// An ordered sequence.
+    List(Vec<Node>),
+    /// A mapping, keyed in sort order.
+    Map(std::collections::BTreeMap<String, Node>),
+}
+
+impl Node {
+    /// This node as JSON, for an evaluator that takes an input document.
+    ///
+    /// The canonical tree is the authority and this is a **projection of it**,
+    /// which is what keeps CLOUD-772's "one canonical tree" true with a second
+    /// consumer attached: TOML, YAML, JSON and JSON5 all arrive here as the same
+    /// shape, so a policy module written against one format decides identically
+    /// over another. A second parser aimed at the evaluator would have
+    /// reintroduced exactly the per-consumer re-derivation the fact model exists
+    /// to stop.
+    ///
+    /// [`Node::Number`] carries its source spelling verbatim, so it is emitted
+    /// as a JSON number when it round-trips and as a string when it does not —
+    /// a TOML datetime or an oversized integer keeps its bytes rather than being
+    /// silently reshaped into something the source did not say.
+    #[must_use]
+    pub fn to_json(&self) -> serde_json::Value {
+        match self {
+            Node::Null => serde_json::Value::Null,
+            Node::Bool(flag) => serde_json::Value::Bool(*flag),
+            Node::Number(text) => text.parse::<serde_json::Number>().map_or_else(
+                |_| serde_json::Value::String(text.clone()),
+                serde_json::Value::Number,
+            ),
+            Node::Text(text) => serde_json::Value::String(text.clone()),
+            Node::List(items) => {
+                serde_json::Value::Array(items.iter().map(Node::to_json).collect())
+            }
+            Node::Map(map) => serde_json::Value::Object(
+                map.iter()
+                    .map(|(key, item)| (key.clone(), item.to_json()))
+                    .collect(),
+            ),
+        }
+    }
+
+    fn from_toml(value: &toml::Value) -> Node {
+        match value {
+            toml::Value::String(text) => Node::Text(text.clone()),
+            toml::Value::Integer(number) => Node::Number(number.to_string()),
+            toml::Value::Float(number) => Node::Number(number.to_string()),
+            toml::Value::Boolean(flag) => Node::Bool(*flag),
+            // A datetime is a scalar with one canonical spelling, which is what
+            // `Text` means here — not a string the author typed.
+            toml::Value::Datetime(stamp) => Node::Text(stamp.to_string()),
+            toml::Value::Array(items) => Node::List(items.iter().map(Node::from_toml).collect()),
+            toml::Value::Table(table) => Node::Map(
+                table
+                    .iter()
+                    .map(|(key, item)| (key.clone(), Node::from_toml(item)))
+                    .collect(),
+            ),
+        }
+    }
+
+    fn from_json(value: &serde_json::Value) -> Node {
+        match value {
+            serde_json::Value::Null => Node::Null,
+            serde_json::Value::Bool(flag) => Node::Bool(*flag),
+            serde_json::Value::Number(number) => Node::Number(number.to_string()),
+            serde_json::Value::String(text) => Node::Text(text.clone()),
+            serde_json::Value::Array(items) => {
+                Node::List(items.iter().map(Node::from_json).collect())
+            }
+            serde_json::Value::Object(map) => Node::Map(
+                map.iter()
+                    .map(|(key, item)| (key.clone(), Node::from_json(item)))
+                    .collect(),
+            ),
+        }
+    }
+
+    fn from_yaml(value: &yaml_rust2::Yaml) -> Node {
+        match value {
+            yaml_rust2::Yaml::Real(number) => Node::Number(number.clone()),
+            yaml_rust2::Yaml::Integer(number) => Node::Number(number.to_string()),
+            yaml_rust2::Yaml::String(text) => Node::Text(text.clone()),
+            yaml_rust2::Yaml::Boolean(flag) => Node::Bool(*flag),
+            yaml_rust2::Yaml::Array(items) => {
+                Node::List(items.iter().map(Node::from_yaml).collect())
+            }
+            yaml_rust2::Yaml::Hash(hash) => Node::Map(
+                hash.iter()
+                    .filter_map(|(key, item)| {
+                        // A non-scalar key addresses nothing a node path can
+                        // spell, so it is dropped rather than stringified into a
+                        // key a consumer could never write. YAML permits them;
+                        // no artifact in scope uses one.
+                        Node::from_yaml(key)
+                            .scalar()
+                            .map(|key| (key, Node::from_yaml(item)))
+                    })
+                    .collect(),
+            ),
+            // An alias resolves to a node this loader does not hand us, and a
+            // bad value is the parser saying it could not read one. Both are
+            // absences rather than nulls, and `Null` is the honest carrier: the
+            // node exists in the file and holds nothing this fact can address.
+            yaml_rust2::Yaml::Alias(_) | yaml_rust2::Yaml::BadValue | yaml_rust2::Yaml::Null => {
+                Node::Null
+            }
+        }
+    }
+
+    /// The node at a dotted path, three-valued.
+    ///
+    /// `a.b.0.c` walks maps by key and lists by index. A path that does not
+    /// resolve is [`Look::IsNot`] — **looked, and it is not there** — which is
+    /// the distinction from a document that could not be parsed at all. The two
+    /// collapsing into one another is the failure mode of every hand-rolled
+    /// reader this replaces.
+    #[must_use]
+    pub fn at(&self, path: &str) -> Look<&Node> {
+        let mut here = self;
+        for segment in path.split('.').filter(|segment| !segment.is_empty()) {
+            let next = match here {
+                Node::Map(map) => map.get(segment),
+                Node::List(items) => segment.parse::<usize>().ok().and_then(|at| items.get(at)),
+                Node::Null | Node::Bool(_) | Node::Number(_) | Node::Text(_) => None,
+            };
+            match next {
+                Some(node) => here = node,
+                None => return Look::IsNot,
+            }
+        }
+        Look::Is(here)
+    }
+
+    /// This node's scalar text, or `None` where it is a container.
+    ///
+    /// One spelling per kind, so a comparison in `batten.toml` reads the same
+    /// whatever format the document was written in.
+    #[must_use]
+    pub fn scalar(&self) -> Option<String> {
+        match self {
+            Node::Text(text) | Node::Number(text) => Some(text.clone()),
+            Node::Bool(true) => Some("true".to_owned()),
+            Node::Bool(false) => Some("false".to_owned()),
+            Node::Null | Node::List(_) | Node::Map(_) => None,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Undeclarable git history (CLOUD-1200)
+// ---------------------------------------------------------------------------
+/// One `[[rule.history]]` row: a PATTERN whose matching set the engine resolves
+/// (CLOUD-1200).
+///
+/// **The half `Fact::GitRef` and `Fact::GitRange` structurally cannot reach.**
+/// Those resolve what a rule NAMES — a ref, a `base..head` range — and thirteen
+/// governed programs need history the declaration cannot name in advance: every
+/// tag matching a pattern, the commit that deleted a path. The answer set is not
+/// knowable at declaration time, which is exactly why a literal cannot express
+/// it.
+///
+/// **What stays declared is the PATTERN, and that is the whole safety property.**
+/// A pattern no row names resolves nothing, so this is a projection of a declared
+/// set rather than a git shell. Widening WHICH commits are visible is admissible;
+/// widening what a commit CARRIES is not, and the per-entry shape stays a sha and
+/// a subject for that reason.
+#[derive(
+    Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize, schemars::JsonSchema,
+)]
+#[serde(deny_unknown_fields)]
+pub struct HistoryQuery {
+    /// The key this query's matching set is projected under.
+    pub id: String,
+    /// A tag glob — every tag whose name matches, with the commit it names.
+    ///
+    /// Exactly one of `tags` and `path` is required; [`HistoryQuery::shape`] is
+    /// what refuses a row carrying both or neither, at load.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tags: Option<String>,
+    /// A path whose add/delete history is wanted — *when did this appear or
+    /// vanish*, which no snapshot fact answers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    /// Which transition on `path` to report: `"A"` for added, `"D"` for deleted.
+    ///
+    /// Required with `path` and refused without it. Defaulting it would make a
+    /// row that forgot it silently mean one of the two, and which one is not
+    /// guessable from the path.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub filter: Option<String>,
+}
+
+/// Which of the two shapes a [`HistoryQuery`] row is.
+///
+/// A closed enum rather than three optional fields read ad hoc, so the
+/// exactly-one-of obligation is decided once, at load, rather than by every
+/// reader remembering it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HistoryShape {
+    /// Every tag matching the glob.
+    Tags,
+    /// The commits that ADDED the path.
+    PathAdded,
+    /// The commits that DELETED the path.
+    PathDeleted,
+}
+
+impl HistoryQuery {
+    /// The row's shape, or `None` when it declares neither or both.
+    ///
+    /// `None` is a CONFIG FAULT the loader refuses, never a could-not-look: no
+    /// state of the repository makes a row declaring both a tag glob and a path
+    /// answerable, so reporting it as a failed look would present a permanent
+    /// authoring error as a transient one — the choice
+    /// [`crate::rules::NotAcquired::UnknownFormat`] already makes.
+    #[must_use]
+    pub fn shape(&self) -> Option<HistoryShape> {
+        // WRITTEN AS GUARDS RATHER THAN AS A TUPLE MATCH, and the reason is a
+        // gate rather than taste: `tests/facts.rs`'s
+        // `no_axis_match_carries_a_wildcard_arm` scans this file for `_ =>`, and
+        // the three-way tuple this used to match on cannot be spelled
+        // exhaustively without one. The scan is blunt on purpose — a wildcard
+        // introduced anywhere in this module is a fact that could later classify
+        // itself instead of failing to compile — so the shape that satisfies it
+        // is the shape to write, not an exemption to argue for.
+        if self.tags.is_some() {
+            // Both is a config fault, and so is a filter with no path to apply
+            // it to.
+            if self.path.is_some() || self.filter.is_some() {
+                return None;
+            }
+            return Some(HistoryShape::Tags);
+        }
+        // A filter with no path to apply it to is a config fault too, and the
+        // `?` is the whole of that arm.
+        self.path.as_ref()?;
+        match self.filter.as_deref() {
+            Some("A") => Some(HistoryShape::PathAdded),
+            Some("D") => Some(HistoryShape::PathDeleted),
+            // A path with no filter, or one naming a transition this does not
+            // resolve. Neither is could-not-look: no state of the repository
+            // makes either answerable, so the loader refuses the row.
+            Some(_) | None => None,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Out-of-root files (CLOUD-1167)
+// ---------------------------------------------------------------------------
+/// One `[[rule.external]]` row: a file outside the repository root that a
+/// tree-scoped module may read (CLOUD-1167).
+///
+/// **The declaration IS the bound.** A module reads the ids its own row names
+/// and nothing else, so a path no row declares is unreadable — which is the
+/// difference between this fact and a filesystem scanner, and the whole of the
+/// safety property CLOUD-1167 owes.
+///
+/// Declared on the ROW rather than in a root table, deliberately: `Rule`'s
+/// columns are already compared byte-for-byte by
+/// [`crate::trust::weakenings`] unless `RULE_NON_PREDICATE` exempts them, so a
+/// branch that repoints an existing row at a different file is reported as a
+/// weakening with no new machinery. Repointing the evidence is exactly the move
+/// that has to be visible.
+#[derive(
+    Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize, schemars::JsonSchema,
+)]
+#[serde(deny_unknown_fields)]
+pub struct Rooted {
+    /// The key this file is projected under in `input.tree.external`.
+    ///
+    /// The id and never the resolved path, because a resolved path is a
+    /// machine's home directory and non-negotiable rule 4 keeps one off the
+    /// policy input.
+    pub id: String,
+    /// The NAME of the environment variable holding the directory to resolve
+    /// `path` beneath.
+    ///
+    /// A name, never a value, and never a directory this crate knows: the engine
+    /// expands whatever variable a row names and has no opinion about which
+    /// variables exist or what any of them means. That is where non-negotiable
+    /// rule 1 is paid — a launcher's, a toolchain's or a cache's layout is the
+    /// consumer's fact, in the consumer's config.
+    ///
+    /// Unset or empty on this machine is [`Look::CouldNotLook`], never an absent
+    /// file: "this host does not have that root" and "the file is not there" are
+    /// different answers and a gate that confuses them reports green on every
+    /// host that never had the root.
+    pub root: String,
+    /// The path beneath that root.
+    ///
+    /// Relative and downward — [`Rooted::escapes`] refuses an absolute path or
+    /// any `..` component when the config loads, so a declaration cannot walk
+    /// back out of the root it named.
+    pub path: String,
+}
+
+impl Rooted {
+    /// Whether `path` would leave the root it is resolved beneath.
+    ///
+    /// Refused at LOAD rather than at resolution, which is the same choice
+    /// [`crate::rules::NotAcquired::UnknownFormat`] makes and for its reason: no
+    /// state of the filesystem makes `../../etc/shadow` an admissible
+    /// declaration, so reporting it as could-not-look would present a permanent
+    /// authoring error as a transient one.
+    ///
+    /// A Windows-style root prefix counts as absolute too, so the refusal does
+    /// not depend on which platform parses the config.
+    #[must_use]
+    pub fn escapes(&self) -> bool {
+        let path = std::path::Path::new(&self.path);
+        path.components().any(|component| {
+            matches!(
+                component,
+                std::path::Component::ParentDir
+                    | std::path::Component::RootDir
+                    | std::path::Component::Prefix(_)
+            )
+        })
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Transcript extractors (CLOUD-1172)
+// ---------------------------------------------------------------------------
+/// One `[[rule.extract]]` row: a named extraction over the session's own
+/// transcript (CLOUD-1172).
+///
+/// **A declaration of WHAT TO COUNT, never of what to read.** The row cannot ask
+/// for a span, a match, or a line, because [`Extraction`] has no member that
+/// yields one — which is how rule 4 is decided here rather than trusted to every
+/// consumer.
+#[derive(
+    Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize, schemars::JsonSchema,
+)]
+#[serde(deny_unknown_fields)]
+pub struct ExtractQuery {
+    /// The key this result is projected under in `input.facts.extracted`.
+    pub id: String,
+    /// Which typed event to count.
+    pub count: Extraction,
+}
+
+/// The closed set of extractions a row may declare.
+///
+/// **Closed, and every member returns an integer.** An open expression language,
+/// or a member yielding a match, would put the session's own text within reach of
+/// a module — and a transcript holds every command, every file body and every
+/// prompt this session touched. The set is small on purpose: each member is a
+/// field [`crate::transcript`] already types, so none of them reads prose even
+/// internally.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize, serde::Serialize, schemars::JsonSchema,
+)]
+#[serde(rename_all = "kebab-case")]
+pub enum Extraction {
+    /// Turn boundaries.
+    Turns,
+    /// Tool calls the session made.
+    ToolCalls,
+    /// Tool results the HOST flagged as errors — its own boolean, never a
+    /// substring match on a message.
+    ToolErrors,
+    /// Hook runs the session recorded.
+    HookDecisions,
+    /// Hook runs that DENIED, by the §7 verdict exit code rather than by prose.
+    HookDenials,
+    /// The trailing run of assistant turns carrying no tool call — the monologue
+    /// shape (CLOUD-1344), and deliberately the first member of this family
+    /// because it needs no hashing: it reduces `Event::Turn`, which is already
+    /// typed, so no argument or result is read even internally.
+    AgentTurnRun,
+    /// Tool calls since the operator's last message with no assistant text
+    /// between them (the ignored-operator shape). A count over typed events;
+    /// no text is read beyond emptiness.
+    UnansweredHumanCalls,
+    /// Plan presentations this session, the in-flight one included
+    /// (CLOUD-2383). A count over `Event::ToolCall` names, which the transcript
+    /// already types; no argument is read.
+    PlanExits,
+}
+
+// ---------------------------------------------------------------------------
+// Task manifests (CLOUD-856)
+// ---------------------------------------------------------------------------
+/// One `[[rule.tasks]]` row: a manifest whose task table the engine reads ONCE,
+/// outside the mediated call (CLOUD-856).
+///
+/// **A declaration rather than a per-call read, and that is the row's whole
+/// answer.** `Fact::Document` stays unresolvable on the mediated path because a
+/// document is unbounded there; naming the manifest here moves the parse to
+/// session start, where a read of that size is admissible, and leaves the call
+/// reading one small keyed record.
+///
+/// Which file carries a task table, and under which node, is the consumer's fact
+/// — non-negotiable rule 1 — so the engine learns both from this row and knows
+/// nothing about either.
+#[derive(
+    Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize, schemars::JsonSchema,
+)]
+#[serde(deny_unknown_fields)]
+pub struct TaskQuery {
+    /// The repository-relative manifest to parse.
+    ///
+    /// Its bytes also key the receipt, so a manifest that changes invalidates the
+    /// record by construction rather than by anyone remembering to.
+    pub manifest: String,
+    /// The node path the task table lives under, in [`Node::at`]'s spelling.
+    pub node: String,
+}
+
+// ---------------------------------------------------------------------------
+// Reductions over captured responses (CLOUD-1188)
+// ---------------------------------------------------------------------------
+/// One `[[rule.captured]]` row: what to reduce out of an already-captured
+/// response, and how (CLOUD-1188).
+///
+/// **The row declares a reduction, not a read.** That asymmetry with every other
+/// declared-read family here is the point: the others name a subject and the
+/// module decides what to make of it, and this one cannot, because the subject is
+/// a tracker payload and handing a module one would put its prose on the policy
+/// input. Rule 4 is therefore decided by the declaration's shape rather than by
+/// every consumer remembering it.
+#[derive(
+    Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize, schemars::JsonSchema,
+)]
+#[serde(deny_unknown_fields)]
+pub struct CaptureQuery {
+    /// The key this reduction is projected under in `input.tree.captured`.
+    pub id: String,
+    /// The token that selects which captured response answers.
+    ///
+    /// An opaque string the consumer supplies. The engine knows nothing about
+    /// what it names, which is where non-negotiable rule 1 is paid: a tracker's
+    /// key vocabulary is the consumer's fact and never this crate's.
+    ///
+    /// How it SELECTS depends on [`Self::key_at`], and the two are different
+    /// questions — see that field.
+    pub key: String,
+    /// Where the key sits in the response, in [`Node::at`]'s spelling.
+    ///
+    /// # This is the difference between "the record about the key" and "a record mentioning it"
+    ///
+    /// Without it, selection is byte CONTAINMENT over the response and the first
+    /// match in handle order answers — so any stored document that merely cites
+    /// the key competes, and which one wins is decided by a digest. Measured
+    /// 2026-09-03 over this repository's own store (CLOUD-1387): 14 captures
+    /// contained `CLOUD-1188`, the one read carried no `project` node and
+    /// answered `false`, and the `get_issue` for that row — carrying
+    /// `project: "Batten"` — sorted later and was never consulted. A filed row
+    /// was reported unfiled, from a payload that was never about it.
+    ///
+    /// With it, the row is resolved through [`crate::capture::find`], which
+    /// selects a response whose scalar AT THIS PATH equals the key and takes the
+    /// most recent in the log's append order. That is the same selector
+    /// `capture find --key-at` already exposes, so there is one authority on what
+    /// "the capture for this key" means rather than two.
+    ///
+    /// **Optional, and absent keeps the old meaning rather than changing a
+    /// verdict silently.** A row that declares no path is still resolved by
+    /// containment: this field can only ever narrow what answers, so adding it is
+    /// raise-only in house-style §8's sense, and a consumer's landed rows do not
+    /// move underneath them.
+    ///
+    /// **The PATH is the consumer's, which is what keeps rule 1 intact.** The
+    /// engine never names `id`, or any other tracker field — it reads the path
+    /// the row supplies, exactly as `node` below is read.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key_at: Option<String>,
+    /// The node path inside the selected response, in [`Node::at`]'s spelling.
+    pub node: String,
+    /// What to make of the node the path reaches.
+    pub reduce: Reduction,
+}
+
+/// How a [`CaptureQuery`] turns a node into something rule 4 permits.
+///
+/// A closed set rather than an open expression language, deliberately: every
+/// member is bounded by construction, so no row can declare a reduction that
+/// yields prose. An `extract` or `matches` arm would reopen exactly that.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize, serde::Serialize, schemars::JsonSchema,
+)]
+#[serde(rename_all = "lowercase")]
+pub enum Reduction {
+    /// Whether the node exists at all — a boolean.
+    Present,
+    /// How many members the node has: a list's length, a map's size, `1` for a
+    /// scalar. Never a length in characters, which would be a measurement of
+    /// prose.
+    Count,
+    /// The node's scalar text, **iff** it is already a bounded token.
+    ///
+    /// A value carrying whitespace, or longer than [`TOKEN_MAX`], is REFUSED and
+    /// the id is absent — never truncated, because a truncated payload is still a
+    /// payload and a prefix of somebody's issue body is exactly what rule 4 is
+    /// about.
+    Token,
+}
+
+/// The longest a `token` reduction may be.
+///
+/// A bound rather than a guideline: `Reduction::Token`'s whole claim is that what
+/// reaches the policy input is a token, and a claim with no number behind it is
+/// the prose ban restated rather than enforced. Sized for a status name, a key,
+/// or an identifier — comfortably past every one of those and far short of a
+/// sentence.
+pub const TOKEN_MAX: usize = 64;
+
+impl Reduction {
+    /// Apply this reduction to the node a path reached, or `None` where the
+    /// answer would not be one rule 4 permits.
+    ///
+    /// [`Look::CouldNotLook`] and [`Look::IsNot`] both mean the path did not
+    /// reach a node, and both answer `false` for [`Reduction::Present`] and `0`
+    /// for [`Reduction::Count`] — because "the node is not there" IS the answer
+    /// those two reductions were asked for. `Token` is different and returns
+    /// `None`: there is no token to carry, and inventing an empty string would
+    /// let a predicate comparing against `""` succeed over a node nobody read.
+    #[must_use]
+    pub fn apply(self, found: &Look<&Node>) -> Option<serde_json::Value> {
+        let node = match found {
+            Look::Is(node) => Some(*node),
+            Look::IsNot | Look::CouldNotLook => None,
+        };
+        match self {
+            Reduction::Present => Some(serde_json::json!(node.is_some())),
+            Reduction::Count => Some(serde_json::json!(match node {
+                Some(Node::List(items)) => items.len(),
+                Some(Node::Map(entries)) => entries.len(),
+                Some(_) => 1,
+                None => 0,
+            })),
+            Reduction::Token => {
+                let text = node?.scalar()?;
+                // REFUSED RATHER THAN TRUNCATED. A prefix of a payload is still a
+                // payload, and this is the one line that makes "tokens, not
+                // prose" a property of the projection instead of a hope about
+                // consumers.
+                if text.is_empty()
+                    || text.len() > TOKEN_MAX
+                    || text.chars().any(char::is_whitespace)
+                {
+                    return None;
+                }
+                Some(serde_json::json!(text))
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Third-party tool verdicts (CLOUD-1171)
+// ---------------------------------------------------------------------------
+/// One `[[rule.tools]]` row: a third-party tool's verdict the engine reads back
+/// from a keyed record (CLOUD-1171).
+///
+/// **Every field is a component of the KEY, and each refuses a different lie.**
+/// A record is found only under the exact triple, so a validator pinned
+/// elsewhere, or one whose answer predates a change to what it read, is not a
+/// record about this repository's current state — it lives under a different
+/// name and simply does not answer. That negative half is the family's safety
+/// property, in the same place [`Rooted`]'s is: the declaration.
+///
+/// The engine knows nothing about which tools exist or what any of them checks.
+/// It composes a key and reads a file, which is where non-negotiable rule 1 is
+/// paid — the tool's name, its pin and its subject are the consumer's facts, in
+/// the consumer's `batten.toml`.
+#[derive(
+    Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize, schemars::JsonSchema,
+)]
+#[serde(deny_unknown_fields)]
+pub struct ToolQuery {
+    /// The key this verdict is projected under in `input.tree["tool-verdict"]`.
+    ///
+    /// The declared id rather than the composed key, because a composed key
+    /// carries a digest that changes every time the input does — a module
+    /// written against one would have to be edited whenever the file it judges
+    /// is edited.
+    pub id: String,
+    /// The tool's name, as the producer wrote it into the record's key.
+    pub tool: String,
+    /// The version the tool was PINNED at when it ran.
+    ///
+    /// A component of the key rather than a field inside the record, and that is
+    /// deliberate: a version compared after the read is a comparison a module can
+    /// forget to make, where a version in the key means a mismatched record is
+    /// never found at all.
+    pub version: String,
+    /// The repository-relative path whose bytes the verdict was taken over.
+    ///
+    /// Its digest is the third component of the key, so a verdict goes stale by
+    /// construction the moment the file changes — the anti-staleness half, and
+    /// the one a `status: clean` marker alone could never provide.
+    ///
+    /// Unreadable, or outside the tree, is [`Look::CouldNotLook`]: the id is
+    /// absent from the map, never present with an empty verdict.
+    pub input: String,
+    /// The argv that takes this verdict, run by `batten record validate <id>`
+    /// from the repository root (CLOUD-843).
+    ///
+    /// **Optional, and a row without one is still read**: a producer outside the
+    /// engine may still pipe its verdict to `record tool`. Declared, the argv is
+    /// the consumer's and never the engine's — which validator, with which
+    /// flags, over which file is this repository's fact (non-negotiable rule 1),
+    /// and what reaches the record is the EXIT CODE and nothing the tool printed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub run: Vec<String>,
+}
+
+impl ToolQuery {
+    /// Whether any key component carries a character that would make the
+    /// composed key ambiguous or reach outside the record directory.
+    ///
+    /// Refused at LOAD, for [`Rooted::escapes`]' reason: no state of the
+    /// filesystem makes `../../x` or a name carrying the field separator an
+    /// admissible declaration, so reporting it as could-not-look would present a
+    /// permanent authoring error as a transient one.
+    #[must_use]
+    pub fn malformed(&self) -> bool {
+        [self.tool.as_str(), self.version.as_str()]
+            .iter()
+            .any(|part| {
+                part.is_empty()
+                    || part.contains(KEY_SEPARATOR)
+                    || part.contains('/')
+                    || part.contains('\\')
+            })
+    }
+}
+
+/// One declared review a policy row reads (CLOUD-472).
+///
+/// **On the row rather than in a top-level table**, for [`ToolQuery`]'s reason:
+/// the declaration and the rule that reads it are one object, so a row cannot
+/// name a review nothing enables and a review cannot outlive its reader.
+#[derive(
+    Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize, schemars::JsonSchema,
+)]
+#[serde(deny_unknown_fields)]
+pub struct ReviewQuery {
+    /// The key this review is projected under in `input.tree.review`.
+    ///
+    /// The declared id rather than the composed key, because a composed key
+    /// carries two digests that move whenever the prompt or the subject does — a
+    /// module written against one would have to be edited on every edit to the
+    /// thing it judges.
+    pub id: String,
+    /// Which VENDORED prompt to dispatch, by id.
+    ///
+    /// Vendored rather than a path, and that is the safety property: the text is
+    /// compiled into the binary, so its digest is a constant of the build and a
+    /// consumer cannot satisfy the gate by pointing it at an easier prompt.
+    pub prompt: String,
+    /// The agent to dispatch it through.
+    pub runner: String,
+    /// The version the runner is pinned at, recorded as provenance.
+    ///
+    /// A component of the record rather than a comparison made after the read,
+    /// for [`ToolQuery::version`]'s reason: a version compared afterwards is a
+    /// comparison a module can forget to make.
+    pub version: String,
+    /// The exact flags, so a reader can tell which question was asked.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub args: Vec<String>,
+    /// How the prompt reaches the runner.
+    ///
+    /// **Declared because a runner that ignores the channel discards the prompt
+    /// SILENTLY**, and the record then reads as a completed review of whatever
+    /// the agent chose to look at. Measured against a real reviewer whose review
+    /// subcommand takes its focus as a POSITIONAL and wires stdin only for a
+    /// different subcommand: the dispatch succeeds, exits zero and steers
+    /// nothing. Which reviewer, and the reading, are CLOUD-472's — a consumer's
+    /// tool is not this crate's to name (non-negotiable rule 1).
+    ///
+    /// Defaults to stdin, which is what the first landed runner contract
+    /// assumed, so a row that says nothing keeps its behaviour.
+    #[serde(default, skip_serializing_if = "PromptArg::is_default")]
+    pub prompt_arg: PromptArg,
+    /// A subcommand that answers whether this runner can review AT ALL.
+    ///
+    /// **Readiness as a declared reading rather than an inference.** Without it
+    /// the engine infers "no runner" from a missing file, which cannot tell a
+    /// machine that never installed the reviewer from one where it is installed
+    /// and not authenticated — different remedies, and the operator gets neither.
+    ///
+    /// The runner is the authority on its own readiness: it knows whether its
+    /// dependencies resolve and whether a session is authenticated, and the
+    /// engine can see neither. Reviewers in this class expose exactly such a
+    /// subcommand, reporting a boolean beside the remedy steps; the row names
+    /// which one, because whose reviewer it is is the consumer's business.
+    ///
+    /// Absent keeps today's behaviour, so a row that declares none is judged
+    /// exactly as it was before this column existed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub probe: Vec<String>,
+    /// What KIND of thing is being reviewed, e.g. `document`.
+    pub subject: String,
+    /// The repository-relative path whose bytes the review was taken over.
+    ///
+    /// Its digest is the second component of the key, so a review goes stale by
+    /// construction the moment the subject changes — the anti-staleness half, and
+    /// the one a `reviewed: true` marker could never provide.
+    ///
+    /// **OPTIONAL, because not every subject is a file.** A `tracker-body`
+    /// review is taken over the description the TRACKER returned, which reaches
+    /// the engine through the refinement payload and has an issue key rather
+    /// than a repository path. Demanding a path there would force a row to name
+    /// a file it does not read, which is a declaration that means nothing and
+    /// would be compared to nothing. A `document` review without one is skipped
+    /// rather than guessed at.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+}
+
+/// How a dispatched prompt reaches its runner (CLOUD-472).
+///
+/// Two spellings rather than a bool, because the axis is not "on or off" — it is
+/// WHICH channel, and a third (a temporary file, say) is a plausible fourth
+/// runner's answer. A bool would have to be renamed to admit one.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Default,
+    serde::Deserialize,
+    serde::Serialize,
+    schemars::JsonSchema,
+)]
+#[serde(rename_all = "kebab-case")]
+pub enum PromptArg {
+    /// Written to the child's stdin. The default, and what the first landed
+    /// runner contract assumed.
+    #[default]
+    Stdin,
+    /// Appended to `args` as the last positional. What a runner taking a focus
+    /// string needs — and what the reviewer batten's customers run requires.
+    Positional,
+}
+
+impl PromptArg {
+    /// Whether this is the serde default, so a row that says nothing stays quiet
+    /// in the emitted config rather than growing a key nobody wrote.
+    #[must_use]
+    pub fn is_default(&self) -> bool {
+        *self == PromptArg::Stdin
+    }
+}
+
+/// What joins a [`ToolQuery`]'s components into one record name.
+///
+/// Stated once here rather than spelled at both the composing and the validating
+/// site, which is the two-authorities shape `rules/policy-modules.md`
+/// records for patterns, one layer down.
+pub const KEY_SEPARATOR: char = '@';
+
+// ---------------------------------------------------------------------------
+// Minted receipt fields (CLOUD-1310)
+// ---------------------------------------------------------------------------
+/// One `[[rule.minted]]` row: a field of a receipt the mediated boundary already
+/// wrote, projected onto the tree surface and bounded by age (CLOUD-1310).
+///
+/// **The age bound is the whole safety property, and it is what makes this a
+/// different family from [`crate::rules::Rule::captured`].** The capture store is
+/// keyed by content and has no clock, so a question about a MUTABLE field
+/// answers from whichever read sorts first by digest — the state before the work
+/// rather than the state now. Here a reading older than [`Self::max_age_days`]
+/// is not evidence about now, so the subject is simply absent, exactly as a
+/// re-digested [`ToolQuery`] input is absent rather than found-and-wrong.
+///
+/// **Positional, and that is the store's existing idiom rather than a new one.**
+/// `claim::read_baseline` already takes its digest with `nth(3)` over one
+/// whitespace-split line. A `[[mint]]` body is a consumer's template, so the
+/// engine cannot know a field by name without inventing a second schema
+/// describing what the consumer already wrote.
+///
+/// The engine knows nothing about what any mint records or what its fields mean.
+/// It reads a line and counts words, which is where non-negotiable rule 1 is
+/// paid: the mint's name, the index that matters and what counts as too old are
+/// the consumer's facts, in the consumer's `batten.toml`.
+#[derive(
+    Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize, schemars::JsonSchema,
+)]
+#[serde(deny_unknown_fields)]
+pub struct MintedQuery {
+    /// The key this field is projected under in `input.tree.minted`.
+    pub id: String,
+    /// The `[[mint]]` name whose receipts are read, as that row declares it.
+    ///
+    /// The engine matches receipt files by this prefix and takes what follows as
+    /// the SUBJECT. It does not resolve the name against the mint table here: a
+    /// mint that never fires leaves no receipts, which is could-not-look and is
+    /// the ordinary state, so refusing the row at load would refuse the common
+    /// case rather than an authoring error.
+    pub mint: String,
+    /// Which whitespace-separated field of the receipt line is the value,
+    /// counting from zero.
+    ///
+    /// A line with fewer fields than this leaves the subject ABSENT rather than
+    /// present with an empty token: a receipt that does not carry the field was
+    /// not an answer about it.
+    pub field: usize,
+    /// Which field carries the time the reading was taken, counting from zero.
+    ///
+    /// Separate from [`Self::field`] because the value and its recency are
+    /// different columns of the same line, and collapsing them would make a
+    /// timestamp the only projectable field.
+    pub recency: usize,
+    /// How old a reading may be and still answer, in days.
+    ///
+    /// Declared rather than defaulted: what counts as stale is a property of the
+    /// subject, and a default would silently pick one for every consumer.
+    pub max_age_days: u32,
+}
+
+impl MintedQuery {
+    /// Whether the row names a mint that cannot address a receipt file.
+    ///
+    /// Refused at LOAD for [`ToolQuery::malformed`]'s reason: no state of the
+    /// filesystem makes an empty name or one carrying a path separator an
+    /// admissible declaration, so reporting it as could-not-look would present a
+    /// permanent authoring error as a transient one.
+    #[must_use]
+    pub fn malformed(&self) -> bool {
+        self.mint.is_empty()
+            || self.mint.contains('/')
+            || self.mint.contains('\\')
+            || self.id.is_empty()
+    }
+}
+
+#[cfg(test)]
+mod minted_query_tests {
+    use super::MintedQuery;
+
+    fn query(id: &str, mint: &str) -> MintedQuery {
+        MintedQuery {
+            id: id.to_owned(),
+            mint: mint.to_owned(),
+            field: 1,
+            recency: 2,
+            max_age_days: 7,
+        }
+    }
+
+    /// Fails by: an empty id admitted beside a well-formed mint, or any one
+    /// malformation needing another beside it to be refused.
+    #[test]
+    fn each_malformation_is_refused_on_its_own() {
+        assert!(!query("m", "issue-read").malformed());
+        assert!(query("", "issue-read").malformed());
+        assert!(query("m", "").malformed());
+        assert!(query("m", "a/b").malformed());
+        assert!(query("m", "a\\b").malformed());
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Agent-sourced facts (CLOUD-776)
+// ---------------------------------------------------------------------------
+
+/// One recorded agent-sourced fact, as it sits under the git dir.
+///
+/// # The channel, and why it is not a spawn
+///
+/// A gate that needs a fact it does not hold denies with
+/// [`crate::refusal::Fix::Run`]; the agent runs that command with its own
+/// binary, its own flags and its own PATH; the harness hands the result buffer
+/// back as [`crate::hook::Envelope::result`]; the boundary records what it said
+/// and the retry decides. **Batten executes nothing**, so house-style §5's read
+/// promise is untouched — reading a buffer somebody else produced is not running
+/// a program, and that is why [`AGENT_SOURCED`] can sit on `Surface::Hook` while
+/// the same answer fetched by the engine could not.
+///
+/// It is also the cheap variant of a pattern this repository already uses.
+/// "Agents fetch, gates decide" normally makes the MODEL transport the payload,
+/// and CLOUD-526 priced that exactly: ~15 KB of **output** tokens per
+/// `issue-read` receipt, an asymmetry that produced seven forged receipts in one
+/// measured session. A tool buffer is different in kind — the model does not
+/// re-type it, so there is no transcription to be unfaithful and no cost
+/// proportional to the artifact.
+///
+/// # The shape is `issue-read-check`'s, borrowed rather than invented
+///
+/// **What was seen, and when it was seen**; the reader bounds the age. That is
+/// already this repository's answer to a fact that goes stale with no
+/// compare-and-swap available, and it is a recency bound rather than a freshness
+/// proof — the same limitation, stated the same way.
+///
+/// # Rule 4, structural rather than careful
+///
+/// A command's stdout can carry anything, which makes a result buffer the
+/// likeliest thing in the envelope to hold a secret. **No byte of it reaches THIS
+/// record.** [`rows_in`] reduces the buffer to a COUNT at the boundary and the
+/// count is what reaches disk, so a deny message, a `-J` document and everything
+/// under the state root are payload-free by construction rather than by care at
+/// each emission site.
+///
+/// The scope is this path, and stating it wider was true once and is not now
+/// (CLOUD-917, which superseded the no-storage rule with the capture contract;
+/// CLOUD-918/919 landed the store). Responses ARE persisted, deliberately — by
+/// `capture`, under its own contract, which [`decode_response`] is the one
+/// authority on and which `batten capture show <handle> --raw` hands back
+/// verbatim. That is the route a payload the model must not re-type travels, and
+/// the paragraph above is exactly why it is a separate store with a separate
+/// contract rather than a field of a receipt.
+///
+/// [`decode_response`]: crate::capture::decode_response
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Sourced {
+    /// The command that actually ran, verbatim, so the gate can check it against
+    /// what it asked for.
+    pub command: String,
+    /// When the agent ran it, RFC3339. Provenance beside the answer; no predicate
+    /// here reads a clock (the caller supplies one, `waiver::today`'s idiom).
+    pub seen_at: String,
+    /// How many rows the buffer carried. **A count, never the payload.**
+    pub rows: usize,
+}
+
+impl Sourced {
+    /// Render the record as its on-disk lines.
+    ///
+    /// One `key value` pair per line, the shape every other receipt in
+    /// `$GIT_DIR/batten-receipts/` uses, so a human reading that directory does
+    /// not meet a second format.
+    #[must_use]
+    pub fn render(&self) -> String {
+        format!(
+            "command {}\nseen-at {}\nrows {}\n",
+            self.command, self.seen_at, self.rows
+        )
+    }
+
+    /// Parse a record back, or `None` if it is not one.
+    ///
+    /// Unreadable and unparseable both answer `None`, which [`sourced`] turns
+    /// into [`Look::CouldNotLook`] — fail closed to *could not look*, never to a
+    /// fact. A half-written record is exactly the case that must not read as "ran
+    /// and there are none".
+    #[must_use]
+    pub fn parse(text: &str) -> Option<Sourced> {
+        // An if/else chain rather than a `match` with a `_ =>` arm, and that is
+        // this module's own gate rather than a style choice: `tests/facts.rs`
+        // scans this file for wildcard arms, because `_ => Cost::Free` compiles
+        // happily and classifies every future fact as cheap. The scan is
+        // file-wide and blunt on purpose, so a match over STRING keys — which
+        // cannot be exhaustive — is written without the token instead of the gate
+        // being taught an exception it would then have to be trusted about.
+        let (mut command, mut seen_at, mut rows) = (None, None, None);
+        for line in text.lines() {
+            let (key, value) = line.split_once(' ')?;
+            if key == "command" {
+                command = Some(value.to_owned());
+            } else if key == "seen-at" {
+                seen_at = Some(value.to_owned());
+            } else if key == "rows" {
+                rows = Some(value.parse().ok()?);
+            }
+        }
+        Some(Sourced {
+            command: command?,
+            seen_at: seen_at?,
+            rows: rows?,
+        })
+    }
+}
+
+/// Where one agent-sourced fact's record lives, beside the other receipts.
+///
+/// **Keyed on the SUBJECT the declaring row's `key` resolves to, never on the
+/// name alone** (CLOUD-859). The name-only form shipped with this channel and its
+/// own doc argued for it: a `claimed-key` answer is a statement about one issue
+/// row at one moment, so keying it to a branch would make the same answer
+/// unavailable to the next branch that needs it. That reasoning is right for a
+/// fact about an *issue* and wrong for a fact about a *head*, and hard-coding it
+/// made the difference inexpressible — a `receipt` row could declare
+/// `key = "head"`, `rules::validate` would hold it to one keying per check, and
+/// the record would file under the name regardless. Measured: a record minted
+/// clear on one head still satisfied its check on the next commit, so the gate
+/// bound once per branch.
+///
+/// So the reading that doc defends is now spelled `key = "branch"` rather than
+/// built in, and both readings are expressible. The subject is HEAD's SHA under
+/// [`crate::rules::ReceiptKey::Head`], the branch name under
+/// [`crate::rules::ReceiptKey::Branch`], and the call's own value under
+/// [`crate::rules::ReceiptKey::Named`] — the same three subjects
+/// `receipt::verdicts` already resolves for the receipt store, resolved once at
+/// the boundary because `adjudicate` may not look.
+///
+/// Both components are `/`-substituted: a branch name legitimately carries
+/// separators and a filename may not. The spelling matches
+/// `receipt::branch_receipt_name`'s for the same reason it does there — two
+/// spellings of one filename are two things to drift.
+#[must_use]
+pub fn sourced_path(git_dir: &std::path::Path, name: &str, subject: &str) -> std::path::PathBuf {
+    git_dir.join("batten-receipts").join(format!(
+        "fact.{}.{}",
+        name.replace('/', "-"),
+        subject.replace('/', "-")
+    ))
+}
+
+/// What a recorded answer means, given the command the gate asked for.
+///
+/// A pure function of the record and the request — no clock, no filesystem —
+/// which is what lets the whole contract be tested without a world.
+///
+/// **Two different failures share [`Look::CouldNotLook`], and that is the point.**
+/// No record means the agent never ran it. A record naming a different command
+/// means something ran and it was not what was asked for. Neither is a fact, and
+/// both call for the same remedy — run *the* command — so they answer the same
+/// arm rather than tempting a caller to treat one of them as evidence.
+///
+/// The command comparison is byte equality, deliberately. The agent picks WHICH
+/// command runs; it does not author what the output says. Any normalisation is a
+/// gap between what was asked and what is accepted, and a fact keyed to a
+/// `Fix::Run` nobody verifies is CLOUD-526's forgery gradient on a new surface.
+#[must_use]
+pub fn sourced(record: Option<&Sourced>, asked_for: &str) -> Look<usize> {
+    match record {
+        Some(record) if record.command == asked_for => Look::Is(record.rows),
+        Some(_) | None => Look::CouldNotLook,
+    }
+}
+
+/// Reduce a tool result buffer to a row count by **normalising it to an array**,
+/// or [`Look::CouldNotLook`] where no count can honestly be given.
+///
+/// # Why normalise rather than refuse (CLOUD-992)
+///
+/// This function used to read exactly two shapes — a bare row array and the
+/// content-block envelope — and answer could-not-look for everything else. The
+/// reasoning was sound and is preserved below: **answering `0` for a buffer this
+/// build cannot read would be a guessed envelope becoming a silent fact.**
+///
+/// What was wrong is that refusing is not the only way to avoid that, and it made
+/// the channel **unusable from any shell tool**. Measured on real Bash responses:
+/// every one is raw text, so the first match arm rejected it. The channel's first
+/// intended consumer declares a `gh` command, so it would have seen could-not-look
+/// on every call — a gate refusing every `gh pr ready`, unsatisfiable by running
+/// the very command its deny prints.
+///
+/// The alternative considered and rejected was making each declared command
+/// project an array (`gh … --jq '[…]'`). That puts the obligation on every future
+/// fact row, fails as could-not-look rather than loudly when forgotten, and is
+/// invisible in the rule that consumes it.
+///
+/// # The table
+///
+/// | buffer | rows |
+/// | -- | -- |
+/// | JSON array that is not wholly content blocks | its length — an empty one is a genuine zero |
+/// | content-block envelope (EVERY item a content block) | the sum over its blocks, each normalised by the rules below — could-not-look if ANY block says nothing |
+/// | a shell tool's envelope object (`{stdout, stderr}`) | its stream text, normalised by the rules below — the buffer is a MEMBER, never the object |
+/// | any other JSON object, or any non-string scalar | `1` — one element, wrapped |
+/// | text that parses as a JSON array | that array's length |
+/// | text that parses as any other JSON value | `1` |
+/// | text that is not JSON at all | `1` — one opaque row |
+/// | text that is empty or whitespace | could-not-look — see below |
+/// | [`serde_json::Value::Null`] | could-not-look — an absent buffer is not a reading |
+///
+/// **The invariant that must not regress: no unread shape is ever reported as
+/// `0`.** Wrapping preserves it exactly as refusing did — an opaque buffer counts
+/// as one row, never none — so a `rows == 0` predicate stays fail-closed.
+///
+/// **The empty buffer is the one place the three-valued reading survives, and it
+/// earns it.** A command that failed and printed nothing is indistinguishable
+/// from one that legitimately found nothing, so `0` and `1` are both guesses:
+/// `0` would let an unreviewed head through, `1` would deny a gate forever. Only
+/// could-not-look states what is actually known.
+///
+/// A tool whose output cannot be parsed as JSON wants an **adapter** rather than
+/// this fallback — the one-opaque-row reading keeps a gate fail-closed in the
+/// meantime and is inventoried as debt (CLOUD-993), not left as the design.
+///
+/// No byte of the buffer is returned (rule 4). The count is the whole answer.
+#[must_use]
+pub fn rows_in(result: &serde_json::Value) -> Look<usize> {
+    match result {
+        // An absent buffer is not a reading. Distinct from an empty one, which
+        // at least says a tool answered.
+        serde_json::Value::Null => Look::CouldNotLook,
+        serde_json::Value::Array(items) => {
+            // ENVELOPE SEMANTICS DEMAND THE WHOLE ARRAY, NOT A MEMBER OF IT. A
+            // row array may legitimately contain a row that happens to be
+            // text-shaped, and treating that array as an envelope reads the one
+            // block and DROPS every other row: `[{"type":"text","text":"[]"},
+            // {"id":1}]` answered `Is(0)` for two rows, breaking the fail-closed
+            // invariant this function exists to hold. So an array is an envelope
+            // only when every item is a content block; anything else is a bare
+            // row array and counts its items.
+            //
+            // An EMPTY array lands here too and is a genuine zero — a shape we
+            // read that carried nothing, not a shape we failed to read.
+            if items.is_empty() || !items.iter().all(is_text_block) {
+                return Look::Is(items.len());
+            }
+            // The content-block envelope an MCP tool returns. Each block's text
+            // goes through the same normalisation a bare text buffer does, so the
+            // two entry points cannot disagree about one string.
+            // NO BLOCK IS SKIPPED, and that is the whole of this loop's contract.
+            // `is_text_block` guarantees a string `text`, so nothing can be
+            // silently filtered out here — a `filter_map` over the field would
+            // drop a block it could not read and then report the SUM OF THE REST
+            // as the buffer's count, which is how a partly-unreadable envelope
+            // came back `Is(0)`.
+            //
+            // And one unreadable block condemns the whole envelope. A block
+            // saying nothing contributes no knowable count, so folding it in as
+            // `0` would be a guess presented as a reading; could-not-look is the
+            // only honest answer for the buffer as a whole. That is also what
+            // keeps the single-empty-block envelope could-not-look, as it has
+            // always been.
+            let mut rows = 0;
+            for block in items {
+                let Some(text) = block.get("text").and_then(serde_json::Value::as_str) else {
+                    return Look::CouldNotLook;
+                };
+                let Some(count) = rows_in_text(text) else {
+                    return Look::CouldNotLook;
+                };
+                rows += count;
+            }
+            Look::Is(rows)
+        }
+        serde_json::Value::String(text) => rows_in_text(text).map_or(Look::CouldNotLook, Look::Is),
+        // A SHELL TOOL'S BUFFER IS A MEMBER OF THIS OBJECT, NEVER THE OBJECT.
+        // This is the arm the whole capability turned on and the one a shape
+        // table could not see: Claude Code hands a Bash call's response back as
+        // `{stdout, stderr, …}`, so counting the object gives `1` for every
+        // shell command ever declared — measured, `printf '[1,2,3]'` recorded
+        // `rows 1`. Normalising buffers was necessary and not sufficient,
+        // because the buffer never arrived as one.
+        //
+        // [`shell_streams`] is the ONE authority on that shape. It reads
+        // `stdout` then `stderr` in a declared order, and is the same reader
+        // `capture::decode_response` stores an object response through. A second
+        // copy of the field list here is the "two copies drifted" failure this
+        // repository keeps recording — so this defers to it rather than
+        // restating it.
+        serde_json::Value::Object(map) => match shell_streams(map) {
+            // A shell envelope: count what the tool actually printed.
+            (bytes, 1..) => match std::str::from_utf8(&bytes) {
+                Ok(text) => rows_in_text(text).map_or(Look::CouldNotLook, Look::Is),
+                // Bytes that are not text are a shape this build did not read,
+                // never a buffer that carried nothing.
+                Err(_) => Look::CouldNotLook,
+            },
+            // An object carrying no readable stream member is not an envelope at
+            // all — it is a single JSON row, which is one element wrapped.
+            (_, 0) => Look::Is(1),
+        },
+        // A single number or boolean is one element. Wrapping it is what makes
+        // the count obvious rather than making the caller project.
+        serde_json::Value::Number(_) | serde_json::Value::Bool(_) => Look::Is(1),
+    }
+}
+
+/// How many rows one text buffer carries, by the table on [`rows_in`], or
+/// `None` when it says nothing at all.
+///
+/// Split out because the bare-string arm and every text block inside a
+/// content-block envelope must answer identically — a second copy of this rule
+/// is how the two entry points come to disagree about the same string.
+///
+/// `Option<usize>` rather than [`Look<usize>`]: a count has only two outcomes
+/// here, and `Look`'s third — [`Look::IsNot`] — is not one of them. Returning
+/// `Look` would put an arm on every caller that no input can reach, and a
+/// wildcard over it is exactly how a future third outcome would be silently
+/// folded into "nothing to add".
+fn rows_in_text(text: &str) -> Option<usize> {
+    if text.trim().is_empty() {
+        // Nothing was said. Neither `0` nor `1` is knowable here; see the doc.
+        return None;
+    }
+    match serde_json::from_str::<serde_json::Value>(text) {
+        Ok(serde_json::Value::Array(inner)) => Some(inner.len()),
+        // Any other JSON value is one element; prose that does not parse is one
+        // opaque row. Both are "we saw something", which is what matters.
+        Ok(_) | Err(_) => Some(1),
+    }
+}
+
+/// How many rows a buffer carries GIVEN what its command promised (CLOUD-993).
+///
+/// The shape-declaring counterpart to [`rows_in`], and the difference between
+/// them is the whole of this change: `rows_in` infers a shape from the bytes,
+/// this one CHECKS the bytes against a shape somebody stated. A mismatch is
+/// [`Look::CouldNotLook`] — never a count — so a command that quietly stops
+/// emitting what it declares fails loudly instead of reporting a plausible `1`
+/// forever and silently making a `rows == 0` predicate unsatisfiable.
+///
+/// The envelope question is [`rows_in`]'s and is not repeated here: where the
+/// buffer LIVES (a bare string, a content-block array, a shell tool's
+/// `{stdout, stderr}` object) is orthogonal to what SHAPE it promised, and
+/// `decode_response` is the one authority on the first. So this decodes through
+/// the same path and then judges the text.
+///
+/// # Rule 4
+///
+/// A mismatch verdict carries no byte of the buffer. The caller renders the
+/// fact's NAME and the shape it DECLARED — both already in hand from config —
+/// because a buffer that failed to parse is the likeliest thing in the envelope
+/// to be holding a secret, and quoting it in a deny is how that would escape.
+#[must_use]
+pub fn rows_declared(result: &serde_json::Value, returns: Returns) -> Look<usize> {
+    // WHICH CONTRACT, NAMED VARIANT BY VARIANT. No wildcard on either axis:
+    // `tests/facts.rs`'s `no_axis_match_carries_a_wildcard_arm` refuses one, and
+    // its reasoning is exactly this function's risk — a `_` arm would classify a
+    // future `Returns` variant silently, and the direction it would classify it
+    // in is "satisfied", which is the expensive one.
+    //
+    // The decode comes FIRST, because could-not-look is the answer under every
+    // declaration: an envelope this build cannot read, and a buffer that said
+    // nothing at all, are facts about the reading rather than about the shape.
+    // Shared rather than repeated per arm, which is also what keeps `Opaque`
+    // three-valued instead of collapsing an empty buffer into a row.
+    let Some(text) = buffer_text(result) else {
+        return Look::CouldNotLook;
+    };
+    if text.trim().is_empty() {
+        return Look::CouldNotLook;
+    }
+    let demands_array = match returns {
+        Returns::JsonArray => true,
+        Returns::Json => false,
+        // `Opaque` DISCLAIMS THE SHAPE, so counting elements would be an
+        // inference the declaration explicitly refused to make — the guess this
+        // whole field exists to end. It read as `rows_in` at first, on the
+        // reasoning that a contract promising nothing has nothing to check; that
+        // is backwards. `rows_in` parses `"[1,2]"` as TWO rows, which is a claim
+        // about a shape nobody declared, and it left one of three variants
+        // defeating the change's own thesis. A command that promises nothing and
+        // answered gives exactly one opaque answer.
+        //
+        // Nothing is lost by it: a consumer that wants the length has
+        // `json-array`, and one that wants a single JSON value has `json`. There
+        // is no coherent third want — "count the elements but do not promise
+        // there are elements" is the inference, spelled as a declaration.
+        Returns::Opaque => return Look::Is(1),
+    };
+    let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&text) else {
+        // Prose under a JSON contract. THE case this function exists for: the
+        // interim reading counted this as one opaque row, which is
+        // indistinguishable from the tool honestly finding one thing.
+        return Look::CouldNotLook;
+    };
+    // One axis now — the JSON shape — with every variant named, for the reason
+    // the `demands_array` match above names every contract.
+    match parsed {
+        // An array satisfies both JSON contracts, and its length is the count.
+        serde_json::Value::Array(rows) => Look::Is(rows.len()),
+        // Every other JSON shape. Under `json-array` it is a mismatch: a JSON
+        // OBJECT here is the raw `gh api graphql` shape, which counts as `1`
+        // under the inferring reader and looks entirely fine, so declaring the
+        // array is what turns a missing `--jq '[…]'` projection into a refusal.
+        // Under `json` the same value is legitimate and counts as one element.
+        serde_json::Value::Object(_)
+        | serde_json::Value::String(_)
+        | serde_json::Value::Number(_)
+        | serde_json::Value::Bool(_)
+        | serde_json::Value::Null => {
+            if demands_array {
+                Look::CouldNotLook
+            } else {
+                Look::Is(1)
+            }
+        }
+    }
+}
+
+/// The buffer's text, wherever the envelope keeps it (CLOUD-993).
+///
+/// Extracted so [`rows_declared`] can judge a shape without re-deriving where
+/// the bytes live. The three shapes are [`rows_in`]'s and stay its authority; a
+/// content-block envelope concatenates its blocks, which is the same summing
+/// `rows_in` does one level up.
+fn buffer_text(result: &serde_json::Value) -> Option<String> {
+    match result {
+        serde_json::Value::String(text) => Some(text.clone()),
+        serde_json::Value::Object(map) => {
+            let (bytes, blocks) = shell_streams(map);
+            (blocks > 0)
+                .then_some(bytes)
+                .and_then(|bytes| String::from_utf8(bytes).ok())
+        }
+        serde_json::Value::Array(items) if items.iter().all(is_text_block) => {
+            let mut joined = String::new();
+            for block in items {
+                joined.push_str(block.get("text").and_then(serde_json::Value::as_str)?);
+            }
+            Some(joined)
+        }
+        // A bare row array carries rows, not text: there is no string to check a
+        // declared shape against, and `rows_in` already counts it correctly.
+        // Answering `None` sends that to could-not-look, which is honest — the
+        // declaration said the COMMAND emits an array, and an already-decomposed
+        // array is not something this path can attribute to it.
+        serde_json::Value::Array(_)
+        | serde_json::Value::Null
+        | serde_json::Value::Number(_)
+        | serde_json::Value::Bool(_) => None,
+    }
+}
+
+/// Whether one array item is a content block this build can read in full.
+///
+/// **A STRING `text` IS PART OF THE SHAPE, not a detail the reader checks
+/// later.** Keying only on `type` admitted `{"type":"text","text":7}` as a
+/// block, and the envelope loop then had to cope with a block it could not
+/// read — which it did by skipping it, so
+/// `[{"type":"text","text":"[]"},{"type":"text","text":7}]` answered `Is(0)`
+/// for a buffer half of which was never read.
+///
+/// Requiring the string here fixes it in the one place that decides, and it
+/// decides in the more useful direction: a malformed block is not a content
+/// block, so its array is not an envelope at all and counts as ordinary rows.
+/// Two rows is what that buffer carries, and saying so beats refusing it.
+fn is_text_block(value: &serde_json::Value) -> bool {
+    value.get("type").and_then(serde_json::Value::as_str) == Some("text")
+        && value.get("text").is_some_and(serde_json::Value::is_string)
+}
+
+/// The JSON a tool actually returned, unwrapped from the envelope it arrived in
+/// (CLOUD-1024).
+///
+/// **The envelope is the shape, and a reader that skips this sees nothing.**
+/// [`rows_in`] one function up already knows that an MCP tool answers with a
+/// content-block array whose `text` carries the real payload; a caller that wants
+/// the payload's FIELDS rather than a count needs the same knowledge, and a
+/// second copy of it is the drift this shares the [`is_text_block`] predicate to
+/// avoid.
+///
+/// Measured, and only against the live host: a mint reading `result.get("id")`
+/// passed every fixture — a test hands the engine a bare object — and matched
+/// nothing at all in production, because the connector wraps every response.
+/// That is the same class as the capture subsystem's own decode, which is why
+/// the capture store kept working while the field reader saw an array with no
+/// members it recognised.
+///
+/// `None` where no JSON can honestly be recovered. Distinct from a payload that
+/// parses to `null`, which is a reading of nothing rather than a failure to read
+/// — the three-valued discipline [`Look`] states for the count.
+#[must_use]
+pub fn payload_in(result: &serde_json::Value) -> Option<serde_json::Value> {
+    match result {
+        // An envelope only when EVERY item is a content block, which is
+        // `rows_in`'s rule and for its reason: a row array may legitimately hold
+        // a text-shaped row, and reading that as an envelope would drop every
+        // other row.
+        serde_json::Value::Array(items) if !items.is_empty() && items.iter().all(is_text_block) => {
+            let joined: String = items
+                .iter()
+                .filter_map(|item| item.get("text").and_then(serde_json::Value::as_str))
+                .collect();
+            serde_json::from_str(&joined).ok()
+        }
+        // The other envelope the survey records: the blocks under a `content`
+        // member rather than at the top level.
+        serde_json::Value::Object(members) => {
+            // An `if let` rather than a `match`, because the wildcard arm the
+            // other spelling needs is refused by `no_axis_match_carries_a_
+            // wildcard_arm` — a text scan over this module, which cannot tell an
+            // `Option` match from an axis one and is right not to try.
+            if let Some(inner @ serde_json::Value::Array(_)) = members.get("content") {
+                payload_in(inner)
+            } else {
+                // An ordinary object IS the payload. The common case, and the one
+                // every fixture exercises.
+                Some(result.clone())
+            }
+        }
+        // A tool that answered with a JSON string still answered.
+        serde_json::Value::String(text) => serde_json::from_str(text).ok(),
+        serde_json::Value::Null => None,
+        // A bare array that is NOT an envelope, and the two scalars. Each is a
+        // real answer carrying no members, so it is returned rather than refused
+        // — a caller's required projection is what decides it says nothing, and
+        // deciding that here would be a second place the same question is asked.
+        //
+        // Spelled out rather than left to a wildcard: `no_axis_match_carries_a_
+        // wildcard_arm` refuses one, so a value variant added later fails to
+        // compile instead of classifying itself (CLOUD-757).
+        serde_json::Value::Array(_) | serde_json::Value::Bool(_) | serde_json::Value::Number(_) => {
+            Some(result.clone())
+        }
+    }
+}
+
+/// The file a host named when it substituted a notice for an over-limit result.
+///
+/// # Why this exists at all
+///
+/// A host may refuse to hand over a large tool result and write it to a file
+/// instead, substituting a plain-text notice that names the path. Measured
+/// 2026-09-01 (CLOUD-1147): a `get_issue` returning 71,501 characters arrived at
+/// the hook as a STRING, so [`payload_in`]'s JSON parse failed and every mint
+/// over that call was skipped — silently, because a mint's failure is silent by
+/// design. Three rows had become permanently un-updatable that way, each with a
+/// refusal whose stated remedy ("re-read the row") is the operation that fails.
+///
+/// The bytes were never gone. They were in a file the notice named, and nothing
+/// looked. This is the projection that looks.
+///
+/// # Why a shape rather than a host's exact sentence
+///
+/// The anchor is `saved to <path>` terminated by a period at end of line, which
+/// is the shape of the notice rather than one host's wording. A host that phrases
+/// it differently recovers nothing and the caller falls back to the ordinary
+/// no-mint path, which is the direction a miss must fail in.
+///
+/// **Pure, and it does not read the file.** Whether to open what this names is
+/// the caller's decision, and it carries the bound: only a path a HOST put in a
+/// result it substituted, never one a caller supplied.
+#[must_use]
+pub fn spilled_path(text: &str) -> Option<&str> {
+    let after = text.split_once("saved to ")?.1;
+    // The path ends at the period that closes the sentence, and a path may
+    // contain periods — so the terminator is a period at END OF LINE rather than
+    // the first period, and a notice on one line ends at the string's end.
+    let line = after.split('\n').next()?;
+    let path = line.strip_suffix('.').unwrap_or(line).trim();
+    // ABSOLUTE ONLY. A relative path would resolve against whatever directory the
+    // hook happens to run in, which is not a thing the notice can have meant.
+    //
+    // ASKED OF `Path`, NOT SPELLED AS A LEADING SLASH, and that is a measured
+    // correction rather than a tidy-up. This read `path.starts_with('/')`, which
+    // is the shape of an absolute path on one platform: `D:\a\_temp\result.txt`
+    // fails it, so on Windows the recovery never fired and the whole class stayed
+    // starved there. The engine builds on Windows and its own suite runs there —
+    // the case below went red on that job and green everywhere else, which is
+    // exactly the half a Unix-only run cannot see.
+    (std::path::Path::new(path).is_absolute() && path.len() > 1).then_some(path)
+}
+
+/// One agent-sourced fact a consumer declares: its name, and the command whose
+/// output answers it.
+///
+/// # Why the command is CONFIG rather than a crate constant
+///
+/// Non-negotiable rule 1. `gh pr list --search …` names a forge, a query syntax
+/// and a workflow — all of them a consumer's facts, none of them the engine's.
+/// The core knows that an agent-sourced fact has a name and a command; which
+/// command answers which question is `batten.toml`'s.
+///
+/// # One value, read twice, which is the point
+///
+/// The same string is the command the deny asks the agent to run AND the command
+/// the record is checked against. That is deliberate and is the lesson of the two
+/// issues this one follows: CLOUD-779 and CLOUD-601 were both a harness-level
+/// declaration kept in step BY HAND with the reachability it implied, and both
+/// drifted. A fix text and a verification target that could disagree would be the
+/// same defect a third time, on a surface where the disagreement is a forged
+/// fact rather than a silent allow.
+#[derive(
+    Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+#[serde(deny_unknown_fields)]
+pub struct Declared {
+    /// The fact's name — the token a `receipt` row's `checks` list refers to,
+    /// and the key its record is stored under.
+    pub name: String,
+    /// The command whose output answers it, verbatim.
+    ///
+    /// Read twice, and the same bytes both times: it is what the deny tells the
+    /// agent to run, and what the stored record is compared against.
+    ///
+    /// **Optional since CLOUD-690, and exactly one of this or [`Declared::tool`]
+    /// is required** — refused at load by [`validate`], never defaulted, because a
+    /// row answering to neither selects nothing and a row answering to both has
+    /// two forgery controls that can disagree.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
+    /// The tool whose RESULT answers it, matched by
+    /// [`selects_tool_name`] (CLOUD-690).
+    ///
+    /// The alternative to `command`, and it exists because a command's transport
+    /// can be unavailable where the same data reaches a tool. Measured: the
+    /// declared `gh api graphql` behind CLOUD-859's review gate is refused by a
+    /// proxy that serves the same review threads through an MCP tool, so the gate
+    /// was unsatisfiable and running the command its own deny printed returned
+    /// 403.
+    ///
+    /// **The forgery control changes shape rather than disappearing.** A `command`
+    /// row is protected by byte-equality against what the agent ran; a `tool` row
+    /// is protected by the selector, because the agent does not choose which tool
+    /// a host reports. It is the same control `[[mint]]` relies on, through the
+    /// same function, so there is no second matcher to drift.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool: Option<String>,
+    /// A path to the array whose MATCHING elements are counted (CLOUD-690).
+    ///
+    /// Without it the whole result is reduced by [`rows_declared`], which is the
+    /// pre-CLOUD-690 behaviour and stays the default. With it, the count is over
+    /// the elements of that array which satisfy [`Declared::matching`] — the
+    /// capability CLOUD-690 records, and the one neither `[[mint]]`'s `requires`
+    /// (presence, not absence) nor `rows_in` (every element, unfiltered) can
+    /// express.
+    ///
+    /// It does not retire [`Declared::returns`]: `opaque` beside it is refused at
+    /// load, and `json-array` still requires the buffer itself to be an array
+    /// before the path is walked. A column this reading ignored would be the
+    /// accepted-and-unread defect one layer down.
+    ///
+    /// A path that is absent, or present and not an array, is **could-not-look**
+    /// rather than zero matches. That is this row's own inherited constraint —
+    /// CLOUD-310 defect 1, a scanner that found nothing and exited 0 — and the
+    /// distinction `rows_in` already draws one function up.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub counts: Option<String>,
+    /// The predicate each counted element must satisfy: path to literal,
+    /// **equality only, `ANDed`** (CLOUD-690).
+    ///
+    /// Spelled `where` in config and `matching` in Rust, because `where` is a
+    /// keyword. Empty means every element of `counts` matches, which is a genuine
+    /// reading — *how many elements are there* — and not a missing predicate.
+    ///
+    /// **Deliberately not a query language.** No operators, no negation, no
+    /// field-to-field comparison, no nesting beyond a path. Each of those is a
+    /// step toward the `conf.d` merge house style §8 refuses, and the measured
+    /// consumer needs none of them; the one thing it does need and cannot have —
+    /// comparing a review's author to the PR's — is named on CLOUD-690 as
+    /// CLOUD-859's to solve rather than quietly admitted here.
+    #[serde(
+        default,
+        rename = "where",
+        skip_serializing_if = "std::collections::BTreeMap::is_empty"
+    )]
+    pub matching: std::collections::BTreeMap<String, Literal>,
+    /// Conditions beside the collection, each holding one adding to the count
+    /// (CLOUD-690, restoring what CLOUD-859's projection carried).
+    ///
+    /// **The shape `counts`/`where` structurally cannot reach.** Those two speak
+    /// about elements OF an array; this speaks about a scalar sitting next to it,
+    /// evaluated against the whole payload. The measured instance is a page cap:
+    /// `pageInfo.hasNextPage` is `true` beside a `review_threads` array that is
+    /// therefore incomplete, and an unresolved thread outside that page would
+    /// leave the count at zero — a false green in the one direction the gate
+    /// exists to prevent.
+    ///
+    /// **Nothing else can express it, which is why it is a column rather than
+    /// config.** A second `[[fact]]` cannot: a `counts` path resolving to a bool
+    /// answers could-not-look, so a row asserting `hasNextPage == false` would
+    /// deny forever instead of passing when the page is complete. A Rego module
+    /// cannot either: `input.call` carries the tool's NAME and never its
+    /// arguments, so no predicate can even require a full page be asked for.
+    ///
+    /// Same vocabulary as [`Declared::matching`] deliberately — the same
+    /// `Literal`, the same path grammar, equality only — so this adds a place a
+    /// predicate may be evaluated and not a second predicate language.
+    ///
+    /// Rule 4 holds identically: a clause NAMES a path, and what is found there
+    /// is compared and discarded. The count is the whole output.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub blocking: std::collections::BTreeMap<String, Literal>,
+    /// Which INVOCATIONS of the declared tool answer this row, read over the
+    /// call's own input object (CLOUD-690).
+    ///
+    /// **The selector names a tool; this names the call.** One tool serves several
+    /// methods, and the method is an ARGUMENT rather than part of the name the
+    /// host attributes the result to — so `tool` alone cannot tell one method's
+    /// result from another's, and [`Declared::counts`] can only discriminate them
+    /// when their payloads happen to differ in shape. Measured, that happened not
+    /// to hold: `pull_request_read`'s `get_reviews` and `get_files` both answer
+    /// with a bare top-level array, so a row counting `.` over the tool recorded
+    /// a non-zero count from a FILE listing and satisfied a check that asks
+    /// whether a review exists. Shape is a proxy for the method; this is the
+    /// method.
+    ///
+    /// **It only ever narrows.** A row carrying no clause records from every call
+    /// the selector matches, which is the behaviour every row had before this
+    /// column; a clause means FEWER calls mint a record, so a check naming the row
+    /// denies at least as often. There is no spelling here that lets one more
+    /// call satisfy a gate.
+    ///
+    /// Refused beside `command` at load: a command row's forgery control is
+    /// byte-equality over the whole command line, so the arguments are already in
+    /// what is compared and a second, weaker predicate over the same bytes could
+    /// only disagree with it.
+    ///
+    /// Same vocabulary as [`Declared::matching`] and [`Declared::blocking`] — the
+    /// same `Literal`, the same path grammar, equality only — so this adds a third
+    /// place a predicate is evaluated and not a third predicate language. Rule 4
+    /// holds identically: a clause NAMES a path, and what is found there is
+    /// compared and discarded.
+    #[serde(
+        default,
+        rename = "when",
+        skip_serializing_if = "std::collections::BTreeMap::is_empty"
+    )]
+    pub called_with: std::collections::BTreeMap<String, Literal>,
+    /// What the command promises to return (CLOUD-993).
+    ///
+    /// **Required, with no default**, and that is the whole point. Before this
+    /// field, `rows_in` inferred the shape from the bytes on every call, and the
+    /// inference was wrong three times in two days — each time producing a
+    /// plausible NUMBER rather than an error, which is the worst available
+    /// failure. A default would put the inference straight back: the row would
+    /// stop stating a contract and start inheriting one.
+    ///
+    /// The migration cost is zero because this repository declares no `[[fact]]`
+    /// rows yet, which is exactly why the field arrives required now rather than
+    /// optional-then-tightened.
+    pub returns: Returns,
+}
+
+/// How many elements of the declared collection satisfy the declared predicate
+/// (CLOUD-690).
+///
+/// This is the capability CLOUD-690 records, and the reason it is needed rather
+/// than convenient: [`rows_in`] counts EVERY element of a result, so a gate whose
+/// question is *how many are still unresolved* reads a head with all its threads
+/// answered as still blocking. The count is not inconvenient there, it is wrong.
+///
+/// # Could-not-look, never zero
+///
+/// An absent path, a path whose value is not an array, and an unreadable envelope
+/// all answer [`Look::CouldNotLook`]. Zero is reserved for *the array was there
+/// and nothing in it matched*, which is the only reading that means the gate may
+/// pass. CLOUD-310 defect 1 — a scanner that found nothing and exited `0`, a
+/// permanent silent green — is this row's own inherited constraint, and this is
+/// where it is honoured.
+///
+/// # Rule 4
+///
+/// The return is a count. No matched element, and no value read at a `where`
+/// path, is returned, stored or rendered anywhere — which is what lets a
+/// consumer's `where` name a value without that value becoming a payload the
+/// engine carries.
+#[must_use]
+pub fn counted(result: &serde_json::Value, declared: &Declared) -> Look<usize> {
+    let Some(path) = declared.counts.as_deref() else {
+        // No collection declared: the pre-CLOUD-690 reading, unchanged, which is
+        // Acceptance's "a row declaring neither column behaves exactly as before".
+        return rows_declared(result, declared.returns);
+    };
+    // The SAME normalisation every other reader on this path uses. A shell tool's
+    // buffer is a member of its envelope (CLOUD-859's measurement) and an MCP
+    // tool's is a content-block array, so the payload has to be lifted out before
+    // a path means anything — and doing that here rather than reimplementing it
+    // is why a `tool`-selected row and a `command`-selected one see one shape.
+    let Some(payload) = payload_in(result) else {
+        return Look::CouldNotLook;
+    };
+    // The declared shape decides before the path does, so `returns` is a contract
+    // on this path too and not a column the counting reading quietly steps over.
+    // `opaque` cannot reach here — `validate` refuses it beside `counts` — and
+    // `json` promises only that the buffer is JSON, which `payload_in` has
+    // already established.
+    if declared.returns == Returns::JsonArray && !payload.is_array() {
+        return Look::CouldNotLook;
+    }
+    // `.` IS THE PAYLOAD ITSELF, and it needs a spelling because two obvious ones
+    // do not work: the empty string is refused by `validate` (an empty `counts` is
+    // a row that names no collection), and `[]` iterates, so it selects N values
+    // where the slice pattern below requires one array. A tool answering with a
+    // bare top-level array — `pull_request_read`'s `get_reviews` is the measured
+    // one — is otherwise uncountable.
+    let selected = if path == "." {
+        vec![&payload]
+    } else {
+        let Some(selected) = select(&payload, path) else {
+            return Look::CouldNotLook;
+        };
+        selected
+    };
+    // Exactly one array. A path selecting several values is a path the consumer
+    // wrote expecting one collection, and summing them would answer a question
+    // nobody asked.
+    let [collection] = selected.as_slice() else {
+        return Look::CouldNotLook;
+    };
+    let Some(elements) = collection.as_array() else {
+        return Look::CouldNotLook;
+    };
+    let matched = elements
+        .iter()
+        .filter(|element| matches_every_clause(element, &declared.matching))
+        .count();
+    // EACH BLOCKING CONDITION IS ONE MORE, which is the arithmetic the `--jq`
+    // projection this replaces did by emitting an extra element. Added rather than
+    // short-circuiting to a refusal, because the consumer's predicate is a count
+    // and a caller that wants "any blocking condition" already spells it `> 0`.
+    let beside = declared
+        .blocking
+        .iter()
+        .filter(|(path, wanted)| holds_over(&payload, path, wanted))
+        .count();
+    Look::Is(matched + beside)
+}
+
+/// Whether one condition beside the counted collection holds over the payload.
+///
+/// The element-scoped twin is [`matches_every_clause`], and the two share
+/// [`Literal::matches`] so a `where` clause and a `blocking` clause can never
+/// disagree about what equality means. Written without a `match` for that
+/// function's reason: `tests/facts.rs` scans this module for wildcard arms.
+///
+/// **An unresolvable path does not hold**, which is the same direction the
+/// element twin takes and the safe one here: a mistyped `blocking` path adds
+/// nothing rather than refusing every call, so the failure is a gate that is no
+/// stronger than before rather than one nobody can clear.
+fn holds_over(payload: &serde_json::Value, path: &str, wanted: &Literal) -> bool {
+    let Some(found) = select(payload, path) else {
+        return false;
+    };
+    let [only] = found.as_slice() else {
+        return false;
+    };
+    wanted.matches(only)
+}
+
+/// Whether one element of a counted collection satisfies every declared clause.
+///
+/// Extracted from [`counted`] and written WITHOUT a `match`, which is this
+/// module's own gate rather than a style choice: `tests/facts.rs` scans this file
+/// for wildcard arms, because `_ => Cost::Free` compiles happily and classifies
+/// every future fact as cheap. A slice pattern cannot be exhaustive, so the
+/// alternative here would be teaching that scan an exception it would then have to
+/// be trusted about.
+///
+/// **A clause whose path does not resolve in THIS element is not a match, and that
+/// is not could-not-look.** The collection was readable; this element simply does
+/// not satisfy the predicate. Reading a missing key as unknowable would let one
+/// odd element take the whole count to could-not-look, which is a verdict about
+/// the array drawn from a fact about one of its members.
+fn matches_every_clause(
+    element: &serde_json::Value,
+    clauses: &std::collections::BTreeMap<String, Literal>,
+) -> bool {
+    clauses.iter().all(|(path, wanted)| {
+        let Some(found) = select(element, path) else {
+            return false;
+        };
+        // Exactly one value, for `counted`'s reason one level up: a clause path
+        // selecting several is a path the consumer wrote expecting one leaf.
+        let [only] = found.as_slice() else {
+            return false;
+        };
+        wanted.matches(only)
+    })
+}
+
+impl Declared {
+    /// What answers this fact — the declared command, or the declared tool.
+    ///
+    /// **One spelling, because it is stored and compared** (CLOUD-690).
+    /// [`Sourced::command`] holds this value and [`sourced`] compares against it,
+    /// so a row's two possible selectors must collapse to one string here or the
+    /// writer and the reader disagree about what a satisfied record looks like.
+    /// [`validate`] refuses a row with neither, so the fallback is unreachable
+    /// through a loaded config and exists only to keep this total.
+    #[must_use]
+    pub fn answered_by(&self) -> &str {
+        // EXHAUSTIVE, with no tuple wildcard: `tests/facts.rs` scans this file for
+        // `_ =>`, `_ if` and `, _)` alike, because an axis match that classifies a
+        // future variant silently is the one mistake here that is expensive in a
+        // predictable direction. A 2-tuple of options has four arms, so totality
+        // costs nothing and the compiler keeps giving it.
+        match (self.command.as_deref(), self.tool.as_deref()) {
+            (Some(command), None) => command,
+            // Refused at load by `validate`, so unreachable through a config; the
+            // command wins here rather than panicking, because a policy assembled
+            // in-process should not be able to abort a hook.
+            (Some(command), Some(_ignored_tool)) => command,
+            (None, Some(tool)) => tool,
+            (None, None) => "",
+        }
+    }
+
+    /// Whether this row is answered by a call the host attributed to `raw_tool`
+    /// running `command` (CLOUD-690).
+    ///
+    /// The two selectors, and their two different forgery controls: a `command`
+    /// row is byte-equality against what the agent ran, because the agent chooses
+    /// the command; a `tool` row is [`selects_tool_name`], because
+    /// the agent does not choose what the host calls the tool it just ran.
+    #[must_use]
+    pub fn answered_here(&self, raw_tool: &str, command: &str) -> bool {
+        match (self.command.as_deref(), self.tool.as_deref()) {
+            (Some(declared), None) => declared == command,
+            // As `answered_by`: refused at load, and the command's byte-equality is
+            // the stricter of the two controls, so it is the one that decides.
+            (Some(declared), Some(_ignored_tool)) => declared == command,
+            (None, Some(selector)) => selects_tool_name(selector, raw_tool),
+            (None, None) => false,
+        }
+    }
+
+    /// Whether this row's [`Declared::called_with`] clauses hold over the call's
+    /// own input object (CLOUD-690).
+    ///
+    /// The second half of selection, asked beside [`Declared::answered_here`]:
+    /// that one decides which TOOL answers the row, this one decides which of its
+    /// invocations. An empty clause set is `true`, so a row that names no call
+    /// keeps the pre-column behaviour exactly.
+    ///
+    /// **An unresolvable path does not select**, which is the opposite direction
+    /// from [`holds_over`]'s and deliberately so: there, a mistyped path adds
+    /// nothing to a count and leaves a gate no weaker than before; here, reading a
+    /// missing `method` as a match would put back the very over-selection this
+    /// column exists to remove. Both directions are the one that cannot turn a
+    /// typo into a satisfied gate.
+    #[must_use]
+    pub fn selected_by(&self, input: &serde_json::Value) -> bool {
+        matches_every_clause(input, &self.called_with)
+    }
+}
+
+/// One scalar a [`Declared::matching`] entry compares against.
+///
+/// **A closed set of three, not `serde_json::Value`.** An arbitrary value would
+/// admit an object or an array on the right-hand side of an equality, which is
+/// either a nested predicate nobody specified or a deep comparison whose cost is
+/// unbounded — and both are the query language CLOUD-690's refinement exists to
+/// keep out. Three scalars are what a tool result's leaves actually are.
+#[derive(
+    Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+#[serde(untagged)]
+pub enum Literal {
+    /// A boolean, which is the measured consumer's case (`isResolved = false`).
+    Bool(bool),
+    /// An integer. Floats are deliberately absent: equality over them is a trap,
+    /// and no surveyed tool result keys a decision on one.
+    Integer(i64),
+    /// A string.
+    Text(String),
+}
+
+impl Literal {
+    /// Whether `found` is this literal.
+    ///
+    /// Typed rather than stringly: comparing `"false"` to `false` would make a
+    /// config that looks right decide wrong, and a tool result's booleans are
+    /// booleans.
+    #[must_use]
+    fn matches(&self, found: &serde_json::Value) -> bool {
+        match self {
+            Literal::Bool(wanted) => found.as_bool() == Some(*wanted),
+            Literal::Integer(wanted) => found.as_i64() == Some(*wanted),
+            Literal::Text(wanted) => found.as_str() == Some(wanted.as_str()),
+        }
+    }
+}
+
+/// What a declared command promises its output looks like (CLOUD-993).
+///
+/// **Three values, deliberately, and the smallness is a design constraint rather
+/// than a starting point.** A vocabulary that grows a variant per tool is the
+/// inference problem again with more syntax — the reader would be back to asking
+/// which of fifteen shapes arrived. These three are the distinctions a COUNT can
+/// actually rest on: a sequence whose length means something, a single value, and
+/// nothing promised at all.
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+#[serde(rename_all = "kebab-case")]
+pub enum Returns {
+    /// The decoded buffer parses as a JSON array; `rows` is its length.
+    ///
+    /// An empty array is a GENUINE ZERO — the reading a review gate rests on,
+    /// where `rows == 0` has to mean "the command looked and found none" rather
+    /// than "nobody looked". Anything that is not an array is a mismatch and
+    /// answers could-not-look, which is what catches a command that quietly
+    /// stopped emitting JSON.
+    JsonArray,
+    /// The decoded buffer parses as any JSON value; an array counts its length,
+    /// anything else counts as one element.
+    ///
+    /// For a command whose output is honestly JSON but not honestly a sequence.
+    /// Distinct from [`Returns::JsonArray`] so the two cannot collapse: a raw
+    /// `gh api graphql` object is legitimate here and a mismatch there.
+    Json,
+    /// No shape is promised: anything non-empty is one opaque row.
+    ///
+    /// The escape hatch, and it has to be SAID. That is the difference between a
+    /// considered choice and a silent fallback — a command routed through a
+    /// wrapper that annotates its own output cannot carry a JSON contract, and
+    /// declaring `opaque` records that rather than discovering it per call.
+    ///
+    /// **It is not an escape back to inference, and the distinction is the one
+    /// this whole enum exists for.** A buffer that happens to look like a JSON
+    /// array still counts as ONE here, because the row disclaimed the shape and
+    /// counting its elements would be a claim about a contract nobody made. It
+    /// first read as [`rows_in`] on the reasoning that a promise of nothing has
+    /// nothing to check; that is backwards, and it left one of three variants
+    /// defeating the field's own purpose. A consumer wanting the length declares
+    /// [`Returns::JsonArray`].
+    Opaque,
+}
+
+/// Refuse a malformed `[[fact]]` table (CLOUD-776).
+///
+/// Three ways a row can be wrong, and each would make a gate that cannot fire —
+/// CLOUD-253's shape, which is why a table nothing validates is itself refused:
+///
+/// * an **empty name** has no `checks` token to be referred to by, so no rule
+///   could ever select it;
+/// * an **empty command** would tell the agent to run nothing and then verify a
+///   record against nothing, which no record can satisfy;
+/// * a **duplicate name** is two answers to one question, and the lookup takes
+///   the first — so the second row is silently dead config.
+///
+/// # What this function deliberately does NOT check
+///
+/// `returns` (CLOUD-993). It is a required non-`Option` field on a
+/// `deny_unknown_fields` struct, so serde refuses an absent one and the enum
+/// refuses a value outside the three — both BEFORE this function is handed a
+/// `Declared` at all. Adding a check here would be unreachable code asserting a
+/// property the type already guarantees, which is the shape that reads as
+/// coverage and is not. The load-time refusal is tested against the real config
+/// path rather than against this function.
+///
+/// # Errors
+///
+/// Returns a [`crate::error::UsageError`] (→ exit `1`) naming the offending row.
+/// Pointer-only: the fact's NAME, never its command, which is a consumer's
+/// argv and may carry anything.
+pub fn validate(facts: &[Declared]) -> anyhow::Result<()> {
+    let mut seen: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
+    for fact in facts {
+        if fact.name.trim().is_empty() {
+            return Err(crate::error::UsageError::raise(
+                "a `[[fact]]` row declares an empty `name`, so no `checks` entry could refer to it",
+            ));
+        }
+        validate_one(fact)?;
+        if !seen.insert(fact.name.as_str()) {
+            return Err(crate::error::UsageError::raise(format!(
+                "`[[fact]]` `{}` is declared twice; the lookup takes the first, so the second \
+                 row is config that can never fire",
+                fact.name
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// The conjuncts that decide ONE `[[fact]]` row, extracted from [`validate`].
+///
+/// Split when the workspace's function-length lint asked for it, and along the
+/// seam the loop already drew: [`validate`] owns what is true of the SET — a name
+/// declared twice is two answers to one question — and this owns what is true of
+/// a row on its own. Every refusal here is pointer-only (rule 4): the row's NAME,
+/// never its command, which is a consumer's argv and may carry anything.
+///
+/// # Errors
+///
+/// Returns a [`crate::error::UsageError`] (-> exit `1`) naming the offending row.
+fn validate_one(fact: &Declared) -> anyhow::Result<()> {
+    // EXACTLY ONE SELECTOR (CLOUD-690). Neither means the row answers to
+    // nothing and can never be satisfied; both means two forgery controls —
+    // byte-equality on the command, the selector on the tool — that can
+    // disagree about whether the same call answered the fact. Refused at load
+    // rather than resolved by precedence, because a precedence rule here is a
+    // rule about rules.
+    match (fact.command.as_deref(), fact.tool.as_deref()) {
+        (Some(command), None) if command.trim().is_empty() => {
+            return Err(crate::error::UsageError::raise(format!(
+                "`[[fact]]` `{}` declares an empty `command`: the deny would ask the agent \
+                 to run nothing, and no record could satisfy it",
+                fact.name
+            )));
+        }
+        (None, Some(tool)) if tool.trim().is_empty() => {
+            return Err(crate::error::UsageError::raise(format!(
+                "`[[fact]]` `{}` declares an empty `tool`, which selects every call and \
+                 therefore none",
+                fact.name
+            )));
+        }
+        (None, None) => {
+            return Err(crate::error::UsageError::raise(format!(
+                "`[[fact]]` `{}` declares neither `command` nor `tool`, so nothing can ever \
+                 answer it and the checks naming it deny forever",
+                fact.name
+            )));
+        }
+        (Some(_), Some(_)) => {
+            return Err(crate::error::UsageError::raise(format!(
+                "`[[fact]]` `{}` declares both `command` and `tool`; they are alternatives, \
+                 and a row carrying both has two forgery controls that can disagree about \
+                 whether a call answered it",
+                fact.name
+            )));
+        }
+        (Some(_), None) | (None, Some(_)) => {}
+    }
+    // A predicate over no collection is a column that reads as configured and
+    // filters nothing — `counted` would fall through to the whole-result
+    // reading and the `where` would silently never be consulted. That is the
+    // accepted-and-unread defect this channel has now shipped twice
+    // (CLOUD-993, CLOUD-859), so it is a load error.
+    if !fact.matching.is_empty() && fact.counts.is_none() {
+        return Err(crate::error::UsageError::raise(format!(
+            "`[[fact]]` `{}` declares `where` and no `counts`: the predicate has no \
+             collection to filter, so it would be read by nothing",
+            fact.name
+        )));
+    }
+    if fact
+        .counts
+        .as_ref()
+        .is_some_and(|path| path.trim().is_empty())
+    {
+        return Err(crate::error::UsageError::raise(format!(
+            "`[[fact]]` `{}` declares an empty `counts` path",
+            fact.name
+        )));
+    }
+    // `blocking` takes `where`'s refusal for `where`'s reason: without a
+    // collection there is no count for a condition to add to, so `counted`
+    // would fall through to the whole-result reading and the clauses would be
+    // read by nothing.
+    if !fact.blocking.is_empty() && fact.counts.is_none() {
+        return Err(crate::error::UsageError::raise(format!(
+            "`[[fact]]` `{}` declares `blocking` and no `counts`: there is no count for a \
+             condition beside the collection to add to, so the clauses would be read by \
+             nothing",
+            fact.name
+        )));
+    }
+    // `returns` STAYS READ ON THE COUNTING PATH, and this is the conjunct that
+    // makes that true rather than nominal. `opaque` disclaims the buffer's
+    // shape; a `counts` path is a claim that the buffer is a JSON document
+    // with that key in it. A row carrying both states two contradictory
+    // contracts and the second one silently wins, which is the
+    // accepted-and-unread defect this channel has shipped twice already
+    // (CLOUD-993, CLOUD-859). The other two values are both legitimate here
+    // and `counted` enforces each of them against the payload.
+    if fact.counts.is_some() && fact.returns == Returns::Opaque {
+        return Err(crate::error::UsageError::raise(format!(
+            "`[[fact]]` `{}` declares `counts` and `returns = \"opaque\"`: the path is a \
+             claim about a shape the row disclaims, so one of the two would decide and the \
+             other would be read by nothing",
+            fact.name
+        )));
+    }
+    // THE OTHER `returns`/`counts` CONTRADICTION, and it is mutually
+    // unsatisfiable rather than merely contradictory. `json-array` requires the
+    // PAYLOAD ITSELF to be the array, and `select` resolves a
+    // named segment with `Value::get`, which answers `None` on an array — so
+    // the pair reaches `Look::CouldNotLook` on every payload there can ever be,
+    // and a check naming the row denies forever with no read that clears it.
+    // `.` is exempt because it is the spelling for the payload itself and is
+    // the only path that means anything over a bare array.
+    //
+    // Refused at load rather than left to a permanent could-not-look for the
+    // reason the whole channel is built on: a gate nobody can satisfy is
+    // CLOUD-859's measured failure, and it presented as a deny naming a remedy
+    // that could not clear it.
+    if fact.returns == Returns::JsonArray
+        && fact
+            .counts
+            .as_deref()
+            .is_some_and(|path| path.trim() != ".")
+    {
+        return Err(crate::error::UsageError::raise(format!(
+            "`[[fact]]` `{}` declares `returns = \"json-array\"` and a named `counts` path: \
+             the shape requires the payload to BE the array and the path requires a member \
+             of an object, so no payload can satisfy both and the row could never look",
+            fact.name
+        )));
+    }
+    // `when` SELECTS AMONG A TOOL'S CALLS, and a `command` row has nothing for
+    // it to select among: the whole command line is compared byte for byte, so
+    // the arguments are already inside the forgery control and a second,
+    // weaker predicate over the same bytes could only disagree with it.
+    // Refused rather than ignored, because a clause accepted and unread is this
+    // channel's own repeated defect (CLOUD-993, CLOUD-859).
+    if !fact.called_with.is_empty() && fact.command.is_some() {
+        return Err(crate::error::UsageError::raise(format!(
+            "`[[fact]]` `{}` declares `when` beside `command`: a command row is matched by \
+             byte-equality over the whole command line, so its arguments are already \
+             compared and the clauses would be read by nothing",
+            fact.name
+        )));
+    }
+    Ok(())
+}
+
+/// Every value a path selects, or `None` where the path does not resolve.
+///
+/// The grammar is dotted segments, where a segment ending `[]` iterates the array
+/// there. `None` and an EMPTY vector are different answers and the difference is
+/// what makes a zero-hit search still mint: a path that does not resolve is a
+/// payload this mint cannot read, while a path resolving to no elements is a real
+/// reading of nothing.
+///
+/// A `null` at the end of a path is `None` rather than a value, because every
+/// caller here is asking whether the result actually said something.
+/// `pub(crate)` since CLOUD-690: `facts::counted` walks a declared path over a
+/// tool result, and it is the SAME question this module already answers. A second
+/// walker would be a second path grammar — one accepting `[]` where the other
+/// does not, one treating an absent segment as null where the other refuses — and
+/// a config path meaning two things depending on which column it appears in is
+/// the drift this crate keeps recording.
+///
+/// Housed in `facts` and re-exported from `crate::mint` (CLOUD-2789), so the
+/// module the engine reads facts through names no module above it.
+#[must_use]
+pub fn select<'a>(value: &'a serde_json::Value, path: &str) -> Option<Vec<&'a serde_json::Value>> {
+    let mut current = vec![value];
+    for segment in path.split('.') {
+        let (name, iterate) = match segment.strip_suffix("[]") {
+            Some(name) => (name, true),
+            None => (segment, false),
+        };
+        let mut next = Vec::new();
+        for value in current {
+            // An empty name is the top-level array's spelling (`[].id`), so the
+            // value is already the thing to iterate.
+            let value = if name.is_empty() {
+                value
+            } else {
+                value.get(name)?
+            };
+            if iterate {
+                next.extend(value.as_array()?);
+            } else {
+                next.push(value);
+            }
+        }
+        current = next;
+    }
+    if current.iter().any(|value| value.is_null()) {
+        return None;
+    }
+    Some(current)
+}
+
+/// Whether `selector` names `raw_tool`: the whole name, or its whole final
+/// `__`-delimited segment.
+///
+/// **One authority, because two callers need the identical answer** (CLOUD-1024).
+/// [`crate::rules::Rule::selects_tool`] decides which rows adjudicate a call and
+/// [`crate::mint::Declared::tool`] decides which results mint a receipt; a rule
+/// that fires on a call whose result minted nothing is a gate nobody can satisfy,
+/// and that is exactly what two hand-rolled matchers would eventually produce.
+///
+/// Never a bare suffix: that would make `Edit` select `NotebookEdit`, widening a
+/// row onto a tool nobody named. The delimiter is what lets a selector survive
+/// the host rotating the server label it was minted under (CLOUD-178, CLOUD-665,
+/// CLOUD-684) — measured on one connector exposed under three names across
+/// registration episodes, where a row naming one matched none of the others and
+/// the miss was silent.
+///
+/// An empty selector is refused at load by both callers, so it cannot reach here
+/// and match the empty final segment of a name ending in `__`.
+#[must_use]
+pub fn selects_tool_name(selector: &str, raw_tool: &str) -> bool {
+    if raw_tool == selector {
+        return true;
+    }
+    // `strip_suffix` then a `__` test, rather than `ends_with("__{selector}")`
+    // built by formatting: the same answer without allocating a string per row
+    // per call, on the hottest path in the binary.
+    raw_tool
+        .strip_suffix(selector)
+        .is_some_and(|prefix| prefix.ends_with("__"))
+}
+
+/// A shell envelope's `stdout` then `stderr` members, concatenated, and how many
+/// of the two were strings.
+///
+/// A FIXED ORDER, declared here rather than taken from the map: two runs over one
+/// value must produce one digest (§6), and iteration order is not a promise a
+/// caller can rely on.
+///
+/// The one reader of that shape: [`crate::capture::decode_response`] stores an
+/// object response through it and the row counters here read a buffer through
+/// it. Housed in `facts` (CLOUD-2789) so `facts` names no module above it.
+#[must_use]
+pub fn shell_streams(map: &serde_json::Map<String, serde_json::Value>) -> (Vec<u8>, usize) {
+    let mut bytes = Vec::new();
+    let mut blocks = 0;
+    for key in ["stdout", "stderr"] {
+        if let Some(text) = map.get(key).and_then(serde_json::Value::as_str) {
+            bytes.extend_from_slice(text.as_bytes());
+            blocks += 1;
+        }
+    }
+    (bytes, blocks)
+}
+
+#[cfg(test)]
+#[allow(clippy::expect_used)]
+mod tests {
+    use super::*;
+
+    /// Fails by: every prompt channel read as the default (`is_default` as
+    /// `true`), so a row declaring `positional` loses it on the way out and
+    /// re-reads as stdin (CLOUD-2789).
+    #[test]
+    fn a_positional_prompt_survives_serialization_and_stdin_stays_quiet() {
+        let row = |prompt_arg: Option<&str>| -> ReviewQuery {
+            let mut row = serde_json::json!({
+                "id": "r",
+                "prompt": "p",
+                "runner": "x",
+                "version": "1",
+                "subject": "s",
+            });
+            if let Some(arg) = prompt_arg {
+                row["prompt_arg"] = serde_json::json!(arg);
+            }
+            serde_json::from_value(row).expect("a review row")
+        };
+        let positional = serde_json::to_value(row(Some("positional"))).expect("serializes");
+        assert_eq!(positional["prompt_arg"], "positional");
+        let stdin = serde_json::to_value(row(None)).expect("serializes");
+        assert!(stdin.get("prompt_arg").is_none(), "{stdin}");
+    }
+
+    /// Fails by: a blank `command` or `tool` admitted as a selector (either
+    /// emptiness guard in `validate_one` read as `false`), so a row that
+    /// selects nothing loads.
+    #[test]
+    fn a_blank_command_or_tool_is_refused_and_a_written_one_loads() {
+        let row = |selector: &str, value: &str| -> Declared {
+            serde_json::from_value(serde_json::json!({
+                "name": "f",
+                selector: value,
+                "returns": "json-array",
+            }))
+            .expect("a row")
+        };
+        for selector in ["command", "tool"] {
+            assert!(
+                validate(&[row(selector, "x")]).is_ok(),
+                "premise: {selector}"
+            );
+            let refused = validate(&[row(selector, "  ")])
+                .expect_err(selector)
+                .to_string();
+            assert!(
+                refused.contains(&format!("declares an empty `{selector}`")),
+                "{refused}"
+            );
+        }
+    }
+
+    /// Fails by: the refusal's list built from the formats that own NO
+    /// extension (only `pkl`) instead of those that own one.
+    #[test]
+    fn the_parseable_list_names_each_format_that_owns_an_extension() {
+        assert_eq!(parseable_extensions(), "json, json5, markdown, toml, yaml");
+    }
+
+    /// Fails by: the text after a fence's opening line starting on that line's
+    /// newline rather than past it.
+    #[test]
+    fn a_fence_opens_past_its_own_newline() {
+        let opened = open_fence("---\nkey: v\n---\n").expect("a YAML fence");
+        assert_eq!(opened.fence.opener, "---");
+        assert_eq!(opened.rest, "key: v\n---\n");
+    }
+
+    /// Fails by: a token of exactly [`TOKEN_MAX`] bytes refused as too long.
+    #[test]
+    fn a_token_at_the_limit_is_kept_and_one_past_it_refused() {
+        let at = "a".repeat(TOKEN_MAX);
+        let node = Node::Text(at.clone());
+        assert_eq!(
+            Reduction::Token.apply(&Look::Is(&node)),
+            Some(serde_json::json!(at))
+        );
+        let over = Node::Text("a".repeat(TOKEN_MAX + 1));
+        assert_eq!(Reduction::Token.apply(&Look::Is(&over)), None);
+    }
+
+    /// Fails by: a tag row carrying a path, or a filter with no path to apply
+    /// it to, read as a tag query rather than refused.
+    #[test]
+    fn a_tag_row_with_a_path_or_a_filter_has_no_shape() {
+        let row = |path: Option<&str>, filter: Option<&str>| HistoryQuery {
+            id: String::from("q"),
+            tags: Some(String::from("v*")),
+            path: path.map(str::to_owned),
+            filter: filter.map(str::to_owned),
+        };
+        assert_eq!(row(None, None).shape(), Some(HistoryShape::Tags));
+        assert_eq!(row(Some("a"), None).shape(), None);
+        assert_eq!(row(None, Some("A")).shape(), None);
+    }
+
+    /// Fails by: any one refusal folded into another, so a mint carrying only
+    /// a `/`, only a `\`, or a row with only an empty id reads as admissible.
+    #[test]
+    fn each_malformed_mint_row_is_refused_on_its_own() {
+        let row = |mint: &str, id: &str| MintedQuery {
+            id: id.to_owned(),
+            mint: mint.to_owned(),
+            field: 0,
+            recency: 1,
+            max_age_days: 1,
+        };
+        assert!(!row("ok", "x").malformed());
+        assert!(row("", "x").malformed());
+        assert!(row("a/b", "x").malformed());
+        assert!(row("a\\b", "x").malformed());
+        assert!(row("ok", "").malformed());
+    }
+
+    /// Fails by: an object with neither stream read as an empty text, or an
+    /// array whose blocks are not all text blocks concatenated anyway.
+    #[test]
+    fn a_buffer_with_no_text_has_no_text() {
+        assert_eq!(buffer_text(&serde_json::json!({})), None);
+        assert_eq!(
+            buffer_text(&serde_json::json!({"stdout": "a", "stderr": "b"})),
+            Some(String::from("ab"))
+        );
+        assert_eq!(
+            buffer_text(&serde_json::json!([{"type": "image", "text": "x"}])),
+            None
+        );
+        assert_eq!(
+            buffer_text(&serde_json::json!([{"type": "text", "text": "x"}])),
+            Some(String::from("x"))
+        );
+    }
+
+    /// Fails by: a row declaring both selectors answered by every command but
+    /// its own.
+    #[test]
+    fn a_row_with_both_selectors_is_answered_by_its_command() {
+        let declared: Declared = serde_json::from_value(serde_json::json!({
+            "name": "n",
+            "command": "run me",
+            "tool": "T",
+            "returns": "json-array",
+        }))
+        .expect("a declared row");
+        assert!(declared.answered_here("T", "run me"));
+        assert!(!declared.answered_here("T", "run you"));
+    }
+
+    /// Fails by: a tool row read as well formed whatever it holds, or any one
+    /// malformation of either key component needing another beside it to be
+    /// refused (an `||` read as `&&` in `ToolQuery::malformed`).
+    #[test]
+    fn each_malformed_tool_row_is_refused_on_its_own() {
+        let row = |tool: &str, version: &str| ToolQuery {
+            id: String::from("q"),
+            tool: tool.to_owned(),
+            version: version.to_owned(),
+            input: String::from("f"),
+            run: Vec::new(),
+        };
+        assert!(!row("t", "1").malformed());
+        let separated = format!("a{KEY_SEPARATOR}b");
+        for part in ["", separated.as_str(), "a/b", "a\\b"] {
+            assert!(row(part, "1").malformed(), "tool {part:?}");
+            assert!(row("t", part).malformed(), "version {part:?}");
+        }
+    }
+
+    /// Fails by: a mint name carrying a path separator admitted.
+    #[test]
+    fn a_minted_query_naming_a_path_is_malformed() {
+        let row = |mint: &str, id: &str| MintedQuery {
+            id: id.to_owned(),
+            mint: mint.to_owned(),
+            field: 0,
+            recency: 1,
+            max_age_days: 1,
+        };
+        assert!(!row("m", "k").malformed());
+        for (mint, id) in [("a/b", "k"), ("a\\b", "k"), ("", "k"), ("m", "")] {
+            assert!(row(mint, id).malformed(), "{mint:?} {id:?}");
+        }
+    }
+
+    /// Fails by: the bare root recovered as a spilled path.
+    #[test]
+    fn the_bare_root_is_no_spilled_path() {
+        assert_eq!(spilled_path("Output saved to /."), None);
+        let named = if cfg!(windows) {
+            "C:\\t\\r.txt"
+        } else {
+            "/t/r.txt"
+        };
+        assert_eq!(
+            spilled_path(&format!("Output saved to {named}.")),
+            Some(named)
+        );
+    }
+
+    /// Fails by: an integer literal matching every integer but itself.
+    #[test]
+    fn an_integer_literal_matches_only_its_own_value() {
+        assert!(Literal::Integer(3).matches(&serde_json::json!(3)));
+        assert!(!Literal::Integer(3).matches(&serde_json::json!(4)));
+        assert!(!Literal::Integer(3).matches(&serde_json::json!("3")));
+    }
+}

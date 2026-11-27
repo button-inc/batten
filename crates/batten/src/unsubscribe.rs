@@ -109,9 +109,9 @@ pub fn session(host: &Host) -> Option<String> {
 }
 
 /// `value` as a session id, or `None` where it is not one path component —
-/// [`crate::record::safe_component`]'s reading, and no inner whitespace.
+/// [`crate::config_check::record::safe_component`]'s reading, and no inner whitespace.
 fn safe_id(value: &str) -> Option<String> {
-    crate::record::safe_component("session id", value)
+    crate::config_check::record::safe_component("session id", value)
         .ok()
         .filter(|id| !id.chars().any(char::is_whitespace))
 }
@@ -163,10 +163,7 @@ pub fn mint(
     answer: &[u8],
     via: &str,
 ) -> Result<String> {
-    let digest: String = crate::receipt::hex_sha256(answer)
-        .chars()
-        .take(12)
-        .collect();
+    let digest: String = crate::digest::sha256_hex(answer).chars().take(12).collect();
     let path = receipt_path(git_dir, host, session, pr);
     if let Some(store) = path.parent() {
         std::fs::create_dir_all(store)?;
@@ -309,7 +306,7 @@ pub fn drop_subscription(
     let Some(token_file) = host.token_env.as_deref().and_then(std::env::var_os) else {
         return give_up(out, pr, "no credential file declared");
     };
-    let Ok(token) = std::fs::read_to_string(&token_file) else {
+    let Ok(token) = crate::fsio::read_to_string(&token_file) else {
         return give_up(out, pr, "the credential file will not read");
     };
     let token = token.trim_end();
@@ -325,7 +322,7 @@ pub fn drop_subscription(
         (
             |calls: &[crate::fetch::Call<'_>]| crate::fetch::spend(calls),
             || {
-                crate::repo_slug(Path::new("."))
+                crate::race::repo_slug(Path::new("."))
                     .as_deref()
                     .and_then(owner_repo)
             },
@@ -398,6 +395,7 @@ fn ask_endpoint(
         body: Some(bytes.as_slice()),
         patch: false,
         delete: false,
+        file: None,
         direct: false,
         credentials: &[],
     };
@@ -470,16 +468,6 @@ pub fn record(
     Ok(ExitCode::Success)
 }
 
-//MUTANT-SUITE crates/batten/src/unsubscribe.rs
-//MUTANT drop-mints-on-any-status|s@^    if status != 200 {$@    if false {@|a_refused_or_errored_call_is_not_accepted
-//MUTANT tool-error-ignored|s@^    !tool_refused$@    true@|a_refused_or_errored_call_is_not_accepted
-//MUTANT any-answer-names-the-pr|s@^    answer.contains(&format!("#{pr}"))$@    true@|an_answer_must_name_this_pr
-//MUTANT receipt-ignores-session|s@^        .join(format!("{}.{session}.{pr}", host.family))$@        .join(format!("{}.{pr}", host.family))@|a_receipt_is_this_sessions_for_this_pr
-//MUTANT pr-leaf-stays-text|s@^        Value::String(text) if text == "{pr}" => Value::from(words.pr),$@@|the_arguments_are_the_consumers_template_filled
-//MUTANT owner-guessed|s@^                    filled = filled.replace(name, part?);$@                    filled = filled.replace(name, part.unwrap_or_default());@|the_arguments_are_the_consumers_template_filled
-//MUTANT-SUITE crates/batten/tests/it/pr_unsubscribed.rs
-//MUTANT drop-blocks-on-failure|s@^    let fails_open = ExitCode::Success;$@    let fails_open = ExitCode::Usage;@|a_refused_or_unreachable_call_mints_nothing_and_drop_never_blocks
-
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
@@ -537,7 +525,8 @@ mod tests {
         let digest = mint(&dir, &host, "cse_a", 489, b"secret answer", "agent").unwrap();
         assert_eq!(digest.len(), 12);
         let stored =
-            std::fs::read_to_string(dir.join("batten-receipts/pr-unsubscribed.cse_a.489")).unwrap();
+            crate::fsio::read_to_string(dir.join("batten-receipts/pr-unsubscribed.cse_a.489"))
+                .unwrap();
         assert!(stored.starts_with("pr 489\nsession cse_a\nvia agent\n"));
         assert!(!stored.contains("secret"), "never the answer");
         assert!(receipt_path(&dir, &host, "cse_a", 489).is_file());

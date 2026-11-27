@@ -102,7 +102,7 @@ wait_ended_a_lap_ago(lines, index) if {
 # quietly.
 wait_answers := [answer |
 	is_object(input.tree.records)
-	lines := input.tree.records[_]
+	lines = input.tree.records[_]
 	some index, line in lines
 	not wait_ended_a_lap_ago(lines, index)
 	columns := split(line, " ")

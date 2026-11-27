@@ -84,7 +84,7 @@
 //! meaning — [`Verdict`] enumerates them.
 //!
 //! And a verdict, however it lands, is **advisory**: nothing here constructs a
-//! [`crate::rules::Finding`], so `any_blocking` and `--fail-on-warning` cannot
+//! [`crate::findings::Finding`], so `any_blocking` and `--fail-on-warning` cannot
 //! see a judge outcome. The advisory surface is unable to block by type rather
 //! than by policy.
 
@@ -95,56 +95,13 @@ use std::path::Path;
 )]
 use std::process::Command;
 
-use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
 use crate::error::UsageError;
 use crate::identity;
-use crate::rules::PathSet;
-
-/// The `[judge]` table: what the judge may put in a model call.
-///
-/// Every field defaults to the refusing reading, so a `[judge]` table that
-/// merely exists sends nothing but pointers and hashes.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct Judge {
-    /// The content classes admitted **raw** into a model call. Empty — the
-    /// default — means pointer-only: no span bytes cross at all.
-    ///
-    /// A class named here is admitted and nothing else is. There is deliberately
-    /// no "all" spelling: a config that wants both classes names both, so the
-    /// diff that widens the boundary shows what it widened.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub raw: Vec<PayloadClass>,
-    /// The ceiling on assembled payload bytes. Absent means
-    /// [`DEFAULT_MAX_PAYLOAD_BYTES`].
-    ///
-    /// There is deliberately **no** key for what happens over the `protected`
-    /// set: one protected member refuses the invocation, full stop. See the
-    /// module docs for why that key was removed rather than defaulted.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub max_payload_bytes: Option<usize>,
-    /// The judge command, as a template. The first whitespace-separated token is
-    /// a program on the operator's `PATH`, **executed directly and never through
-    /// a shell** — so this is data a reviewer can read, not a script.
-    ///
-    /// Absent is legal on its own: a `[judge]` table predates the judge that
-    /// reads it (CLOUD-135 landed first), and a repository that declared a
-    /// boundary and no command must keep loading. It is a judge **row** that
-    /// cannot resolve without one — see [`argv`].
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub run: Option<String>,
-    /// The model the operator's command should use, substituted into [`Judge::run`]
-    /// at each `{{model}}` placeholder.
-    ///
-    /// **Opaque to the engine**: never parsed, never validated against a list,
-    /// never used to decide anything. Batten has no opinion about which model a
-    /// consumer judges with, and a build that shipped a roster would be stating
-    /// one — plus going stale (non-negotiable rule 1: the fact is the consumer's).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub model: Option<String>,
-}
+use crate::path_set::PathSet;
+// The section's declaration lives with the model (CLOUD-2789).
+use crate::config_model::{Judge, PayloadClass};
 
 /// The `{{model}}` placeholder [`Judge::model`] substitutes for in [`Judge::run`].
 ///
@@ -156,7 +113,7 @@ pub const MODEL_PLACEHOLDER: &str = "{{model}}";
 
 /// The argv a judge row's command resolves to: program first, arguments after.
 ///
-/// Splitting on whitespace is the same reading [`crate::rules::Rule::program`]
+/// Splitting on whitespace is the same reading [`crate::config_model::Rule::program`]
 /// gives a `command` rule's `check`, and for the same reason — one authority for
 /// "which token is the program", so a `doctor` PATH probe and the runner can
 /// never disagree about which binary they are talking about.
@@ -340,31 +297,6 @@ pub fn effective_cap(authority: Option<usize>, local: Option<usize>) -> usize {
     match local {
         Some(local) => base.min(local),
         None => base,
-    }
-}
-
-/// A class of content that could cross into a model call.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-#[non_exhaustive]
-pub enum PayloadClass {
-    /// The bytes of one matched span.
-    SpanText,
-    /// The bytes of a whole file.
-    FileText,
-}
-
-impl PayloadClass {
-    /// Every class, so a census cannot go stale — the `Effect::ALL` idiom.
-    pub const ALL: &'static [PayloadClass] = &[PayloadClass::SpanText, PayloadClass::FileText];
-
-    /// The stable token, used in config, output, and the hash preimage.
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            PayloadClass::SpanText => "span_text",
-            PayloadClass::FileText => "file_text",
-        }
     }
 }
 
@@ -677,7 +609,7 @@ fn pointer_of(span: &Span) -> Option<String> {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
-
+    #[cfg(test)]
     const SECRET: &[u8] = b"AKIAIOSFODNN7EXAMPLE trailing-secret-bytes";
     const UNMATCHED: &[u8] = b"UNMATCHED-FILE-SENTINEL-nothing-selected-this";
     const ENV_SENTINEL: &[u8] = b"ENV-VALUE-SENTINEL-never-a-payload-input";

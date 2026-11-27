@@ -161,6 +161,38 @@ fn a_loadable_config_still_allows_an_ordinary_call() {
     );
 }
 
+#[test]
+fn a_tool_name_off_the_pre_tool_event_loads_no_config() {
+    // `is_adjudicable` admits a tool name only on `PreTool` or a permission
+    // event (CLOUD-2789): each is one clause, the event and the tool name
+    // joined by `&&`. An event off both, naming an MCP tool, carries no
+    // command and no write, so it never reaches the config load; nor does a
+    // pre-tool or permission event naming no tool. An unparseable config
+    // cannot refuse either. Joined by `||` instead, the tool name or the event
+    // alone admits the call, the load fails, and it is refused at `2` (an MCP
+    // call is no exempt read).
+    let dir = fixture("adjudicate-post-tool-name", WILL_NOT_PARSE);
+    for event in ["PostToolUse", "Notification", "UserPromptSubmit"] {
+        let named = format!(
+            "{{\"hook_event_name\":\"{event}\",\"tool_name\":\"mcp__fixture__call\",\
+             \"tool_input\":{{}}}}"
+        );
+        assert_eq!(
+            code_for(&dir, &named),
+            Some(0),
+            "a tool name on {event} must not make the call adjudicable"
+        );
+    }
+    for event in ["PreToolUse", "PermissionRequest"] {
+        let bare = format!("{{\"hook_event_name\":\"{event}\",\"tool_input\":{{}}}}");
+        assert_eq!(
+            code_for(&dir, &bare),
+            Some(0),
+            "{event} naming no tool must not make the call adjudicable"
+        );
+    }
+}
+
 /// A write-tool call targeting `file` inside `dir`, by absolute path the way
 /// Claude Code sends one — the boundary relativises it before judging.
 fn write_payload(dir: &Path, file: &str) -> String {
@@ -233,6 +265,61 @@ fn on_claude_code_the_refusal_is_the_document_rather_than_the_number() {
         Some(3),
         "where the document refuses, the number says nothing was judged"
     );
+}
+
+#[test]
+fn the_unloaded_refusal_reason_reaches_the_harness() {
+    // CLOUD-2595 §2f, measured in a consumer's session: the first deny of a
+    // session carried the cause, and EVERY LATER ONE read only `batten deny
+    // engine-cannot-adjudicate` — the pointer arm of a refusal with no subjects
+    // and no routes. The session never learned why its config would not load.
+    // So the reason must survive the second firing of one session.
+    let dir = fixture("adjudicate-reason-repeats", FAILS_VALIDATION);
+    let in_session = "{\"session_id\":\"cloud-2595-reason\",\"hook_event_name\":\"PreToolUse\",\
+                      \"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"echo hello\"}}";
+    let args = ["adjudicate", "--harness", "claude-code"];
+    let first = run_with_stdin(dir.as_path(), &args, in_session);
+    let second = run_with_stdin(dir.as_path(), &args, in_session);
+    for (which, output) in [("first", &first), ("second", &second)] {
+        let rendered = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            rendered.contains(r#""permissionDecision":"deny""#),
+            "the {which} firing refuses: {rendered}"
+        );
+        assert!(
+            rendered.contains("could not load the rules"),
+            "the {which} firing of one session still says why: {rendered}"
+        );
+    }
+}
+
+#[test]
+fn a_repeated_load_refusal_still_names_its_cause_and_repair() {
+    // CLOUD-2603. The case above holds only the fixed preamble, so it stays green
+    // if the CAUSE or the REPAIR falls out of the repeat, which is the field
+    // symptom: the second firing read `batten deny engine-cannot-adjudicate` and
+    // nothing else. `DENIES_THE_READ` with its reason one character over the 240
+    // cap, so the config fails on that alone, and a `Bash` call so the read floor
+    // does not admit it. Not byte-identity across firings: the first alone carries
+    // the once-per-window legend line.
+    let over_cap = DENIES_THE_READ.replace("the fixture refuses this read", &"x".repeat(241));
+    let dir = fixture("adjudicate-cause-repeats", &over_cap);
+    let in_session = "{\"session_id\":\"cloud-2603-cause\",\"hook_event_name\":\"PreToolUse\",\
+                      \"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"echo hello\"}}";
+    let args = ["adjudicate", "--harness", "claude-code"];
+    let first = run_with_stdin(dir.as_path(), &args, in_session);
+    let second = run_with_stdin(dir.as_path(), &args, in_session);
+    for (which, output) in [("first", &first), ("second", &second)] {
+        let rendered = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            rendered.contains("rule[0].reason"),
+            "the {which} firing names the row that would not load: {rendered}"
+        );
+        assert!(
+            rendered.contains("engine install"),
+            "the {which} firing names the admitted repair: {rendered}"
+        );
+    }
 }
 
 #[test]
@@ -853,16 +940,23 @@ fn a_plan_mode_write_is_refused_and_a_read_granted_where_no_authority_governs() 
     assert_eq!(decision, "allow", "plan mode grants a read");
 }
 
+/// Owner ruling R1, 2026-11-23 (`.batten/asked.jsonl` 293, CLOUD-2768): batten
+/// grants every call it allows in every permission mode but plan, and in plan
+/// grants only the read-only ones.
+///
+/// Fails by: default mode left to the host's prompt again, or plan mode
+/// granting a write.
 #[test]
-fn default_mode_is_left_to_the_host_where_no_authority_governs() {
+fn default_mode_grants_an_allowed_call_and_plan_mode_does_not() {
     let call = mode_call(
         "default",
         "Bash",
         &serde_json::json!({"command": "touch x"}),
     );
-    assert_eq!(
-        mode_verdict("mode-default-default", &call),
-        None,
-        "a mode the operator chose to be asked in stays the host's"
-    );
+    let (decision, reason) = mode_verdict("mode-default-default", &call).unwrap_or_default();
+    assert_eq!(decision, "allow", "default mode grants what no rule denied");
+    assert!(reason.contains("mode grant now"), "{reason}");
+    let plan = mode_call("plan", "Bash", &serde_json::json!({"command": "touch x"}));
+    let (decision, _) = mode_verdict("mode-default-plan-touch", &plan).unwrap_or_default();
+    assert_ne!(decision, "allow", "plan mode never grants a write");
 }

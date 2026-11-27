@@ -138,7 +138,7 @@ impl Session {
             .current_dir(&self.dir)
             .args(["mcp", "posture", "--settings", &settings, "--logs", &logs])
             .args(extra)
-            .output()
+            .streamed_output()
             .expect("run the posture check");
         (
             out.status.code(),
@@ -487,4 +487,51 @@ fn no_generated_config_means_no_verdict() {
     let s = Session::with_config("765-no-config", GOVERNED);
     s.settings(&allow(r#"["mcp__Claude_Code_Remote__list_sessions"]"#));
     assert_eq!(s.check(), (Some(0), String::new()));
+}
+
+/// With no `--logs`, the root is the host's own tree under `$HOME`, keyed by the
+/// working directory with every separator written as `-`.
+///
+/// Fails by: `mcp_log_root` answering any path but that one — an empty path
+/// reads as a missing root, which passes as "not a live session" over a log
+/// that records a failure.
+#[test]
+fn the_default_log_root_is_the_hosts_tree_under_home() {
+    use common::StateHome as _;
+    let s = Session::new("default-root");
+    let home = s.dir.join("home");
+    let cwd = std::fs::canonicalize(&s.dir).expect("canonical cwd");
+    let key = cwd.to_string_lossy().replace('/', "-");
+    let server = home
+        .join(".cache/claude-cli-nodejs")
+        .join(key)
+        .join("mcp-logs-serena");
+    std::fs::create_dir_all(&server).expect("server log dir");
+    std::fs::write(
+        server.join("2026-08-11T04-17-22-000Z.jsonl"),
+        format!("{STARTED}\n{CLOSED}\n"),
+    )
+    .expect("log");
+    let settings = s.dir.join("settings.json").display().to_string();
+    let absent = s.dir.join("absent-ledger").display().to_string();
+    let out = common::batten()
+        .current_dir(&s.dir)
+        .args([
+            "mcp",
+            "posture",
+            "--settings",
+            &settings,
+            "--spawns",
+            &absent,
+        ])
+        .at_home(&home)
+        .streamed_output()
+        .expect("run the posture check");
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(out.status.code(), Some(2), "{text}");
+    assert!(text.contains("serena -32000"), "{text}");
 }

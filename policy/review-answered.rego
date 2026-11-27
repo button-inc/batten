@@ -96,7 +96,7 @@ violation contains {
 	"subjects": [{"count": record.rows}],
 } if {
 	readying
-	record := input.facts["agent-sourced"]["review-threads-clear"]
+	record = input.facts["agent-sourced"]["review-threads-clear"]
 	record.rows > 0
 }
 
@@ -115,7 +115,7 @@ violation contains {
 	"subjects": [{"count": record.rows}],
 } if {
 	readying
-	record := input.facts["agent-sourced"]["review-happened"]
+	record = input.facts["agent-sourced"]["review-happened"]
 	record.rows == 0
 }
 

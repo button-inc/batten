@@ -124,7 +124,7 @@ violation contains {
 	"subjects": [{"path": path}],
 } if {
 	input.call.operation == "write"
-	path := input.call.writes
+	path = input.call.writes
 	is_string(path)
 	governed(path)
 }

@@ -326,7 +326,7 @@ fn this_repositorys_two_tier_gate_is_wired_today() {
     // fast plan skips the committed slow steps for their profile, and the full
     // plan includes them.
     let root = at_root(".");
-    let query = |value: serde_json::Value| -> hk::PlanQuery {
+    let query = |value: serde_json::Value| -> batten::config_model::PlanQuery {
         serde_json::from_value(value).expect("a query a row declares")
     };
     let Look::Is(fast) = hk::acquire(

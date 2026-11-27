@@ -88,8 +88,11 @@
 //! rather than passed along — named rather than dropped, because a silently
 //! discarded document is an author who believes they are deciding something.
 
+#[cfg(test)]
+use crate::config_check::handler::HandlerExt as _;
+#[cfg(test)]
+use crate::hook::EventExt as _;
 use regex::Regex;
-use std::collections::BTreeSet;
 use std::io::Read;
 use std::path::Path;
 #[expect(
@@ -97,15 +100,15 @@ use std::path::Path;
     reason = "stays: a handler IS a program the operator declared in `[[hook.handler]]`, so there is no in-process form of it to prefer — the same standing `action` has (CLOUD-320)"
 )]
 use std::process::{Command, Stdio};
-use std::sync::mpsc;
-use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
-
-use crate::error::UsageError;
-use crate::hook::Event;
+#[cfg(test)]
+use crate::config_check::handler::declarable_tokens;
+use crate::config_check::handler::event_of;
+#[cfg(test)]
+use crate::config_check::handler::validate;
+use crate::config_model::Event;
+use crate::config_model::Handler;
 
 /// The exit code a handler refuses with.
 ///
@@ -149,198 +152,11 @@ const POLL: Duration = Duration::from_millis(10);
 /// verdict that has not arrived by now is not coming, and the bound is the promise.
 const DRAIN_GRACE: Duration = Duration::from_millis(200);
 
-/// Server names no connector is exposed under, used to ask a `matcher` whether it
-/// accepts a label it has never seen (CLOUD-178).
-///
-/// Two rather than one, so a fragment cannot pass by coinciding with a single
-/// probe's shape, and they are the two forms a host actually mints: a readable
-/// alias and a UUID. **Fixed rather than random** — a gate's verdict is
-/// byte-stable (house-style §6), and a probe drawn per run would make a refusal
-/// depend on the draw. Neither contains `__`, which is the segment separator the
-/// fragment is cut on.
-const PROBE_SERVERS: [&str; 2] = ["zqxjkvwpbf", "00000000-0000-4000-8000-000000000000"];
-
-/// One declared handler.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct Handler {
-    /// The stable identifier a verdict, a violation and a timing are reported
-    /// under.
-    ///
-    /// Separate from the command for [`crate::action::Action`]'s reason: the
-    /// argv is free to change without the thing it is called in reports changing
-    /// with it. Here it carries a second load — it is the key a per-handler
-    /// timing series is recorded against, so a renamed handler starts a new
-    /// series rather than silently continuing another's.
-    pub id: String,
-    /// The event this handler runs on, as [`Event::as_str`] spells it.
-    ///
-    /// A **normalized** token, never a host's own word — `action`'s rule for
-    /// `action`'s reason: a handler declared once should run on every host that
-    /// offers the moment, and keying it on one host's spelling would silently
-    /// not run on another's.
-    pub on: String,
-    /// The command, as argv. Never a shell string.
-    ///
-    /// argv rather than a command line so there is no quoting layer between what
-    /// an operator wrote and what runs: no word splitting, no glob expansion, no
-    /// command substitution.
-    pub run: Vec<String>,
-    /// How long this handler may run, in milliseconds.
-    ///
-    /// Absent means [`DEFAULT_TIMEOUT`]. There is deliberately no spelling for
-    /// "no timeout": the bound is the property the door exists to provide, and a
-    /// surface letting a handler opt out of it would return every registration
-    /// to the state this replaces.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub timeout_ms: Option<u64>,
-    /// Which tool names this handler runs for, as a regular expression over the
-    /// raw name (CLOUD-312 row 5).
-    ///
-    /// **Absent means every call at the event**, which is what [`selects`] did for
-    /// every row before this column existed — so no landed row changes behaviour by
-    /// its arrival.
-    ///
-    /// # Why a handler needs one at all
-    ///
-    /// [`selects`] narrows by EVENT, which is the whole narrowing `pre-tool` was
-    /// admitted on. That is enough for `user-prompt-submit`, which fires once a
-    /// turn. It is not enough for `pre-tool`, which fires on every tool call:
-    /// measured 2026-08-25 while retiring `connector-allow-guard`, an unnarrowed
-    /// `pre-tool` handler cost **19.6ms p50 on a `Bash` call and 19.9ms on a
-    /// `Read`** — calls it has nothing to say about — against a `wired` path whose
-    /// whole p50 is 21ms. The guard it replaced was registered under a host matcher
-    /// and never saw those calls, so the door would have been a regression dressed
-    /// as a consolidation.
-    ///
-    /// # A regex here, where a rule row gets `tool`
-    ///
-    /// [`crate::rules::Rule::tool`] is a SUFFIX selector, deliberately: a rule
-    /// naming a literal server is the CLOUD-178 trap, where a host rotates the
-    /// exposed name and the row silently matches nothing. This column is a regex
-    /// instead, because the predicate a dispatched program needs is not always a
-    /// suffix — `connector-allow-guard` decides `mcp__<any server>__<any verb>`,
-    /// which is a PREFIX and which no suffix selector can say.
-    ///
-    /// **The trap is refused rather than trusted.** A matcher naming a literal
-    /// server segment is exactly what CLOUD-178 measured going inert, so
-    /// [`Handler::validate`] rejects one — `^mcp__` is admitted and
-    /// `^mcp__Linear__` is not. That keeps the freedom this column needs without
-    /// re-opening the defect the sibling column's shape exists to prevent.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub matcher: Option<String>,
-    /// Which COMMANDS this handler runs for, as a regular expression over the
-    /// mediated call's command string (CLOUD-1650).
-    ///
-    /// **Absent means every call [`Handler::matcher`] already selected**, so no
-    /// landed row changes behaviour by this column's arrival — the same promise
-    /// `matcher` itself made when it was added.
-    ///
-    /// # Why the sibling column cannot express this
-    ///
-    /// [`Handler::matcher`] is a regex over the TOOL NAME. That is the whole of
-    /// what it can say, and for a shell tool the tool name is `Bash` on every
-    /// call the agent makes — so a handler that wants *some* shell commands and
-    /// not others has, without this, exactly two options: fire on all of them, or
-    /// on none. Firing on all of them is not a neutral default. Measured
-    /// 2026-08-25 on the sibling column's own row, an unnarrowed `pre-tool`
-    /// handler cost 19.6ms p50 on a `Bash` call against a `wired` path whose
-    /// whole p50 is 21ms — so "narrow by tool name only" prices a handler about a
-    /// dozen commands as if it were about every one.
-    ///
-    /// # It names a SHAPE, never a program's own vocabulary
-    ///
-    /// The engine holds the matcher and the consumer's `batten.toml` holds the
-    /// expression, which is `protected`'s split and non-negotiable rule 1's: a
-    /// list of git subcommands in `crates/batten` would be one consumer's
-    /// vocabulary shipped to every adopter. What is generic here is "select on
-    /// what the call is going to RUN, not on what the host called the tool".
-    ///
-    /// # A command that cannot be read does NOT select
-    ///
-    /// The opposite reading from [`Handler::selects_tool`]'s unparseable-matcher
-    /// arm, and the asymmetry is deliberate. There, running is the safe direction
-    /// because the row was validated at load and reaching the fallback means a
-    /// caller skipped validation. Here, could-not-look means the ENVELOPE carried
-    /// no command — every non-command tool call in the session — and selecting on
-    /// those would fire the handler on every `Read` and every `Edit`, which is the
-    /// unnarrowed cost this column exists to avoid. A row declaring this column
-    /// has said its subject is a command; an envelope with no command is not its
-    /// subject.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub command_matcher: Option<String>,
-    /// Whether this handler's subject is the TREE, so a call writing outside the
-    /// repository does not select it (CLOUD-2390).
-    ///
-    /// Measured: `filed-row-settled` refuses every Edit and Write while a filed
-    /// row is unsettled, and its remedy is a board write. In plan mode the board
-    /// write is refused, so the host's plan file — outside the repository, and
-    /// the one file plan mode exists to write — could not be written either.
-    ///
-    /// **A boolean, not a path expression**: the boundary already makes a
-    /// written path repo-relative exactly when it lies inside the repository
-    /// (`hook::relativise_writes`), so a ROOTED path IS a path outside it, and
-    /// no row has to spell a host's directory layout. Rooted, not absolute: on
-    /// Windows `/root/x.md` has a root but no drive, so `is_absolute` reads it
-    /// as inside, and only the Windows leg says so. A call that writes no path
-    /// is selected — nothing was written outside. `false` is every landed row.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub tree_only: bool,
-    /// The issue that owns retiring this handler (CLOUD-984).
-    ///
-    /// **A handler is an antipattern with a ratchet, never a destination.** The
-    /// door makes a dispatched program safe — a bound, central fail-open, a
-    /// stated output shape — and none of that makes it *policy*. A predicate
-    /// living behind a spawn is one the committed authority cannot be read to
-    /// discover, so every handler is a debt somebody owes, and this column is
-    /// where the creditor is named.
-    ///
-    /// Absent is not refused at load, deliberately — see
-    /// [`Handler::transitional_defect`] for why the enforcement is tree-scoped.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub owner: Option<String>,
-    /// The date past which this handler is overdue, `YYYY-MM-DD`.
-    ///
-    /// Not an expiry that switches the handler OFF: a dispatched program that
-    /// silently stopped running is the fail-open this whole surface exists to
-    /// close. It is a date past which the DIAGNOSIS says so, which is the only
-    /// form of pressure that cannot itself become an outage.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub expires: Option<String>,
-    /// Whether this handler's advisory is a **pre-approval** rather than a note.
-    ///
-    /// CLOUD-191's channel, and the reason it is a column rather than a new exit
-    /// code: §7's table is `0/1/2/3` with no per-kind exception, and
-    /// [`Outcome::Advise`] already occupies exit `0` with output. A third meaning
-    /// distinguished by the *shape* of stdout is exactly what [`impersonates_host`]
-    /// refuses, so the capability is DECLARED here and the channel stays the exit
-    /// code the handler already has. A row without this behaves exactly as it does
-    /// today, and no new vocabulary enters the stream.
-    ///
-    /// **What it buys.** `connector-allow-guard` reads the session's injected MCP
-    /// config to learn which of a server's two names — readable or UUID — is live
-    /// this session, and applies the committed verdict to the live spelling. Its
-    /// allow arm has to reach the host as `permissionDecision: "allow"` or the
-    /// operator is prompted for a grant they already wrote down.
-    ///
-    /// **What it cannot buy.** A pre-approval only ever upgrades a decision that
-    /// was already an allow; the boundary enforces that rather than trusting it, so
-    /// no handler can spend a refusal the engine's own rows reached. And it is
-    /// refused at load on any event whose host does not honour one, because a
-    /// declared grant that lands nowhere is indistinguishable from this handler
-    /// never having run.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub preapproves: bool,
-}
-
-//MUTANT tree-only-inverted|s@^        !self.tree_only \x7c\x7c writes.is_none_or(\x7cwrites\x7c !Path::new(writes).has_root())$@        !self.tree_only \x7c\x7c writes.is_none_or(\x7cwrites\x7c Path::new(writes).has_root())@|a_write_inside_the_tree_is_selected
-//MUTANT tree-only-pathless|s@^        !self.tree_only \x7c\x7c writes.is_none_or(\x7cwrites\x7c !Path::new(writes).has_root())$@        !self.tree_only \x7c\x7c writes.is_some_and(\x7cwrites\x7c !Path::new(writes).has_root())@|a_tree_only_row_selects_a_pathless_call
-impl Handler {
+/// `Handler` behaviour that belongs to this module's layer, not the type's (CLOUD-2793).
+pub trait HandlerExt: Sized {
     /// The event this handler names, or `None` when `on` names none.
     #[must_use]
-    pub fn event(&self) -> Option<Event> {
-        event_of(&self.on)
-    }
+    fn event(&self) -> Option<Event>;
 
     /// Whether this handler runs for `raw_tool`.
     ///
@@ -351,15 +167,7 @@ impl Handler {
     /// contract is to RUN it — a handler that silently stopped being dispatched is
     /// the absence the door exists to close.
     #[must_use]
-    pub fn selects_tool(&self, raw_tool: &str) -> bool {
-        let Some(matcher) = self.matcher.as_deref() else {
-            return true;
-        };
-        match Regex::new(matcher) {
-            Ok(regex) => regex.is_match(raw_tool),
-            Err(_) => true,
-        }
-    }
+    fn selects_tool(&self, raw_tool: &str) -> bool;
 
     /// Whether this handler runs for `command` (CLOUD-1650).
     ///
@@ -377,32 +185,16 @@ impl Handler {
     /// reading for a participant in a fail-open contract is to run — a handler
     /// that silently stopped being dispatched is the absence the door closes.
     #[must_use]
-    pub fn selects_command(&self, command: Option<&str>) -> bool {
-        let Some(matcher) = self.command_matcher.as_deref() else {
-            return true;
-        };
-        let Some(command) = command else {
-            return false;
-        };
-        match Regex::new(matcher) {
-            Ok(regex) => regex.is_match(command),
-            Err(_) => true,
-        }
-    }
+    fn selects_command(&self, command: Option<&str>) -> bool;
 
     /// Whether this handler runs for a call writing `writes` (CLOUD-2390): see
     /// [`Handler::tree_only`].
     #[must_use]
-    pub fn selects_path(&self, writes: Option<&str>) -> bool {
-        !self.tree_only || writes.is_none_or(|writes| !Path::new(writes).has_root())
-    }
+    fn selects_path(&self, writes: Option<&str>) -> bool;
 
     /// The bound this handler runs under.
     #[must_use]
-    pub fn timeout(&self) -> Duration {
-        self.timeout_ms
-            .map_or(DEFAULT_TIMEOUT, Duration::from_millis)
-    }
+    fn timeout(&self) -> Duration;
 
     /// Why this handler's transitional declaration is not in good standing, if
     /// it is not: a stable reason id, or `None` when it is (CLOUD-984).
@@ -419,7 +211,47 @@ impl Handler {
     /// passed in rather than read, because a predicate that consults the clock
     /// cannot be tested at the boundary it actually fires on.
     #[must_use]
-    pub fn transitional_defect(&self, today: crate::waiver::Date) -> Option<&'static str> {
+    fn transitional_defect(&self, today: crate::waiver::Date) -> Option<&'static str>;
+}
+
+impl HandlerExt for Handler {
+    fn event(&self) -> Option<Event> {
+        event_of(&self.on)
+    }
+
+    fn selects_tool(&self, raw_tool: &str) -> bool {
+        let Some(matcher) = self.matcher.as_deref() else {
+            return true;
+        };
+        match Regex::new(matcher) {
+            Ok(regex) => regex.is_match(raw_tool),
+            Err(_) => true,
+        }
+    }
+
+    fn selects_command(&self, command: Option<&str>) -> bool {
+        let Some(matcher) = self.command_matcher.as_deref() else {
+            return true;
+        };
+        let Some(command) = command else {
+            return false;
+        };
+        match Regex::new(matcher) {
+            Ok(regex) => regex.is_match(command),
+            Err(_) => true,
+        }
+    }
+
+    fn selects_path(&self, writes: Option<&str>) -> bool {
+        !self.tree_only || writes.is_none_or(|writes| !Path::new(writes).has_root())
+    }
+
+    fn timeout(&self) -> Duration {
+        self.timeout_ms
+            .map_or(DEFAULT_TIMEOUT, Duration::from_millis)
+    }
+
+    fn transitional_defect(&self, today: crate::waiver::Date) -> Option<&'static str> {
         match self.owner.as_deref() {
             None => return Some("handler-unowned"),
             // A key that is not a key names nobody, which is the state the
@@ -461,188 +293,6 @@ fn is_issue_key(text: &str) -> bool {
         && number.chars().all(|c| c.is_ascii_digit())
 }
 
-impl Handler {
-    /// Reject a handler that cannot honestly run.
-    ///
-    /// # Errors
-    ///
-    /// Returns a [`UsageError`] (→ exit `1`) for an empty `id`, an `on` naming
-    /// no known event or naming `unrecognized`, an empty `run`, a `run` whose
-    /// program is empty, or a zero timeout.
-    fn validate(&self) -> anyhow::Result<()> {
-        if self.id.is_empty() {
-            return Err(UsageError::raise("hook.handler: `id` must not be empty"));
-        }
-        let Some(event) = self.event() else {
-            return Err(UsageError::raise(format!(
-                "hook.handler {}: `on` names no event ({:?}); expected one of {}",
-                self.id,
-                self.on,
-                declarable_tokens().join(", ")
-            )));
-        };
-        // Not a moment, but the absence of one Batten could name — `action`'s
-        // refusal verbatim, for the same reason. A handler keyed here would run
-        // on any host event this build has never heard of: the widest possible
-        // trigger, chosen by nobody.
-        if event == Event::Unrecognized {
-            return Err(UsageError::raise(format!(
-                "hook.handler {}: `on` may not be {:?} — it names no moment, only that the host \
-                 said a word this build does not know",
-                self.id,
-                Event::Unrecognized.as_str()
-            )));
-        }
-        let Some(program) = self.run.first() else {
-            return Err(UsageError::raise(format!(
-                "hook.handler {}: `run` must name a command",
-                self.id
-            )));
-        };
-        if program.is_empty() {
-            return Err(UsageError::raise(format!(
-                "hook.handler {}: `run`'s first element is the program and must not be empty",
-                self.id
-            )));
-        }
-        // The matcher compiles, and does not name a server literally.
-        //
-        // BOTH HALVES ARE REFUSALS AT LOAD rather than per-call surprises, for the
-        // reason `key_shape` records one column over: an expression discarded per
-        // call leaves the row it qualifies quietly dead, and the direction of that
-        // failure is the one that runs the handler on everything.
-        if let Some(matcher) = self.matcher.as_deref() {
-            Regex::new(matcher).map_err(|err| {
-                UsageError::raise(format!(
-                    "hook.handler {}: `matcher` is not valid: {err}",
-                    self.id
-                ))
-            })?;
-            // CLOUD-178, MECHANIZED RATHER THAN DOCUMENTED. A matcher pinned to one
-            // server segment is precisely the shape that measured inert: a claude.ai
-            // connector's exposed name is chosen per registration episode by the
-            // host, so `^mcp__Linear__` matches nothing the moment it comes back as
-            // a UUID — and a handler that stops being dispatched is silent.
-            // `^mcp__` is admitted: it names no server, which is what makes it
-            // portable. A rule row avoids this by construction (its `tool` column is
-            // a suffix); a regex has to be told.
-            //
-            // THE QUESTION IS ACCEPTANCE, NOT SPELLING, and the difference is a
-            // measured bypass rather than a nicety. This clause first asked whether
-            // the segment CONTAINED a regex metacharacter, which `^mcp__[L]inear__`
-            // satisfies while still accepting only `mcp__Linear__…` — so the check
-            // meant to prevent an inert handler admitted one, and `^mcp__(Linear|
-            // Gmail)__` passed the same way. Review of #703 caught it. So the
-            // segment's own fragment is compiled and asked whether it accepts a
-            // server name it has never seen: two probes, fixed rather than random so
-            // the verdict is byte-stable, neither one any real connector's label and
-            // shaped like the two forms a host actually mints (readable and UUID).
-            // A fragment that will not compile alone is could-not-look and admits,
-            // which is this module's posture everywhere else.
-            if let Some(rest) = matcher.trim_start_matches('^').strip_prefix("mcp__") {
-                let fragment = rest.split("__").next().unwrap_or_default();
-                if !fragment.is_empty()
-                    && let Ok(segment) = Regex::new(&format!("^(?:{fragment})$"))
-                    && !PROBE_SERVERS.iter().all(|probe| segment.is_match(probe))
-                {
-                    return Err(UsageError::raise(format!(
-                        "hook.handler {}: `matcher`'s server segment {fragment:?} \
-                                 does not accept a server name it has not seen, so it is \
-                                 pinned to the label the host exposes today — which is \
-                                 rotated per registration episode (CLOUD-178), and this \
-                                 handler would then match nothing at all. Match the \
-                                 prefix alone (`^mcp__`) and let the program decide the \
-                                 rest.",
-                        self.id
-                    )));
-                }
-            }
-        }
-        // THE COMMAND SELECTOR COMPILES (CLOUD-1650).
-        //
-        // Refused at load for the sibling's reason and one of its own. An
-        // expression discarded per call leaves the row it qualifies quietly dead,
-        // and here the direction of that failure is the worse one: an
-        // uncompilable `command_matcher` falls through to `selects_command`'s
-        // fail-open arm and runs the handler on EVERY call the tool matcher
-        // admitted — which for a `^Bash$` row is every shell command in the
-        // session, spawning a program per call to decide nothing.
-        //
-        // No server-segment probe here, and its absence is not an omission:
-        // CLOUD-178's trap is about a name the HOST rotates per registration
-        // episode, and a command string is written by the agent rather than
-        // minted by the host. There is no rotating label for an expression over
-        // it to be pinned to.
-        if let Some(matcher) = self.command_matcher.as_deref() {
-            Regex::new(matcher).map_err(|err| {
-                UsageError::raise(format!(
-                    "hook.handler {}: `command_matcher` is not valid: {err}",
-                    self.id
-                ))
-            })?;
-        }
-        // A GRANT NEEDS A MOMENT THAT DECIDES PERMISSION, and this is the one half
-        // of that question a config load can answer.
-        //
-        // It cannot ask whether THIS host honours a pre-approval: `validate` runs
-        // at config load, which knows nothing about the harness — that answer is
-        // `Capabilities::preapprove_reachable`'s, consulted at the boundary, where
-        // an unreachable channel degrades to silence. What is decidable here is
-        // harness-INDEPENDENT: whether the MOMENT decides permission at all. An
-        // inert grant is indistinguishable from the handler not running, which is
-        // the failure this whole column exists to remove.
-        //
-        // `Event::decides_permission` and NOT `carries_a_verdict`, which is the
-        // narrower answer and was found by a test rather than by reading: the
-        // first version of this borrowed `carries_a_verdict` and admitted
-        // `post-tool`, where a deny is a finding about a call that already ran and
-        // a grant is permission for something already done. That authority lives
-        // on `Event` so this validator and any future reader ask one question.
-        if self.preapproves && !event.decides_permission() {
-            return Err(UsageError::raise(format!(
-                "hook.handler {}: `preapproves` needs a moment that decides permission for a call \
-                 that has not run, and {:?} is not one — so the grant would be inert on every \
-                 host rather than unreachable on some. Drop the column, or move the row to the \
-                 pre-tool event.",
-                self.id, self.on
-            )));
-        }
-        // A zero bound is not "no bound", it is a handler that can never
-        // succeed. Refusing it at load is the difference between an author
-        // learning this now and a turn losing every handler to a timeout later.
-        if self.timeout_ms == Some(0) {
-            return Err(UsageError::raise(format!(
-                "hook.handler {}: `timeout_ms` must be greater than zero",
-                self.id
-            )));
-        }
-        Ok(())
-    }
-}
-
-/// Every event token a handler may name.
-///
-/// Derived from [`Event::ALL`] rather than re-typed, so an event added to the
-/// enum becomes declarable in the same change instead of in a forgotten second
-/// table. `pre-tool` IS among them — see the module docs for why it is here and
-/// absent from `action`'s list.
-#[must_use]
-pub fn declarable_tokens() -> Vec<&'static str> {
-    Event::ALL
-        .iter()
-        .filter(|event| **event != Event::Unrecognized)
-        .map(|event| event.as_str())
-        .collect()
-}
-
-/// The event a token names, if any.
-fn event_of(token: &str) -> Option<Event> {
-    Event::ALL
-        .iter()
-        .copied()
-        .find(|event| event.as_str() == token)
-}
-
 // THE OBLIGATION CLOUD-1650 OWES, BOUND TO THE LINE THAT SELECTS.
 //
 // Dropping the git-subcommand selector is the row's own §7, and the mutation is
@@ -655,41 +305,19 @@ fn event_of(token: &str) -> Option<Event> {
 // The survivor is what makes it a finding: a suite that only asserted the
 // advisory FIRES would stay green under this patch, because an over-firing
 // handler fires. The case has to assert the calls it does NOT select.
-//MUTANT-SUITE crates/batten/tests/it/handler_dispatch.rs
-//MUTANT head-move-unwatched|s@^        let Some(matcher) = self.command_matcher.as_deref() else {$@        let Some(matcher) = None::<\&str> else {@|a_git_call_that_moves_no_head_is_not_selected
 
-/// Reject a handler set that cannot honestly run.
-///
-/// # Errors
-///
-/// Propagates the first row's validation failure, and raises on a duplicate
-/// `id` — ids identify a row in its reports, and two rows sharing one would make
-/// a timing series and a violation ambiguous.
-pub fn validate(handlers: &[Handler]) -> anyhow::Result<()> {
-    let mut seen = BTreeSet::new();
-    for handler in handlers {
-        handler.validate()?;
-        if !seen.insert(handler.id.as_str()) {
-            return Err(UsageError::raise(format!(
-                "hook.handler {}: declared twice; ids identify a row in its reports",
-                handler.id
-            )));
-        }
-    }
-    Ok(())
-}
-
-/// Whether any declared handler runs at `event`.
+/// Whether any declared handler runs at `event` for a call answering to any of
+/// `tools` (a mediated call answers to its connector name too, CLOUD-2789).
 ///
 /// **The narrowing, and the reason `pre-tool` is affordable** (CLOUD-460). A
 /// repository declaring no handler for the event pays one slice scan and nothing
 /// else — no spawn, no pipe, no read. Called before any work, so the hot path
 /// stays what §4 promises: cheap when irrelevant.
 #[must_use]
-pub fn selects(handlers: &[Handler], event: Event, raw_tool: &str) -> bool {
-    handlers
-        .iter()
-        .any(|handler| handler.event() == Some(event) && handler.selects_tool(raw_tool))
+pub fn selects(handlers: &[Handler], event: Event, tools: &[&str]) -> bool {
+    handlers.iter().any(|handler| {
+        handler.event() == Some(event) && tools.iter().any(|tool| handler.selects_tool(tool))
+    })
 }
 
 /// Why a handler's answer could not be taken at face value.
@@ -742,10 +370,9 @@ impl Violation {
 
 /// A handler's report as the class it belongs to (CLOUD-2078): its row and
 /// its own words travel as subjects of `hook report now`.
-//MUTANT handler-advice-misclassed|s@^    let class = crate::verdict::Native::HookReportNow;$@    let class = crate::verdict::Native::HookAnswerBroken;@|handler_advice_and_violations_carry_their_row_and_class
 #[must_use]
 pub fn report_refusal(id: &str, text: &str) -> crate::refusal::Refusal {
-    let class = crate::verdict::Native::HookReportNow;
+    let class = crate::error::Native::HookReportNow;
     let row = crate::verdict::artifact(&format!("hook.handler.{id}"));
     crate::refusal::Refusal::engine(
         class,
@@ -757,11 +384,18 @@ pub fn report_refusal(id: &str, text: &str) -> crate::refusal::Refusal {
 /// A broken contract as the class it belongs to (CLOUD-2078).
 #[must_use]
 pub fn violation_refusal(id: &str, violation: &Violation) -> crate::refusal::Refusal {
+    broken_refusal(id, &violation.token())
+}
+
+/// [`violation_refusal`] over a token already taken, for an outcome recorded by
+/// one process and surfaced by another (CLOUD-2840).
+#[must_use]
+pub fn broken_refusal(id: &str, token: &str) -> crate::refusal::Refusal {
     crate::refusal::Refusal::engine(
-        crate::verdict::Native::HookAnswerBroken,
+        crate::error::Native::HookAnswerBroken,
         &[
             crate::verdict::artifact(&format!("hook.handler.{id}")),
-            crate::verdict::artifact(&violation.token()),
+            crate::verdict::artifact(token),
         ],
         crate::refusal::Fix::None,
     )
@@ -925,21 +559,41 @@ pub fn dispatch(
     command: Option<&str>,
     payload: &Payload,
 ) -> Dispatched {
-    dispatch_writing(root, handlers, event, raw_tool, command, None, payload)
+    let routed = [Routed {
+        tool: raw_tool,
+        command,
+        payload,
+    }];
+    dispatch_writing(root, handlers, event, &routed, None)
+}
+
+/// One name a call answers to, and what a handler that name selects is
+/// handed: the command it is judged by and the payload on its stdin
+/// (CLOUD-2789). A shell call mediating a connector call answers to two: the
+/// shell, with its own command and bytes, and the connector call, with no
+/// command and the payload the host would have sent for the direct call.
+#[derive(Debug, Clone, Copy)]
+pub struct Routed<'a> {
+    /// The tool name a handler's matcher is asked about.
+    pub tool: &'a str,
+    /// The command a handler's `command_matcher` is asked about.
+    pub command: Option<&'a str>,
+    /// What the handler reads on stdin.
+    pub payload: &'a Payload,
 }
 
 /// [`dispatch`], for a call that writes `writes`, which a row's
-/// [`Handler::tree_only`] is judged against (CLOUD-2390). A sibling rather than
-/// a seventh parameter, so every caller with no path to give is unchanged.
+/// [`Handler::tree_only`] is judged against (CLOUD-2390), and that may answer
+/// to several names (CLOUD-2789): each handler runs once, handed the FIRST
+/// name in `routed` that selects it, so a row about the shell keeps the
+/// shell's bytes and a row only the mediated call selects sees that call.
 #[must_use]
 pub fn dispatch_writing(
     root: &Path,
     handlers: &[Handler],
     event: Event,
-    raw_tool: &str,
-    command: Option<&str>,
+    routed: &[Routed<'_>],
     writes: Option<&str>,
-    payload: &Payload,
 ) -> Dispatched {
     let mut ran = Vec::new();
     for handler in handlers {
@@ -949,18 +603,19 @@ pub fn dispatch_writing(
         // THE HALF THAT ACTUALLY SAVES THE SPAWN. `selects` above answers whether
         // ANY handler runs; this decides per row, so a narrowed handler costs a
         // regex rather than a process on every call it does not select.
-        if !handler.selects_tool(raw_tool) {
-            continue;
-        }
+        //
         // AND THE SECOND NARROWING, WHICH THE FIRST STRUCTURALLY CANNOT DO
         // (CLOUD-1650). For a shell tool the tool name is `Bash` on every call, so
         // a row about a dozen commands and a row about all of them are
         // indistinguishable to `selects_tool` — this is what makes the difference
         // a regex rather than a process. Ordered after it because a tool-name
         // mismatch is the cheaper rejection and the commoner one.
-        if !handler.selects_command(command) {
+        let Some(Routed { payload, .. }) = routed
+            .iter()
+            .find(|call| handler.selects_tool(call.tool) && handler.selects_command(call.command))
+        else {
             continue;
-        }
+        };
         if !handler.selects_path(writes) {
             continue;
         }
@@ -1012,12 +667,20 @@ impl Payload {
     ///
     /// The write's, or a spool that cannot be opened.
     pub fn write_to(&self, sink: &mut dyn std::io::Write) -> std::io::Result<()> {
-        match self {
-            Payload::Text(text) => sink.write_all(text.as_bytes()),
-            Payload::Spooled(path) => {
-                std::io::copy(&mut std::fs::File::open(path)?, sink).map(drop)
-            }
-        }
+        crate::stream::pump(self.reader()?, &mut [sink])
+    }
+
+    /// The bytes as a stream: the text itself, or the spool file opened for
+    /// reading. Never read whole, so a spooled payload stays bounded.
+    ///
+    /// # Errors
+    ///
+    /// The spool file cannot be opened.
+    pub fn reader(&self) -> std::io::Result<Box<dyn std::io::Read + Send>> {
+        Ok(match self {
+            Payload::Text(text) => Box::new(std::io::Cursor::new(text.clone().into_bytes())),
+            Payload::Spooled(path) => Box::new(std::fs::File::open(path)?),
+        })
     }
 
     /// The bytes as text, for a reader that needs the whole document (the Stop
@@ -1028,7 +691,7 @@ impl Payload {
         match self {
             Payload::Text(text) => std::borrow::Cow::Borrowed(text),
             Payload::Spooled(path) => {
-                std::borrow::Cow::Owned(std::fs::read_to_string(path).unwrap_or_default())
+                std::borrow::Cow::Owned(crate::fsio::read_to_string(path).unwrap_or_default())
             }
         }
     }
@@ -1040,10 +703,6 @@ impl Payload {
 /// says "exceeded …ms and was killed" — so the cases that prove it read that
 /// record rather than a wall clock (CLOUD-2059). Each row below takes the bound
 /// away in one way, and its case reads `Pass` where the record should have been.
-//MUTANT handler-bound-never-fires|s@^        if Instant::now() >= deadline {$@        if Instant::now() >= deadline + Duration::from_secs(3600) {@|a_handler_that_hangs_is_killed_at_its_bound_and_the_turn_still_ends
-//MUTANT step-bound-never-fires|s@^        if Instant::now() >= deadline {$@        if Instant::now() >= deadline + Duration::from_secs(3600) {@|a_step_that_hangs_is_killed_at_its_declared_bound
-//MUTANT payload-written-before-the-bound|s@^    let deadline = Instant::now() + bound;$@    let _ = child.stdin.as_mut().map(\x7cpipe\x7c payload.write_to(pipe)); let deadline = Instant::now() + bound;@|a_handler_that_never_reads_stdin_cannot_wedge_the_parent
-//MUTANT handler-cwd-inherited|s@^            .current_dir(root)$@            .current_dir(".")@|a_handler_runs_from_the_declaring_root_whatever_the_cwd
 fn run_one(root: &Path, handler: &Handler, payload: &Payload) -> Outcome {
     let Some((program, args)) = handler.run.split_first() else {
         return Outcome::Broke(Violation::NotSpawnable);
@@ -1113,15 +772,12 @@ fn run_one(root: &Path, handler: &Handler, payload: &Payload) -> Outcome {
     // the handle at the end of the closure is that close.
     let bound = handler.timeout();
     let deadline = Instant::now() + bound;
-    let stdin_pipe = child.stdin.take();
-    let owned = payload.clone();
-    let (feed_tx, feed_done) = mpsc::channel();
-    drop(std::thread::spawn(move || {
-        if let Some(mut stdin) = stdin_pipe {
-            let _ = owned.write_to(&mut stdin);
-        }
-        let _ = feed_tx.send(());
-    }));
+    // The pump owns the stdin handle and drops it at EOF, which is the close.
+    let feed = child
+        .stdin
+        .take()
+        .zip(payload.reader().ok())
+        .map(|(stdin, source)| crate::stream::spawn_pump(source, vec![Box::new(stdin)]));
     let (out_buf, out_done) = drain(child.stdout.take());
     let (err_buf, err_done) = drain(child.stderr.take());
     let mut timed_out = false;
@@ -1176,9 +832,9 @@ fn run_one(root: &Path, handler: &Handler, payload: &Payload) -> Outcome {
     // what `exec.rs::group_at_spawn` exists for, and is the right follow-up; it is
     // not what keeps the bound honest, and the bound is this module's promise.
     let grace = DRAIN_GRACE;
-    let _ = out_done.recv_timeout(grace);
-    let _ = err_done.recv_timeout(grace);
-    let _ = feed_done.recv_timeout(grace);
+    for pumping in [out_done, err_done].into_iter().flatten().chain(feed) {
+        let _ = pumping.finished(grace);
+    }
     let stdout = taken(&out_buf);
     let stderr = taken(&err_buf);
     if timed_out {
@@ -1190,41 +846,23 @@ fn run_one(root: &Path, handler: &Handler, payload: &Payload) -> Outcome {
     interpret(status.code(), &stdout, &stderr)
 }
 
-/// Drain one child stream on its own thread, into a buffer the caller can read
-/// WITHOUT waiting for the thread to finish.
+/// Drain one child stream into a buffer the caller can read WITHOUT waiting
+/// for the pump to finish ([`crate::stream::spawn_pump`]).
 ///
-/// The shared buffer is the whole point, and it is `exec.rs`'s reasoning rather
-/// than a new one: *"a return value is only readable by a join that completes, so
-/// a deadline over a returned `Vec` could only ever store nothing."* A handler's
-/// pipe can outlive the handler — an orphaned grandchild keeps the write end open
-/// past a `SIGKILL` to its parent — so the caller must be able to take what
-/// arrived and walk away.
-///
-/// The channel says "EOF reached", so the caller can wait for a clean finish when
-/// there is one and stop waiting when there is not.
-fn drain(stream: Option<impl Read + Send + 'static>) -> (Arc<Mutex<Vec<u8>>>, mpsc::Receiver<()>) {
-    let buffer = Arc::new(Mutex::new(Vec::new()));
-    let (tx, rx) = mpsc::channel();
-    let handle = Arc::clone(&buffer);
-    drop(std::thread::spawn(move || {
-        if let Some(mut stream) = stream {
-            let mut chunk = [0_u8; 8192];
-            loop {
-                let read = match stream.read(&mut chunk) {
-                    Ok(0) | Err(_) => break,
-                    Ok(read) => read,
-                };
-                // Appended per chunk rather than at EOF, for the reason the
-                // shared buffer exists at all: a drain abandoned at the deadline
-                // must still have delivered everything it had already read.
-                if let Ok(mut seen) = handle.lock() {
-                    seen.extend_from_slice(chunk.get(..read).unwrap_or(&[]));
-                }
-            }
-        }
-        let _ = tx.send(());
-    }));
-    (buffer, rx)
+/// The shared buffer is the whole point: a handler's pipe can outlive the
+/// handler — an orphaned grandchild keeps the write end open past a `SIGKILL`
+/// to its parent — so the caller must be able to take what arrived and walk
+/// away. An absent stream drains nothing and has no pump to wait for.
+fn drain(
+    stream: Option<impl Read + Send + 'static>,
+) -> (
+    crate::stream::Shared<Vec<u8>>,
+    Option<crate::stream::Pumping>,
+) {
+    let buffer = crate::stream::Shared::new(Vec::new());
+    let pumping =
+        stream.map(|stream| crate::stream::spawn_pump(stream, vec![Box::new(buffer.clone())]));
+    (buffer, pumping)
 }
 
 /// Read a drained buffer as a string, lossily.
@@ -1236,11 +874,8 @@ fn drain(stream: Option<impl Read + Send + 'static>) -> (Arc<Mutex<Vec<u8>>>, mp
 /// A poisoned lock reads as empty for the same reason — the only writer is the
 /// drain thread above, so a poisoning means that thread panicked and there is no
 /// verdict to recover either way.
-fn taken(buffer: &Arc<Mutex<Vec<u8>>>) -> String {
-    buffer.lock().map_or_else(
-        |_| String::new(),
-        |seen| String::from_utf8_lossy(&seen).trim().to_owned(),
-    )
+fn taken(buffer: &crate::stream::Shared<Vec<u8>>) -> String {
+    String::from_utf8_lossy(&buffer.bytes()).trim().to_owned()
 }
 
 /// Read one handler's exit code and streams under the contract.
@@ -1295,7 +930,28 @@ fn interpret(code: Option<i32>, stdout: &str, stderr: &str) -> Outcome {
 /// because a handler that put its reason on the wrong stream has still said
 /// something true, and discarding it would leave a refusal with no reason at all
 /// — which §5 forbids more strongly than it requires a particular stream.
+///
+/// **A BATTEN CHILD'S OWN REFUSAL IS THE REASON, AND ONLY IT.** A handler that
+/// runs `batten check` through a task runner writes its finding to stdout, its
+/// remedy line to stderr, and the runner adds its own `ERROR task failed` line
+/// there too. Taking stderr whole handed the session three statements for one
+/// refusal, and the one carrying the pointer (`… at CLOUD-N`) was the one
+/// dropped. So the `batten deny` lines on either stream are the reason, and
+/// nothing else: one refusal, its pointers kept.
 fn reason(stderr: &str, stdout: &str) -> String {
+    let head = format!(
+        "{} {} ",
+        crate::grammar::PROVENANCE,
+        crate::grammar::Severity::Deny.word()
+    );
+    let denials: Vec<&str> = stderr
+        .lines()
+        .chain(stdout.lines())
+        .filter(|line| line.starts_with(&head) && crate::refusal::parse_finding(line).is_some())
+        .collect();
+    if !denials.is_empty() {
+        return denials.join("\n");
+    }
     if stderr.is_empty() {
         stdout.to_owned()
     } else {
@@ -1307,6 +963,38 @@ fn reason(stderr: &str, stdout: &str) -> String {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+    #[cfg(test)]
+    use crate::error::UsageError;
+
+    /// A Batten child's refusal reaches the session as its deny lines alone:
+    /// the remedy line and the task runner's error line are dropped, and the
+    /// deny on stdout (the one carrying the pointer) is kept.
+    #[test]
+    fn a_batten_child_refusal_is_its_deny_lines_alone() {
+        let stdout = "batten deny issue file held at CLOUD-1\n";
+        let stderr = "batten remedy issue file other — class 3 (a board action)\n\
+                      [filed-here:guard] ERROR task failed\n";
+        assert_eq!(
+            reason(stderr, stdout),
+            "batten deny issue file held at CLOUD-1"
+        );
+
+        // Two denials are two pointers, both kept, stderr's first.
+        let stdout = "batten deny issue file held at CLOUD-2\n";
+        let stderr = "batten deny issue file unclear at CLOUD-3\n[x] ERROR task failed\n";
+        assert_eq!(
+            reason(stderr, stdout),
+            "batten deny issue file unclear at CLOUD-3\nbatten deny issue file held at CLOUD-2"
+        );
+
+        // A line merely mentioning a deny mid-sentence is not a finding.
+        let stderr = "note: batten deny is printed below\n";
+        assert_eq!(reason(stderr, ""), stderr);
+
+        // A handler that is not Batten keeps the old reading: stderr, else stdout.
+        assert_eq!(reason("", "plain reason\n"), "plain reason\n");
+        assert_eq!(reason("stderr reason\n", "stdout\n"), "stderr reason\n");
+    }
 
     /// The command selector's four readings, decided directly (CLOUD-1650).
     ///
@@ -1370,6 +1058,33 @@ mod tests {
         assert!(row.selects_path(None));
         assert!(row.selects_path(Some("crates/batten/src/lib.rs")));
         assert!(!row.selects_path(Some("/root/.claude/plans/x.md")));
+    }
+
+    /// A row on `forge` selects by the normalized `<event>.<action>` through the
+    /// matcher column it already has (CLOUD-2689).
+    #[test]
+    fn a_forge_handler_selects_its_matching_event_only() {
+        let mut row = handler("forge-pr", "forge", &["true"]);
+        row.matcher = Some("^pull_request\\.opened$".to_owned());
+        let rows = [row];
+        assert!(validate(&rows).is_ok(), "{:?}", validate(&rows));
+        assert!(selects(&rows, Event::Forge, &["pull_request.opened"]));
+        assert!(!selects(&rows, Event::Forge, &["issues.opened"]));
+        assert!(!selects(&rows, Event::PostTool, &["pull_request.opened"]));
+    }
+
+    /// A row on `child-session` selects a child's ending by name (CLOUD-2826),
+    /// through the same matcher column a `forge` row uses: one that wants
+    /// `session.dead` is not woken by a child that finished.
+    #[test]
+    fn a_child_session_handler_selects_its_ending_only() {
+        let mut row = handler("child-dead", "child-session", &["true"]);
+        row.matcher = Some("^session\\.dead$".to_owned());
+        let rows = [row];
+        assert!(validate(&rows).is_ok(), "{:?}", validate(&rows));
+        assert!(selects(&rows, Event::ChildSession, &["session.dead"]));
+        assert!(!selects(&rows, Event::ChildSession, &["session.done"]));
+        assert!(!selects(&rows, Event::Forge, &["session.dead"]));
     }
 
     fn handler(id: &str, on: &str, run: &[&str]) -> Handler {
@@ -1583,7 +1298,9 @@ mod tests {
         // because a side effect there runs before a possible deny; a handler is
         // part of that decision, so there is no ordering to invert.
         assert!(declarable_tokens().contains(&Event::PreTool.as_str()));
-        assert!(!crate::action::declarable_tokens().contains(&Event::PreTool.as_str()));
+        assert!(
+            !crate::config_check::action::declarable_tokens().contains(&Event::PreTool.as_str())
+        );
     }
 
     #[test]
@@ -1621,9 +1338,9 @@ mod tests {
         // repository declaring nothing for the event answers without touching a
         // process. The end-to-end cost assertion is the CLI suite's.
         let rows = vec![handler("h", Event::Stop.as_str(), &["true"])];
-        assert!(selects(&rows, Event::Stop, ""));
-        assert!(!selects(&rows, Event::PreTool, ""));
-        assert!(!selects(&[], Event::Stop, ""));
+        assert!(selects(&rows, Event::Stop, &[""]));
+        assert!(!selects(&rows, Event::PreTool, &[""]));
+        assert!(!selects(&[], Event::Stop, &[""]));
     }
 
     #[test]
@@ -1637,17 +1354,17 @@ mod tests {
         row.matcher = Some("^mcp__".to_owned());
         let rows = vec![row];
         assert!(
-            selects(&rows, Event::PreTool, "mcp__Linear__save_issue"),
+            selects(&rows, Event::PreTool, &["mcp__Linear__save_issue"]),
             "the calls the matcher names still select it"
         );
         assert!(
-            !selects(&rows, Event::PreTool, "Bash"),
+            !selects(&rows, Event::PreTool, &["Bash"]),
             "and a call it does not name costs a regex rather than a process"
         );
         // Absence is the behaviour every row had before the column existed, so no
         // landed row changes by its arrival.
         let bare = vec![handler("h", Event::PreTool.as_str(), &["true"])];
-        assert!(selects(&bare, Event::PreTool, "Bash"));
+        assert!(selects(&bare, Event::PreTool, &["Bash"]));
     }
 
     #[test]

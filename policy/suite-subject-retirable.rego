@@ -259,7 +259,7 @@ violation contains {
 	"subjects": [{"path": path}],
 } if {
 	some path, _ in exempt
-	subjects := declared[path]
+	subjects = declared[path]
 	every subject in subjects {
 		retirable(subject)
 	}

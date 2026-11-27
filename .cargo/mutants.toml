@@ -1,0 +1,200 @@
+# cargo-mutants' configuration (https://mutants.rs/, CLOUD-2253). Rust mutation
+# is cargo-mutants' alone; `mutant:changed` runs it over the branch's diff.
+
+# The `test` profile, with `CARGO_PROFILE_TEST_DEBUG=0` set by `mutate`'s
+# `suite_env`: dependency units hash as `target/debug`'s do, so the build
+# reuses them from the checkout's build directory (#1276).
+profile = "test"
+test_tool = "nextest"
+# The suite asks git about its own tree, so each build copy carries `.git`.
+copy_vcs = true
+# Ignored files (`target/` among them) are not copied into a build directory.
+gitignore = true
+# Where `mutant:rust` keeps its verdict files, which `--iterate` reads back.
+output = "target/mutants"
+
+# EQUIVALENT MUTANTS, each with the reason no test can tell it from the
+# original (mutants.rs, "Skipping functions"; Madeyski et al., TSE 2014, on why
+# equivalence is decided by argument and not by a test). A pattern names the
+# function and the mutation, never a line, so it follows the code it was
+# argued for and lapses when that code goes.
+exclude_re = [
+  # A readahead hint to the kernel: what it changes is page-cache timing, which
+  # no assertion can observe. `prefetch_packs` counts what it hinted instead.
+  'replace will_need with \(\)',
+  # The single-thread path and the threaded path read the same blobs into the
+  # same map; `workers == 1` only decides whether a thread is worth spawning.
+  'replace == with != in map_blobs',
+  # Where a ratchet's count table persists between calls. Without one every
+  # count is taken fresh, so the verdict is the same; only the call is slower.
+  'replace count_entry -> ',
+  # `flush` runs only on a full 64 KiB window, and an incomplete trailing UTF-8
+  # sequence is at most three bytes, so the valid prefix is never empty there:
+  # `> 0` and `>= 0` differ only on a window no caller ever flushes.
+  'replace > with >= in Chunked::flush',
+  # `ExitCode` is a fieldless enum: two values with equal codes are the same
+  # value, so which of them `worse` answers on a tie cannot be told apart.
+  'replace > with >= in worse',
+  # `map_blobs`' argument again: the serial path and the threaded one fold
+  # each rule's own buffers in declaration order, so `workers == 1` only
+  # decides whether a thread is worth spawning (#1276).
+  'replace == with != in evaluate_due',
+  # A tree-half run's live stores are cost only: `null_live_keys` nulls every
+  # key that is not a tree fact before any module reads the document, so
+  # reading a sink, the findings store or a recorder's records under the tree
+  # half changes no verdict, and skipping one off the live half reads a store
+  # nothing declared (#1276).
+  'rules\.rs:\d+:\d+: replace && with \|\| in run$',
+  'rules\.rs:\d+:\d+: replace \|\| with && in run$',
+  'replace match guard !tree_half with true in recorded_stores',
+  # At `after == min` the step admits either way: the wait loop only waits on
+  # a collector or a build and collects again, and its exit test is
+  # `after >= min`, which already holds (#1276).
+  'replace < with <= in disk_admits',
+  # `moved`'s one caller, `option_acting_dir`, hands it only the (program,
+  # option) pairs its `takes` table admits, and `--manifest-path` is the one
+  # option `cargo` takes there: `name == "cargo"` already decides it (#1276).
+  'hook\.rs:\d+:\d+: replace && with \|\| in moved$',
+  # At `size == 5` the penalty is `5f64.log(5.0).recip()`, which is exactly 1.0,
+  # the value the other arm answers (#1276).
+  'coupling\.rs:\d+:\d+: replace > with >= in decoupling_level_of$',
+  # The loop runs `at < steps`, and a named leaf's `steps` is `len - 1`, so
+  # `at + 1 < len` and `at < len` both hold on every pass; a glob or group end
+  # has no leaf for the filter to read (#1276).
+  'uses\.rs:\d+:\d+: replace \+ with \* in collect_edges$',
+  # The same loop bound: on a named leaf's every pass `at + 1 < len` holds, so
+  # `at + 1 <= len` does too, and a glob or group end has no leaf to filter.
+  'uses\.rs:\d+:\d+: replace < with <= in collect_edges$',
+  # Every splice `guarded_sources_of` makes replaces zero bytes but one: the
+  # renamed `_` of a bare `_ := e`, one byte, whose preceding byte is an ASCII
+  # delimiter in any source regorus parsed (its whitespace is ASCII). So
+  # `at - replaced` is a char boundary whenever `at + replaced` is (#1276).
+  'policy\.rs:\d+:\d+: replace \+ with - in guarded_sources_of$',
+  # `module_graph::token_paths` reads only a macro's TOKEN_TREE, where the
+  # lexer keeps `::` as two `:` tokens: a joined `::` never reaches it, and the
+  # two-colon arm is the one `a_crate_path_inside_a_macro_names_the_root`
+  # exercises (#1276).
+  'module_graph\.rs:\d+:\d+: delete match arm Some\(SyntaxKind::COLON2\) in token_paths$',
+  # The trace wait's exit test with `&&` never blocks on the tracer's close:
+  # it re-reads until the trace is whole or the grace runs out, then reads
+  # once more, which is the text the blocking wait returns too. Only wall time
+  # and CPU differ, and time is never what a case asserts.
+  'replace \|\| with && in await_trace',
+  # COMPILED OUT, not equivalent: the off-Linux `fanotify` stub is
+  # `#[cfg(not(target_os = "linux"))]`, and mutants run on Linux, so no case is
+  # built against it; its `Group` is uninhabited, so off Linux too the mutant
+  # would not compile (CLOUD-2789).
+  'disk_watch\.rs:\d+:\d+: replace fanotify::arm -> Result<Group, String> with Ok\(Default::default\(\)\)$',
+  # The same for the lease's off-Linux `holder_alive`, `#[cfg(not(target_os =
+  # "linux"))]` in `off_proc`: no Linux build compiles it (CLOUD-2789).
+  'lease\.rs:\d+:\d+: replace off_proc::holder_alive -> bool with true$',
+  # The same for the trace wait's off-Linux `await_trace`, `#[cfg(not(target_os
+  # = "linux"))]` in `off_linux`, named apart from the Linux arm, whose mutants
+  # stay judged: no Linux build compiles it (CLOUD-2902).
+  'trace\.rs:\d+:\d+: replace off_linux::await_trace -> Option<String> with ',
+  # A fork's `= 0` keyed as a child: `>=` adds only the parent row keyed "0",
+  # which `walk_back` reads for no pid but one a trace line is prefixed with,
+  # and no traced process is pid 0 (the kernel's idle task). Every other row
+  # is the same under both. Column 70 is the `> 0`; the line's other compares
+  # are not this argument's (CLOUD-2789).
+  'trace\.rs:\d+:70: replace > with >= in Cwds::read$',
+  # COMPILED OUT, not equivalent: column 10 is the `!` of the `#[cfg(windows)]`
+  # leg's empty-table guard in `processes`, and mutants run on Linux, where
+  # that leg is not built, so no case can reach it (CLOUD-2789).
+  'collect\.rs:\d+:10: delete ! in processes$',
+  # `torn_tail`'s one caller runs it only after the whole line failed to
+  # decode, and offset 0 is that same whole line: admitting it decodes the
+  # same failing text again (CLOUD-2789).
+  'transcript\.rs:\d+:\d+: replace > with >= in torn_tail$',
+  # The one caller reads its rows past every line starting `#`, so no root
+  # starts with `#` and a comment's first word never names one (CLOUD-2789).
+  'module_graph\.rs:\d+:\d+: replace match guard !line\.starts_with\(.#.\) with true in tightened_record$',
+  # A crate's name is its manifest's `package.name`, which cargo refuses empty,
+  # so a head the guard would let through (`""` then the alias) names no
+  # module, and the arms after it answer `None` alike (CLOUD-2789).
+  'item_index\.rs:\d+:\d+: replace match guard !reader\.krate\.is_empty\(\) with true in Index::absolute_in$',
+  # Two adjacent nonempty `:` tokens give start < end == next_start < next_end, so `<` and `<=` agree (CLOUD-2789).
+  'item_index\.rs:\d+:\d+: replace < with <= in token_paths$',
+  # `mediated` only fills `bare_only_modules`, and `policy::case` reads only the suite's passed and failed (CLOUD-2789).
+  'policy\.rs:\d+:\d+: replace == with != in case$',
+  # regorus 0.15 refuses an entry point only when undefined (recursion, conflicts, `with` all compile), so the guard never holds (CLOUD-2789).
+  'policy\.rs:\d+:\d+: replace match guard !undefined_entry_point\(&err\) with false in Compiled::compile_guarded$',
+  # `OPEN.len() * body.len()` is under `+`'s bound only for a body of 0 or 1
+  # bytes, which holds no two-segment path, and over it only by the wrapper's
+  # trailing `\n}` (or an unclosed literal or comment swallowing it): never an
+  # identifier or a colon, so no path starts, continues or is glued there.
+  # Pinned to the column: the other `+` mutants in `token_paths` are killed.
+  'item_index\.rs:\d+:81: replace \+ with \* in token_paths$',
+  # A body that parses after `fn f() ` opens with `{` at offset 7, so no root
+  # splice starts before or at it: `< 7` and `== 7` are both never true (CLOUD-2789).
+  'crate_cut\.rs:\d+:\d+: replace < with == in respell_body$',
+  # At `at == end` the slice is empty, `path_at` finds nothing, and the walk
+  # steps once past `end` and stops: the extra pass pushes no path (CLOUD-2789).
+  'item_index\.rs:\d+:\d+: replace < with <= in paths_in$',
+  # `unexercised`'s outer guard only spares a sweep's setup: with either list
+  # empty its `while` (`swept < len && !unexercised.is_empty()`) runs no pass,
+  # so the same list comes back. Column 32 is the guard's `&&`, never the
+  # loop's, which would spin (CLOUD-2789).
+  'policy\.rs:\d+:32: replace && with \|\| in unexercised$',
+  # The bounded sweep's exit with `&&` runs its remaining passes past the last
+  # case or past an emptied list: each slices nothing, so it evaluates nothing,
+  # reads the same report, and retains the same list. On an all-empty report
+  # `sweep_spent` already returned at the pass that ran the last case. Only the
+  # pass count differs (CLOUD-2789).
+  'policy\.rs:\d+:\d+: replace \|\| with && in unexercised$',
+  # `replaced` is 0 or 1 (`guarded_sources_of`'s argument above), so
+  # `at * replaced` is 0 or `at`, both char boundaries once the first check
+  # admitted `at`; and `at + 1` always is, after the ASCII `_` at `at`.
+  # Pinned to the column: the splice's own `+` on the next line is killed (CLOUD-2789).
+  'policy\.rs:\d+:72: replace \+ with \* in guarded_sources_of$',
+  # Without the arm, a `super::` alias target recurses as a path whose crate is
+  # `super`, a keyword no crate can be named, so its first module lookup misses
+  # and answers `None`, as the arm does (CLOUD-2789).
+  'item_index\.rs:\d+:\d+: delete match arm Some\(.super.\) in Index::resolve_through$',
+  # Every splice offset is a regorus span edge or one past a closing quote, a
+  # char boundary, and only a renamed `_` (one ASCII byte) replaces any bytes, so
+  # `at` and `at + replaced` are boundaries alike: `||` and `&&` agree (CLOUD-2789).
+  'policy\.rs:\d+:43: replace \|\| with && in guarded_sources_of$',
+  # At `len == 2` the inner segments are `segments[1..1]`, empty, so `contains`
+  # is false under `> 2` and `>= 2` alike (CLOUD-2789).
+  'startup\.rs:\d+:\d+: replace > with >= in configured$',
+  # `||` keeps the wrapper's tokens too: `m`, `!`, `{` before the body and the
+  # newline and `}` after it. None is a colon and `m` is followed by `!`, so no
+  # path starts, continues or is glued there. Column 59 is the window's `&&`,
+  # never the `ident` closure's, which are killed (CLOUD-2789).
+  'item_index\.rs:\d+:59: replace && with \|\| in token_paths$',
+  # The `<=` twin of `respell_body`'s `==` entry above: a body that parses after `fn f() `
+  # opens with `{`, `->`, `where` or `;` at offset 7, none a path root, so no
+  # splice starts at or before it and `< 7` and `<= 7` agree (CLOUD-2789).
+  'crate_cut\.rs:\d+:\d+: replace < with <= in respell_body$',
+  # `switch_script`'s one `>` is the full name's length: with `name.len() >= 3`
+  # a 3-character full name that starts with `name` IS `name`, which the
+  # `*full == name` arm already accepts, so `> 3` and `>= 3` agree (CLOUD-2789).
+  'shell_logic\.rs:\d+:\d+: replace > with >= in switch_script$',
+  # `seen` is read only by this `insert`, and `!=` negates the key's mode bit
+  # for every row alike: a bijection on the keys, so two rows collide under it
+  # exactly when they collide under `==`. Pinned to the column: the other `==`
+  # in `validate` is not this argument's (CLOUD-2789).
+  'mint\.rs:\d+:56: replace == with != in validate$',
+  # `surface`'s early return is a shortcut, never a different answer: with no
+  # outcome on disk, the path past it answers nothing either. A finished task's
+  # `rename` of the absent outcome fails and returns empty; a crashed one with
+  # the marker present returns empty; and with the session-setup directory
+  # absent the marker cannot be written (`durable::replace` creates no
+  # parent), so that also returns empty. The `&&` reaches that path only in
+  # those states, and the registry read it adds writes nothing. Column 48 is
+  # the inner `||`, the one argued here (CLOUD-2789).
+  'session_setup\.rs:\d+:48: replace \|\| with && in surface$',
+  # `end` is `subcommand_index` over the same words with the same steps (two
+  # for a `GIT_VALUE_OPTIONS` word, else one), so the scan lands on `end` only
+  # where that walk stopped: the subcommand, a word not starting `-`, which no
+  # arm reads, or past the last word, where `get` answers `None`. `< end` and
+  # `<= end` agree (CLOUD-2789). Column 65 is that `< end`, the function's only
+  # `<`, so one added there later is judged rather than excluded unread.
+  'hook\.rs:\d+:65: replace < with <= in git_dir_operands$',
+  # A fork whose result is not a positive pid (`-1` on failure, `?`) becomes a
+  # `parent` key that no traced line carries: every line's pid, and the root's,
+  # is the positive pid strace prints, so `walk_back` never looks one up, and a
+  # positive result is inserted either way (CLOUD-2789).
+  'trace\.rs:\d+:\d+: replace match guard result\.parse::<u32>\(\)\.is_ok_and\(\|child\| child > 0\) with true in Cwds::read$',
+]

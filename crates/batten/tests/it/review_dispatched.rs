@@ -47,7 +47,9 @@ use crate::common;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use batten::rules::{self, Rule, RuleKind, RuleScope};
+use batten::config_model::{Rule, RuleKind};
+use batten::preset_catalog::RuleScope;
+use batten::rules;
 
 const RULE: &str = "prompt run never";
 const REVIEW: &str = "ready-pressure-test";

@@ -19,9 +19,9 @@
 
 use crate::common;
 
+use batten::config_model::Rule;
 use batten::facts::Look;
 use batten::policy;
-use batten::rules::Rule;
 use batten::verdict::Subject;
 
 use common::{git_in, init_repo, scratch, stderr, write};

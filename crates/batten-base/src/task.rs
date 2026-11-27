@@ -1,0 +1,1944 @@
+//! The long-running-task registry: what is running, and what phase each is in.
+//!
+//! CLOUD-425's two halves, ported off `mise-tasks/task-registry.sh` (the writer)
+//! and `mise-tasks/alive.sh` (the reader) under CLOUD-843's retirement campaign.
+//! One noun, because the registry is a single mechanism read from both ends and
+//! two implementations of the stamp rule over one file format would be the
+//! second-authority class CLOUD-857 measured.
+//!
+//! **The writer nearly did not land, and the reason is worth keeping.** The
+//! caller in `mise-tasks/land-lock.sh` binds this program to a variable and
+//! spends it with arguments, and `shell-retirement`'s
+//! `repoints_at_the_declared_invocation` looked as though it reached the binding
+//! and not the spend. It reaches both: the clause decomposes the ADDED line
+//! against the declared invocation, so with `runs:batten+task` the derived span
+//! is exactly `"$reg"` and `spellings` strips the quotes onto a variable
+//! `retired_path_vars` already resolves. Choosing the longer `batten task read`
+//! is what made it look refused (CLOUD-1283, retracted).
+//!
+//! **State is pushed, never polled, and this module sends no signal at all.**
+//! That is forced by `signal(7)` rather than chosen: `SIGUSR1`'s default
+//! disposition is `Term`, so a broadcast meant to inspect a task would kill it,
+//! and a shell trap does not run while a foreground child does — precisely when
+//! an answer is wanted. `rustix::process::test_kill_process` is the one probe
+//! used here and it delivers nothing; `tests/task_registry.rs` pins that no
+//! signal-sending call reaches this file.
+//!
+//! **Three answers stay distinct, and conflating any two is the defect this
+//! exists to fix** (measured 2026-08-12: a dead `land` was reported to a human
+//! as "still in verify" twice, seventeen minutes apart, because `pgrep -f`
+//! matched the asking subshell):
+//!
+//! * *running* — registered, and the process is still that task
+//! * *crashed* — registered, and the process is gone. A STATE, not an absence
+//! * *nothing registered* — which is not the same as could-not-look
+//!
+//! **Pointer-only** (non-negotiable rule 4): a task name, a phase word, a pid
+//! and a count of seconds. Never a line of any log — being forced to read logs
+//! is the defect this removes, so emitting log content would reintroduce it
+//! through the front door.
+//!
+//! **Liveness reads no path** (CLOUD-1560). That a live pid is still the task
+//! that registered it is decided by the digest of the registrant's own
+//! `cmdline`, recorded at register, so no consumer directory is consulted and a
+//! task whose program was retired into a verb is still recognised.
+
+use std::io::Write;
+use std::path::{Path, PathBuf};
+
+use crate::Result;
+
+/// The directory the registry lives in, under the git dir.
+///
+/// The `batten-<noun>` convention `batten-receipts/` and `batten-land-lock/`
+/// already use. The layout is this module's own now, both ends: the writer
+/// retired here too, so "byte-identical to what the writer produces" stopped
+/// being a constraint across a boundary and became one authority.
+const STATE_DIR: &str = "batten-tasks";
+
+/// The `[task]` table: where this consumer keeps its task programs, and which
+/// of them the Stop watchdog relaunches (CLOUD-2370).
+///
+/// CONSUMER CONFIG, NOT A CONST (non-negotiable rule 1). Liveness no longer
+/// reads the program root (CLOUD-1560): it stays required and load-validated
+/// for the watchdog's relaunch, and `BATTEN_TASK_PROGRAM_ROOT` and
+/// `task alive --program-root` stay accepted and unread until CLOUD-2463
+/// retires all three.
+#[derive(
+    Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize, schemars::JsonSchema,
+)]
+#[serde(deny_unknown_fields)]
+pub struct TaskTable {
+    /// The directory, relative to the repository root, the task programs live
+    /// in.
+    pub program_root: String,
+    /// The tasks a crash of which forces one relaunch at `Stop`. Empty
+    /// relaunches nothing.
+    #[serde(default)]
+    pub relaunch: Vec<String>,
+    /// The proven lifetime, in seconds, under which a crash in this boot is
+    /// advice rather than a relaunch: a task that died that fast will die again.
+    #[serde(default = "default_min_lifetime_secs")]
+    pub min_lifetime_secs: u64,
+}
+
+impl TaskTable {
+    /// Validate the table at load (CLOUD-2370).
+    ///
+    /// # Errors
+    ///
+    /// A `program_root` that names no directory — blank, `.`, `/`, or one that
+    /// holds a `..` or a whitespace-padded segment; refused here, where the
+    /// error names the key.
+    pub fn validate(&self) -> Result<()> {
+        if normalized_root(&self.program_root).is_none() {
+            return Err(crate::error::UsageError::raise(
+                "[task]: `program_root` names no directory (blank, `.`, `/`, a `..`, or a padded segment)",
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// An hour: a lap that crashed after one has done real work, and one that died
+/// in a minute is a defect a relaunch repeats.
+const fn default_min_lifetime_secs() -> u64 {
+    3600
+}
+
+/// Every field a record carries, in the writer's order (CLOUD-2679): the one
+/// list `task read` checks a field name against, so an unknown name is refused
+/// rather than answered with an empty line. `Entry::render` is held to it by
+/// `the_field_list_is_the_records_own`.
+pub const FIELDS: [&str; 12] = [
+    "task",
+    "pid",
+    "pgid",
+    "phase",
+    "started_at",
+    "phase_since",
+    "tick",
+    "tick_at",
+    "sig",
+    "sig_at",
+    "cmdline_sha256",
+    "proc_start",
+];
+
+/// One registered task, as the writer left it.
+///
+/// Every field is a `String`, and that is deliberate rather than lazy: the record
+/// is written by another program, a field may be absent on an entry written
+/// before it existed, and a reader's job is to render what is there rather than
+/// to insist the record parse. An entry missing a stamp renders without it — the
+/// byte-stability obligation for readers that predate the field — which a typed
+/// `u64` would have turned into an error.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Entry {
+    /// The task name as the caller registered it.
+    pub task: String,
+    /// The registering process.
+    pub pid: String,
+    /// Its process group, or the pid where there is no group to read.
+    pub pgid: String,
+    /// What it is doing.
+    pub phase: String,
+    /// When it registered.
+    pub started_at: String,
+    /// When it entered this phase.
+    pub phase_since: String,
+    /// The loop-went-round token.
+    pub tick: String,
+    /// When that token last CHANGED.
+    pub tick_at: String,
+    /// The world-moved token.
+    pub sig: String,
+    /// When that token last CHANGED.
+    pub sig_at: String,
+    /// The registrant's own `/proc/<pid>/cmdline`, SHA-256 in lowercase hex,
+    /// taken at register (CLOUD-1560). Liveness compares the live cmdline
+    /// against THIS rather than re-deriving identity from a program path, so a
+    /// task whose program was retired into a verb is still recognised. Empty
+    /// where there was no cmdline to read, or the entry predates the field.
+    pub cmdline_sha256: String,
+    /// The registrant's start time, field 22 of `/proc/<pid>/stat` in clock
+    /// ticks since boot, taken at register (CLOUD-2840). With the pid it is the
+    /// record's KEY: a recycled pid starts at another tick, so a pid alone never
+    /// names a process. Empty off Linux, or on an entry that predates the field,
+    /// which [`task_alive`] reads as abandoned wherever the live tick is readable.
+    pub proc_start: String,
+}
+
+impl Entry {
+    /// The first `<name>: ` line's value, or the empty string.
+    ///
+    /// First rather than last, matching the retiring `sed -n "s/^$2: //p" | head
+    /// -n 1`: the writer rewrites the whole record, so a second line for one key
+    /// cannot occur — and where it somehow does, taking the first is what the
+    /// previous reader did, and a reader may not move a verdict silently.
+    fn field(body: &str, name: &str) -> String {
+        let prefix = format!("{name}: ");
+        body.lines()
+            .find_map(|line| line.strip_prefix(prefix.as_str()))
+            .unwrap_or_default()
+            .to_owned()
+    }
+
+    /// The latest second the registrant stamped, so the latest it is known to
+    /// have been alive, or `None` where no stamp parses.
+    #[must_use]
+    pub fn last_alive(&self) -> Option<u64> {
+        [
+            &self.started_at,
+            &self.phase_since,
+            &self.tick_at,
+            &self.sig_at,
+        ]
+        .into_iter()
+        .filter_map(|stamp| second(stamp))
+        .max()
+    }
+
+    /// The second it registered, or `None` where the stamp does not parse.
+    #[must_use]
+    pub fn started(&self) -> Option<u64> {
+        second(&self.started_at)
+    }
+
+    /// Read a record out of its own bytes.
+    #[must_use]
+    pub fn parse(body: &str) -> Self {
+        Self {
+            task: Self::field(body, "task"),
+            pid: Self::field(body, "pid"),
+            pgid: Self::field(body, "pgid"),
+            phase: Self::field(body, "phase"),
+            started_at: Self::field(body, "started_at"),
+            phase_since: Self::field(body, "phase_since"),
+            tick: Self::field(body, "tick"),
+            tick_at: Self::field(body, "tick_at"),
+            sig: Self::field(body, "sig"),
+            sig_at: Self::field(body, "sig_at"),
+            cmdline_sha256: Self::field(body, "cmdline_sha256"),
+            proc_start: Self::field(body, "proc_start"),
+        }
+    }
+
+    /// The record's bytes, in the retiring writer's field order.
+    ///
+    /// The order is part of the contract rather than cosmetic: a clone can carry
+    /// an entry either half wrote during the migration, and a reader comparing
+    /// bytes needs one answer. `cmdline_sha256` is APPENDED (CLOUD-1560), so the
+    /// first ten lines stay byte-identical and an older reader's first-match
+    /// `field` never sees it.
+    #[must_use]
+    pub fn render(&self) -> String {
+        format!(
+            "task: {}\npid: {}\npgid: {}\nphase: {}\nstarted_at: {}\nphase_since: {}\ntick: {}\ntick_at: {}\nsig: {}\nsig_at: {}\ncmdline_sha256: {}\nproc_start: {}\n",
+            self.task,
+            self.pid,
+            self.pgid,
+            self.phase,
+            self.started_at,
+            self.phase_since,
+            self.tick,
+            self.tick_at,
+            self.sig,
+            self.sig_at,
+            self.cmdline_sha256,
+            self.proc_start,
+        )
+    }
+
+    /// Whether this record is renderable at all.
+    ///
+    /// A half-written entry is SKIPPED rather than rendered as a line of blanks:
+    /// a partial record is not a task, and inventing one would be a claim.
+    #[must_use]
+    pub fn is_complete(&self) -> bool {
+        !self.task.is_empty() && !self.pid.is_empty()
+    }
+}
+
+/// The phase a task that SUCCEEDED leaves on its record before it exits.
+pub const OK: &str = "ok";
+
+/// The phase a task that FAILED leaves on its record before it exits.
+pub const FAILED: &str = "failed";
+
+/// What a record says about its task, the key decided once (CLOUD-2840).
+///
+/// FOUR answers, because a gate on a backgrounded install needs all four apart:
+/// still running holds the gate, `ok` opens it, and `failed` and a crash each
+/// refuse naming what happened. A terminal phase is the task's own last word,
+/// written once its outcome is complete, so it is a finish whether or not the
+/// pid has exited yet: what the task does after it is housekeeping (releasing
+/// its singleton), and a reader that waited for the exit would hold a gate on a
+/// task that has already answered.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum State {
+    /// The keyed process is still the task.
+    Running,
+    /// It exited after recording [`OK`].
+    Ok,
+    /// It exited after recording [`FAILED`].
+    Failed,
+    /// It is gone, or the pid is another process, with no terminal phase.
+    Crashed,
+}
+
+/// Read one record's state.
+#[must_use]
+pub fn state(entry: &Entry) -> State {
+    match entry.phase.as_str() {
+        OK => State::Ok,
+        FAILED => State::Failed,
+        _ if task_alive(entry) => State::Running,
+        _ => State::Crashed,
+    }
+}
+
+/// Where the registry lives for this repository.
+fn state_dir(git_dir: &Path) -> PathBuf {
+    git_dir.join(STATE_DIR)
+}
+
+/// The file one pid's record lives in.
+fn entry_path(git_dir: &Path, pid: &str) -> PathBuf {
+    state_dir(git_dir).join(pid)
+}
+
+/// A stamp moves only when its value CHANGES.
+///
+/// That one rule is the whole progress mechanism (CLOUD-499). A writer
+/// re-announcing what it already said — a lap repeating a step, a poll that
+/// learned nothing — must not thereby report progress it did not make, because
+/// the stall bail's entire job is to disbelieve exactly that.
+#[must_use]
+pub fn stamp_for(new: &str, old: &str, old_stamp: &str, now: u64) -> String {
+    if new == old && !old_stamp.is_empty() {
+        old_stamp.to_owned()
+    } else {
+        now.to_string()
+    }
+}
+
+/// Write a record whole, atomically.
+///
+/// Temp file plus rename, because a reader must never see a half-written record
+/// and a line-edit in place could not promise that. Failure DEGRADES to a no-op:
+/// a `land` must not die because its bookkeeping is unwritable, and the reader
+/// reports could-not-look rather than "nothing runs" — those two are different
+/// answers and conflating them is the defect this exists to fix.
+fn write_entry(git_dir: &Path, entry: &Entry) {
+    let dir = state_dir(git_dir);
+    if std::fs::create_dir_all(&dir).is_err() {
+        return;
+    }
+    // `durable::replace` IS the temp plus rename, with a temp unique per writer:
+    // the gate's steps announce under one pid from many processes at once, and
+    // a shared temp of this module's own was one writer renaming another's
+    // half-written record into place.
+    let _ = crate::durable::replace(entry_path(git_dir, &entry.pid), entry.render());
+}
+
+/// Whether a registry path is a record rather than a write in flight.
+///
+/// A [`crate::durable::is_temp`] file that a kill stranded between its sync and
+/// its rename is complete enough to parse. Nothing deletes it now that `alive`
+/// reads without deleting (CLOUD-2372), so a reader that took it for a record
+/// would report its crash forever.
+fn is_record(path: &Path) -> bool {
+    path.is_file()
+        && path
+            .file_name()
+            .and_then(std::ffi::OsStr::to_str)
+            .is_some_and(|name| !crate::durable::is_temp(name))
+}
+
+/// A pid's process group, or the pid itself where there is none to read.
+///
+/// A group of one is the truth for a task that was not started under job
+/// control, so the fallback is a reading rather than a placeholder. `rustix`
+/// rather than spawning `ps`: `git.rs`'s `no_second_git_invoker_exists` is about
+/// the literal program `git`, but a spawn is still an inventory row
+/// (`clippy.toml`), and one per registration would be a cost the shell paid only
+/// because it had no alternative.
+///
+/// Off unix there is no process group to read, so the pid is the whole truth;
+/// only the read is under `cfg` (CLOUD-2509).
+pub fn process_group(pid: &str) -> String {
+    #[cfg(unix)]
+    let group = pid
+        .parse::<i32>()
+        .ok()
+        .and_then(rustix::process::Pid::from_raw)
+        .and_then(|pid| rustix::process::getpgid(Some(pid)).ok())
+        .map(|pgid| pgid.as_raw_nonzero().to_string());
+    #[cfg(not(unix))]
+    let group = None::<String>;
+    group.unwrap_or_else(|| pid.to_owned())
+}
+
+/// Register a task, replacing any record under the same pid.
+///
+/// The loop stamps start EMPTY rather than at the start time: a task that has
+/// not ticked has not ticked, and seeding them would let a stall detector read
+/// registration as progress.
+///
+/// The digest is of the pid it is GIVEN, never `/proc/self`: `batten task
+/// register <task> <pid>` runs on the registrant's behalf (CLOUD-1560).
+pub fn register(git_dir: &Path, task: &str, pid: &str, phase: &str, now: u64) {
+    supersede(git_dir, task, pid);
+    let started = now.to_string();
+    write_entry(
+        git_dir,
+        &Entry {
+            task: task.to_owned(),
+            pid: pid.to_owned(),
+            pgid: process_group(pid),
+            phase: phase.to_owned(),
+            phase_since: started.clone(),
+            started_at: started,
+            cmdline_sha256: cmdline_digest(pid).unwrap_or_default(),
+            proc_start: process_start(pid).unwrap_or_default(),
+            ..Entry::default()
+        },
+    );
+}
+
+/// Remove every DEAD record of `task` under another pid before `pid` registers
+/// it (CLOUD-2679): one record per container restart piled up, because nothing
+/// removes a record whose process is gone and `alive` must not (CLOUD-901).
+///
+/// TWO CONDITIONS, BOTH REQUIRED. The registrant is gone by [`task_alive`],
+/// the predicate `alive` reads, AND its process group is gone too. The second
+/// keeps CLOUD-1148's invariant: a dead registrant whose group still runs is
+/// exactly what `land`'s reap exists to find, and forgetting its record would
+/// hide those processes from it. Off unix no group reads as gone, so nothing
+/// is superseded there.
+fn supersede(git_dir: &Path, task: &str, pid: &str) {
+    for entry in records(git_dir) {
+        let sibling = entry.task == task && entry.pid != pid;
+        let dead = !task_alive(&entry);
+        if sibling && dead && !group_exists(&entry.pgid) {
+            unregister(git_dir, &entry.pid);
+        }
+    }
+}
+
+/// `kill(-pgid, 0)`: whether any process is in the group, through the probe
+/// [`pid_exists`] uses, so EPERM reads as life there too. A group that will
+/// not parse is no group; off unix every group exists, so nothing is dropped.
+fn group_exists(pgid: &str) -> bool {
+    let Ok(raw) = pgid.parse::<i32>() else {
+        return false;
+    };
+    #[cfg(unix)]
+    {
+        rustix::process::Pid::from_raw(raw)
+            .is_some_and(|group| lives(rustix::process::test_kill_process_group(group)))
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = raw;
+        true
+    }
+}
+
+/// Which of the three per-value fields a push is aimed at.
+///
+/// Three variants rather than one field name, because they answer different
+/// questions (CLOUD-499) and a caller that can name the wrong one in a string
+/// can push the wrong one silently.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Signal {
+    /// What the task is doing. The slow signal, pushed at transitions.
+    Phase,
+    /// The loop went round — moves on every iteration, including the ones that
+    /// learn nothing. Frozen means the loop is blocked rather than waiting.
+    Tick,
+    /// The world moved — moves only when a watched thing does. Frozen while the
+    /// tick keeps moving is a poll that will never resolve, which is the
+    /// livelock a hang detector cannot see.
+    Sig,
+}
+
+/// Push one value, preserving every other field.
+///
+/// A push for a pid that never registered is a NO-OP rather than a fabricated
+/// entry: the registry records what registered, and inventing a record here
+/// would let a half-wired task look fully wired.
+pub fn push(git_dir: &Path, pid: &str, signal: Signal, value: &str, now: u64) {
+    let Ok(body) = crate::fsio::read_to_string(entry_path(git_dir, pid)) else {
+        return;
+    };
+    let mut entry = Entry::parse(&body);
+    match signal {
+        Signal::Phase => {
+            entry.phase_since = stamp_for(value, &entry.phase, &entry.phase_since, now);
+            value.clone_into(&mut entry.phase);
+        }
+        Signal::Tick => {
+            entry.tick_at = stamp_for(value, &entry.tick, &entry.tick_at, now);
+            value.clone_into(&mut entry.tick);
+        }
+        Signal::Sig => {
+            entry.sig_at = stamp_for(value, &entry.sig, &entry.sig_at, now);
+            value.clone_into(&mut entry.sig);
+        }
+    }
+    write_entry(git_dir, &entry);
+}
+
+/// One field of one record, or `None` where nothing registered under that pid.
+#[must_use]
+pub fn read_field(git_dir: &Path, pid: &str, name: &str) -> Option<String> {
+    crate::fsio::read_to_string(entry_path(git_dir, pid))
+        .ok()
+        .map(|body| Entry::field(&body, name))
+}
+
+/// Drop a record.
+///
+/// Called from the task's exit path, which does not run for a task that was
+/// `SIGKILL`ed — that is exactly the case [`alive`] reports as crashed rather
+/// than as absent. Removing what is not there is a no-op, never a failure.
+pub fn unregister(git_dir: &Path, pid: &str) {
+    let _ = std::fs::remove_file(entry_path(git_dir, pid));
+}
+
+/// What [`alive`] found.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Reading {
+    /// Nothing has ever registered, or every entry was half-written. A real
+    /// answer, and NOT the same as being unable to read the registry.
+    Nothing,
+    /// One line per renderable entry, in lexical order.
+    Lines(Vec<String>),
+    /// The registry is there and cannot be read. Could-not-look, never
+    /// "nothing runs".
+    Unreadable(PathBuf),
+}
+
+/// How [`alive`] renders its lines.
+#[derive(Clone, Copy, Debug)]
+pub struct Alive {
+    /// The instant ages are measured against, supplied rather than read, so two
+    /// calls over one registry state produce identical bytes (house-style §6).
+    pub now: u64,
+}
+
+/// Is the process behind this entry still the task that registered it?
+///
+/// Two parts, because existence alone is not enough: pids recycle, and this
+/// clone measurably wrapped its pid space inside 20 minutes (CLOUD-432).
+///
+/// **IDENTITY IS RECORDED, NEVER RE-DERIVED (CLOUD-1560).** The entry carries
+/// the SHA-256 of the registrant's own `/proc/<pid>/cmdline`, taken at
+/// register, and this compares the live one against it. The retired reading
+/// matched a program PATH in the cmdline, so the moment a task's shell program
+/// was retired into a verb its live instance read as a corpse — measured on
+/// PR #848, where the first reaper would have signalled a running lap. A
+/// recycled pid runs a different cmdline, so the digest mismatches: strictly
+/// stronger than the substring match (CLOUD-901).
+///
+/// **The asymmetry runs the opposite way here than in a lease heartbeat.** There
+/// an unevaluable probe reads as gone, because a wrongly renewed lease wedges
+/// the fleet. Here a wrongly CRASHED verdict is the expensive direction: a
+/// successor session reads this to learn what was in flight, and a duplicate-run
+/// refusal consumes it, so a live task misreported as dead licenses exactly the
+/// duplicate-landing incident the registry exists to prevent. So an unevaluable
+/// comparison reads as ALIVE: off Linux, where there is no cmdline to read, and
+/// for an entry an older binary wrote with no digest, which is reaped only once
+/// its pid is gone.
+///
+/// **THE KEY IS THE PID AND ITS START TICK (CLOUD-2840), AND IT OUTRANKS THE
+/// ASYMMETRY ABOVE.** A start tick is the kernel's own, so unlike a cmdline it
+/// cannot coincide across a recycle: wherever the live tick is readable a record
+/// whose tick differs, or that carries none, is not that process and reads as
+/// abandoned. A session's detached setup task is read by the next call to learn
+/// whether a tool it installs may run yet; a stale record read as live would
+/// hold that gate shut on a process that is not the task. Where no tick reads
+/// (off Linux) the digest decides, as before.
+///
+/// **AN UNREAPED PROCESS HAS EXITED (CLOUD-2789).** A detached task's parent
+/// is gone, so it is reparented to pid 1, and where pid 1 does not reap (a
+/// container's) it stays a zombie: its pid answers `kill(pid, 0)`, its start
+/// tick still reads, and its cmdline is empty, which the digest reads as
+/// unevaluable and so alive. A setup task that exited short of a terminal
+/// phase then read as running forever.
+fn task_alive(entry: &Entry) -> bool {
+    if !pid_exists(&entry.pid) || exited(&entry.pid) {
+        return false;
+    }
+    if let Some(live) = process_start(&entry.pid)
+        && entry.proc_start != live
+    {
+        return false;
+    }
+    let Some(live) = cmdline_digest(&entry.pid) else {
+        return true;
+    };
+    entry.cmdline_sha256.is_empty() || entry.cmdline_sha256 == live
+}
+
+/// Whether `pid` has exited and only waits to be reaped: its `/proc/<pid>/stat`
+/// state, field 3, is `Z` (zombie) or `X` (dead). `false` where the file is
+/// unreadable (off Linux, or the pid is gone), which [`pid_exists`] decides.
+fn exited(pid: &str) -> bool {
+    crate::fsio::read_to_string(format!("/proc/{pid}/stat")).is_ok_and(|stat| exited_in(&stat))
+}
+
+/// Whether a `/proc/<pid>/stat` text's state field names an exited process.
+/// Counted after the LAST `)`, as [`process_start`] counts.
+fn exited_in(stat: &str) -> bool {
+    stat.rsplit_once(')')
+        .and_then(|(_, rest)| rest.split_whitespace().next())
+        .is_some_and(|state| state == "Z" || state == "X")
+}
+
+/// A process's start time, field 22 of `/proc/<pid>/stat`, in clock ticks since
+/// boot; `None` where the file is unreadable (off Linux, or the pid is gone).
+///
+/// Fields are counted after the LAST `)`: field 2 is the command name in
+/// parentheses and may itself hold spaces and parentheses, so splitting the
+/// whole line would miscount for a program named `a) b`.
+#[must_use]
+pub fn process_start(pid: &str) -> Option<String> {
+    let stat = crate::fsio::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    let (_, rest) = stat.rsplit_once(')')?;
+    // `rest` starts at field 3 (state), so field 22 is the twentieth word.
+    rest.split_whitespace().nth(19).map(str::to_owned)
+}
+
+/// The SHA-256 of `/proc/<pid>/cmdline`'s raw bytes, NULs included, in
+/// lowercase hex; `None` where the file is unreadable or empty (off Linux, or
+/// the pid is gone).
+fn cmdline_digest(pid: &str) -> Option<String> {
+    use sha2::Digest as _;
+    use std::fmt::Write as _;
+    let raw = crate::fsio::read(format!("/proc/{pid}/cmdline")).ok()?;
+    if raw.is_empty() {
+        return None;
+    }
+    Some(
+        sha2::Sha256::digest(&raw)
+            .iter()
+            .fold(String::new(), |mut text, byte| {
+                let _ = write!(text, "{byte:02x}");
+                text
+            }),
+    )
+}
+
+/// The program root as the directory it names, or `None` where it names none.
+///
+/// The ONE reading of a root (CLOUD-2370): the matcher, `[task]`'s load-time
+/// validation and every transitional reader take it, so they cannot disagree on
+/// what a usable root is. LITERAL, as the kernel keeps a process's argv: outer
+/// padding, `.` segments and slashes go, and every other segment is kept exactly
+/// as spelled. A root that cannot be read one way is `None`: a `..` (which
+/// directory it names depends on the filesystem) or a segment padded with
+/// whitespace (a typo or a real name, and the two match different cmdlines).
+#[must_use]
+pub fn normalized_root(program_root: &str) -> Option<String> {
+    let mut parts: Vec<&str> = Vec::new();
+    for part in Path::new(program_root.trim()).components() {
+        match part {
+            std::path::Component::Normal(name) => {
+                let name = name.to_str()?;
+                if name.trim() != name {
+                    return None;
+                }
+                parts.push(name);
+            }
+            std::path::Component::ParentDir => return None,
+            _ => {}
+        }
+    }
+    (!parts.is_empty()).then(|| parts.join("/"))
+}
+
+/// `kill -0`: existence and permission, and no signal delivered.
+///
+/// A pid that will not parse is not a process, which is the one direction this
+/// may answer `false` in without asking the kernel: an unparseable field is a
+/// malformed record rather than a dead task.
+///
+/// # Off unix
+///
+/// Nothing is ever reported dead — and nothing is ever REAPED. The same
+/// asymmetry [`task_alive`] argues for, applied to the only other place that can
+/// act on it. `rustix` is a `cfg(unix)` dependency (`Cargo.toml` declares it
+/// under `[target.'cfg(unix)'.dependencies]` precisely so a Windows build links
+/// neither it nor `signal-hook`), so there is no `kill -0` there at all — and a
+/// wrongly CRASHED verdict is the expensive direction, because a successor
+/// session reads this to learn what was in flight. Answering "alive" makes the
+/// reader useless on Windows rather than wrong there, which is the side to be on.
+/// The parse decides on every platform; only the probe is under `cfg`
+/// (CLOUD-2509).
+#[must_use]
+pub fn pid_exists(pid: &str) -> bool {
+    let Ok(raw) = pid.parse::<i32>() else {
+        return false;
+    };
+    // EPERM MEANS IT EXISTS, and reading it as dead is a false ALLOW on every
+    // consumer of this probe: the singleton gate stops refusing a second start,
+    // and `task alive` reports a live holder as a corpse the next caller may
+    // reclaim. Only ESRCH — no such process — is death.
+    //
+    // Measured in CI and invisible here: the probe answers `kill(pid, 0)`, which
+    // returns EPERM for a process this uid may not signal. This sandbox runs as
+    // root, so every pid is signallable and the arm never bites;
+    // `singleton_gate::a_live_holder_denies_the_second_start` holds a lock for
+    // pid 1 and passed locally while exiting 0 on the runner, where the job is
+    // unprivileged and pid 1 belongs to another uid. That is the condition
+    // `.claude/rules/rust.md` names — the sandbox cannot produce the failing
+    // state, so the case asserted its conclusion over a premise root had already
+    // satisfied.
+    #[cfg(unix)]
+    {
+        rustix::process::Pid::from_raw(raw)
+            .is_some_and(|pid| lives(rustix::process::test_kill_process(pid)))
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = raw;
+        true
+    }
+}
+
+/// Whether a `kill(pid, 0)` answer means the process is THERE.
+///
+/// Extracted so it can be shown able to fail, which the probe above cannot be:
+/// this sandbox runs as root, so no test here can produce an EPERM from a real
+/// process, and a case asserting the conclusion would assert its own premise —
+/// `.claude/rules/rust.md`'s rule and the reason `markers::scannable` exists.
+/// The decision is the errno, so the decision is what gets tested.
+#[cfg(unix)]
+/// # The arms that are not written
+///
+/// Spelled as the one negation rather than four arms, because three of them
+/// agree on the answer AND the reason reduces to a single claim: **ESRCH is the
+/// only death.** `Ok` is a process signalled, EPERM is one present but not ours
+/// to signal, and every other errno is a probe that could not look — which this
+/// gate must not read as free, since a wrong answer here fails open.
+const fn lives(answer: Result<(), rustix::io::Errno>) -> bool {
+    !matches!(answer, Err(rustix::io::Errno::SRCH))
+}
+
+/// Render one entry's line.
+///
+/// `in-phase` is APPENDED rather than substituted, and omitted entirely on an
+/// entry written before that field existed, so the line stays byte-stable for
+/// every reader that predates it.
+fn render_line(entry: &Entry, running: bool, now: u64) -> String {
+    let age = elapsed(&entry.started_at, now).map_or_else(|| "?".to_owned(), |age| age.to_string());
+    let in_phase = elapsed(&entry.phase_since, now)
+        .map_or_else(String::new, |since| format!(" in-phase {since}s"));
+    let phase = if entry.phase.is_empty() {
+        "unknown"
+    } else {
+        entry.phase.as_str()
+    };
+    let finished = !running && matches!(entry.phase.as_str(), OK | FAILED);
+    if running || finished {
+        format!("{} {phase} {} {age}s{in_phase}", entry.task, entry.pid)
+    } else {
+        format!(
+            "{} crashed({phase}) {} {age}s{in_phase}",
+            entry.task, entry.pid
+        )
+    }
+}
+
+/// Seconds since a recorded stamp, or `None` where none was recorded.
+fn elapsed(stamp: &str, now: u64) -> Option<u64> {
+    second(stamp).map(|then| now.saturating_sub(then))
+}
+
+/// A stamp as the epoch second it records, or `None` for a blank or malformed
+/// one: the one reading of a stamp every reader of the record shares.
+fn second(stamp: &str) -> Option<u64> {
+    stamp.parse().ok()
+}
+
+/// Read the registry, and delete nothing.
+///
+/// **A READER THAT DELETES CONSUMES THE EVIDENCE** (CLOUD-2372). This used to
+/// remove a corpse's file as it rendered `crashed(...)`, on CLOUD-901's reasoning
+/// that a headstone read once is a diagnosis and one read forever is a registry
+/// that fills up. The first reader then took the crash with it: the next `alive`
+/// answered "nothing registered", and every later reader that needed it — the
+/// Stop watchdog (CLOUD-2370), the session-start notice, a human — saw nothing.
+/// Crash-only puts the tidy-up at the NEXT RUN'S ENTRY instead: `land` reaps
+/// every [`abandoned`] entry, then forgets it. Growth is bounded by distinct
+/// tasks that crashed and were never re-run, which is exactly the set worth
+/// showing; `batten task unregister --pid` stays the explicit escape.
+///
+/// CLOUD-901's other half still holds, and now for every entry: a corroboration
+/// miss costs a wrong word here, never the evidence.
+#[must_use]
+pub fn alive(git_dir: &Path, options: Alive) -> Reading {
+    alive_reading(git_dir, options, |file| crate::fsio::read_to_string(file))
+}
+
+/// [`alive`] over an injected record reader: the step between listing an entry
+/// and reading it is where a deregistering task races this one, and only a
+/// reader that loses that race on demand can show the race is answered.
+fn alive_reading(
+    git_dir: &Path,
+    options: Alive,
+    read: impl Fn(&Path) -> std::io::Result<String>,
+) -> Reading {
+    let dir = state_dir(git_dir);
+    // Genuine ABSENCE is a real answer — "nothing is running" — and only genuine
+    // absence may take this branch. Present-but-unreadable is the other one.
+    if !dir.exists() {
+        return Reading::Nothing;
+    }
+    let Ok(listing) = std::fs::read_dir(&dir) else {
+        return Reading::Unreadable(dir);
+    };
+    let mut files: Vec<PathBuf> = listing
+        .filter_map(|found| found.ok().map(|found| found.path()))
+        .filter(|path| is_record(path))
+        .collect();
+    // Sorted, so the output is byte-stable across runs for one registry state
+    // (non-negotiable rule 5) rather than dependent on readdir order.
+    files.sort();
+
+    let mut lines = Vec::new();
+    for file in files {
+        // **AN ENTRY THAT WILL NOT READ IS COULD-NOT-LOOK, NOT AN ABSENCE**
+        // (review of #848). This discarded the error and skipped, so a registry
+        // whose entries were all unreadable — a different uid, a restrictive mode,
+        // invalid UTF-8 — fell through to the empty check below and answered
+        // "nothing registered" at exit 0. That is the exact conflation this
+        // module's header says it exists to remove, and it is the dangerous
+        // direction: a successor reads it as a clear field and starts a second
+        // landing.
+        //
+        // **AND `NotFound` IS NOT ONE OF THOSE CAUSES** (review of #848). An entry
+        // is deregistered by DELETING it — by every exiting task, and by the next
+        // `land`'s reap — so a file listed by `read_dir` and gone by the time
+        // it is read is the ordinary race, not a registry nobody can see. Reading
+        // it as could-not-look turned a healthy answer into `Unreadable` and hid
+        // every entry later in sort order, which is the same conflation running
+        // the other way: the fix above must not buy its direction by inventing a
+        // failure the tree does not have.
+        let body = match read(&file) {
+            Ok(body) => body,
+            Err(reason) if reason.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(_) => return Reading::Unreadable(file.clone()),
+        };
+        let entry = Entry::parse(&body);
+        if !entry.is_complete() {
+            continue;
+        }
+        let running = task_alive(&entry);
+        lines.push(render_line(&entry, running, options.now));
+    }
+    if lines.is_empty() {
+        Reading::Nothing
+    } else {
+        Reading::Lines(lines)
+    }
+}
+
+/// Every registered task whose registrant is GONE, with the group it led.
+///
+/// **The crash-only half of the registry, and the half that was missing**
+/// (CLOUD-1148). Forgetting a dead entry tidies the STORE — and the store was
+/// never the thing that outlived the crash. A task is
+/// registered by the process that leads a group; when the container reaps that
+/// process, or a supervisor TERMs it, the group's other members are reparented
+/// to init and keep running. Deleting the record makes them invisible instead of
+/// dead, which is strictly worse: `alive` then answers "nothing registered" over
+/// a machine with four test suites on it. Measured exactly that way, five laps
+/// deep, on the branch that retired the shell lander.
+///
+/// So this is deliberately a READ that deletes nothing. It hands back the
+/// `pgid` its caller needs to signal, and the caller — which is the only layer
+/// that may reach both this store and a process group — decides. This module
+/// signals nothing itself: its declared edges are `error` and `exit`, and
+/// growing it a `kill` would make the registry a second authority over process
+/// lifetime as well as over its own format.
+///
+/// **`pgid` may be the pid**, per [`Entry`]'s own field doc, and that is safe
+/// rather than lucky: signalling a group led by a pid that no longer exists is
+/// `ESRCH`, which every caller here treats as nothing-to-do.
+///
+/// The liveness question is [`task_alive`]'s — pid existence AND the cmdline
+/// the registrant recorded, because this clone measurably wrapped its pid space
+/// inside 20 minutes (CLOUD-432). An unevaluable comparison reads as ALIVE there, so this under-reports rather than over-reports, which is the
+/// direction that cannot kill a working lap. The one caller that signals adds a
+/// stricter gate of its own (`collect::group_orphaned`), which declines a group
+/// its registrant or its leader is still in — a corroboration miss here is not a
+/// kill while the registrant stays in its recorded group.
+#[must_use]
+pub fn abandoned(git_dir: &Path) -> Vec<Entry> {
+    partition(git_dir).1
+}
+
+/// The registry split in one read: `(running, abandoned)`, each record probed
+/// once, so a registrant exiting mid-read lands in exactly one half. The Stop
+/// watchdog reads the first half as a relaunch already under way (CLOUD-2370).
+#[must_use]
+pub fn partition(git_dir: &Path) -> (Vec<Entry>, Vec<Entry>) {
+    records(git_dir).into_iter().partition(task_alive)
+}
+
+/// Every complete record in the registry, in path order.
+fn records(git_dir: &Path) -> Vec<Entry> {
+    let dir = state_dir(git_dir);
+    let Ok(listing) = std::fs::read_dir(&dir) else {
+        // Could-not-look reaps nothing, which is the safe direction: a registry
+        // that cannot be read must never license signalling a group it guessed at.
+        return Vec::new();
+    };
+    let mut files: Vec<PathBuf> = listing
+        .filter_map(|found| found.ok().map(|found| found.path()))
+        .filter(|path| is_record(path))
+        .collect();
+    // Sorted for the byte-stability obligation every reader here carries.
+    files.sort();
+    files
+        .iter()
+        .filter_map(|file| crate::fsio::read_to_string(file).ok())
+        .map(|body| Entry::parse(&body))
+        .filter(Entry::is_complete)
+        .collect()
+}
+
+/// Write a reading out, as the reader's caller expects to read it.
+///
+/// # Errors
+///
+/// Propagates a write failure on either channel.
+pub fn report(
+    reading: &Reading,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<crate::ExitCode> {
+    match reading {
+        Reading::Nothing => {
+            writeln!(out, "alive: nothing registered")?;
+            Ok(crate::ExitCode::Success)
+        }
+        Reading::Lines(lines) => {
+            for line in lines {
+                writeln!(out, "{line}")?;
+            }
+            Ok(crate::ExitCode::Success)
+        }
+        // Could-not-look is exit 3 in the one contract, where the retiring shell
+        // spelled it 2. The remap is deliberate and is `checks green`'s: this
+        // table has one meaning per code and no per-verb exception, so a caller
+        // branching on the code alone cannot read "I could not tell" as a
+        // verdict about the repository.
+        Reading::Unreadable(path) => {
+            writeln!(
+                err,
+                "::error:: task alive: the registry at {} cannot be read — that is not 'nothing runs'",
+                path.display()
+            )?;
+            Ok(crate::ExitCode::Internal)
+        }
+    }
+}
+
+// -- One task per clone (CLOUD-428) ------------------------------------------
+//
+// **HERE RATHER THAN IN A MODULE OF ITS OWN, and the reason is this module's
+// own subject.** The retiring `mise-tasks/singleton.sh` read the task registry
+// by hand — `sed -n 's/^phase: //p' "$git_dir/batten-tasks/$1" | head -n 1` — to
+// name what the holder was doing. That is a second authority over a layout this
+// module owns, in the same shape `rules/policy-modules.md` records for
+// parsers, and it is the whole reason the two could not stay apart: the registry
+// gained an owner one commit ago and this was its remaining hand-rolled reader.
+// It also shares `pid_exists`, so a liveness rule spelled twice becomes one.
+//
+// **THE LOCK IS A DIRECTORY, never `flock(1)`** — carried unchanged from the
+// shell (CLOUD-286): `flock` ships with util-linux and does not exist on macOS,
+// where the refusal guarding it fired before any other gate. `create_dir` is an
+// atomic create-or-fail everywhere that matters.
+//
+// **THE CALLER'S TRAP OWNS THE RELEASE.** This performs the acquire on the
+// CALLER's behalf and writes the CALLER's pid; the process that ran it exits
+// immediately and holds nothing, exactly as the shell did.
+
+/// Where one clone's singleton locks live.
+pub const SINGLETON_DIR: &str = "batten-singleton";
+
+/// What an acquire attempt found.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Claim {
+    /// The lock is this caller's now.
+    Taken,
+    /// It was abandoned by a pid that is gone, and is this caller's now.
+    Reclaimed(String),
+    /// Somebody live holds it. The phase is the registry's word about what they
+    /// are doing, and is absent whenever the registry cannot say — a holder that
+    /// died before registering has no entry, which is the COMMON case and never
+    /// turns a refusal into a pass.
+    Held {
+        holder: String,
+        phase: Option<String>,
+    },
+    /// The state directory could not be created or read. Could-not-look, never
+    /// "free": treating it as free is how two lands start.
+    CouldNotLook(PathBuf),
+}
+
+/// The directory one task's lock is.
+fn singleton_lock(git_dir: &Path, task: &str) -> PathBuf {
+    git_dir.join(SINGLETON_DIR).join(task)
+}
+
+/// Drop a task's lock, whether or not it was ever taken.
+///
+/// Idempotent because it runs from an exit trap that also fires on paths where
+/// the acquire never happened, and a trap that can fail masks the real exit
+/// code.
+pub fn singleton_release(git_dir: &Path, task: &str) {
+    let _ = std::fs::remove_dir_all(singleton_lock(git_dir, task));
+}
+
+/// Who holds the singleton lock for `task`, WITHOUT taking or reclaiming it
+/// (CLOUD-438).
+///
+/// **The read half of [`singleton_acquire`], and it exists because that function
+/// is a write.** `singleton_acquire` creates the lock, sleeps, and may reclaim a
+/// corpse — every one of which is wrong on the mediated path, where the question
+/// is only "would starting a second one be a mistake". A hook that called the
+/// acquiring verb would take the lock the call it is judging is about to want.
+///
+/// The four answers are the same four the acquiring path already distinguishes,
+/// so this adds no second predicate and no second bookkeeping:
+///
+/// * **no lock at all** — `None`. Nothing is running.
+/// * **a lock whose pid file is empty or unreadable** — `Some("unknown")`. A
+///   holder caught between its create and its write is a holder, not a corpse:
+///   absence of evidence is "held", never "free", which is the direction
+///   `singleton_acquire` already takes and states.
+/// * **a live pid** — `Some(pid)`.
+/// * **a dead pid** — `None`. A corpse holds nothing; the acquiring path
+///   reclaims it, and refusing here would refuse against a process that no
+///   longer exists.
+///
+/// No sleep and no second sighting, deliberately. The recheck in
+/// `singleton_acquire` exists to make RECLAIMING safe — it must not rob a holder
+/// that took the lock between two reads. Nothing is reclaimed here, so there is
+/// nothing to be careful about, and a pause on the hot path would be the timer
+/// standing in for an exit condition that CLOUD-1177 refuses.
+#[must_use]
+pub fn singleton_holder(git_dir: &Path, task: &str) -> Option<String> {
+    let lock = singleton_lock(git_dir, task);
+    if !lock.exists() {
+        return None;
+    }
+    // A lock that names no pid is the acquiring path's to judge over two sightings
+    // (CLOUD-1895), exactly as a dead pid is: refusing here on one sighting made
+    // the reclaim unreachable through `mise run`, since the task never started.
+    let holder = holder_of(&lock)?;
+    pid_exists(&holder).then_some(holder)
+}
+
+/// Take a task's lock for `pid`, or report who holds it.
+///
+/// `recheck` is the pause between the two sightings a reclaim requires. It is an
+/// argument rather than a constant so a test can drive the second case with a
+/// wide margin instead of racing the default; nothing in production sets it.
+#[must_use]
+pub fn singleton_acquire(
+    git_dir: &Path,
+    task: &str,
+    pid: &str,
+    recheck: std::time::Duration,
+) -> Claim {
+    let lock = singleton_lock(git_dir, task);
+    match singleton_acquire_at(&lock, pid, recheck, 1) {
+        // The registry's word about what the holder is DOING, and it is added
+        // here rather than in the path-taking core because only a clone-scoped
+        // lock has a registry to ask. A lock guarding a machine-global resource
+        // has no such entry, and inventing one would be a second authority over
+        // a layout this module owns.
+        Claim::Held {
+            holder,
+            phase: None,
+        } => {
+            let phase = read_field(git_dir, &holder, "phase").filter(|phase| !phase.is_empty());
+            Claim::Held { holder, phase }
+        }
+        answered => answered,
+    }
+}
+
+/// [`singleton_acquire`] over a lock at an explicit PATH.
+///
+/// **The core, and the split is behaviour rather than tidiness** (CLOUD-1710).
+/// `singleton_acquire`'s lock lives under `$GIT_DIR`, which is right for "one
+/// task per clone" and wrong for a lock guarding something the clone does not
+/// own. The two locks `mise-tasks/with-lock.sh` was written for are both of the
+/// second kind — `doctor`'s sits under `$MISE_DATA_DIR` and `target-ensure`'s
+/// inside the rust sysroot it protects — because the resources they serialize
+/// are the MACHINE's, shared by every clone on it. Keying those per clone would
+/// let two checkouts install a rustup target concurrently and roll each other
+/// back, which is CLOUD-220 returning by another route.
+///
+/// Every decision is the same one `singleton_acquire` makes; only where the lock
+/// lives differs.
+#[must_use]
+pub fn singleton_acquire_at(
+    lock: &Path,
+    pid: &str,
+    recheck: std::time::Duration,
+    attempts: usize,
+) -> Claim {
+    // THE ONE DECLARED PAUSE IN THIS MODULE, and the only waived delay it owns.
+    // One site rather than two is a rule rather than tidiness: the
+    // delay-waiver ratchet counts every annotation standing over a sleep in this
+    // crate (CLOUD-1148), so a queue with its own loop and sleep would have spent
+    // a second waiver on a pause this one already owns. It serves both readings:
+    // the interval separating the two sightings a reclaim requires, and the one
+    // between two asks for a lock somebody else holds. Neither is a poll standing
+    // in for an exit condition (CLOUD-1177): the bound is `attempts`, a count the
+    // caller declares. The thread's own sleep is handed over by name rather than
+    // wrapped, since a wrapper's one-call body has a mutant no case can tell from
+    // the real pause.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the module's one declared pause: it separates the two sightings a reclaim requires AND the two asks a queue makes, bounded by `attempts` rather than by a clock, so it is neither a poll nor a timer standing in for an exit condition"
+    )]
+    let pause = std::thread::sleep;
+    acquire_pausing(lock, pid, recheck, attempts, pause)
+}
+
+/// [`singleton_acquire_at`] over an injected pause, so a case can move the lock
+/// BETWEEN the two sightings, which is the interleaving every reclaim decision
+/// is about and one no real pause can be made to produce on demand.
+fn acquire_pausing(
+    lock: &Path,
+    pid: &str,
+    recheck: std::time::Duration,
+    attempts: usize,
+    mut pause: impl FnMut(std::time::Duration),
+) -> Claim {
+    // A lock with no parent is not a lock: could-not-look, never "free".
+    let Some(parent) = lock.parent() else {
+        return Claim::CouldNotLook(lock.to_path_buf());
+    };
+    if std::fs::create_dir_all(parent).is_err() {
+        return Claim::CouldNotLook(parent.to_path_buf());
+    }
+
+    // One ask: the claim it settles, or `None` for a lock someone else still
+    // holds.
+    let mut ask = || {
+        if take(lock, pid) {
+            return Some(Claim::Taken);
+        }
+
+        // An EMPTY OR ABSENT pid file is neither held nor free on ONE sighting
+        // (CLOUD-1895). It used to report `Held { "unknown" }` before the reclaim
+        // below was consulted — so a process killed between `take`'s create and
+        // its write left a lock nothing would ever reclaim. It now takes the
+        // two-sighting path a dead pid does: a holder mid-write has written long
+        // before the recheck ends, and `take` no longer leaves a live holder's
+        // lock unstamped.
+        let holder = holder_of(lock);
+
+        // There is deliberately NO early live-holder fast path. It read as a safety
+        // property and was not one: with it deleted a live holder still falls
+        // through to the refusal below, so no test could tell the two apart and it
+        // survived its own mutant. One refusal path is worth more than the pause.
+        //
+        // First sighting of a dead pid. Look again before reclaiming, so a holder
+        // that exited cleanly between the read and the check — its own trap already
+        // removing the directory — is never mistaken for one that died holding, and
+        // a NEW holder that took the lock in between is never robbed of it.
+        // An INVENTORY ROW, and it is neither of the two shapes CLOUD-1177 separates.
+        // It is not a poll — nothing is re-attempted on a schedule — and it is not a
+        // timer standing in for an exit condition, because there is no condition to
+        // wait for: the two sightings must be separated by elapsed time or they are
+        // one sighting. The bound is `--recheck-ms`, a single pause the caller
+        // declares, and the interval IS the safety margin rather than a guess at how
+        // long something takes.
+        pause(recheck);
+        if may_reclaim(holder.as_deref(), holder_of(lock).as_deref())
+            && std::fs::remove_dir_all(lock).is_ok()
+            && take(lock, pid)
+        {
+            return Some(Claim::Reclaimed(
+                holder.unwrap_or_else(|| UNSTAMPED.to_owned()),
+            ));
+        }
+        None
+    };
+    // Every ask but the last, as a range rather than a counter: a counter's
+    // `+=` and `>=` have mutants that never reach the last ask, and so hang
+    // rather than fail. At least one ask follows, so `attempts = 0` is a single
+    // non-blocking attempt rather than a silent "never look" that would report a
+    // free lock as held.
+    for _ in 1..attempts {
+        if let Some(claim) = ask() {
+            return claim;
+        }
+    }
+    // The lock changed under us, or a live holder took it: whoever holds it now
+    // is real. Re-read rather than reporting the corpse seen a moment ago.
+    ask().unwrap_or_else(|| Claim::Held {
+        holder: holder_of(lock).unwrap_or_else(|| "unknown".to_owned()),
+        phase: None,
+    })
+}
+
+/// Drop a lock at an explicit path, whether or not it was ever taken.
+pub fn singleton_release_at(lock: &Path) {
+    let _ = std::fs::remove_dir_all(lock);
+}
+
+/// May the lock be taken from the pid seen at the FIRST sighting?
+///
+/// Extracted rather than inlined, and that is `rust.md`'s premise rule rather
+/// than taste: the failing condition is "the lock changed hands between the two
+/// sightings", and driving it through the verb means racing a live child against
+/// a sleep — a timer standing in for an exit condition, which is exactly what
+/// CLOUD-1177 refuses. As a function of the two readings it is total and
+/// testable, and the four combinations are four assertions with no clock in
+/// them.
+///
+/// Both conjuncts are load-bearing and in this order. A DIFFERENT second reading
+/// means a new holder took the lock while the first's own trap was removing it,
+/// and reclaiming then robs a live process. A reading that is gone entirely is
+/// the same answer: there is nothing to reclaim, and the caller's next `take`
+/// decides it honestly.
+///
+/// A lock naming NO pid on both sightings is reclaimable too (CLOUD-1895):
+/// unreadable-twice is the corroboration standing in for `!pid_exists`, since a
+/// holder between its create and its write stamps it long before the recheck
+/// ends. Unreadable then readable is a holder that finished writing: held.
+fn may_reclaim(first: Option<&str>, second: Option<&str>) -> bool {
+    match (first, second) {
+        (None, None) => true,
+        (Some(first), second) => second == Some(first) && !pid_exists(first),
+        (None, Some(_)) => false,
+    }
+}
+
+/// What a reclaim reports when the lock it took named no pid.
+const UNSTAMPED: &str = "(none: the lock carried no readable pid)";
+
+/// Create the lock and stamp it with `pid`, reporting whether this call won it.
+///
+/// A write that fails REMOVES the lock and reports a loss. It used to leave an
+/// empty pid file and report a win, which was safe only while an empty file read
+/// as held forever; now that one is reclaimable, a live holder must never be the
+/// thing that leaves it (CLOUD-1895).
+fn take(lock: &Path, pid: &str) -> bool {
+    if std::fs::create_dir(lock).is_err() {
+        return false;
+    }
+    if crate::durable::replace(lock.join("pid"), format!("{pid}\n")).is_err() {
+        let _ = std::fs::remove_dir_all(lock);
+        return false;
+    }
+    true
+}
+
+/// Who the lock says holds it, or `None` where it says nothing readable.
+fn holder_of(lock: &Path) -> Option<String> {
+    let raw = crate::fsio::read_to_string(lock.join("pid")).ok()?;
+    let holder = raw.trim().to_owned();
+    (!holder.is_empty()).then_some(holder)
+}
+
+/// Report a claim on the one exit table.
+///
+/// A live holder is `Violation`: it is a verdict about this clone, and the
+/// refusal is the product. The retiring shell spelled it `1` and spelled
+/// could-not-look `2`; the wrapper translates both back for callers written
+/// against those codes.
+///
+/// # Errors
+///
+/// Propagates a write failure on either channel.
+pub fn report_claim(
+    claim: &Claim,
+    task: &str,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<crate::ExitCode> {
+    match claim {
+        Claim::Taken => Ok(crate::ExitCode::Success),
+        Claim::Reclaimed(dead) => {
+            writeln!(out, "singleton: reclaimed {task} from dead pid {dead}")?;
+            Ok(crate::ExitCode::Success)
+        }
+        Claim::Held { holder, phase } => {
+            let doing = phase
+                .as_ref()
+                .map_or_else(String::new, |p| format!(" ({p})"));
+            writeln!(
+                err,
+                "::error:: singleton: {task} is already running in this clone as pid {holder}{doing}. \
+                 Stopping a background task does not reap its tree — check `mise run alive`, and kill \
+                 that process rather than starting a second one."
+            )?;
+            Ok(crate::ExitCode::Violation)
+        }
+        Claim::CouldNotLook(path) => {
+            writeln!(
+                err,
+                "::error:: singleton: cannot create {} — that is not 'nothing holds it'",
+                path.display()
+            )?;
+            Ok(crate::ExitCode::Internal)
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A process's digest is the SHA-256 of its `/proc` command line, in
+    /// lowercase hex; a pid with none has no digest.
+    #[test]
+    fn a_cmdline_digest_is_the_sha256_of_the_command_line() {
+        use sha2::Digest as _;
+        // Only Linux has `/proc`; elsewhere every pid reads as no digest.
+        if !cfg!(target_os = "linux") {
+            assert_eq!(cmdline_digest(&std::process::id().to_string()), None);
+            return;
+        }
+        let pid = std::process::id().to_string();
+        let raw = crate::fsio::read("/proc/self/cmdline");
+        assert!(raw.is_ok(), "a Linux process reads its own command line");
+        let raw = raw.unwrap_or_default();
+        let want = sha2::Sha256::digest(&raw)
+            .iter()
+            .fold(String::new(), |mut hex, byte| {
+                let _ = std::fmt::Write::write_fmt(&mut hex, format_args!("{byte:02x}"));
+                hex
+            });
+        assert_eq!(cmdline_digest(&pid), Some(want));
+        assert_eq!(cmdline_digest("0"), None);
+    }
+
+    /// A temp a kill stranded between its sync and its rename parses as a whole
+    /// record, so the readers must not take it for one (CLOUD-2372).
+    #[test]
+    fn a_write_in_flight_is_not_a_record() {
+        let dir = registry("write-in-flight");
+        let record = dir.join("4242");
+        let temp = dir.join(".4242.99.1.0.tmp");
+        assert!(crate::durable::replace(&record, "pid: 4242\n").is_ok());
+        assert!(crate::durable::replace(&temp, "pid: 4242\n").is_ok());
+        assert!(is_record(&record));
+        assert!(
+            !is_record(&temp),
+            "a dot-prefixed temp is a write in flight"
+        );
+    }
+
+    /// A scratch registry. `CARGO_TARGET_TMPDIR` is only defined for integration
+    /// crates, so this derives one the way `rules`'s own unit tests do.
+    fn registry(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join("batten-task-tests").join(name);
+        let _ = std::fs::remove_dir_all(&dir);
+        // `assert!` rather than `unwrap`: this module carries no
+        // `clippy::unwrap_used` allowance, and adding one to admit a helper
+        // would widen the lint's posture over every case in it.
+        assert!(
+            std::fs::create_dir_all(&dir).is_ok(),
+            "the scratch registry must be creatable"
+        );
+        dir
+    }
+
+    /// A pid this machine cannot have running.
+    ///
+    /// `/proc/sys/kernel/pid_max` is at most 2^22 on Linux, so this is above
+    /// every assignable number rather than merely unlikely — the environment
+    /// CAN produce the failing condition, which `.claude/rules/rust.md` asks for
+    /// rather than an assertion over a premise nothing established.
+    const NO_SUCH_PID: &str = "4194305";
+
+    /// THE REAPER'S SUBJECT: a registrant that is gone, with its group.
+    ///
+    /// The measured failure this closes (CLOUD-1148): a lap registers, the
+    /// container TERMs it, its `verify` is reparented to init and keeps running,
+    /// and `alive` deletes the record — so the machine has four test suites on it
+    /// and the registry answers "nothing registered". `abandoned` is what hands a
+    /// caller the group to signal.
+    /// **A CORPSE IS UNREACHABLE OFF UNIX, AND THIS ROW HAS TO SAY SO**
+    /// (CLOUD-1148). `pid_exists`'s `#[cfg(not(unix))]` arm answers `true` for
+    /// every parseable pid, deliberately, so nothing is ever reported dead and
+    /// nothing is ever reaped there — which makes `abandoned` empty by
+    /// construction and this case's premise unreachable. It asserted the unix
+    /// outcome unconditionally and the `windows` job found it: `found.len()` was
+    /// 0 where the assertion wanted 1.
+    ///
+    /// `cfg!` RATHER THAN AN ATTRIBUTE, for the reason
+    /// `crates/batten/tests/it/task_registry.rs` already records beside the same
+    /// asymmetry: it keeps BOTH arms compiled on every target, so `cross-check`
+    /// type-checks the off-unix branch instead of skipping over it unparsed. That
+    /// matters here more than usual, since this whole class was discovered by CI
+    /// compiling and RUNNING what no local gate can.
+    ///
+    /// `#[cfg(unix)]` over the whole test would have left the Windows contract
+    /// unstated, which is the mistake `a_reclaim_needs_two_sightings_of_one_dead_pid`
+    /// below already calls out in as many words.
+    /// Fails by: a field the writer renders missing from [`FIELDS`], or one
+    /// listed that the writer does not render, which would refuse a real field
+    /// or admit a name that always reads empty.
+    #[test]
+    fn the_field_list_is_the_records_own() {
+        let rendered: Vec<String> = Entry::default()
+            .render()
+            .lines()
+            .filter_map(|line| line.split_once(": ").map(|(name, _)| name.to_owned()))
+            .collect();
+        assert_eq!(rendered, FIELDS.map(str::to_owned).to_vec());
+    }
+
+    #[test]
+    fn a_dead_registrant_is_abandoned_and_carries_its_group() {
+        let dir = registry("abandoned-reports-the-dead");
+        register(&dir, "land", NO_SUCH_PID, "lap", 100);
+        let found = abandoned(&dir);
+        if cfg!(unix) {
+            assert_eq!(found.len(), 1, "the dead registrant is reported: {found:?}");
+            assert_eq!(found[0].pid, NO_SUCH_PID);
+            assert!(
+                !found[0].pgid.is_empty(),
+                "the group is what the caller signals, so it must be there: {:?}",
+                found[0]
+            );
+        } else {
+            assert!(
+                found.is_empty(),
+                "off unix no pid reads as dead, so the reaper must find nothing \
+                 rather than guess: {found:?}"
+            );
+        }
+    }
+
+    /// A REGISTRY THAT CANNOT BE READ REAPS NOTHING.
+    ///
+    /// The safe direction, and the opposite one from `singleton_acquire`'s: there
+    /// an unreadable lock must not read as free, because two lands start. Here an
+    /// unreadable registry must not license signalling a group nobody resolved,
+    /// because the signal is irreversible and the guess is unfounded.
+    #[test]
+    fn an_unreadable_registry_reaps_nothing() {
+        let dir = registry("abandoned-could-not-look").join("absent");
+        assert!(abandoned(&dir).is_empty());
+    }
+
+    /// EPERM IS LIFE, AND READING IT AS DEATH IS A FALSE ALLOW.
+    ///
+    /// `kill(pid, 0)` answers EPERM for a process this uid may not signal — it
+    /// exists, and the caller merely lacks the right to poke it. Every consumer
+    /// of the probe fails OPEN on a wrong reading here: the singleton gate stops
+    /// refusing a second `land`, and `task alive` reports a live holder as a
+    /// corpse the next caller reclaims.
+    ///
+    /// SHOWN ABLE TO FAIL, WHICH THE PROBE ITSELF CANNOT BE HERE (CLOUD-438).
+    /// The predecessor was `test_kill_process(pid).is_ok()`, which reads EPERM
+    /// as dead; against it the second case below returns `false` where it must
+    /// return `true`. That defect was invisible in this sandbox — it runs as
+    /// root, so every pid is signallable and EPERM never arrives — and CI is
+    /// where it surfaced, as `a_live_holder_denies_the_second_start` exiting 0
+    /// on an unprivileged runner holding a lock for pid 1. Testing the errno
+    /// rather than a live process is `.claude/rules/rust.md`'s own remedy for a
+    /// premise the environment cannot create.
+    ///
+    /// `cfg(unix)` like the function it tests: there is no `kill(pid, 0)` off
+    /// unix, so `rustix` is a `cfg(unix)` dependency and neither `lives` nor
+    /// `Errno` exists on the Windows target `cross-check` type-checks.
+    #[cfg(unix)]
+    #[test]
+    fn only_no_such_process_is_death() {
+        assert!(lives(Ok(())), "signalled: it is there");
+        assert!(
+            lives(Err(rustix::io::Errno::PERM)),
+            "EPERM is a process this uid may not signal, never an absent one"
+        );
+        assert!(
+            !lives(Err(rustix::io::Errno::SRCH)),
+            "ESRCH is the one answer that means death"
+        );
+        assert!(
+            lives(Err(rustix::io::Errno::INVAL)),
+            "a probe that could not look must not read as free"
+        );
+    }
+
+    // TWO SIGHTINGS, all four combinations, with no clock and no second process.
+    // The retiring suite raced a real child against a sleep to reach the middle
+    // two; over the decision itself they are ordinary assertions.
+    #[test]
+    fn a_reclaim_needs_two_sightings_of_one_dead_pid() {
+        let dead = "4194304";
+        let live = std::process::id().to_string();
+
+        // THE ONE ARM THAT IS PLATFORM-SPLIT, AND IT ASSERTS THE ASYMMETRY
+        // RATHER THAN SKIPPING IT. `pid_exists` has no probe off unix — the
+        // `#[cfg(not(unix))]` arm answers `true` for every parseable pid, on
+        // purpose, so that nothing is ever reported dead and nothing is ever
+        // REAPED there. A reclaim therefore cannot happen on Windows, and this
+        // case is where that decision is written down as an assertion instead of
+        // only as a doc comment. `#[cfg(unix)]` over the whole test would have
+        // left the Windows contract unstated, which is what let CI find it.
+        #[cfg(unix)]
+        // The same dead pid twice, and it is gone.
+        assert!(may_reclaim(Some(dead), Some(dead)));
+        #[cfg(not(unix))]
+        // Off unix the identical reading is NOT reclaimable, because the probe
+        // that would call it dead does not exist.
+        assert!(!may_reclaim(Some(dead), Some(dead)));
+        // The lock changed hands to a NEW holder while the first's trap was
+        // removing it. Reclaiming here robs whoever holds it now.
+        assert!(!may_reclaim(Some(dead), Some(&live)));
+        assert!(!may_reclaim(Some(dead), Some("31337")));
+        // It is gone entirely: nothing to reclaim, and the next `take` decides.
+        assert!(!may_reclaim(Some(dead), None));
+        // Two sightings of a LIVE pid is a held lock, which is the common case.
+        assert!(!may_reclaim(Some(&live), Some(&live)));
+        // CLOUD-1895: no readable pid on EITHER sighting is reclaimable, on every
+        // platform — it needs no liveness probe. No pid, then a pid, is a holder
+        // that finished its write: held.
+        assert!(may_reclaim(None, None));
+        assert!(!may_reclaim(None, Some(&live)));
+    }
+
+    #[test]
+    fn a_half_written_entry_is_not_renderable() {
+        assert!(!Entry::parse("task: land\n").is_complete());
+        assert!(!Entry::parse("pid: 42\n").is_complete());
+        assert!(Entry::parse("task: land\npid: 42\n").is_complete());
+    }
+
+    #[test]
+    fn an_entry_predating_the_phase_stamp_renders_without_the_suffix() {
+        let entry = Entry::parse("task: land\npid: 42\nphase: verify\nstarted_at: 100\n");
+        assert_eq!(render_line(&entry, true, 160), "land verify 42 60s");
+    }
+
+    /// CLOUD-2366: the reaper dates a group against the latest stamp, any of
+    /// the four, and an entry with none parsing has no such second.
+    #[test]
+    fn the_last_alive_second_is_the_latest_stamp() {
+        let entry =
+            Entry::parse("pid: 42\nstarted_at: 100\nphase_since: 140\ntick_at: 120\nsig_at: x\n");
+        assert_eq!(entry.last_alive(), Some(140));
+        assert_eq!(Entry::parse("pid: 42\n").last_alive(), None);
+    }
+
+    #[test]
+    fn a_missing_start_time_renders_a_question_mark_rather_than_a_number() {
+        let entry = Entry::parse("task: land\npid: 42\nphase: verify\n");
+        assert_eq!(render_line(&entry, true, 160), "land verify 42 ?s");
+    }
+
+    #[test]
+    fn an_absent_phase_reads_as_unknown_rather_than_as_a_blank() {
+        let entry = Entry::parse("task: land\npid: 42\nstarted_at: 100\n");
+        assert_eq!(
+            render_line(&entry, false, 160),
+            "land crashed(unknown) 42 60s"
+        );
+    }
+
+    /// Fails by: a task that recorded its own outcome before exiting rendered
+    /// as a crash, or an unrecorded exit rendered as a finish.
+    #[test]
+    fn a_terminal_phase_is_a_finish_and_never_a_crash() {
+        for outcome in [OK, FAILED] {
+            let entry = Entry::parse(&format!(
+                "task: install\npid: {NO_SUCH_PID}\nphase: {outcome}\nstarted_at: 100\n"
+            ));
+            assert_eq!(
+                render_line(&entry, false, 160),
+                format!("install {outcome} {NO_SUCH_PID} 60s")
+            );
+        }
+        let ok = Entry::parse(&format!("task: t\npid: {NO_SUCH_PID}\nphase: ok\n"));
+        let failed = Entry::parse(&format!("task: t\npid: {NO_SUCH_PID}\nphase: failed\n"));
+        let died = Entry::parse(&format!("task: t\npid: {NO_SUCH_PID}\nphase: install\n"));
+        if cfg!(unix) {
+            assert_eq!(state(&ok), State::Ok);
+            assert_eq!(state(&failed), State::Failed);
+            assert_eq!(state(&died), State::Crashed);
+        }
+    }
+
+    /// Fails by: a record read as its process without the pid's start tick
+    /// matching — one with no tick, or another tick, under a LIVE pid — or a
+    /// registration that does not record the tick it is keyed on.
+    #[test]
+    fn a_record_is_keyed_on_its_pid_and_start_tick() {
+        let own = std::process::id().to_string();
+        let tick = process_start(&own);
+        if !cfg!(target_os = "linux") {
+            assert_eq!(tick, None);
+            return;
+        }
+        let Some(tick) = tick else {
+            panic!("a Linux process reads its own start tick");
+        };
+        assert!(tick.parse::<u64>().is_ok(), "{tick}");
+        assert_eq!(process_start(NO_SUCH_PID), None);
+        let dir = registry("start-tick");
+        register(&dir, "t", &own, "run", 100);
+        assert_eq!(read_field(&dir, &own, "proc_start"), Some(tick.clone()));
+        let keyed = Entry::parse(&format!("task: t\npid: {own}\nproc_start: {tick}\n"));
+        assert_eq!(state(&keyed), State::Running);
+        let unkeyed = Entry::parse(&format!("task: t\npid: {own}\n"));
+        assert_eq!(
+            state(&unkeyed),
+            State::Crashed,
+            "no tick reads as abandoned"
+        );
+        let recycled = Entry::parse(&format!("task: t\npid: {own}\nproc_start: 1{tick}\n"));
+        assert_eq!(
+            state(&recycled),
+            State::Crashed,
+            "another tick is another process"
+        );
+        let stamped = Entry::parse(&format!(
+            "task: t\npid: {own}\nphase: ok\nproc_start: {tick}\n"
+        ));
+        assert_eq!(
+            state(&stamped),
+            State::Ok,
+            "a last word is a finish before the exit"
+        );
+    }
+
+    #[test]
+    fn a_crashed_line_carries_the_phase_it_died_in() {
+        let entry =
+            Entry::parse("task: land\npid: 42\nphase: verify\nstarted_at: 100\nphase_since: 140\n");
+        assert_eq!(
+            render_line(&entry, false, 160),
+            "land crashed(verify) 42 60s in-phase 20s"
+        );
+    }
+
+    #[test]
+    fn the_first_line_wins_for_a_repeated_key() {
+        // The retiring reader's `head -n 1`, kept: a reader may not move a
+        // verdict silently, even for a shape the writer cannot produce.
+        assert_eq!(Entry::field("phase: one\nphase: two\n", "phase"), "one");
+    }
+
+    #[test]
+    fn a_value_carrying_a_colon_is_one_field() {
+        assert_eq!(Entry::field("phase: lap: 3\n", "phase"), "lap: 3");
+    }
+
+    /// Fails by: a stamp moved by a re-announcement of the value it already
+    /// holds, or kept when the value changed or was never stamped.
+    #[test]
+    fn a_stamp_moves_only_when_its_value_changes() {
+        assert_eq!(stamp_for("a", "a", "100", 200), "100");
+        assert_eq!(stamp_for("b", "a", "100", 200), "200");
+        assert_eq!(stamp_for("a", "a", "", 200), "200");
+    }
+
+    /// Fails by: a registration not recorded with its phase, its stamps or its
+    /// group, a push lost, misfiled or fabricated for a pid that never
+    /// registered, or an unregister that leaves the record.
+    #[test]
+    fn a_record_is_registered_pushed_and_dropped() {
+        let dir = registry("lifecycle");
+        let pid = "4242";
+        register(&dir, "land", pid, "start", 100);
+        let field = |name: &str| read_field(&dir, pid, name);
+        assert_eq!(field("task").as_deref(), Some("land"));
+        assert_eq!(field("phase").as_deref(), Some("start"));
+        assert_eq!(field("phase_since").as_deref(), Some("100"));
+        assert_eq!(field("started_at").as_deref(), Some("100"));
+        assert_eq!(field("pgid"), Some(process_group(pid)));
+        push(&dir, pid, Signal::Phase, "start", 200);
+        assert_eq!(field("phase_since").as_deref(), Some("100"), "not a change");
+        push(&dir, pid, Signal::Phase, "next", 300);
+        assert_eq!(field("phase").as_deref(), Some("next"));
+        assert_eq!(field("phase_since").as_deref(), Some("300"));
+        push(&dir, pid, Signal::Tick, "1", 400);
+        assert_eq!(field("tick_at").as_deref(), Some("400"));
+        push(&dir, pid, Signal::Sig, "moved", 500);
+        assert_eq!(field("sig").as_deref(), Some("moved"));
+        assert_eq!(field("sig_at").as_deref(), Some("500"));
+        push(&dir, "777", Signal::Tick, "1", 600);
+        assert_eq!(read_field(&dir, "777", "tick"), None, "nothing fabricated");
+        unregister(&dir, pid);
+        assert_eq!(field("task"), None);
+    }
+
+    /// A live registrant's record carries the digest of ITS command line, the
+    /// stamp `alive` compares a reused pid against (CLOUD-1560, CLOUD-2789).
+    ///
+    /// Fails by: the digest dropped from the registered entry, so a recycled
+    /// pid reads as the registrant.
+    #[test]
+    fn a_live_registrant_is_recorded_with_its_command_line_digest() {
+        let dir = registry("cmdline-digest");
+        let pid = std::process::id().to_string();
+        register(&dir, "land", &pid, "start", 100);
+        let recorded = read_field(&dir, &pid, "cmdline_sha256").unwrap_or_default();
+        assert_eq!(recorded, cmdline_digest(&pid).unwrap_or_default());
+        if cfg!(target_os = "linux") {
+            assert_eq!(recorded.len(), 64, "a live pid's command line reads");
+        }
+    }
+
+    /// Fails by: a pid's group misread, or a field that is not a pid read as
+    /// one.
+    #[test]
+    fn a_group_is_read_for_a_pid_and_kept_for_anything_else() {
+        assert_eq!(process_group("not-a-pid"), "not-a-pid");
+        let own = std::process::id().to_string();
+        assert!(
+            process_group(&own).parse::<u32>().is_ok(),
+            "{}",
+            process_group(&own)
+        );
+        assert!(pid_exists(&own));
+        assert!(!pid_exists("not-a-pid"));
+        // Off unix there is no probe, so no parseable pid is ever called gone.
+        assert_eq!(pid_exists(NO_SUCH_PID), cfg!(not(unix)));
+    }
+
+    /// Fails by: a running or sleeping state read as exited, a zombie or a
+    /// dead one read as running, or the state read before the command name's
+    /// last `)` (CLOUD-2789).
+    #[test]
+    fn only_a_zombie_or_dead_state_has_exited() {
+        assert!(exited_in("42 (setup) Z 1 42 42 0"));
+        assert!(exited_in("42 (setup) X 1 42 42 0"));
+        assert!(!exited_in("42 (setup) S 1 42 42 0"));
+        assert!(!exited_in("42 (setup) R 1 42 42 0"));
+        assert!(!exited_in("42 (a) Z b) S 1 42 42 0"));
+        assert!(!exited_in(""));
+    }
+
+    /// Fails by: a live registrant whose recorded cmdline still matches read as
+    /// crashed, a gone one read as running, a half-written record rendered, or
+    /// an unreadable record read as absent.
+    #[test]
+    fn alive_reads_each_record_against_its_process() {
+        let dir = registry("alive");
+        let exe = std::env::current_exe().unwrap_or_default();
+        let task = exe
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let own = std::process::id().to_string();
+        register(&dir, &task, &own, "running", 100);
+        register(&dir, "gone", NO_SUCH_PID, "stuck", 100);
+        assert!(crate::durable::replace(state_dir(&dir).join("half"), "task: x\n").is_ok());
+        let options = Alive { now: 160 };
+        let Reading::Lines(lines) = alive(&dir, options) else {
+            panic!("two whole records");
+        };
+        assert_eq!(lines.len(), 2, "{lines:?}");
+        let mine = format!("{task} running {own} 60s in-phase 60s");
+        assert!(lines.contains(&mine), "{lines:?}");
+        // Off unix nothing is ever reported dead, so the gone registrant reads
+        // as running in its phase.
+        let gone = if cfg!(unix) {
+            "gone crashed(stuck) "
+        } else {
+            "gone stuck "
+        };
+        assert!(lines.iter().any(|line| line.starts_with(gone)), "{lines:?}");
+        assert!(crate::durable::replace(state_dir(&dir).join("garbled"), [0xff, 0xfe]).is_ok());
+        assert!(matches!(alive(&dir, options), Reading::Unreadable(_)));
+    }
+
+    /// Fails by: a free lock not taken, a live holder's lock taken or reported
+    /// without the phase its registry names, a release that leaves the lock, or
+    /// a lock a dead pid or no pid holds not reclaimed.
+    #[test]
+    fn the_singleton_lock_is_taken_held_released_and_reclaimed() {
+        let dir = registry("singleton");
+        let none = std::time::Duration::ZERO;
+        let own = std::process::id().to_string();
+        assert!(matches!(
+            singleton_acquire(&dir, "land", &own, none),
+            Claim::Taken
+        ));
+        assert_eq!(
+            singleton_holder(&dir, "land").as_deref(),
+            Some(own.as_str())
+        );
+        register(&dir, "land", &own, "lapping", 100);
+        let held = singleton_acquire(&dir, "land", "999", none);
+        assert!(
+            matches!(&held, Claim::Held { holder, phase } if *holder == own && phase.as_deref() == Some("lapping")),
+            "{held:?}"
+        );
+        singleton_release(&dir, "land");
+        assert_eq!(singleton_holder(&dir, "land"), None);
+        assert!(!singleton_lock(&dir, "land").exists());
+
+        let lock = singleton_lock(&dir, "dead");
+        assert!(std::fs::create_dir_all(&lock).is_ok());
+        assert!(crate::durable::replace(lock.join("pid"), format!("{NO_SUCH_PID}\n")).is_ok());
+        // Off unix no probe calls the pid gone, so the corpse still holds.
+        assert_eq!(
+            singleton_holder(&dir, "dead"),
+            cfg!(not(unix)).then(|| NO_SUCH_PID.to_owned()),
+            "a corpse holds nothing"
+        );
+        let reclaimed = singleton_acquire(&dir, "dead", &own, none);
+        if cfg!(unix) {
+            assert!(
+                matches!(&reclaimed, Claim::Reclaimed(from) if from == NO_SUCH_PID),
+                "{reclaimed:?}"
+            );
+        } else {
+            assert!(
+                matches!(&reclaimed, Claim::Held { holder, .. } if holder == NO_SUCH_PID),
+                "{reclaimed:?}"
+            );
+        }
+        let unstamped = singleton_lock(&dir, "unstamped");
+        assert!(std::fs::create_dir_all(&unstamped).is_ok());
+        let reclaimed = singleton_acquire(&dir, "unstamped", &own, none);
+        assert!(
+            matches!(&reclaimed, Claim::Reclaimed(from) if from == UNSTAMPED),
+            "{reclaimed:?}"
+        );
+        singleton_release_at(&unstamped);
+        assert!(!unstamped.exists());
+    }
+
+    /// Fails by: a queue of several asks never ending, or ending without
+    /// reporting the live holder.
+    #[test]
+    fn a_queue_of_asks_ends_with_the_holder_it_waited_on() {
+        let dir = registry("singleton-queue");
+        let lock = singleton_lock(&dir, "doctor");
+        let own = std::process::id().to_string();
+        assert!(matches!(
+            singleton_acquire_at(&lock, &own, std::time::Duration::ZERO, 1),
+            Claim::Taken
+        ));
+        let queued = singleton_acquire_at(&lock, "999", std::time::Duration::ZERO, 3);
+        assert!(
+            matches!(&queued, Claim::Held { holder, .. } if *holder == own),
+            "{queued:?}"
+        );
+    }
+
+    /// Fails by: an entry deregistered between the listing and the read taken
+    /// for an unreadable registry, which hides every later entry behind a
+    /// failure the tree does not have.
+    #[test]
+    fn an_entry_gone_before_its_read_is_skipped() {
+        let dir = registry("alive-race");
+        register(&dir, "gone", NO_SUCH_PID, "stuck", 100);
+        register(&dir, "kept", &std::process::id().to_string(), "stuck", 100);
+        let options = Alive { now: 160 };
+        let raced = alive_reading(&dir, options, |file| {
+            let body = crate::fsio::read_to_string(file)?;
+            if body.contains("gone") {
+                Err(std::io::Error::from(std::io::ErrorKind::NotFound))
+            } else {
+                Ok(body)
+            }
+        });
+        let Reading::Lines(lines) = raced else {
+            panic!("the surviving entry reads: {raced:?}");
+        };
+        assert_eq!(lines.len(), 1, "{lines:?}");
+        assert!(lines[0].starts_with("kept "), "{lines:?}");
+    }
+
+    /// Fails by: a lock its live holder released DURING the pause reported as
+    /// reclaimed from that holder, rather than taken fresh on the next ask; or
+    /// the pause asked for any interval but the recheck.
+    #[test]
+    fn a_lock_released_between_the_sightings_is_taken_not_reclaimed() {
+        let dir = registry("singleton-released");
+        let lock = singleton_lock(&dir, "released");
+        let own = std::process::id().to_string();
+        assert!(matches!(
+            singleton_acquire_at(&lock, &own, std::time::Duration::ZERO, 1),
+            Claim::Taken
+        ));
+        let recheck = std::time::Duration::from_millis(7);
+        let mut paused = Vec::new();
+        let claim = acquire_pausing(&lock, "999", recheck, 2, |interval| {
+            paused.push(interval);
+            singleton_release_at(&lock);
+        });
+        assert!(matches!(claim, Claim::Taken), "{claim:?}");
+        assert_eq!(paused, [recheck], "one pause, of the recheck");
+    }
+
+    #[test]
+    fn a_table_whose_root_names_no_directory_is_refused_at_load() {
+        let table = |root: &str| TaskTable {
+            program_root: root.to_owned(),
+            relaunch: Vec::new(),
+            min_lifetime_secs: 3600,
+        };
+        assert!(table("mise-tasks").validate().is_ok());
+        assert!(table("./mise-tasks/").validate().is_ok());
+        for blank in [
+            "",
+            " ",
+            ".",
+            "/",
+            "../scripts",
+            "tasks/../scripts",
+            "/ scripts /",
+        ] {
+            assert!(table(blank).validate().is_err(), "{blank:?} is refused");
+        }
+    }
+
+    /// A root is read LITERALLY: outer padding, `.` segments and slashes go, so
+    /// every spelling of one directory names it, and each loads. Carries the
+    /// normalization half of `main`'s `a_root_is_trimmed_and_a_blank_one_reads_alive`,
+    /// whose corroboration half left with `corroborates` (6b79edf5).
+    ///
+    /// Fails by: the outer `trim` dropped (a padded root then refused at load),
+    /// a `.` segment kept, or a `..` or blank root read as a directory.
+    #[test]
+    fn every_spelling_of_one_root_names_that_directory() {
+        for spelled in [
+            "scripts",
+            " scripts/ ",
+            "./scripts",
+            " ./scripts/",
+            "././scripts",
+            "scripts/.",
+        ] {
+            assert_eq!(
+                normalized_root(spelled).as_deref(),
+                Some("scripts"),
+                "{spelled:?} names the scripts directory"
+            );
+        }
+        assert_eq!(normalized_root("a//b/").as_deref(), Some("a/b"));
+        for blank in [
+            "  /  ",
+            ".",
+            "./",
+            " /./ ",
+            "../scripts",
+            "tasks/../scripts",
+        ] {
+            assert_eq!(normalized_root(blank), None, "{blank:?} names no directory");
+        }
+    }
+}

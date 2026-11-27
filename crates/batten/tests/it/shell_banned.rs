@@ -6,7 +6,8 @@
 //! The module's own `test_` rules pin the predicate over a fabricated input.
 //! This tier shows the ENGINE builds that input — the consumer's `[census.shell]`
 //! table through `documents`, `lines` for the head, `base-lines` for the base,
-//! `added` over the whole tree — so the refusals below come from a real diff
+//! `added` over the whole tree, and the detector's `shell` fact over all of them
+//! (CLOUD-2625) — so the refusals below come from a real diff
 //! against a real `origin/main` (CLOUD-845's class: a module can pass every
 //! `with input as` case and decide nothing on a real tree).
 //!
@@ -36,8 +37,8 @@
 //! workflow paths became the consumer's `[census.shell]` table. Four behaviours
 //! follow: the ban reads EVERY declared manifest's command keys (in this
 //! repository that adds `hk.pkl`'s `check`/`fix` strings, which the census
-//! already counted), exempt entries are globs, a consumer declaring no census is
-//! not banned at all, and the table's globs are held to `*`, `?` and `**` — the
+//! already counted), exempt entries are globs, and the table's globs are held to
+//! `*`, `?` and `**` — the
 //! operators both the census and the ban read alike — so a brace, a class or an
 //! escape is refused at load rather than read two ways.
 //!
@@ -45,6 +46,14 @@
 //! whose base side is missing from `base-lines` refuses every shell unit it
 //! carries, as the consumer module did, rather than reading the unread base as
 //! holding them all.
+//!
+//! # Presence by default (CLOUD-2628)
+//!
+//! The stranger above still carries `exempt`, which reads as `mode =
+//! "migrate"`: every growth case here runs under that legacy reading. A census
+//! with no `mode` and no `exempt` — and a consumer with no census at all — is
+//! judged for PRESENCE over every tracked file, whatever its line sources, and
+//! the only shell it admits is a `[[census.shell.generated]]` entry's.
 
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -79,7 +88,7 @@ fn config() -> String {
          exempt = [\"bootstrap.sh\"]\n\
          \n[[census.shell.manifest]]\n\
          path = \"mise.toml\"\n\
-         keys = [\"run\"]\n\
+         carrier = \"mise-task\"\n\
          unit = \"[tasks.\"\n\
          \n[[census.shell.manifest]]\n\
          path = \"tasks.toml\"\n\
@@ -188,12 +197,14 @@ fn a_program_moved_inline_is_refused() {
 fn a_task_body_grown_by_one_line_is_refused() {
     let dir = repo(
         "shell-ban-grown",
-        &[("mise.toml", &manifest(&[("a", &["echo one"])]))],
+        // Two lines at the base: a one-command body is argv to the detector
+        // (CLOUD-2625), and a base of zero would make this a new unit.
+        &[("mise.toml", &manifest(&[("a", &["echo one", "echo two"])]))],
     );
     change(
         &dir,
         "mise.toml",
-        &manifest(&[("a", &["echo one", "echo two"])]),
+        &manifest(&[("a", &["echo one", "echo two", "echo three"])]),
     );
     let (code, found) = findings(&dir);
     assert_eq!(code, Some(2), "{found:?}");
@@ -202,6 +213,30 @@ fn a_task_body_grown_by_one_line_is_refused() {
         !found.iter().any(|(_, line)| line.is_some()),
         "no task gained shell it did not have: {found:?}"
     );
+}
+
+/// THE DECLARATION IS WHAT THE MODULE READS, and this is the case that says so
+/// in the admitting direction. The stranger's `[census.shell]` carries `exempt`,
+/// which reads as `mode = "migrate"`, so shell that stood at the base and that no
+/// change grows is admitted: a script outside every line source and a manifest
+/// task the census declares. A module that stopped reading `doc.census.shell`
+/// would see no declaration, fall to presence, and refuse both
+/// (`#MUTANT declaration-unread`); the growth cases above cannot tell, since
+/// presence refuses them too.
+#[test]
+fn shell_standing_at_the_base_is_admitted_by_the_declared_migration() {
+    let dir = repo(
+        "shell-ban-declared-migration",
+        &[
+            ("README.md", "x\n"),
+            ("scripts/old.sh", "#!/usr/bin/env bash\necho old\n"),
+            ("mise.toml", &manifest(&[("a", &["echo one", "echo two"])])),
+        ],
+    );
+    change(&dir, "README.md", "y\n");
+    let (code, found) = findings(&dir);
+    assert_eq!(code, Some(0), "{found:?}");
+    assert!(found.is_empty(), "{found:?}");
 }
 
 #[test]
@@ -213,7 +248,12 @@ fn a_body_moved_into_a_new_task_is_refused_even_when_the_total_falls() {
             &manifest(&[("a", &["echo 1", "echo 2", "echo 3"])]),
         )],
     );
-    change(&dir, "mise.toml", &manifest(&[("b", &["echo 1"])]));
+    // Two lines: one plain command is argv, and would give no finding at all.
+    change(
+        &dir,
+        "mise.toml",
+        &manifest(&[("b", &["echo 1", "echo 2"])]),
+    );
     let (code, found) = findings(&dir);
     assert_eq!(code, Some(2), "{found:?}");
     assert!(
@@ -265,10 +305,15 @@ fn a_deleted_body_is_admitted() {
         "shell-ban-deleted",
         &[(
             "mise.toml",
-            &manifest(&[("a", &["echo a"]), ("b", &["echo b"])]),
+            // Two lines each, or no body is shell and the case passes vacuously.
+            &manifest(&[("a", &["echo a", "echo 1"]), ("b", &["echo b", "echo 2"])]),
         )],
     );
-    change(&dir, "mise.toml", &manifest(&[("a", &["echo a"])]));
+    change(
+        &dir,
+        "mise.toml",
+        &manifest(&[("a", &["echo a", "echo 1"])]),
+    );
     assert_eq!(check(&dir).status.code(), Some(0));
 }
 
@@ -337,6 +382,134 @@ fn an_added_shell_script_is_refused() {
     assert!(grew(&found, "scripts/deploy.sh"), "{found:?}");
 }
 
+/// The preset judges presence over the whole tree for a consumer that declares
+/// no `[census.shell]` at all: a shell program known only by its shebang,
+/// outside every line source the row names, is still read and refused.
+///
+/// Fails by: the preset row's whole-tree reach dropped where no census table
+/// is declared, so that program goes unread and is admitted.
+#[test]
+fn a_shebang_program_is_refused_where_no_census_table_is_declared() {
+    let config = format!(
+        "version = 1\n\
+         \n[[rule]]\nid = \"{ROW}\"\nkind = \"policy\"\nscope = \"tree\"\n\
+         preset = \"shell-hygiene\"\nseverity = \"deny\"\n\
+         base = \"origin/main\"\ndelta_sources = [\"**\"]\n\
+         documents = [\"batten.toml\"]\n\
+         line_sources = [\"mise.toml\"]\n"
+    );
+    let dir = Fixture::new("shell-ban-undeclared-shebang")
+        .config(&config)
+        .files(&[("README.md", "x\n")])
+        .git()
+        .base_commit()
+        .build();
+    change(&dir, "bin/deploy", "#!/bin/sh\necho deploy\n");
+    let (code, found) = findings(&dir);
+    assert_eq!(code, Some(2), "{found:?}");
+    assert!(grew(&found, "bin/deploy"), "{found:?}");
+}
+
+/// An added `path` holding `text` is refused as a shell file, pointing at it.
+fn placed_shell_is_refused(name: &str, path: &str, text: &str) {
+    let dir = repo(name, &[("README.md", "x\n")]);
+    change(&dir, path, text);
+    let (code, found) = findings(&dir);
+    assert_eq!(code, Some(2), "{path}: {found:?}");
+    assert!(grew(&found, path), "{path}: {found:?}");
+}
+
+// EVERY SHELL THE DETECTOR KNOWS, BY NAME AND BY SHEBANG (CLOUD-2625, the
+// owner's widening). One case each, so a dropped extension or interpreter names
+// itself. A shebang is read off `lines`, so those files sit under `tools/**`,
+// the row's line source; an extension needs no lines at all.
+
+#[test]
+fn an_added_zsh_script_is_refused() {
+    placed_shell_is_refused("shell-ban-ext-zsh", "scripts/x.zsh", "echo\n");
+}
+
+#[test]
+fn an_added_ksh_script_is_refused() {
+    placed_shell_is_refused("shell-ban-ext-ksh", "scripts/x.ksh", "echo\n");
+}
+
+#[test]
+fn an_added_fish_script_is_refused() {
+    placed_shell_is_refused("shell-ban-ext-fish", "scripts/x.fish", "echo\n");
+}
+
+#[test]
+fn an_added_csh_script_is_refused() {
+    placed_shell_is_refused("shell-ban-ext-csh", "scripts/x.csh", "echo\n");
+}
+
+#[test]
+fn an_added_tcsh_script_is_refused() {
+    placed_shell_is_refused("shell-ban-ext-tcsh", "scripts/x.tcsh", "echo\n");
+}
+
+#[test]
+fn an_added_command_script_is_refused() {
+    placed_shell_is_refused("shell-ban-ext-command", "scripts/x.command", "echo\n");
+}
+
+#[test]
+fn an_added_fish_shebang_program_is_refused() {
+    placed_shell_is_refused(
+        "shell-ban-fish",
+        "tools/run-fish",
+        "#!/usr/bin/env fish\necho\n",
+    );
+}
+
+#[test]
+fn an_added_csh_shebang_program_is_refused() {
+    placed_shell_is_refused("shell-ban-csh", "tools/run-csh", "#!/bin/csh\necho\n");
+}
+
+#[test]
+fn an_added_tcsh_shebang_program_is_refused() {
+    placed_shell_is_refused("shell-ban-tcsh", "tools/run-tcsh", "#!/bin/tcsh\necho\n");
+}
+
+#[test]
+fn an_added_mksh_shebang_program_is_refused() {
+    placed_shell_is_refused("shell-ban-mksh", "tools/run-mksh", "#!/bin/mksh\necho\n");
+}
+
+#[test]
+fn an_added_ash_shebang_program_is_refused() {
+    placed_shell_is_refused("shell-ban-ash", "tools/run-ash", "#!/bin/ash\necho\n");
+}
+
+#[test]
+fn an_added_yash_shebang_program_is_refused() {
+    placed_shell_is_refused(
+        "shell-ban-yash",
+        "tools/run-yash",
+        "#!/usr/bin/env yash\necho\n",
+    );
+}
+
+#[test]
+fn an_added_busybox_sh_program_is_refused() {
+    placed_shell_is_refused(
+        "shell-ban-busybox",
+        "tools/run-busybox",
+        "#!/bin/busybox sh\necho\n",
+    );
+}
+
+#[test]
+fn an_added_busybox_sh_program_through_env_is_refused() {
+    placed_shell_is_refused(
+        "shell-ban-busybox-env",
+        "tools/run-busybox-env",
+        "#!/usr/bin/env busybox sh\necho\n",
+    );
+}
+
 #[test]
 fn an_added_shebang_program_under_a_declared_directory_is_refused() {
     let dir = repo("shell-ban-shebang", &[("README.md", "x\n")]);
@@ -363,11 +536,16 @@ fn a_manifest_whose_base_is_not_text_is_judged_against_nothing() {
     let fixture = Fixture::new("shell-ban-unreadable-base")
         .config(&config())
         .git();
-    let mut base = manifest(&[("a", &["echo a"])]).into_bytes();
+    // Two lines, so the head's body is shell to the detector at all.
+    let mut base = manifest(&[("a", &["echo a", "echo b"])]).into_bytes();
     base.extend_from_slice(b"# \xff\xfe\n");
     std::fs::write(fixture.path().join("mise.toml"), base).unwrap();
     let dir = fixture.base_commit().build();
-    change(&dir, "mise.toml", &manifest(&[("a", &["echo a"])]));
+    change(
+        &dir,
+        "mise.toml",
+        &manifest(&[("a", &["echo a", "echo b"])]),
+    );
     let (code, found) = findings(&dir);
     assert_eq!(code, Some(2), "{found:?}");
     assert!(
@@ -395,26 +573,324 @@ fn a_census_glob_the_ban_cannot_read_is_refused_at_load() {
     assert_eq!(output.status.code(), Some(1), "{}", stdout(&output));
 }
 
-/// NO DECLARATION, NO BAN. A consumer enabling `shell-hygiene` for its naming
-/// rules alone has not said where its shell lives, and must not be refused a
-/// shell file it never agreed to stop writing.
-#[test]
-fn a_consumer_declaring_no_census_is_not_banned() {
-    let dir = Fixture::new("shell-ban-undeclared")
-        .config(&format!(
-            "version = 1\n\n[[rule]]\nid = \"{ROW}\"\nkind = \"policy\"\nscope = \"tree\"\n\
-             preset = \"shell-hygiene\"\nseverity = \"deny\"\n\
-             base = \"origin/main\"\ndelta_sources = [\"**\"]\n\
-             documents = [\"batten.toml\"]\nline_sources = [\"tools/**\"]\n"
-        ))
-        .file("README.md", "x\n")
+/// The enabling row alone, with no census: what a consumer who only switched
+/// the preset on writes.
+fn undeclared_config() -> String {
+    format!(
+        "version = 1\n\n[[rule]]\nid = \"{ROW}\"\nkind = \"policy\"\nscope = \"tree\"\n\
+         preset = \"shell-hygiene\"\nseverity = \"deny\"\n\
+         base = \"origin/main\"\ndelta_sources = [\"**\"]\n\
+         documents = [\"batten.toml\"]\nline_sources = [\"tools/**\"]\n"
+    )
+}
+
+/// The enabling row and a `[census.shell]` whose body is `census`: no `exempt`,
+/// so presence unless `census` declares `mode = "migrate"`.
+fn presence_config(census: &str) -> String {
+    format!("{}\n[census.shell]\n{census}", undeclared_config())
+}
+
+/// A repository whose `origin/main` holds `files` under `config`.
+fn repo_under(name: &str, config: &str, files: &[(&str, &str)]) -> PathBuf {
+    Fixture::new(name)
+        .config(config)
+        .files(files)
         .git()
         .base_commit()
-        .build();
+        .build()
+}
+
+/// NO DECLARATION IS PRESENCE (CLOUD-2628, absorbing CLOUD-1809). Enabling the
+/// preset is the request for the ban; the census is only where a consumer says
+/// what it admits, so a consumer with none admits nothing — and the file sits
+/// outside the row's line sources, so the whole tree is what is read.
+#[test]
+fn a_consumer_declaring_no_census_is_judged_for_presence() {
+    let dir = repo_under(
+        "shell-ban-undeclared",
+        &undeclared_config(),
+        &[("README.md", "x\n")],
+    );
     change(&dir, "scripts/deploy.sh", "echo deploy\n");
     let (code, found) = findings(&dir);
-    assert!(found.is_empty(), "{found:?}");
-    assert_eq!(code, Some(0));
+    assert_eq!(code, Some(2), "{found:?}");
+    assert!(grew(&found, "scripts/deploy.sh"), "{found:?}");
+}
+
+/// PRESENCE, NOT GROWTH. A shell file that has stood since the base is refused
+/// by default — no diff touches it — and the same tree declaring `mode =
+/// "migrate"` passes, since migrating judges only what grows.
+#[test]
+fn a_base_tree_shell_file_is_refused_by_default_and_admitted_under_migrate() {
+    let files: &[(&str, &str)] = &[("README.md", "x\n"), ("scripts/old.sh", "echo old\n")];
+    let dir = repo_under("shell-ban-presence", &presence_config(""), files);
+    let output = check(&dir);
+    assert_eq!(output.status.code(), Some(2), "{}", stdout(&output));
+    // The report carries pointers, not classes. No diff touches the file, so
+    // no growth arm can point at it: the one finding is `shell present
+    // refused` (the module's own `test_` rules pin the class).
+    let (_, found) = findings(&dir);
+    assert_eq!(found, [("scripts/old.sh".to_owned(), None)], "{found:?}");
+
+    let dir = repo_under(
+        "shell-ban-presence-migrate",
+        &presence_config("mode = \"migrate\"\n"),
+        files,
+    );
+    let output = check(&dir);
+    assert_eq!(output.status.code(), Some(0), "{}", stdout(&output));
+}
+
+/// A SHEBANG IS SHELL UNDER ANY NAME, and outside every line source: the fact
+/// probes every tracked file's first two bytes.
+#[test]
+fn a_shebang_under_any_suffix_is_refused() {
+    let dir = repo_under(
+        "shell-ban-presence-shebang",
+        &presence_config(""),
+        &[
+            ("README.md", "x\n"),
+            ("fixtures/p.in", "#!/bin/sh\necho p\n"),
+        ],
+    );
+    let (code, found) = findings(&dir);
+    assert_eq!(code, Some(2), "{found:?}");
+    assert!(grew(&found, "fixtures/p.in"), "{found:?}");
+}
+
+/// One `[[census.shell.generated]]` row.
+fn generated_row(path: &str, check: &str) -> String {
+    format!(
+        "\n[[census.shell.generated]]\npath = '{path}'\n\
+         generator = \"batten completions bash\"\ncheck = '{check}'\n"
+    )
+}
+
+/// A check is what the admission stands on, so `validate` refuses a row with
+/// none at load, before any module reads the table.
+#[test]
+fn a_generated_entry_without_a_check_is_refused_at_load() {
+    let dir = repo_under(
+        "shell-ban-generated-unchecked",
+        &presence_config(
+            "\n[[census.shell.generated]]\npath = \"gen/*.sh\"\ngenerator = \"batten completions bash\"\n",
+        ),
+        &[("README.md", "x\n")],
+    );
+    let output = check(&dir);
+    assert_eq!(output.status.code(), Some(1), "{}", stdout(&output));
+}
+
+/// A legacy `exempt` list and a generated table are two answers to one
+/// question, so a config carrying both is refused at load.
+#[test]
+fn a_config_with_both_exempt_and_generated_is_refused_at_load() {
+    let dir = repo_under(
+        "shell-ban-exempt-and-generated",
+        &presence_config(&format!(
+            "exempt = [\"bootstrap.sh\"]\n{}",
+            generated_row("gen/*.sh", "tests/gen.rs::pins_gen")
+        )),
+        &[("README.md", "x\n")],
+    );
+    let output = check(&dir);
+    assert_eq!(output.status.code(), Some(1), "{}", stdout(&output));
+}
+
+/// The test file every generated case below points its `check` at.
+const PINS: (&str, &str) = ("tests/gen.rs", "#[test]\nfn pins_gen() {}\n");
+
+/// THE TABLE IN THE OTHER DIRECTION: an entry with nothing behind it is an
+/// admission waiting for a file nobody reviewed.
+#[test]
+fn a_generated_entry_covering_no_file_is_a_finding() {
+    let dir = repo_under(
+        "shell-ban-generated-empty",
+        &presence_config(&generated_row("gen/*.sh", "tests/gen.rs::pins_gen")),
+        &[("README.md", "x\n"), PINS],
+    );
+    let output = check(&dir);
+    assert_eq!(output.status.code(), Some(2), "{}", stdout(&output));
+    // The entry's own glob is the pointer, and its check is found, so the one
+    // finding is `shell path missing`.
+    let (_, found) = findings(&dir);
+    assert_eq!(found, [("gen/*.sh".to_owned(), None)], "{found:?}");
+}
+
+/// A check whose name no line of its file holds — or whose file is absent — is
+/// a test nothing runs, so the entry stands on nothing.
+#[test]
+fn a_generated_entry_whose_check_is_not_found_is_a_finding() {
+    for (name, pointer) in [
+        ("shell-ban-generated-misnamed", "tests/gen.rs::pins_other"),
+        ("shell-ban-generated-no-file", "tests/absent.rs::pins_gen"),
+    ] {
+        let dir = repo_under(
+            name,
+            &presence_config(&generated_row("gen/*.sh", pointer)),
+            &[("README.md", "x\n"), ("gen/a.sh", "echo gen\n"), PINS],
+        );
+        let output = check(&dir);
+        assert_eq!(
+            output.status.code(),
+            Some(2),
+            "{pointer}: {}",
+            stdout(&output)
+        );
+        // The glob matches `gen/a.sh`, which is covered and so not present:
+        // the one finding is the entry's, and with a match it is `shell test
+        // missing`.
+        let (_, found) = findings(&dir);
+        assert_eq!(
+            found,
+            [("gen/*.sh".to_owned(), None)],
+            "{pointer}: {found:?}"
+        );
+    }
+}
+
+/// The only shell presence admits: a covered file whose check is found.
+#[test]
+fn a_generated_file_is_admitted() {
+    let dir = repo_under(
+        "shell-ban-generated",
+        &presence_config(&generated_row("gen/*.sh", "tests/gen.rs::pins_gen")),
+        &[("README.md", "x\n"), ("gen/a.sh", "echo gen\n"), PINS],
+    );
+    let output = check(&dir);
+    assert_eq!(output.status.code(), Some(0), "{}", stdout(&output));
+}
+
+// ENGINE SOURCE THAT SPAWNS A SHELL (CLOUD-2770). A string-literal argv in
+// non-test `src/**.rs` whose program runs a shell is a site, and a site stands
+// only on a `[[census.shell.spawn]]` row. The table is held in both directions,
+// so a row naming no site is refused too.
+
+/// A crate source whose non-test `run` spawns `sh -c`, at line 4.
+const SPAWNING: &str = "use std::process::Command;\n\npub fn run() {\n    \
+                        let _ = Command::new(\"sh\").args([\"-c\", \"x\"]).status();\n}\n";
+
+/// One `[[census.shell.spawn]]` row for `src/lib.rs`'s `run`.
+const SPAWN_ROW: &str = "\n[[census.shell.spawn]]\npath = \"src/lib.rs\"\nfunction = \"run\"\n\
+                         contract = \"the format's helper is a shell line: https://example.invalid/format\"\n";
+
+#[test]
+fn an_undeclared_engine_shell_spawn_is_refused() {
+    let dir = repo_under(
+        "shell-ban-spawn-undeclared",
+        &presence_config(""),
+        &[("src/lib.rs", SPAWNING)],
+    );
+    let (code, found) = findings(&dir);
+    assert_eq!(code, Some(2), "{found:?}");
+    // `shell spawn refused` points at the site: the file and the program's line.
+    assert_eq!(found, [("src/lib.rs".to_owned(), Some(4))], "{found:?}");
+}
+
+#[test]
+fn a_declared_engine_shell_spawn_is_admitted() {
+    let dir = repo_under(
+        "shell-ban-spawn-declared",
+        &presence_config(SPAWN_ROW),
+        &[("src/lib.rs", SPAWNING)],
+    );
+    let output = check(&dir);
+    assert_eq!(output.status.code(), Some(0), "{}", stdout(&output));
+}
+
+#[test]
+fn a_spawn_row_naming_no_site_is_refused() {
+    let dir = repo_under(
+        "shell-ban-spawn-row-unmatched",
+        &presence_config(SPAWN_ROW),
+        &[("src/lib.rs", "pub fn run() {}\n")],
+    );
+    let (code, found) = findings(&dir);
+    assert_eq!(code, Some(2), "{found:?}");
+    // `shell spawn missing` points at the row's file, no line.
+    assert_eq!(found, [("src/lib.rs".to_owned(), None)], "{found:?}");
+}
+
+/// A struct field whose VALUE lists shell names is data, not an argv: the shape
+/// of `hook.rs`'s `COPILOT_ENTRY` (`read: &["bash", "command"]`), which the census
+/// once reported as a spawn. No row is needed for it.
+#[test]
+fn a_struct_field_naming_shells_is_no_spawn_site() {
+    let dir = repo_under(
+        "shell-ban-spawn-field",
+        &presence_config(""),
+        &[(
+            "src/lib.rs",
+            "pub struct Entry {\n    pub read: &'static [&'static str],\n}\n\n\
+             pub const COPILOT: Entry = Entry {\n    read: &[\"bash\", \"command\"],\n};\n",
+        )],
+    );
+    let output = check(&dir);
+    assert_eq!(output.status.code(), Some(0), "{}", stdout(&output));
+}
+
+/// The spawn arms are presence's: under `mode = "migrate"` an undeclared spawn is
+/// not refused (owner ruling, 2026-11-22), so a consumer still migrating is not
+/// held to the table its mode has not reached.
+#[test]
+fn an_undeclared_engine_shell_spawn_is_not_judged_while_migrating() {
+    let dir = repo_under(
+        "shell-ban-spawn-migrating",
+        &presence_config("mode = \"migrate\"\n"),
+        &[("src/lib.rs", SPAWNING)],
+    );
+    let output = check(&dir);
+    assert_eq!(output.status.code(), Some(0), "{}", stdout(&output));
+}
+
+/// Test code is CLOUD-2336's: the same spawn inside `#[cfg(test)] mod tests`
+/// is no site, so no row is needed for it.
+#[test]
+fn a_shell_spawn_inside_cfg_test_is_not_judged_here() {
+    let dir = repo_under(
+        "shell-ban-spawn-cfg-test",
+        &presence_config(""),
+        &[(
+            "src/lib.rs",
+            "#[cfg(test)]\nmod tests {\n    use std::process::Command;\n\n    \
+             #[test]\n    fn run() {\n        \
+             let _ = Command::new(\"sh\").args([\"-c\", \"x\"]).status();\n    }\n}\n",
+        )],
+    );
+    let output = check(&dir);
+    assert_eq!(output.status.code(), Some(0), "{}", stdout(&output));
+}
+
+/// LEGACY `exempt` IS MIGRATE. The stranger's config carries `exempt` and no
+/// `mode`, so a shell file standing at the base that the list does not name
+/// passes — presence is not judged — and growing it is refused.
+#[test]
+fn a_config_that_still_carries_exempt_keeps_its_growth_meaning() {
+    let dir = repo("shell-ban-legacy", &[("tools/x.sh", "echo a\necho b\n")]);
+    let output = check(&dir);
+    assert_eq!(output.status.code(), Some(0), "{}", stdout(&output));
+    change(&dir, "tools/x.sh", "echo a\necho b\necho c\n");
+    let (code, found) = findings(&dir);
+    assert_eq!(code, Some(2), "{found:?}");
+    assert!(grew(&found, "tools/x.sh"), "{found:?}");
+}
+
+/// MIGRATING, AN EXISTING SHELL FILE MAY ONLY SHRINK — read outside the line
+/// sources too. An edit that does not grow it lands; one that does is refused.
+#[test]
+fn an_existing_shell_file_that_grows_under_migrate_is_refused() {
+    let dir = repo_under(
+        "shell-ban-migrate-grown",
+        &presence_config("mode = \"migrate\"\n"),
+        &[("scripts/x.sh", "echo a\necho b\n")],
+    );
+    change(&dir, "scripts/x.sh", "echo a\necho B\n");
+    let output = check(&dir);
+    assert_eq!(output.status.code(), Some(0), "{}", stdout(&output));
+    change(&dir, "scripts/x.sh", "echo a\necho B\necho c\n");
+    let (code, found) = findings(&dir);
+    assert_eq!(code, Some(2), "{found:?}");
+    assert!(grew(&found, "scripts/x.sh"), "{found:?}");
 }
 
 /// THE EXEMPTION SET, ASSERTED EXACTLY. It is this repository's
@@ -436,7 +912,12 @@ fn the_exemption_set_is_exactly_the_files_that_must_be_shell() {
         BTreeSet::from([
             ".claude/hooks/git-hook.sh",
             "completions/batten.bash",
-            "setup.sh",
+            // TEMPORARY, admitted by the owner in `.batten/asked.jsonl` (dbd96081):
+            // the generated fish and zsh completions stand here until plan step 14
+            // swaps both for `[[census.shell.generated]]` rows under v0.0.221.
+            // Step 14 deletes these two lines with the entries.
+            "completions/batten.fish",
+            "completions/batten.zsh",
         ])
     );
 }

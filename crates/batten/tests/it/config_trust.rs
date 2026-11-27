@@ -133,18 +133,18 @@ fn lowering_a_rules_severity_is_reported_and_still_judged_at_the_base_rank() {
     let repo = pr_fixture(
         "trust-severity-lowered",
         &format!("version = 1\n{}", rule("no-todo", "deny")),
-        &format!("version = 1\n{}", rule("no-todo", "warn")),
+        &format!("version = 1\n{}", rule("no-todo", "advise")),
         &[("lib.rs", "TODO\n")],
     );
     assert_eq!(
         run(&repo, &["check"]).status.code(),
         Some(0),
-        "a warn finding does not fail by itself — the bar the branch lowered to"
+        "an advise finding does not fail by itself — the bar the branch lowered to"
     );
     let output = run(&repo, &["check", "--config-from", "origin/main"]);
     assert_eq!(output.status.code(), Some(2));
     assert!(
-        stdout(&output).contains("batten.toml:rule[no-todo].severity deny→warn"),
+        stdout(&output).contains("batten.toml:rule[no-todo].severity deny→advise"),
         "got: {}",
         stdout(&output)
     );
@@ -289,7 +289,7 @@ fn a_reference_that_spells_an_option_is_refused_and_writes_nothing() {
         .args(["check"])
         .current_dir(&repo)
         .env("BATTEN_CONFIG_FROM", &reference)
-        .output()
+        .streamed_output()
         .expect("run batten");
     assert_eq!(output.status.code(), Some(1), "bad input, never a verdict");
     assert!(output.stdout.is_empty(), "stdout stays the answer channel");
@@ -437,7 +437,7 @@ fn the_env_form_selects_the_same_ref_as_the_flag() {
         .args(["check"])
         .current_dir(&repo)
         .env("BATTEN_CONFIG_FROM", "origin/main")
-        .output()
+        .streamed_output()
         .expect("run batten");
     assert_eq!(
         output.status.code(),
@@ -789,7 +789,7 @@ fn exec_applies_the_base_refs_output_predicates_when_the_working_config_is_gone(
         .current_dir(&repo)
         .state_home(&home)
         .env_remove("BATTEN_FAIL_ON_WARNING")
-        .output()
+        .streamed_output()
         .expect("run batten exec");
     assert_eq!(
         output.status.code(),
@@ -835,7 +835,7 @@ fn exec_without_the_flag_declares_no_patterns_in_a_config_less_tree() {
         .current_dir(&repo)
         .state_home(&home)
         .env_remove("BATTEN_FAIL_ON_WARNING")
-        .output()
+        .streamed_output()
         .expect("run batten exec");
     assert_eq!(
         output.status.code(),
@@ -873,7 +873,7 @@ fn run_stateful(repo: &Path, state: &Path, args: &[&str]) -> Output {
         .args(args)
         .current_dir(repo)
         .state_dir(state)
-        .output()
+        .streamed_output()
         .expect("run batten")
 }
 

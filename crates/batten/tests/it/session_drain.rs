@@ -96,7 +96,7 @@ fn session(dir: &Path, extra: &[&str]) -> Output {
         .env_remove("BATTEN_STRICTNESS")
         .env_remove("BATTEN_FAIL_ON_WARNING")
         .env_remove("BATTEN_CONFIG_FROM")
-        .output()
+        .streamed_output()
         .expect("run batten doctor session")
 }
 

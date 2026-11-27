@@ -13,8 +13,9 @@
 //! a tool call's `name` and `input`, a result's `is_error` boolean, and a hook
 //! decision's `exitCode`. That last one matters most: a host records its hook
 //! runs structurally, so "was this call denied" is `exit_code == 2` against the
-//! one §7 table — not a substring match on an error message. A predicate built
-//! on prose would be a classifier wearing a gate's clothes.
+//! one §7 table — not a substring match on an error message. This module
+//! reduces events; text read anywhere in the engine leaves it only as a typed
+//! fact, never as a span (`rules/policy-modules.md`).
 //!
 //! The free-text payload is **never interpreted and never emitted**. A
 //! transcript is the single richest source of secrets the engine can be pointed
@@ -77,6 +78,7 @@
 //! The three precedents above are about a gate that *skipped and reported success*;
 //! this reports, every time, and hands the rules keyed on the transcript nothing.
 
+use crate::hook::HarnessExt as _;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
@@ -84,8 +86,12 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+#[cfg(test)]
+use crate::config_check::transcript::validate;
+use crate::config_model::Harness;
+use crate::config_model::TranscriptConfig;
 use crate::error::UsageError;
-use crate::hook::{Harness, RecordShape, TranscriptShape};
+use crate::hook::{RecordShape, TranscriptShape};
 
 /// What the human channel says when a configured transcript is not there.
 ///
@@ -113,6 +119,12 @@ pub const ABSENT_NOTICE: &str =
 /// transcript is the richest secret surface this engine can be pointed at.
 pub const UNREADABLE_NOTICE: &str =
     "transcript: configured but could not be decoded, so the rules that read it did not run";
+
+/// What a verb says when the host tore lines of the transcript: the stream was
+/// read past each one, and the record each cut short is lost. Followed by the
+/// torn line numbers, never their bytes (rule 4).
+pub const TORN_NOTICE: &str =
+    "transcript: the host tore lines, so the record each cut short was not read";
 
 /// What a verb says when `[transcript]` names a path and no harness
 /// (CLOUD-1624).
@@ -503,6 +515,16 @@ pub struct Stream {
     /// never fingerprinted. [`parse`] is unkeyed and says so here;
     /// [`parse_keyed`] is the entry that mints.
     pub keyed: bool,
+    /// Lines the host tore: a record cut short with the next one written onto
+    /// the same line. The tail record is read; the cut one is lost, and its line
+    /// number is here so the run can say so (pointer-only, rule 4).
+    ///
+    /// Measured on this repository's own session: line 34197 of a Claude Code
+    /// transcript held a `compact_boundary` record cut mid-array with a
+    /// `hook_success` record appended, and aborting the whole parse on it turned
+    /// every transcript rule off for the rest of the session. A line that does
+    /// not decode at all is still [`Capability::Unreadable`] (CLOUD-819).
+    pub torn: Vec<usize>,
 }
 
 /// The agent's own composition, as far as a transcript states it.
@@ -633,6 +655,11 @@ pub struct Repeats {
     /// speaking, which is the case this member was measured on: a session that
     /// answered four mid-turn messages with tool calls only.
     pub unanswered_human_calls: usize,
+    /// The 1-based transcript line of the operator message
+    /// `unanswered_human_calls` counts from, when the last marker was the
+    /// operator's (CLOUD-2861). A pointer, never the message: the Stop refusal
+    /// names the line and reads nothing on it.
+    pub operator_line: Option<usize>,
     /// The TRAILING run of assistant turns carrying no tool call — the monologue
     /// shape, and deliberately the member that needs no hashing at all.
     ///
@@ -692,6 +719,11 @@ pub struct Tally {
     /// (`false`); `None` before either.
     operator_marker: Option<bool>,
     calls_since_marker: usize,
+    /// The file line of the last authored operator turn (CLOUD-2861).
+    operator_line: Option<usize>,
+    /// Complete lines folded so far, so a tail parsed on its own numbers its
+    /// records from where the file is, not from 1.
+    lines: usize,
     plan_exits: usize,
 }
 
@@ -721,7 +753,6 @@ pub fn tally_appended(path: &Path, shape: RecordShape) -> Option<Tally> {
 /// [`tally_appended`] with its entry under the cache partition `cache`. No
 /// partition is a whole read, never could-not-look: a cache that cannot be
 /// kept must not cost a readable transcript its answer.
-//MUTANT tally-entry-trusted-after-replace|s@^        .filter(\x7csaved\x7c saved.head == head \&\& saved.offset <= len);$@        .filter(\x7c_\x7c true);@|the_incremental_reader_answers_as_a_whole_parse
 fn tally_under(path: &Path, shape: RecordShape, cache: Option<&Path>) -> Option<Tally> {
     use std::io::{Read as _, Seek as _};
     let canonical = std::fs::canonicalize(path).ok()?;
@@ -771,9 +802,10 @@ fn tally_under(path: &Path, shape: RecordShape, cache: Option<&Path>) -> Option<
         .map_or(0, <[u8]>::len);
     let whole = tail.len() - unfinished;
     let (complete, partial) = tail.as_slice().split_at(whole);
-    parse(std::str::from_utf8(complete).ok()?, &label, shape)
-        .ok()?
-        .fold_into(&mut tally);
+    let complete = std::str::from_utf8(complete).ok()?;
+    parse(complete, &label, shape).ok()?.fold_into(&mut tally);
+    // `complete` ends at a newline, so its lines are exactly the ones consumed.
+    tally.lines += complete.lines().count();
     let advanced = Tallied {
         offset: offset + whole,
         head,
@@ -797,7 +829,7 @@ fn tally_under(path: &Path, shape: RecordShape, cache: Option<&Path>) -> Option<
 const HEAD_PROBE: u64 = 64 * 1024;
 
 /// Bump on any change to [`Tally`] or [`Tallied`]; every older entry misses.
-const TALLY_FORMAT: &str = "batten-transcript-tally-3";
+const TALLY_FORMAT: &str = "batten-transcript-tally-4";
 
 /// What [`tally_appended`] persists between calls.
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -860,9 +892,66 @@ impl Summary for Tally {
     }
 }
 
-//MUTANT tally-text-not-a-marker|s@^                self.operator_marker = Some(false);$@                {}@|a_split_fold_answers_as_the_whole_parse
+// `Extraction::of` lives here rather than in `facts` (CLOUD-2789): the
+// decision reads this module's `Summary`, and `Extraction` is `batten-facts`'
+// now, so the method rides an extension trait. A caller names the trait once
+// (`use crate::transcript::ExtractionOf as _`) and the call stays `.of(..)`.
+/// [`crate::facts::Extraction`]'s answer over a parsed stream.
+pub trait ExtractionOf {
+    /// See the implementation on [`crate::facts::Extraction`].
+    #[must_use]
+    fn of(self, stream: &impl Summary) -> Option<usize>;
+}
+
+impl ExtractionOf for crate::facts::Extraction {
+    /// This extraction's answer over a parsed stream, or `None` where this host
+    /// records none of the events it reduces.
+    ///
+    /// **`None` is COULD-NOT-LOOK and it is decided here** (CLOUD-1344). Zero is
+    /// a real answer meaning the extractor ran, so an extraction whose underlying
+    /// event kind never appears must not report one: "zero repeats" over a
+    /// two-hundred-call session is a false green over a session nobody measured.
+    /// Deciding it in the engine rather than as a per-module conjunct is what
+    /// keeps it from being a dead gate on every harness but the one its author
+    /// tested.
+    ///
+    /// Takes the whole `Stream` rather than `Counts` because the members divide:
+    /// the totals come from [`Stream::counts`] and the runs from
+    /// [`Stream::repeats`], and `Counts` is the `-J` capability report's own
+    /// shape rather than this family's.
+    ///
+    /// Exhaustive with no wildcard arm, like every other axis match in this
+    /// module: a member added later decides here or fails to compile, rather than
+    /// defaulting to a count of something else.
+    ///
+    /// Generic over [`Summary`] so the hook's incremental
+    /// [`Tally`] is read by this same decision (CLOUD-2315).
+    fn of(self, stream: &impl Summary) -> Option<usize> {
+        let records = stream.records();
+        let recorded = |kind: Kind| records.contains(&kind);
+        match self {
+            Self::Turns => recorded(Kind::Turns).then(|| stream.counts().turns),
+            Self::ToolCalls => recorded(Kind::ToolCalls).then(|| stream.counts().tool_calls),
+            Self::ToolErrors => recorded(Kind::ToolResults).then(|| stream.counts().tool_errors),
+            Self::HookDecisions => {
+                recorded(Kind::HookDecisions).then(|| stream.counts().hook_decisions)
+            }
+            Self::HookDenials => {
+                recorded(Kind::HookDecisions).then(|| stream.counts().hook_denials)
+            }
+            Self::AgentTurnRun => recorded(Kind::Turns).then(|| stream.repeats().agent_turn_run),
+            Self::UnansweredHumanCalls => {
+                recorded(Kind::Turns).then(|| stream.repeats().unanswered_human_calls)
+            }
+            // Gated on the kind it counts, as `ToolCalls` is: a host recording no
+            // tool calls cannot say a plan was never presented.
+            Self::PlanExits => recorded(Kind::ToolCalls).then(|| stream.repeats().plan_exits),
+        }
+    }
+}
+
 impl Tally {
-    fn fold(&mut self, event: &Event) {
+    fn fold(&mut self, line: usize, event: &Event) {
         match event {
             Event::Turn(role, origin) => {
                 self.turns += 1;
@@ -874,6 +963,7 @@ impl Tally {
                         if *origin == Origin::Authored {
                             self.operator_marker = Some(true);
                             self.calls_since_marker = 0;
+                            self.operator_line = Some(line);
                         }
                     }
                 }
@@ -945,6 +1035,11 @@ impl Tally {
             } else {
                 0
             },
+            operator_line: if self.operator_marker == Some(true) {
+                self.operator_line
+            } else {
+                None
+            },
             agent_turn_run: self.agent_turn_run,
             plan_exits: self.plan_exits,
         }
@@ -993,7 +1088,7 @@ pub enum Capability {
     /// variant exists to prevent.
     Unsurveyed(&'static str),
     /// Configured and parsed.
-    Present(Stream),
+    Present(Box<Stream>),
 }
 
 impl Capability {
@@ -1111,20 +1206,21 @@ impl Stream {
         // answers the operator and zeroes it, an operator message ends the scan
         // and keeps the count, and reaching the start means nobody spoke.
         let mut calls = 0;
-        let mut spoke = false;
+        let mut spoke = None;
         for record in self.records.iter().rev() {
             match &record.event {
                 Event::AssistantText => break,
                 Event::ToolCall { .. } => calls += 1,
                 Event::Turn(Role::User, Origin::Authored) => {
-                    spoke = true;
+                    spoke = Some(record.line);
                     break;
                 }
                 _ => {}
             }
         }
-        if spoke {
+        if spoke.is_some() {
             repeats.unanswered_human_calls = calls;
+            repeats.operator_line = spoke;
         }
         // A TOTAL, not a run, so it reads the whole stream rather than a tail.
         repeats.plan_exits = self
@@ -1137,8 +1233,9 @@ impl Stream {
 
     /// Fold every record, in file order, into `tally` (CLOUD-2315).
     pub fn fold_into(&self, tally: &mut Tally) {
+        let base = tally.lines;
         for record in &self.records {
-            tally.fold(&record.event);
+            tally.fold(base + record.line, &record.event);
         }
     }
 
@@ -1221,7 +1318,7 @@ pub fn resolve(root: &Path, configured: Option<&str>, harness: Option<Harness>) 
         TranscriptShape::Unsurveyed(owes) => return Capability::Unsurveyed(owes),
     };
     let path = root.join(relative);
-    let Ok(body) = std::fs::read_to_string(&path) else {
+    let Ok(body) = crate::fsio::read_to_string(&path) else {
         // Unopenable and absent are one answer on purpose: both mean the file
         // yielded nothing, and distinguishing a missing file from a permission
         // failure would report an access problem as a parse failure. A file that
@@ -1230,7 +1327,7 @@ pub fn resolve(root: &Path, configured: Option<&str>, harness: Option<Harness>) 
         return Capability::Absent;
     };
     match parse(&body, relative, shape) {
-        Ok(stream) => Capability::Present(stream),
+        Ok(stream) => Capability::Present(Box::new(stream)),
         Err(error) => Capability::Unreadable(error.to_string()),
     }
 }
@@ -1283,29 +1380,37 @@ pub fn parse_keyed(
     let mut session = None;
     let mut records = Vec::new();
     let mut agent = AgentContext::default();
+    let mut torn = Vec::new();
     for (index, text) in body.lines().enumerate() {
         let line = index + 1;
         if text.trim().is_empty() {
             continue;
         }
-        let parsed: Line = serde_json::from_str(text).map_err(|_| {
-            UsageError::raise(format!(
-                // THE FACT, AND ONLY THE FACT. The consequence — "so the rules
-                // that read it did not run" — belongs to [`UNREADABLE_NOTICE`],
-                // which is what a caller renders this pointer INSIDE. Saying it
-                // here too produced the clause twice in one line, measured live:
-                //
-                //   transcript: configured but could not be decoded, so the rules
-                //   that read it did not run (.claude/.transcript.jsonl:5204:
-                //   transcript line did not decode; the rules that read it did
-                //   not run)
-                //
-                // A parse error is a statement about one line; what follows from
-                // it is a statement about the run, and only the caller knows
-                // which rules those were.
-                "{label}:{line}: transcript line did not decode"
-            ))
-        })?;
+        let whole: Option<Line> = serde_json::from_str(text).ok();
+        let parsed: Line = whole
+            .or_else(|| {
+                let tail = torn_tail(text)?;
+                torn.push(line);
+                Some(tail)
+            })
+            .ok_or_else(|| {
+                UsageError::raise(format!(
+                    // THE FACT, AND ONLY THE FACT. The consequence — "so the rules
+                    // that read it did not run" — belongs to [`UNREADABLE_NOTICE`],
+                    // which is what a caller renders this pointer INSIDE. Saying it
+                    // here too produced the clause twice in one line, measured live:
+                    //
+                    //   transcript: configured but could not be decoded, so the rules
+                    //   that read it did not run (.claude/.transcript.jsonl:5204:
+                    //   transcript line did not decode; the rules that read it did
+                    //   not run)
+                    //
+                    // A parse error is a statement about one line; what follows from
+                    // it is a statement about the run, and only the caller knows
+                    // which rules those were.
+                    "{label}:{line}: transcript line did not decode"
+                ))
+            })?;
         if session.is_none() {
             // Borrowed, not moved: `collect` reads the same value below, and an
             // empty id is normalized to absent here so `Some("")` never reaches a
@@ -1325,7 +1430,21 @@ pub fn parse_keyed(
         agent,
         bytes: body.len(),
         keyed: key.is_some(),
+        torn,
     })
+}
+
+/// The complete record a torn line ends with, if it ends with one.
+///
+/// A host that cuts a write short and appends the next record leaves one line
+/// holding a truncated object followed by a whole one. The leftmost `{"` after
+/// the start from which the rest of the line decodes as a whole record is that
+/// record; anything else is not this shape and stays undecodable.
+fn torn_tail(text: &str) -> Option<Line> {
+    text.match_indices("{\"")
+        .map(|(at, _)| at)
+        .filter(|at| *at > 0)
+        .find_map(|at| serde_json::from_str::<Line>(&text[at..]).ok())
 }
 
 /// Accumulate one line's agent-context facts.
@@ -1606,8 +1725,6 @@ fn collect(
 /// [`crate::refusal::parse_finding`] — the same grammar parse
 /// [`Event::HookOutput`]'s findings take, never a reading of prose. A deny no
 /// line of which parses is still one refusal, with no findings.
-//MUTANT-SUITE crates/batten/src/transcript.rs
-//MUTANT refused-prefix-unstripped|s@^    let (_, emitted) = text.split_once(HOOK_ERROR_SEPARATOR)?;$@    let emitted = text.contains(HOOK_ERROR_SEPARATOR).then_some(text)?;@|a_failed_tool_result_carrying_the_hook_separator_is_a_refusal
 fn refusal_of(call: &str, text: &str) -> Option<Event> {
     let (_, emitted) = text.split_once(HOOK_ERROR_SEPARATOR)?;
     let parsed: Vec<crate::refusal::Parsed> = emitted
@@ -1747,7 +1864,7 @@ pub fn census(root: &std::path::Path, exclude: Option<&str>) -> usize {
             if path.extension().is_none_or(|ext| ext != "jsonl") {
                 continue;
             }
-            let Ok(body) = std::fs::read_to_string(&path) else {
+            let Ok(body) = crate::fsio::read_to_string(&path) else {
                 continue;
             };
             // THE FIRST AUTHORED ID IN THE FILE IDENTIFIES IT; a file with none
@@ -2070,72 +2187,6 @@ struct Block {
     text: Option<String>,
 }
 
-/// The configured transcript, as `batten.toml` declares it: where it is, and
-/// whose dialect it is in.
-///
-/// **It used to say "a path, not a format selector", and that was the bug**
-/// (CLOUD-1624). Which host wrote the file was left to the fixtures, so the
-/// engine read every transcript through one host's grammar and reported the zero
-/// events that produces on any other as a clean session. The dialect is a fact
-/// about this consumer's setup, and non-negotiable rule 1 puts a consumer fact
-/// in the consumer's own `batten.toml` rather than in the core.
-///
-/// Host-specific, never consumer-specific, so rule 1 holds in the other
-/// direction too — no consumer's directory layout appears in the engine.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema, Default)]
-#[serde(deny_unknown_fields)]
-pub struct TranscriptConfig {
-    /// Repo-relative path to the completed session transcript.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub path: Option<String>,
-    /// Which host wrote it, selecting the record grammar to read it with
-    /// (CLOUD-1624).
-    ///
-    /// **Omitted is could-not-look, never a default.** `cli.rs`'s attribution
-    /// host is the precedent and states it: an unnamed host "declares nothing
-    /// rather than borrowing a default's declarations". Defaulting here would
-    /// read an unnamed host's transcript through one host's grammar and report
-    /// the zero events that yields as a clean session — the exact false green
-    /// this key exists to close. A consumer that declares a `path` and no
-    /// `harness` gets [`Capability::Unnamed`] and every gate over the transcript
-    /// abstains.
-    ///
-    /// The fourth fact about one host on this table, joining `path`,
-    /// `memory_root` and the task store for the reason those three already give:
-    /// splitting facts about a single host across tables is the widening rule 6
-    /// forbids.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub harness: Option<Harness>,
-    /// The host's memory-root prefix, for CLOUD-267's self-persistence match.
-    ///
-    /// Host-adapter data on the same table rather than a second authority: the
-    /// transcript's format and the host's memory layout are two facts about one
-    /// host, and splitting them across tables would be the widening rule 6
-    /// forbids. Omitted, [`crate::selfwrite::DEFAULT_MEMORY_ROOT`] applies.
-    ///
-    /// A **prefix matched against targets the transcript recorded** — never a
-    /// path this engine opens, stats, or globs, which is what keeps the rule
-    /// inside the repo root.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub memory_root: Option<String>,
-    /// Where this host keeps the session's own task store, with `{session}`
-    /// standing in for the id the envelope carries (CLOUD-1376).
-    ///
-    /// ON THIS TABLE RATHER THAN A `[session]` ONE, and the reason is this
-    /// table's own: the transcript's format and the host's memory layout are
-    /// already "two facts about one host", and splitting them across tables
-    /// would be the widening rule 6 forbids. A third fact about the same host
-    /// joins them rather than opening a second authority over the same subject.
-    ///
-    /// A TEMPLATE, because the engine may not derive it. The store lives outside
-    /// the repository root and its layout is the HOST's — deriving it from the
-    /// transcript path would put a directory layout in the engine, which rule 1
-    /// refuses. The consumer names the shape; the engine substitutes one field it
-    /// was handed and opens what the substitution names.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tasks: Option<String>,
-}
-
 /// Where the engine parks a pointer at the live session's task store.
 ///
 /// DERIVED FROM `path` RATHER THAN DECLARED, on the same reasoning that put
@@ -2193,31 +2244,6 @@ pub fn tasks_dir(template: &str, session: &str, home: Option<&std::ffi::OsStr>) 
     }
 }
 
-/// Validate the table at load, the way every other config table is.
-///
-/// Takes an `Option` to match [`crate::budget::validate`]'s signature: `[budget]`
-/// and `[transcript]` are both tables rather than lists, so neither is reached by
-/// the `Vec<T>` census in `config.rs`, and both are called explicitly from
-/// `parse_ungated` for that reason.
-///
-/// # Errors
-///
-/// [`UsageError`] when a declared path is empty — a key present and blank is a
-/// different claim from a key absent, and the blank one is a mistake rather than
-/// a repository opting out. Left unchecked it would join to the repository root
-/// and be read as a directory, which surfaces as "undecodable transcript".
-pub fn validate(config: Option<&TranscriptConfig>) -> Result<()> {
-    let Some(config) = config else {
-        return Ok(());
-    };
-    if config.path.as_deref().is_some_and(str::is_empty) {
-        return Err(UsageError::raise(
-            "transcript.path: declared but empty; omit the key to opt out".to_owned(),
-        ));
-    }
-    Ok(())
-}
-
 /// The path a run should read, if any.
 #[must_use]
 pub fn configured_path(config: Option<&TranscriptConfig>) -> Option<PathBuf> {
@@ -2231,7 +2257,6 @@ pub fn configured_path(config: Option<&TranscriptConfig>) -> Option<PathBuf> {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
-
     // --- the independent-session census (CLOUD-1717) -----------------------
 
     /// One authored user turn, in the host's real shape.
@@ -2673,7 +2698,7 @@ mod tests {
     #[test]
     fn a_turn_end_alone_records_turns() {
         let mut tally = Tally::default();
-        tally.fold(&Event::TurnEnd(StopReason::EndTurn));
+        tally.fold(1, &Event::TurnEnd(StopReason::EndTurn));
         assert_eq!(
             tally.records(),
             std::collections::BTreeSet::from([Kind::Turns])
@@ -2835,6 +2860,9 @@ mod tests {
                     parse(&part.join("\n"), "t.jsonl", RecordShape::Jsonl)
                         .expect("parses")
                         .fold_into(&mut tally);
+                    // As `tally_under` advances past each complete chunk, so
+                    // the operator line is the file's, not the chunk's.
+                    tally.lines += part.len();
                 }
                 assert_eq!(
                     tally.counts(),
@@ -3219,6 +3247,29 @@ mod tests {
         assert!(pointer.contains("s.jsonl:2"), "names the line: {pointer}");
         assert!(!pointer.contains("not json"), "never the line: {pointer}");
         assert_eq!(Capability::Unreadable(pointer).as_str(), "unreadable");
+    }
+
+    /// The torn-append shape (measured on this repository's session): a record
+    /// cut short with the next written onto the same line. Fails by: the whole
+    /// parse aborting (every transcript rule off), the appended record dropped,
+    /// or the torn line not recorded.
+    #[test]
+    fn a_torn_line_is_read_past_and_named() {
+        let body = concat!(
+            "{\"type\":\"user\"}\n",
+            "{\"type\":\"system\",\"content\":[\"a\",\"b{\"type\":\"user\"}\n",
+            "{\"type\":\"user\"}\n",
+        );
+        let stream = parse(body, "s.jsonl", RecordShape::Jsonl).expect("a torn line is read past");
+        assert_eq!(stream.torn, [2]);
+        assert!(
+            parse(
+                "{\"type\":\"user\"}\nnot json\n",
+                "s.jsonl",
+                RecordShape::Jsonl
+            )
+            .is_err()
+        );
     }
 
     #[test]

@@ -68,14 +68,17 @@
 //! non-zero and explains itself on stderr. `perf-gate` distinguishes the two by
 //! looking for `^arm=`, never by a second exit code.
 
+use crate::capture::Streamed as _;
+use crate::hook::HarnessExt as _;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context as _, Result, bail};
 
+use crate::config_model::{Event, Harness};
 use crate::error::UsageError;
-use crate::hook::{Event, Harness, WiringFile};
-use crate::wiring::same_bytes;
+use crate::fsio::same_bytes;
+use crate::hook::WiringFile;
 
 /// The base a comparison is taken against, and the run counts.
 ///
@@ -123,8 +126,6 @@ const OUT_DIR_VAR: &str = "BENCH_OUT_DIR";
 ///
 /// The cost is three times the runs, paid only by a commit that touches crate
 /// source, a manifest or the lockfile — [`Decision`] skips clean otherwise.
-//MUTANT-SUITE crates/batten/tests/it/perf_pair.rs
-//MUTANT sample-too-small-to-decide|s@const DEFAULT_RUNS: \&str = "300";@const DEFAULT_RUNS: \&str = "100";@|the_default_sample_is_at_least_what_the_null_was_remeasured_at
 const DEFAULT_RUNS: &str = "300";
 /// Warmups, moved with [`DEFAULT_RUNS`] and measured in the same pair of nulls.
 const DEFAULT_WARMUP: &str = "30";
@@ -239,7 +240,7 @@ fn matches(entry: &str, path: &str) -> bool {
 /// compiled into the binary, so a change to one is already a change to `crates/`.
 /// Including it would be a second, weaker spelling of a path already covered.
 #[must_use]
-pub fn registered_paths(rules: &[crate::rules::Rule]) -> Vec<String> {
+pub fn registered_paths(rules: &[crate::config_model::Rule]) -> Vec<String> {
     let mut paths: BTreeSet<String> = BTreeSet::new();
     for rule in rules {
         if let Some(module) = rule.module.as_ref() {
@@ -596,7 +597,6 @@ pub fn base_target_dir(perf_dir: &Path, key: &str) -> PathBuf {
 /// other (CLOUD-1891): the dependency closure is built once and shared, and
 /// only the `batten` crate differs between the arms.
 #[must_use]
-//MUTANT base-arm-inside-shared|s@^    perf_dir.join("arms")$@    perf_dir.join("base-k")@|the_shared_arms_directory_keeps_each_arm_apart
 pub fn arms_target_dir(perf_dir: &Path) -> PathBuf {
     perf_dir.join("arms")
 }
@@ -646,8 +646,6 @@ fn arms_suspect(null: bool, head_could_inherit: bool, identical: bool) -> bool {
 /// Whether the head arm could hold the base arm's `batten` units: the base was
 /// built into the shared directory in this run, and the head build did not drop
 /// them first (CLOUD-2107, CLOUD-2399).
-//MUTANT identical-arms-always-suspect|s@^    base_built_now \&\& !head_cleaned$@    !head_cleaned@|identical_arms_are_suspect_only_when_the_base_was_built_this_run
-//MUTANT cleaned-head-still-suspect|s@^    base_built_now \&\& !head_cleaned$@    base_built_now@|identical_arms_are_suspect_only_when_the_base_was_built_this_run
 fn head_could_inherit(base_built_now: bool, head_cleaned: bool) -> bool {
     base_built_now && !head_cleaned
 }
@@ -701,27 +699,107 @@ pub fn base_key(repo: &Path, base_sha: &str) -> Result<String> {
     ))
 }
 
-/// The trees the `batten` BINARY is compiled from at `rev`: its `src`, both
-/// manifest layers and the lockfile.
+/// The trees the `batten` BINARY is compiled from at `rev`: the `src`,
+/// `build.rs` and manifest of `batten` and of every workspace crate in its
+/// path-dependency closure, in sorted crate order, then the workspace manifest
+/// and the lockfile.
 ///
 /// NARROWER THAN [`base_key`] ON PURPOSE. That key names a cache entry, so it
 /// takes all of `crates/`; this one answers whether two builds COULD differ, and
-/// `crates/batten/tests` cannot change a byte of the binary. Every non-test
+/// a crate's `tests` cannot change a byte of the binary. Every non-test
 /// `include_str!` in the crate reads under `src/`.
+///
+/// THE CLOSURE, NOT `crates/batten` ALONE (CLOUD-2789): after the crate split
+/// most of the binary compiles from `batten-base`, `batten-core` and the rest,
+/// and a key blind to them reads a change there as "same sources", which
+/// disarms the wrong-binary guard [`sources_differ`] feeds. A crate that depends
+/// ON `batten` (`batten-codemods`) is outside the closure and stays out.
 ///
 /// # Errors
 ///
-/// A repository that cannot be opened.
-//MUTANT binary-key-takes-tests|s@^        \&id("crates/batten/src")?,$@        \&id("crates")?,@|a_test_only_commit_keeps_the_binary_source_key
+/// A repository that cannot be opened, or a manifest at `rev` that is not TOML.
 pub fn binary_source_key(repo: &Path, rev: &str) -> Result<String> {
     let id = |path: &str| -> Result<String> {
         Ok(crate::git::resolve_ref(repo, &format!("{rev}:{path}"))?.unwrap_or_default())
     };
+    let mut sources = Vec::new();
+    let mut manifests = Vec::new();
+    for name in binary_crates(repo, rev)? {
+        sources.push(format!("{name} {}", id(&format!("crates/{name}/src"))?));
+        sources.push(format!(
+            "{name} {}",
+            id(&format!("crates/{name}/build.rs"))?
+        ));
+        manifests.push(format!(
+            "{name} {}",
+            id(&format!("crates/{name}/Cargo.toml"))?
+        ));
+    }
+    manifests.push(id("Cargo.toml")?);
     Ok(crate_key(
-        &id("crates/batten/src")?,
-        &format!("{}\n{}", id("crates/batten/Cargo.toml")?, id("Cargo.toml")?),
+        &sources.join("\n"),
+        &manifests.join("\n"),
         &id("Cargo.lock")?,
     ))
+}
+
+/// The `crates/<dir>` names `batten` is built from at `rev`: itself and every
+/// workspace crate its manifests reach by a `path = "../<dir>"` dependency,
+/// transitively, sorted. Build and target-specific dependency tables count;
+/// `dev-dependencies` do not, since they never link into the binary.
+///
+/// # Errors
+///
+/// A crate of the closure whose manifest is absent at `rev`, or a `rev` that
+/// does not resolve: the closure is then UNKNOWN, and the caller's `.ok()`
+/// reads unknown as "differs", which keeps the wrong-binary guard armed.
+fn binary_crates(repo: &Path, rev: &str) -> Result<BTreeSet<String>> {
+    let mut seen = BTreeSet::new();
+    let mut queue = vec![String::from("batten")];
+    while let Some(name) = queue.pop() {
+        if !seen.insert(name.clone()) {
+            continue;
+        }
+        let path = format!("crates/{name}/Cargo.toml");
+        let manifest = match crate::git::read_at(repo, rev, &path)? {
+            crate::git::BaseBlob::Found { text, .. } => text,
+            crate::git::BaseBlob::RefUnreachable { .. } => bail!("{rev} does not resolve"),
+            crate::git::BaseBlob::AbsentAtRef { .. } => bail!("{path} is absent at {rev}"),
+        };
+        let table: toml::Table = manifest
+            .parse()
+            .with_context(|| format!("crates/{name}/Cargo.toml at {rev} is not TOML"))?;
+        queue.extend(path_dependencies(&table));
+    }
+    Ok(seen)
+}
+
+/// The sibling directory each workspace path dependency in `manifest` names:
+/// `[dependencies]`, `[build-dependencies]` and their `[target.*]` forms.
+fn path_dependencies(manifest: &toml::Table) -> Vec<String> {
+    let mut tables: Vec<&toml::Table> = Vec::new();
+    for key in ["dependencies", "build-dependencies"] {
+        tables.extend(manifest.get(key).and_then(toml::Value::as_table));
+    }
+    for target in manifest
+        .get("target")
+        .and_then(toml::Value::as_table)
+        .into_iter()
+        .flat_map(toml::Table::values)
+        .filter_map(toml::Value::as_table)
+    {
+        for key in ["dependencies", "build-dependencies"] {
+            tables.extend(target.get(key).and_then(toml::Value::as_table));
+        }
+    }
+    tables
+        .into_iter()
+        .flat_map(toml::Table::values)
+        .filter_map(|spec| spec.get("path").and_then(toml::Value::as_str))
+        .filter_map(|path| path.strip_prefix("../"))
+        .filter(|dir| !dir.is_empty() && !dir.contains('/'))
+        .map(str::to_owned)
+        .collect()
 }
 
 /// Whether two arms' binary sources differ, so identical bytes are a
@@ -731,7 +809,6 @@ pub fn binary_source_key(repo: &Path, rev: &str) -> Result<String> {
 /// look. Measured on #1134: a test-and-config-only change built its head from
 /// the base's very sources after `build` had dropped the shared units, got the
 /// base's bytes, and the guard refused it as a wrong binary.
-//MUTANT identical-sources-suspect|s@^        (Some(base), Some(head)) => base != head,$@        (Some(_), Some(_)) => true,@|identical_arms_from_identical_sources_are_not_suspect
 fn sources_differ(base: Option<&str>, head: Option<&str>) -> bool {
     match (base, head) {
         (Some(base), Some(head)) => base != head,
@@ -746,7 +823,6 @@ fn sources_differ(base: Option<&str>, head: Option<&str>) -> bool {
 /// behind with no binary in it, and reading that as "built" would hand hyperfine
 /// a path it cannot execute and report the could-not-look as a measurement.
 #[must_use]
-//MUTANT built-for-unread|s@^    base_binary(perf_dir, key).is_file() \&\& marked_for(perf_dir, key)$@    base_binary(perf_dir, key).is_file()@|a_seeded_base_dir_does_not_answer_as_built
 pub fn base_arm_is_built(perf_dir: &Path, key: &str) -> bool {
     // BUILT FOR THIS KEY, NOT MERELY PRESENT (CLOUD-2068). A warm-start seed
     // renames a sibling's directory to this key with that sibling's binary still
@@ -779,7 +855,6 @@ pub fn base_arm_is_built(perf_dir: &Path, key: &str) -> bool {
 /// # Errors
 ///
 /// A directory that cannot be created, or a copy or marker write that fails.
-//MUTANT kept-head-unmarked|s@^    crate::durable::replace(built_for(perf_dir, key), key)$@    Ok::<(), anyhow::Error>(())@|a_kept_head_answers_as_the_next_base
 pub fn keep_as_base(perf_dir: &Path, key: &str, head_bin: &Path, keep: &str) -> Result<()> {
     if let Ok(entries) = std::fs::read_dir(perf_dir) {
         for entry in entries.filter_map(std::result::Result::ok) {
@@ -805,7 +880,7 @@ pub fn keep_as_base(perf_dir: &Path, key: &str, head_bin: &Path, keep: &str) -> 
 
 /// Whether the `built-for` marker names `key`.
 fn marked_for(perf_dir: &Path, key: &str) -> bool {
-    std::fs::read_to_string(built_for(perf_dir, key)).is_ok_and(|text| text == key)
+    crate::fsio::read_to_string(built_for(perf_dir, key)).is_ok_and(|text| text == key)
 }
 
 /// The marker a base build writes beside its binary, naming the key it was
@@ -898,7 +973,6 @@ const PAIR_PROFILE_CONFIG: [&str; 4] = [
 /// built this checkout's release binary into the real `target/release` — 634
 /// CPU-seconds of `rustc` inside one case on a lap whose prune had evicted it. A
 /// missing manifest now fails the build here, which is `build`'s could-not-look.
-//MUTANT build-escapes-to-enclosing-workspace|s@    args.push(String::from("--manifest-path"));@    let _ = "--manifest-path";@|a_measurement_builds_the_repository_it_was_asked_about
 fn build_args(profile: &str, dir: &Path) -> Vec<String> {
     let mut args: Vec<String> = ["build", "--profile", profile, "-p", "batten"]
         .iter()
@@ -965,7 +1039,7 @@ fn build(dir: &Path, target_dir: Option<&Path>, what: &str, profile: &str) -> Re
     let marker = target_dir.map(|dir| dir.join(LAST_ARM));
     let mut cleaned = false;
     if let Some(marker) = &marker {
-        let last = std::fs::read_to_string(marker).ok();
+        let last = crate::fsio::read_to_string(marker).ok();
         if switches_arm(last.as_deref(), what) {
             let clean: Vec<String> = ["clean", "-p", "batten", "--profile", profile]
                 .iter()
@@ -990,9 +1064,6 @@ fn build(dir: &Path, target_dir: Option<&Path>, what: &str, profile: &str) -> Re
     }
     Ok(cleaned)
 }
-
-//MUTANT-SUITE crates/batten/src/perf.rs
-//MUTANT arm-switch-never|s@^    last != Some(what)$@    false@|switching_arms_drops_the_shared_units
 
 /// The file in a shared target dir naming the arm last built into it.
 const LAST_ARM: &str = "perf-last-arm";
@@ -1044,7 +1115,7 @@ fn mediation_verb(bin: &Path) -> Result<String> {
     let mut command = std::process::Command::new(bin);
     let output = command
         .args(["spec", "--format", "json"])
-        .output()
+        .streamed_output()
         .with_context(|| format!("perf-pair: could not ask {} for its surface", bin.display()))?;
     if !output.status.success() {
         bail!(
@@ -1097,7 +1168,7 @@ fn wired_command(tree: &Path, bin: &Path) -> Result<Vec<String>> {
         WiringFile::Whole(path) => (path, None),
     };
     let settings = tree.join(path);
-    let text = std::fs::read_to_string(&settings).with_context(|| {
+    let text = crate::fsio::read_to_string(&settings).with_context(|| {
         format!(
             "perf-pair: {} wires no settings the wired pair can read. No measurement.",
             settings.display()
@@ -1322,6 +1393,264 @@ fn stage(repo: &Path, out: &Path) -> Result<(PathBuf, PathBuf)> {
     Ok((check_repo, hooks))
 }
 
+/// The `session-start` arm's fixture (CLOUD-2840): a git repository declaring
+/// one session-start row, so the hook does its real work there — writes the
+/// payload, spawns the setup task detached and registers it — and the arm
+/// prices that, not an early return. `check-repo` is no repository, and making
+/// it one would move what every other arm measures.
+fn stage_session(out: &Path) -> Result<PathBuf> {
+    let session = out.join("session-repo");
+    std::fs::create_dir_all(&session).context("perf: could not stage the session fixture")?;
+    crate::durable::replace(
+        session.join("batten.toml"),
+        "version = 1\n\n[[hook.handler]]\nid = \"perf\"\non = \"session-start\"\nrun = [\"true\"]\ntimeout_ms = 1000\n",
+    )
+    .context("perf: could not stage the session fixture's config")?;
+    crate::gitwrite::init_on_main(&session)?;
+    Ok(session)
+}
+
+/// The Rust source the commit fixture changes: a TYPICAL one, because the
+/// formatter and the cfg-gated-test step now cost what the staged file costs.
+///
+/// Chosen by measurement, not convenience (CLOUD-2789): over the 1,353 `.rs`
+/// touches of the 200 commits before 2026-11-23 (`git log -200 --numstat`), the
+/// median touched file is 1,168 lines, and that file is this one (p25 453, p75
+/// 2,850). `lib.rs`, the fixture's first choice, is 33,775 lines and 55 of the
+/// 1,353 touches: the worst case, which [`COMMIT_WORST`] records beside it.
+const COMMIT_SOURCE: &str = "crates/batten/src/hookcost.rs";
+
+/// The largest `.rs` file in the tree, which `cargo-fmt-worst` formats so the
+/// worst case a commit can pay is RECORDED rather than hidden behind the median.
+/// It carries no `perf-assert` budget: rustfmt alone is 311 ms on it, and a
+/// budget is a ceiling on the typical commit, not a description of this one.
+const COMMIT_WORST: &str = "crates/batten/src/lib.rs";
+
+/// The unbound TOML the commit fixture stages beside `batten.toml`, CHOSEN FROM
+/// THE TREE, never named: the largest tracked root-level `.toml` that is neither
+/// Batten's own config (`batten.*`, schema-bound and linted at landing) nor the
+/// Cargo manifest. Which TOML a consumer edits most is a fact about their
+/// repository (non-negotiable rule 1); the largest is the one whose commit-time
+/// `taplo` costs most, so the arm prices the expensive commit, not a toy file.
+///
+/// # Errors
+///
+/// A checkout whose index cannot be read, or that tracks no such file.
+fn commit_toml(repo: &Path) -> Result<String> {
+    let mut best: Option<(u64, String)> = None;
+    for path in crate::git::tracked_paths(repo)? {
+        let own = path.starts_with("batten.") || path == "Cargo.toml";
+        let toml = Path::new(&path)
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("toml"));
+        if path.contains('/') || !toml || own {
+            continue;
+        }
+        let Ok(meta) = std::fs::metadata(repo.join(&path)) else {
+            continue;
+        };
+        if best.as_ref().is_none_or(|(size, _)| meta.len() > *size) {
+            best = Some((meta.len(), path));
+        }
+    }
+    best.map(|(_, path)| path).ok_or_else(|| {
+        anyhow::anyhow!(
+            "perf: the commit fixture needs a tracked root-level TOML other than `batten.*` \
+             and `Cargo.toml` in {}, and there is none",
+            repo.display()
+        )
+    })
+}
+
+/// The trunk ref the commit fixture's branch-relative steps judge against, which
+/// [`stage_commit`] refuses to stage without.
+const TRUNK_REF: &str = "refs/remotes/origin/main";
+
+/// Where git leaves the message `commit-msg` is handed, relative to the clone.
+const COMMIT_MESSAGE: &str = ".git/COMMIT_EDITMSG";
+
+/// The fixture's own committer. Left to the host, the identity is whatever the
+/// machine configures, and the attribution step refuses a denied one, so the
+/// arm would measure a refusal on one machine and an admission on another.
+const COMMIT_EMAIL: &str = "perf@example.invalid";
+
+/// The fixture every commit-time hook arm runs against, staged once
+/// (CLOUD-2789): a shared clone of `repo` carrying one staged one-line change
+/// to a Rust source and to `batten.toml` — the commit that fires every default
+/// `pre-commit` step — and a conventional message for `commit-msg`.
+///
+/// **A CLONE OF THE CHECKOUT, NOT A ONE-RULE FIXTURE**, because a hook step
+/// runs against the repository being committed to: its whole config, its whole
+/// workspace for `cargo fmt`, its whole index. A smaller tree would price a
+/// commit nobody makes. In-process, as `git clone --shared` (objects borrowed
+/// through alternates), because this module spawns no `git`.
+fn stage_commit(repo: &Path, out: &Path, toml: &str) -> Result<PathBuf> {
+    // THE TRUNK REF IS A PRECONDITION, refused here rather than discovered by
+    // hyperfine (CLOUD-2789). `cfg-gated-test-pinned`, timed here until it moved
+    // to `slow` (CLOUD-2852) and still profiled in this fixture by
+    // `mise run profile`, judges the branch against
+    // `origin/main`, which the clone carries only where the checkout resolves it;
+    // without it the step denies "diff read absent", exits 2 on the first warmup,
+    // and hyperfine aborts the whole run naming the arm, not the missing ref.
+    // Measured: a session that had not fetched `main` lost a 30-run baseline so.
+    if crate::git::resolve_ref(repo, TRUNK_REF)?.is_none() {
+        anyhow::bail!(
+            "perf: the commit fixture needs `{TRUNK_REF}` in {}, and it does not resolve; \
+             run `git fetch origin main` first",
+            repo.display()
+        );
+    }
+    let commit = out.join("commit-repo");
+    crate::gitwrite::clone_shared(repo, &commit)
+        .context("perf: could not clone the commit fixture")?;
+    let line = [
+        (COMMIT_SOURCE, "// perf: one staged line\n"),
+        ("batten.toml", "# perf: one staged line\n"),
+        // An unbound TOML ([`commit_toml`]), so the commit-time `taplo` step
+        // (which skips the schema-bound ones) has a subject.
+        (toml, "# perf: one staged line\n"),
+    ];
+    for (path, added) in line {
+        let at = commit.join(path);
+        let mut body = crate::fsio::read_to_string(&at)
+            .with_context(|| format!("perf: the commit fixture has no {path}"))?;
+        if !body.is_empty() && !body.ends_with('\n') {
+            body.push('\n');
+        }
+        body.push_str(added);
+        crate::durable::replace(&at, body)
+            .with_context(|| format!("perf: could not edit {path}"))?;
+    }
+    crate::gitwrite::stage_paths(&commit, &line.map(|(path, _)| path.to_owned()))
+        .context("perf: could not stage the commit fixture's change")?;
+    let config = commit.join(".git/config");
+    let mut text = crate::fsio::read_to_string(&config).unwrap_or_default();
+    text.push_str("[user]\n\tname = perf\n\temail = ");
+    text.push_str(COMMIT_EMAIL);
+    text.push('\n');
+    crate::durable::replace(&config, text).context("perf: could not set the fixture identity")?;
+    crate::durable::replace(
+        commit.join(COMMIT_MESSAGE),
+        "fix(perf): one staged line\n\nThe commit every commit-time hook arm judges.\n",
+    )
+    .context("perf: could not write the commit message")?;
+    Ok(commit)
+}
+
+/// The default commit-time hk steps a `.rs`, `batten.toml` and unbound-TOML commit fires
+/// (CLOUD-2789), each as hk runs it, with `batten` the binary under measurement.
+///
+/// **READ OFF `hk run pre-commit --plan`, NOT GUESSED**: on that commit the plan
+/// includes exactly `cargo-fmt`, `taplo`, `taplo-format` and
+/// `merge-conflict-markers`; `commit-msg` runs both of its steps on every
+/// commit. `config-lint-pinned` and `cfg-gated-test-pinned` were in it until
+/// they measured 29x and 5x the ceiling and moved to `slow` (CLOUD-2852).
+/// `taplo`'s two are hk builtins whose argv is `taplo lint {{files}}` /
+/// `taplo format --check --diff {{files}}` under `RUST_LOG=warn`. A commit hook
+/// is a batten hook and answers to the same 100 ms ceiling, which `perf-assert`
+/// holds each of these to.
+///
+/// `cargo-fmt-worst` is no step: it is `cargo-fmt` over [`COMMIT_WORST`], so the
+/// cost of the commit that stages the largest file is on the record, unbudgeted.
+fn commit_arms(bin: &str, toml: &str) -> Vec<(&'static str, Vec<String>)> {
+    let words = |words: &[&str]| {
+        words
+            .iter()
+            .map(|word| (*word).to_owned())
+            .collect::<Vec<_>>()
+    };
+    let batten = |args: &[&str]| {
+        std::iter::once(bin.to_owned())
+            .chain(args.iter().map(|word| (*word).to_owned()))
+            .collect::<Vec<_>>()
+    };
+    let rustfmt = |file: &str| {
+        words(&[
+            "rustfmt",
+            "--check",
+            "--edition",
+            "2024",
+            "--config",
+            "skip_children=true",
+            file,
+        ])
+    };
+    vec![
+        ("cargo-fmt", rustfmt(COMMIT_SOURCE)),
+        ("cargo-fmt-worst", rustfmt(COMMIT_WORST)),
+        // Both taplo steps skip the schema-bound `batten.toml` at the commit
+        // (`taplo-schema` and `taplo-format-schema` run it in `slow`,
+        // CLOUD-2852), so their staged set is the unbound TOML.
+        (
+            "taplo",
+            words(&["env", "RUST_LOG=warn", "taplo", "lint", toml]),
+        ),
+        (
+            "taplo-format",
+            words(&[
+                "env",
+                "RUST_LOG=warn",
+                "taplo",
+                "format",
+                "--check",
+                "--diff",
+                toml,
+            ]),
+        ),
+        (
+            "merge-conflict-markers",
+            batten(&["enforce", "--rule", "source carry broken"]),
+        ),
+        (
+            "conventional-commit",
+            batten(&["commit", "check", "--message", COMMIT_MESSAGE]),
+        ),
+        (
+            "commit-attribution",
+            batten(&["attribution", "check", "--message", COMMIT_MESSAGE]),
+        ),
+    ]
+}
+
+/// The data directory mise reads its installs from before [`bench`] relocates
+/// the data home: `MISE_DATA_DIR`, else the XDG (or Windows) data home's
+/// `mise`, else `~/.local/share/mise`.
+fn mise_data_dir() -> Option<String> {
+    if let Some(dir) = std::env::var_os("MISE_DATA_DIR") {
+        return Some(dir.to_string_lossy().into_owned());
+    }
+    let home = ["XDG_DATA_HOME", "LOCALAPPDATA"]
+        .into_iter()
+        .find_map(std::env::var_os)
+        .map(PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/share"))
+        })?;
+    Some(home.join("mise").to_string_lossy().into_owned())
+}
+
+/// One argv as the single command line hyperfine splits back into words under
+/// `--shell=none`: a word carrying whitespace or a quote is single-quoted, so
+/// `--rule 'test cover missing'` reaches the binary as two words, not four.
+/// Every other word is passed as it was, so an arm with no such word renders
+/// the line it always did.
+fn command_line(argv: &[String]) -> String {
+    argv.iter()
+        .map(|word| {
+            if !word.is_empty()
+                && !word
+                    .chars()
+                    .any(|c| c.is_whitespace() || matches!(c, '\'' | '"'))
+            {
+                word.clone()
+            } else {
+                format!("'{}'", word.replace('\'', r"'\''"))
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 /// One absolute measurement per invocation path (CLOUD-207), ported off
 /// `mise-tasks/perf.sh` under CLOUD-1753.
 ///
@@ -1343,6 +1672,13 @@ fn stage(repo: &Path, out: &Path) -> Result<(PathBuf, PathBuf)> {
 /// more. `posttool` prices the per-call capture write. `stop` is the end of
 /// turn, which a turn cannot close until it returns. `wired` is what the
 /// settings file actually invokes, launcher and all.
+///
+/// # THE COMMIT-TIME STEPS, one arm each
+///
+/// A commit hook is a batten hook (CLOUD-2789): every default `pre-commit` and
+/// `commit-msg` step a Rust-plus-config commit fires is an arm, run as hk runs
+/// it in [`stage_commit`]'s clone — see [`commit_arms`] for the list and where
+/// it was read from.
 ///
 /// # Errors
 ///
@@ -1377,6 +1713,8 @@ pub fn invocation(repo: &Path) -> Result<Vec<Record>> {
     let _ = std::fs::remove_dir_all(&out);
     std::fs::create_dir_all(&out).context("perf: could not create the output directory")?;
     let (check_repo, hooks) = stage(repo, &out)?;
+    let toml = commit_toml(repo)?;
+    let commit_repo = stage_commit(repo, &out, &toml)?;
     let state = out.join("state");
     let state_text = state.to_string_lossy().into_owned();
 
@@ -1398,7 +1736,8 @@ pub fn invocation(repo: &Path) -> Result<Vec<Record>> {
     // waits on, which is the failure this path exists to prevent.
     let wired = wired_command(repo, &head_bin)?;
 
-    let plan: Vec<(&str, Option<PathBuf>, Vec<String>, &Path)> = vec![
+    let session_repo = stage_session(&out)?;
+    let mut plan: Vec<(&str, Option<PathBuf>, Vec<String>, &Path)> = vec![
         (
             "noop",
             None,
@@ -1444,10 +1783,44 @@ pub fn invocation(repo: &Path) -> Result<Vec<Record>> {
             wired,
             repo.as_path(),
         ),
+        // THE SESSION'S FIRST MOMENT (CLOUD-2840): the hook starts the setup
+        // task and returns, so the first response waits on this and no more.
+        (
+            "session-start",
+            Some(hooks.join("claude-code-session-start.json")),
+            hook_argv(),
+            session_repo.as_path(),
+        ),
+        // THE SAME TWO CALLS WITH THE OFF-BOX DAEMON WATCH ON (CLOUD-2736): the
+        // state repository variable set and a daemon's lock held, so each run
+        // pays the appended inbox line, the shared try-lock and the two small
+        // reads an agent with the feature on pays on every tool call.
+        (
+            "hook-offbox",
+            Some(hooks.join("claude-code.json")),
+            hook_argv(),
+            repo.as_path(),
+        ),
+        (
+            "posttool-offbox",
+            Some(hooks.join("claude-code-posttool.json")),
+            hook_argv(),
+            repo.as_path(),
+        ),
     ];
+    // THE COMMIT-TIME HOOK STEPS (CLOUD-2789), in the commit fixture, each with
+    // no stdin: hk hands a step its files on the command line.
+    plan.extend(
+        commit_arms(&head, &toml)
+            .into_iter()
+            .map(|(id, cmd)| (id, None, cmd, commit_repo.as_path())),
+    );
 
     let mut records = Vec::new();
     for (id, input, cmd, dir) in plan {
+        // HELD FOR THE ARM'S WHOLE MEASUREMENT, as a daemon holds it for its
+        // life, and released when this binding drops.
+        let _daemon = daemon_for(id, &state_text, dir)?;
         records.push(measure_arm(
             dir,
             &out,
@@ -1655,6 +2028,19 @@ fn arms(
             &state_text,
         )?);
     }
+    // THE SESSION'S FIRST MOMENT (CLOUD-2840), in its own repository fixture:
+    // the base binary runs every declared row inline there, the head starts
+    // the setup task, and the pair is that difference.
+    let session_repo = stage_session(out)?;
+    records.extend(hyperfine(
+        &session_repo,
+        out,
+        "session-start",
+        Some(&hooks.join("claude-code-session-start.json")),
+        &hook_argv(&base, &base_verb),
+        &hook_argv(&head, &head_verb),
+        &state_text,
+    )?);
     Ok(records)
 }
 
@@ -1736,7 +2122,9 @@ fn bench(
         args.push(input.to_string_lossy().into_owned());
     }
 
-    let arms: Vec<(&'static str, Vec<String>)> = if id == "posttool" {
+    let single = arms.len() == 1;
+    let mut arm_env: Vec<(String, String)> = Vec::new();
+    let arms: Vec<(&'static str, Vec<String>)> = if id.starts_with("posttool") {
         // ONE STATE ROOT PER ARM, AND EMPTY BEFORE EVERY RUN. This is the only
         // arm whose binaries WRITE, and both would otherwise share the store: the
         // head arm's capture would then be a blob the base arm's run already
@@ -1763,28 +2151,66 @@ fn bench(
             .collect::<Result<Vec<String>>>()?;
         args.push(String::from("--prepare"));
         args.push(format!("rm -rf {}", stores.join(" ")));
-        arms.iter()
-            .zip(&roots)
-            .map(|((label, cmd), root)| (*label, state_prefixed(root, cmd)))
-            .collect()
+        if single {
+            // ONE ARM, ITS ROOT IN THE MEASURING PROCESS'S ENVIRONMENT rather
+            // than an `env` exec the hook call never pays: see [`unprefixed`].
+            arm_env.extend(roots.first().map_or_else(Vec::new, |root| state_env(root)));
+            arms.to_vec()
+        } else {
+            arms.iter()
+                .zip(&roots)
+                .map(|((label, cmd), root)| (*label, state_prefixed(root, cmd)))
+                .collect()
+        }
     } else {
         arms.to_vec()
     };
+    let arms: Vec<(&'static str, Vec<String>)> = if single {
+        arms.into_iter()
+            .map(|(label, cmd)| {
+                let (env, cmd) = unprefixed(dir, cmd);
+                arm_env.extend(env);
+                (label, cmd)
+            })
+            .collect()
+    } else {
+        arms
+    };
 
     for (_, cmd) in &arms {
-        args.push(cmd.join(" "));
+        args.push(command_line(cmd));
     }
 
-    let env = vec![
+    let mut env = vec![
         (String::from("XDG_DATA_HOME"), state.to_owned()),
         (String::from("APPDATA"), state.to_owned()),
         (String::from("LOCALAPPDATA"), state.to_owned()),
+        // SET ON THE OFF-BOX ARMS AND EMPTIED ON EVERY OTHER (CLOUD-2736): a
+        // cloud session sets this variable for every process, and an arm that
+        // inherited it would be measuring the feature under another arm's name.
+        (
+            String::from(crate::session::STATE_REPO_ENV),
+            String::from(if id.ends_with(OFFBOX_ARM) {
+                "example/state"
+            } else {
+                ""
+            }),
+        ),
     ];
+    // MISE'S INSTALLS STAY WHERE THEY ARE (CLOUD-2789). mise keeps them under
+    // the data home relocated above, so a commit arm running `mise run` would
+    // find none and install the whole toolchain into the scratch root inside its
+    // first timed run — measured: it began downloading every pinned tool.
+    if let Some(data) = mise_data_dir() {
+        env.push((String::from("MISE_DATA_DIR"), data));
+    }
+    // After the defaults, so a single arm's own root wins over them.
+    env.extend(arm_env);
     if !run(dir, Tool::Hyperfine, &args, &env)? {
         bail!("perf-pair: measuring the {id} pair failed. No measurement.");
     }
 
-    let text = std::fs::read_to_string(&json)
+    let text = crate::fsio::read_to_string(&json)
         .with_context(|| format!("perf-pair: could not read the {id} pair. No measurement."))?;
     let parsed: serde_json::Value = serde_json::from_str(&text)
         .with_context(|| format!("perf-pair: the {id} pair did not parse. No measurement."))?;
@@ -1804,28 +2230,128 @@ fn bench(
         .collect()
 }
 
+/// The suffix of an arm that runs with the off-box daemon watch on.
+const OFFBOX_ARM: &str = "-offbox";
+
+/// The state root an arm's binary resolves: the shared one, or the per-arm one
+/// [`bench`] gives the arms that write.
+fn arm_state_root(id: &str, state: &str) -> String {
+    if id.starts_with("posttool") {
+        format!("{state}-head")
+    } else {
+        state.to_owned()
+    }
+}
+
+/// The stand-in daemon an off-box arm runs against, and nothing for any other.
+fn daemon_for(id: &str, state: &str, dir: &Path) -> Result<Option<std::fs::File>> {
+    if !id.ends_with(OFFBOX_ARM) {
+        return Ok(None);
+    }
+    stand_in_daemon(&arm_state_root(id, state), dir).map(Some)
+}
+
+/// Stand in for a running off-box daemon in the state directory of `dir` under
+/// `state_root`: hold its lock exclusively and leave a status file that reads
+/// as keeping up, so the hook's probe answers alive on every run.
+///
+/// No `session` line and an `inbox_read` far ahead: the first reads as this
+/// session, and the second keeps a growing inbox from ever reading as stuck.
+fn stand_in_daemon(state_root: &str, dir: &Path) -> Result<std::fs::File> {
+    let offbox = crate::state::repo_state_dir_under(Path::new(state_root), dir)?
+        .join(crate::offbox_watch::DIR);
+    std::fs::create_dir_all(&offbox).context("perf: could not create the off-box directory")?;
+    crate::durable::replace(
+        offbox.join(crate::offbox_watch::STATUS),
+        format!("pid 1\ninbox_read {}\nattached yes\n", u64::MAX / 2),
+    )
+    .context("perf: could not write the stand-in daemon's status")?;
+    let lock = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(offbox.join(crate::offbox_watch::LOCK))
+        .context("perf: could not open the stand-in daemon's lock")?;
+    fs4::FileExt::try_lock(&lock)
+        .map_err(|_| anyhow::anyhow!("perf: the stand-in daemon's lock is already held."))?;
+    Ok(lock)
+}
+
 /// `env VAR=… <argv>`, which is how a per-arm environment is supplied at all:
 /// `--shell=none` runs argv directly, so it can only come from a prefix. The
 /// extra exec is identical on both arms and divides out of the ratio.
 fn state_prefixed(state: &str, argv: &[String]) -> Vec<String> {
+    let mut out = vec![String::from("env")];
+    out.extend(
+        state_env(state)
+            .into_iter()
+            .map(|(name, value)| format!("{name}={value}")),
+    );
+    out.extend(argv.iter().cloned());
+    out
+}
+
+/// The environment that points an arm's state at `state`.
+fn state_env(state: &str) -> Vec<(String, String)> {
     // THE ISOLATION IS `arm::Isolation`'s, and stating it there is what makes it
     // behaviour rather than setup (CLOUD-1714): every state-writing name is set
     // together, so a caller cannot point one at a scratch root and leave the
-    // rest ambient. This wrapper is the `env`-prefix spelling the benchmarking
-    // tool needs, over that one declaration.
-    let mut out = vec![String::from("env")];
-    for (name, value) in crate::arm::Isolation::at(state).env() {
-        if name == "HOME" {
-            // The benchmarking arms deliberately keep the ambient home: they
-            // measure a repository checkout, and relocating `HOME` would move
-            // the toolchain out from under the binary being measured. The other
-            // three are what carry per-arm state.
-            continue;
-        }
-        out.push(format!("{name}={value}"));
+    // rest ambient. This is the benchmarking tool's view of that one
+    // declaration, as a prefix or as its own process environment.
+    crate::arm::Isolation::at(state)
+        .env()
+        .into_iter()
+        // The benchmarking arms deliberately keep the ambient home: they
+        // measure a repository checkout, and relocating `HOME` would move the
+        // toolchain out from under the binary being measured. The other three
+        // are what carry per-arm state.
+        .filter(|(name, _)| name != "HOME")
+        .collect()
+}
+
+/// A single arm's `env` prefix as the measuring process's own environment, and
+/// the argv after it (2026-11-16, the owner's answer in `.batten/asked.jsonl`).
+///
+/// AN ABSOLUTE ARM MEASURES WHAT A HOOK CALL COSTS, and no hook call pays an
+/// `env` exec: the settings file invokes the binary itself. Measured on the
+/// runner, the prefix added ~2.5 ms to `posttool` and `wired` over the arms that
+/// run the binary directly, ~0.3 ms locally. A pair keeps the prefix, where it is
+/// paid by both arms and divides out of the ratio.
+///
+/// `-C<dir>` is dropped only where it names the directory the arm already runs
+/// in; any other prefix is left as it is, measured as before.
+///
+/// ONLY A PROGRAM NAMED BY ITS PATH LOSES THE PREFIX. `env` resolves a bare name
+/// through `PATH`, and the measuring tool runs a command without one: the
+/// commit-time `taplo` arm, lifted, failed every run with "no such file". A
+/// hook arm names the binary by its path, so it still measures what a call pays.
+fn unprefixed(dir: &Path, argv: Vec<String>) -> (Vec<(String, String)>, Vec<String>) {
+    if argv.first().map(String::as_str) != Some("env") {
+        return (Vec::new(), argv);
     }
-    out.extend(argv.iter().cloned());
-    out
+    let here = dir.to_string_lossy();
+    let mut env = Vec::new();
+    let mut rest = argv.iter().skip(1).peekable();
+    while let Some(word) = rest.peek() {
+        if let Some(cwd) = word.strip_prefix("-C") {
+            if cwd != here {
+                return (Vec::new(), argv);
+            }
+        } else if let Some((name, value)) = word.split_once('=')
+            && !name.is_empty()
+            && !name.starts_with('-')
+        {
+            env.push((name.to_owned(), value.to_owned()));
+        } else {
+            break;
+        }
+        rest.next();
+    }
+    let rest: Vec<String> = rest.cloned().collect();
+    if !rest.first().is_some_and(|program| program.contains('/')) {
+        return (Vec::new(), argv);
+    }
+    (env, rest)
 }
 
 /// One arm's record, with `perf`'s own percentile convention.
@@ -2088,7 +2614,7 @@ fn parse_pairs(input: &str) -> Result<Vec<Paired>> {
 /// false green this repository keeps re-meeting.
 pub fn compare(
     input: &str,
-    exempt: &[crate::config::PerfExempt],
+    exempt: &[crate::config_model::PerfExempt],
     today: &str,
 ) -> Result<Comparison> {
     let records = parse_pairs(input)?;
@@ -2202,7 +2728,7 @@ pub enum Gate {
 pub fn gate(
     repo: &Path,
     options: Options,
-    exempt: &[crate::config::PerfExempt],
+    exempt: &[crate::config_model::PerfExempt],
     today: &str,
 ) -> Result<Gate> {
     match pair(repo, options)? {
@@ -2572,7 +3098,7 @@ pub fn config_load(path: &Path) -> Result<Sweep> {
     // Read once, up front, for two reasons: it is the `parse` arm's input, and a
     // missing or unparseable file is a could-not-look that must be reported
     // BEFORE any timing rather than as a zero.
-    let text = std::fs::read_to_string(path)
+    let text = crate::fsio::read_to_string(path)
         .with_context(|| format!("perf-config-load: could not read {source}"))?;
     crate::config::parse(&text, &source)
         .with_context(|| format!("perf-config-load: {source} does not parse"))?;
@@ -2958,8 +3484,6 @@ impl Residency {
 /// also keeps the script free of the `|` the row itself is split on — a script
 /// carrying `||` reads as eight fields where three are wanted.
 #[must_use]
-//MUTANT-SUITE crates/batten/tests/it/refusal_render_bench.rs
-//MUTANT current-warm-first-sighting|s@        !matches!(self, Self::FullEveryTime)@        matches!(self, Self::FirstFullThenCompact)@|a_compact_warm_repeat_is_exactly_the_refusal_line
 pub const fn first_sighting(strategy: Strategy, residency: Residency) -> bool {
     // A cold firing is a first sighting under every strategy; a warm one is a
     // first sighting exactly when the strategy does not treat it as a repeat.
@@ -3017,7 +3541,9 @@ pub struct RenderRecord {
 /// A class this repository does not declare. That is a property of the
 /// configuration rather than a verdict about the cost, and reporting a
 /// zero-length rendering for an absent class would be a measurement of nothing.
-pub fn refusal_render(registry: &[crate::verdict::DeclaredVerdict]) -> Result<Vec<RenderRecord>> {
+pub fn refusal_render(
+    registry: &[crate::config_model::DeclaredVerdict],
+) -> Result<Vec<RenderRecord>> {
     let mut records = Vec::new();
     for (class, rule) in MEASURED_CLASSES {
         let refusal = crate::refusal::Refusal::from_class(
@@ -3400,9 +3926,6 @@ pub fn median_seconds(samples: &[u64]) -> Option<u64> {
     sorted.get(at).copied()
 }
 
-//MUTANT-SUITE crates/batten/src/perf.rs
-//MUTANT latency-ceiling-without-slack|s@    if median > budget.saturating_add(slack) {@    if median > budget {@|a_median_inside_the_slack_is_within
-//MUTANT latency-loose-unread|s@    } else if median < budget / loose_factor.max(1) {@    } else if false {@|a_median_under_the_loose_floor_is_drift
 /// The verdict over a median, with the retired body's integer arithmetic: the
 /// ceiling is `budget + slack` and the floor `budget / loose_factor`.
 #[must_use]
@@ -3419,7 +3942,7 @@ pub fn latency_verdict(median: u64, budget: u64, slack: u64, loose_factor: u64) 
 #[cfg(test)]
 mod tests {
     use super::*;
-
+    #[cfg(test)]
     /// The sweep refuses a checkout with no release build, and gets past that
     /// check for one that has it, whatever the host's instrument then says.
     ///
@@ -3493,8 +4016,8 @@ mod tests {
             "the kept head answers as the next pair's base"
         );
         assert_eq!(
-            std::fs::read(base_binary(&perf, "headkey"))?,
-            std::fs::read(&head)?
+            crate::fsio::read(base_binary(&perf, "headkey"))?,
+            crate::fsio::read(&head)?
         );
         assert!(!stale.exists(), "a base neither live nor kept is removed");
         Ok(())
@@ -3617,8 +4140,8 @@ mod tests {
         std::fs::write(&built, b"head")?;
         let head = perf.join("pair").join("batten-head");
         take_arm(&shared, &head, "head")?;
-        assert_eq!(std::fs::read(&base)?, b"base");
-        assert_eq!(std::fs::read(&head)?, b"head");
+        assert_eq!(crate::fsio::read(&base)?, b"base");
+        assert_eq!(crate::fsio::read(&head)?, b"head");
         assert!(take_arm(&perf.join("empty"), &head, "head").is_err());
         let _ = std::fs::remove_dir_all(&scratch);
         Ok(())
@@ -3668,47 +4191,26 @@ mod tests {
         clippy::expect_used,
         reason = "test-only: a failed fixture write should fail the case loudly"
     )]
-    #[expect(
-        clippy::disallowed_types,
-        reason = "stays: test-only, builds the fixture repository `base_key` reads; no production spawn"
-    )]
     fn a_commit_outside_the_crates_keeps_the_base_key() {
         let repo = perf_scratch("base-key");
-        let git = |args: &[&str]| {
-            let out = std::process::Command::new("git")
-                .args([
-                    "-c",
-                    "user.name=t",
-                    "-c",
-                    "user.email=t@t",
-                    "-c",
-                    "commit.gpgsign=false",
-                ])
-                .args(args)
-                .current_dir(&repo)
-                .output()
-                .expect("git");
-            assert!(out.status.success(), "git {args:?}");
-            String::from_utf8(out.stdout)
-                .expect("utf8")
-                .trim()
-                .to_owned()
+        // IN-CRATE, NO SPAWN (#1276): the fixture is commits, which `gitwrite`
+        // writes; shelling out to the host's `git` was a spawn for nothing.
+        let commit = |paths: &[&str], message: &str| {
+            let paths: Vec<String> = paths.iter().map(|path| (*path).to_owned()).collect();
+            crate::gitwrite::commit_paths(&repo, &paths, message).expect("commit");
+            crate::git::head_commit(&repo).expect("head")
         };
-        git(&["init", "-q", "-b", "main"]);
+        crate::gitwrite::init_on_main(&repo).expect("init");
         std::fs::create_dir_all(repo.join("crates")).expect("mkdir");
         std::fs::write(repo.join("crates/lib.rs"), "a").expect("write");
         std::fs::write(repo.join("Cargo.toml"), "m").expect("write");
-        git(&["add", "-A"]);
-        git(&["commit", "-q", "-m", "one"]);
-        let first = git(&["rev-parse", "HEAD"]);
+        // Each commit names its WHOLE tree: `commit_paths` writes the tree from
+        // the paths it is handed, so a partial list would drop a file.
+        let first = commit(&["crates/lib.rs", "Cargo.toml"], "one");
         std::fs::write(repo.join("README"), "r").expect("write");
-        git(&["add", "-A"]);
-        git(&["commit", "-q", "-m", "two"]);
-        let second = git(&["rev-parse", "HEAD"]);
+        let second = commit(&["crates/lib.rs", "Cargo.toml", "README"], "two");
         std::fs::write(repo.join("crates/lib.rs"), "b").expect("write");
-        git(&["add", "-A"]);
-        git(&["commit", "-q", "-m", "three"]);
-        let third = git(&["rev-parse", "HEAD"]);
+        let third = commit(&["crates/lib.rs", "Cargo.toml", "README"], "three");
         let key = |sha: &str| base_key(&repo, sha).expect("key");
         assert_eq!(key(&first), key(&second));
         assert_ne!(key(&second), key(&third));
@@ -3731,48 +4233,35 @@ mod tests {
         clippy::expect_used,
         reason = "test-only: a failed fixture write should fail the case loudly"
     )]
-    #[expect(
-        clippy::disallowed_types,
-        reason = "stays: test-only, builds the fixture repository `binary_source_key` reads; no production spawn"
-    )]
     fn a_test_only_commit_keeps_the_binary_source_key() {
         let repo = perf_scratch("binary-source-key");
-        let git = |args: &[&str]| {
-            let out = std::process::Command::new("git")
-                .args([
-                    "-c",
-                    "user.name=t",
-                    "-c",
-                    "user.email=t@t",
-                    "-c",
-                    "commit.gpgsign=false",
-                ])
-                .args(args)
-                .current_dir(&repo)
-                .output()
-                .expect("git");
-            assert!(out.status.success(), "git {args:?}");
-            String::from_utf8(out.stdout)
-                .expect("utf8")
-                .trim()
-                .to_owned()
+        let commit = |paths: &[&str], message: &str| {
+            let paths: Vec<String> = paths.iter().map(|path| (*path).to_owned()).collect();
+            crate::gitwrite::commit_paths(&repo, &paths, message).expect("commit");
+            crate::git::head_commit(&repo).expect("head")
         };
-        git(&["init", "-q", "-b", "main"]);
+        crate::gitwrite::init_on_main(&repo).expect("init");
         std::fs::create_dir_all(repo.join("crates/batten/src")).expect("mkdir");
         std::fs::create_dir_all(repo.join("crates/batten/tests")).expect("mkdir");
         std::fs::write(repo.join("crates/batten/src/lib.rs"), "a").expect("write");
         std::fs::write(repo.join("crates/batten/tests/it.rs"), "t").expect("write");
-        git(&["add", "-A"]);
-        git(&["commit", "-q", "-m", "one"]);
-        let first = git(&["rev-parse", "HEAD"]);
+        // The manifest the closure walk starts from: without it the key is
+        // unknown (CLOUD-2789), which is a different case.
+        std::fs::write(
+            repo.join("crates/batten/Cargo.toml"),
+            "[package]\nname = \"batten\"\n",
+        )
+        .expect("write");
+        let tree = [
+            "crates/batten/Cargo.toml",
+            "crates/batten/src/lib.rs",
+            "crates/batten/tests/it.rs",
+        ];
+        let first = commit(&tree, "one");
         std::fs::write(repo.join("crates/batten/tests/it.rs"), "t2").expect("write");
-        git(&["add", "-A"]);
-        git(&["commit", "-q", "-m", "two"]);
-        let second = git(&["rev-parse", "HEAD"]);
+        let second = commit(&tree, "two");
         std::fs::write(repo.join("crates/batten/src/lib.rs"), "b").expect("write");
-        git(&["add", "-A"]);
-        git(&["commit", "-q", "-m", "three"]);
-        let third = git(&["rev-parse", "HEAD"]);
+        let third = commit(&tree, "three");
         let key = |sha: &str| binary_source_key(&repo, sha).expect("key");
         assert_ne!(
             base_key(&repo, &first).expect("key"),
@@ -3780,6 +4269,110 @@ mod tests {
         );
         assert_eq!(key(&first), key(&second));
         assert_ne!(key(&second), key(&third));
+    }
+
+    /// CLOUD-2789: after the crate split the binary is compiled from `batten`
+    /// AND every workspace crate in its path-dependency closure, so a commit in
+    /// one of those moves [`binary_source_key`]; a crate that depends ON
+    /// `batten` (codemods) is outside the closure and leaves it.
+    ///
+    /// MUTANT: keying `crates/batten/src` alone keeps the second key equal to
+    /// the first and the dependency case goes red.
+    #[test]
+    #[expect(
+        clippy::expect_used,
+        reason = "test-only: a failed fixture write should fail the case loudly"
+    )]
+    fn a_dependency_crates_commit_moves_the_binary_source_key() {
+        let repo = perf_scratch("binary-source-key-deps");
+        let commit = |paths: &[&str], message: &str| {
+            let paths: Vec<String> = paths.iter().map(|path| (*path).to_owned()).collect();
+            crate::gitwrite::commit_paths(&repo, &paths, message).expect("commit");
+            crate::git::head_commit(&repo).expect("head")
+        };
+        crate::gitwrite::init_on_main(&repo).expect("init");
+        for dir in [
+            "crates/batten/src",
+            "crates/batten-base/src",
+            "crates/batten-fsio/src",
+            "crates/batten-codemods/src",
+        ] {
+            std::fs::create_dir_all(repo.join(dir)).expect("mkdir");
+        }
+        let write = |path: &str, text: &str| std::fs::write(repo.join(path), text).expect("write");
+        write(
+            "crates/batten/Cargo.toml",
+            "[package]\nname = \"batten\"\n\n[dependencies]\n\
+             batten-base = { path = \"../batten-base\" }\n",
+        );
+        // Reached only TRANSITIVELY, through `batten-base`.
+        write(
+            "crates/batten-base/Cargo.toml",
+            "[package]\nname = \"batten-base\"\n\n\
+             [target.'cfg(unix)'.dependencies]\n\
+             batten-fsio = { path = \"../batten-fsio\" }\n",
+        );
+        write(
+            "crates/batten-fsio/Cargo.toml",
+            "[package]\nname = \"batten-fsio\"\n",
+        );
+        write(
+            "crates/batten-codemods/Cargo.toml",
+            "[package]\nname = \"batten-codemods\"\n\n[dependencies]\n\
+             batten = { path = \"../batten\" }\n",
+        );
+        write("crates/batten/src/lib.rs", "a");
+        write("crates/batten-base/src/lib.rs", "b");
+        write("crates/batten-fsio/src/lib.rs", "f");
+        write("crates/batten-codemods/src/lib.rs", "c");
+        let tree = [
+            "crates/batten/Cargo.toml",
+            "crates/batten/src/lib.rs",
+            "crates/batten-base/Cargo.toml",
+            "crates/batten-base/src/lib.rs",
+            "crates/batten-fsio/Cargo.toml",
+            "crates/batten-fsio/src/lib.rs",
+            "crates/batten-codemods/Cargo.toml",
+            "crates/batten-codemods/src/lib.rs",
+        ];
+        let first = commit(&tree, "one");
+        write("crates/batten-base/src/lib.rs", "b2");
+        let direct = commit(&tree, "direct dependency");
+        write("crates/batten-fsio/src/lib.rs", "f2");
+        let transitive = commit(&tree, "transitive dependency");
+        write("crates/batten-codemods/src/lib.rs", "c2");
+        let dependent = commit(&tree, "dependent crate");
+        let key = |sha: &str| binary_source_key(&repo, sha).expect("key");
+        assert_ne!(key(&first), key(&direct), "a direct dependency's src");
+        assert_ne!(
+            key(&direct),
+            key(&transitive),
+            "a transitive dependency's src"
+        );
+        assert_eq!(
+            key(&transitive),
+            key(&dependent),
+            "codemods depends on batten"
+        );
+        // A dependency's build script compiles into the binary as surely as
+        // its `src` does.
+        write("crates/batten-fsio/build.rs", "fn main() {}");
+        let mut with_build: Vec<&str> = tree.to_vec();
+        with_build.push("crates/batten-fsio/build.rs");
+        let built = commit(&with_build, "a dependency's build script");
+        assert_ne!(key(&dependent), key(&built), "a dependency's build.rs");
+        // A closure crate missing at `rev` is UNKNOWN, never a quiet key: the
+        // caller reads the error as "differs" and the guard stays armed.
+        let without_fsio: Vec<&str> = with_build
+            .iter()
+            .copied()
+            .filter(|path| !path.starts_with("crates/batten-fsio/"))
+            .collect();
+        let missing = commit(&without_fsio, "a closure crate removed");
+        assert!(
+            binary_source_key(&repo, &missing).is_err(),
+            "a crate the closure names but the tree lacks keys as unknown"
+        );
     }
 
     /// A perf dir nothing else in this process writes, keyed on pid and thread.
@@ -3844,7 +4437,7 @@ mod tests {
         sibling(&perf, "b", 60);
         seed_base_target_dir(&perf, "c").expect("seed");
         let seeded = base_target_dir(&perf, "c").join("marker");
-        assert_eq!(std::fs::read_to_string(seeded).expect("seeded"), "b");
+        assert_eq!(crate::fsio::read_to_string(seeded).expect("seeded"), "b");
         assert!(
             !base_target_dir(&perf, "b").exists(),
             "a rename, not a copy"
@@ -3880,7 +4473,7 @@ mod tests {
         sibling(&perf, "d", 60);
         seed_base_target_dir(&perf, "c").expect("seed");
         let kept = base_target_dir(&perf, "c").join("marker");
-        assert_eq!(std::fs::read_to_string(kept).expect("kept"), "c");
+        assert_eq!(crate::fsio::read_to_string(kept).expect("kept"), "c");
         assert!(base_target_dir(&perf, "d").exists());
     }
 
@@ -4187,7 +4780,7 @@ mod tests {
         assert!(head.is_file(), "a directory that is no base build stays");
         assert!(base_target_dir(&perf, "livebase").is_dir());
         assert!(!base_target_dir(&perf, "stale").exists());
-        assert_eq!(std::fs::read(base_binary(&perf, "headkey"))?, b"head");
+        assert_eq!(crate::fsio::read(base_binary(&perf, "headkey"))?, b"head");
         Ok(())
     }
 
@@ -4326,11 +4919,227 @@ mod tests {
         assert_eq!(check, out.join("check-repo"));
         assert_eq!(hooks, repo.join("crates/batten/tests/fixtures/hooks"));
         assert_eq!(
-            std::fs::read_to_string(check.join("batten.toml"))?,
+            crate::fsio::read_to_string(check.join("batten.toml"))?,
             "authority"
         );
-        assert_eq!(std::fs::read_to_string(check.join("lib.rs"))?, "source");
+        assert_eq!(crate::fsio::read_to_string(check.join("lib.rs"))?, "source");
         Ok(())
+    }
+
+    /// The commit fixture's TOML is read off the tree: the largest tracked
+    /// root-level `.toml` that is not Batten's own config or the Cargo manifest.
+    ///
+    /// Fails by: a hardcoded name (picks nothing here, or the wrong one), size
+    /// ignored (`small.toml` sorts first), a nested file admitted (`deep/huge.toml`
+    /// is the largest), an untracked file admitted, or `batten.*`/`Cargo.toml`
+    /// admitted (each is larger than the winner).
+    #[test]
+    fn the_commit_toml_is_the_largest_unbound_root_toml_the_tree_tracks() -> Result<()> {
+        let repo = perf_scratch("commit-toml");
+        crate::gitwrite::init_on_main(&repo)?;
+        std::fs::create_dir_all(repo.join("deep"))?;
+        let big = "# line\n".repeat(50);
+        let bigger = "# line\n".repeat(100);
+        let biggest = "# line\n".repeat(200);
+        for (path, body) in [
+            ("small.toml", "a = 1\n"),
+            ("tools.toml", big.as_str()),
+            ("batten.toml", bigger.as_str()),
+            ("batten.example.toml", bigger.as_str()),
+            ("Cargo.toml", bigger.as_str()),
+            ("deep/huge.toml", biggest.as_str()),
+            ("notes.txt", biggest.as_str()),
+        ] {
+            std::fs::write(repo.join(path), body)?;
+        }
+        let tracked = [
+            "small.toml",
+            "tools.toml",
+            "batten.toml",
+            "batten.example.toml",
+            "Cargo.toml",
+            "deep/huge.toml",
+            "notes.txt",
+        ]
+        .map(str::to_owned);
+        crate::gitwrite::commit_paths(&repo, &tracked, "base\n")?;
+        std::fs::write(repo.join("untracked.toml"), &biggest)?;
+        assert_eq!(commit_toml(&repo)?, "tools.toml");
+        Ok(())
+    }
+
+    /// Two candidates of one size: the first in index order is kept, so the
+    /// fixture names the same file however the tie arises.
+    ///
+    /// Fails by: a later candidate of equal size displacing the one chosen.
+    #[test]
+    fn a_tie_in_size_keeps_the_first_candidate() -> Result<()> {
+        let repo = perf_scratch("commit-toml-tie");
+        crate::gitwrite::init_on_main(&repo)?;
+        for path in ["a.toml", "b.toml"] {
+            std::fs::write(repo.join(path), "a = 1\n")?;
+        }
+        let tracked = ["a.toml", "b.toml"].map(str::to_owned);
+        crate::gitwrite::commit_paths(&repo, &tracked, "base\n")?;
+        assert_eq!(commit_toml(&repo)?, "a.toml");
+        Ok(())
+    }
+
+    /// With no candidate the fixture is refused, naming what it needed.
+    ///
+    /// Fails by: an empty name returned, which stages nothing and prices a
+    /// `taplo` over no file.
+    #[test]
+    fn a_tree_tracking_no_unbound_root_toml_is_refused() -> Result<()> {
+        let repo = perf_scratch("commit-toml-none");
+        crate::gitwrite::init_on_main(&repo)?;
+        std::fs::write(repo.join("batten.toml"), "version = 1\n")?;
+        crate::gitwrite::commit_paths(&repo, &[String::from("batten.toml")], "base\n")?;
+        let Err(refusal) = commit_toml(&repo) else {
+            bail!("a tree with no candidate TOML chose one");
+        };
+        let refusal = refusal.to_string();
+        assert!(refusal.contains("root-level TOML"), "{refusal}");
+        Ok(())
+    }
+
+    /// The commit fixture is a shared clone of the checkout carrying exactly one
+    /// staged one-line change to a Rust source and to the config, a commit
+    /// message where `commit-msg` reads it, and an identity of its own.
+    ///
+    /// Fails by: the clone skipped, a subject left unstaged or unchanged, a
+    /// third path staged, the message absent, or the identity left to the host
+    /// (whose own may be one the attribution gate refuses).
+    #[test]
+    fn the_commit_fixture_is_a_clone_with_one_staged_line_per_subject() -> Result<()> {
+        const COMMIT_TOML: &str = "tools.toml";
+        let repo = perf_scratch("commit-source");
+        crate::gitwrite::init_on_main(&repo)?;
+        std::fs::create_dir_all(repo.join("crates/batten/src"))?;
+        std::fs::write(repo.join(COMMIT_SOURCE), "fn main() {}\n")?;
+        std::fs::write(repo.join("batten.toml"), "version = 1\n")?;
+        std::fs::write(repo.join(COMMIT_TOML), "[tools]\n")?;
+        std::fs::write(repo.join("other.txt"), "untouched\n")?;
+        crate::gitwrite::commit_paths(
+            &repo,
+            &[
+                COMMIT_SOURCE.to_owned(),
+                String::from("batten.toml"),
+                COMMIT_TOML.to_owned(),
+                String::from("other.txt"),
+            ],
+            "base\n",
+        )?;
+        pin_trunk(&repo)?;
+        let out = perf_scratch("commit-out");
+        let commit = stage_commit(&repo, &out, COMMIT_TOML)?;
+        assert_eq!(commit, out.join("commit-repo"));
+        let staged: Vec<String> = crate::git::staged_paths(&commit)?.into_iter().collect();
+        assert_eq!(staged, ["batten.toml", COMMIT_SOURCE, COMMIT_TOML]);
+        for (path, before) in [
+            (COMMIT_SOURCE, "fn main() {}\n"),
+            ("batten.toml", "version = 1\n"),
+            (COMMIT_TOML, "[tools]\n"),
+        ] {
+            let after = crate::fsio::read_to_string(commit.join(path))?;
+            let added = after.strip_prefix(before).unwrap_or_default();
+            assert_eq!(added.lines().count(), 1, "{path}: {after:?}");
+        }
+        assert!(crate::fsio::read_to_string(commit.join(COMMIT_MESSAGE))?.contains(':'));
+        let config = crate::fsio::read_to_string(commit.join(".git/config"))?;
+        assert!(config.contains(COMMIT_EMAIL), "{config}");
+        assert!(
+            crate::git::resolve_ref(&commit, TRUNK_REF)?.is_some(),
+            "the clone carries the trunk ref the branch-relative steps read"
+        );
+        Ok(())
+    }
+
+    /// Fails by: a subject whose last line has no newline taking the staged
+    /// line glued onto that last line, so the fixture's diff edits a line
+    /// rather than adding one.
+    #[test]
+    fn a_subject_without_a_final_newline_takes_the_line_on_its_own() -> Result<()> {
+        const COMMIT_TOML: &str = "tools.toml";
+        let repo = perf_scratch("commit-unterminated");
+        crate::gitwrite::init_on_main(&repo)?;
+        std::fs::create_dir_all(repo.join("crates/batten/src"))?;
+        std::fs::write(repo.join(COMMIT_SOURCE), "fn main() {}\n")?;
+        std::fs::write(repo.join("batten.toml"), "version = 1\n")?;
+        std::fs::write(repo.join(COMMIT_TOML), "[tools]")?;
+        crate::gitwrite::commit_paths(
+            &repo,
+            &[
+                COMMIT_SOURCE.to_owned(),
+                String::from("batten.toml"),
+                COMMIT_TOML.to_owned(),
+            ],
+            "base\n",
+        )?;
+        pin_trunk(&repo)?;
+        let out = perf_scratch("commit-unterminated-out");
+        let commit = stage_commit(&repo, &out, COMMIT_TOML)?;
+        assert_eq!(
+            crate::fsio::read_to_string(commit.join(COMMIT_TOML))?,
+            "[tools]\n# perf: one staged line\n"
+        );
+        Ok(())
+    }
+
+    /// Point `origin/main` at `repo`'s `HEAD`, as a fetched checkout has it.
+    fn pin_trunk(repo: &Path) -> Result<()> {
+        let head = crate::git::resolve_ref(repo, "HEAD")?
+            .ok_or_else(|| anyhow::anyhow!("the fixture has a HEAD"))?;
+        let at = repo.join(".git").join(TRUNK_REF);
+        std::fs::create_dir_all(at.parent().unwrap_or(repo))?;
+        std::fs::write(at, format!("{head}\n"))?;
+        Ok(())
+    }
+
+    /// A checkout with no `origin/main` is refused at staging, naming the ref
+    /// and the fetch, instead of reaching hyperfine as an arm that exits 2.
+    ///
+    /// Fails by: the precondition dropped (the clone is staged and the
+    /// cfg-gated-test arm later denies "diff read absent"), or a refusal that
+    /// does not name what to fetch.
+    #[test]
+    fn a_checkout_without_the_trunk_ref_is_refused_before_staging() -> Result<()> {
+        let repo = perf_scratch("commit-no-trunk");
+        crate::gitwrite::init_on_main(&repo)?;
+        std::fs::write(repo.join("batten.toml"), "version = 1\n")?;
+        crate::gitwrite::commit_paths(&repo, &[String::from("batten.toml")], "base\n")?;
+        let out = perf_scratch("commit-no-trunk-out");
+        let Err(refusal) = stage_commit(&repo, &out, "tools.toml") else {
+            bail!("no origin/main, no fixture");
+        };
+        let refusal = refusal.to_string();
+        assert!(
+            refusal.contains(TRUNK_REF) && refusal.contains("git fetch origin main"),
+            "{refusal}"
+        );
+        assert!(!out.join("commit-repo").exists(), "nothing was staged");
+        Ok(())
+    }
+
+    /// hyperfine splits a command line into words itself (`--shell=none`), so a
+    /// word carrying a space or a quote is quoted and every other word is not.
+    ///
+    /// Fails by: `--rule 'test cover missing'` reaching the binary as three
+    /// words, or a quote inside a word ending its quoting.
+    #[test]
+    fn a_word_with_a_space_or_quote_is_quoted_for_the_runner() {
+        let argv = [
+            "/bin/batten",
+            "check",
+            "--rule",
+            "test cover missing",
+            "it's",
+        ]
+        .map(String::from);
+        assert_eq!(
+            command_line(&argv),
+            r"/bin/batten check --rule 'test cover missing' 'it'\''s'"
+        );
     }
 
     /// The trunk is the declared one, and only a record line enters the series.
@@ -4388,6 +5197,39 @@ mod tests {
                 "x"
             ]
         );
+    }
+
+    fn words(text: &str) -> Vec<String> {
+        text.split(' ').map(String::from).collect()
+    }
+
+    /// Fails by: the prefix kept on a single arm, a `-C` naming another
+    /// directory dropped, or the argv after the prefix truncated.
+    #[test]
+    fn a_single_arms_env_prefix_becomes_its_environment() {
+        let here = Path::new("/t");
+        let (env, argv) = unprefixed(here, words("env -C/t A=/t B=/b /bin/x adjudicate --h"));
+        assert_eq!(
+            env,
+            [
+                (String::from("A"), String::from("/t")),
+                (String::from("B"), String::from("/b"))
+            ]
+        );
+        assert_eq!(argv, words("/bin/x adjudicate --h"));
+
+        let elsewhere = words("env -C/u A=1 /bin/x");
+        assert_eq!(unprefixed(here, elsewhere.clone()), (Vec::new(), elsewhere));
+
+        let plain = words("/bin/x hook");
+        assert_eq!(unprefixed(here, plain.clone()), (Vec::new(), plain));
+
+        let bare = words("env A=1");
+        assert_eq!(unprefixed(here, bare.clone()), (Vec::new(), bare));
+
+        // A program named bare keeps `env`, which is what finds it on `PATH`.
+        let by_name = words("env RUST_LOG=warn taplo lint mise.toml");
+        assert_eq!(unprefixed(here, by_name.clone()), (Vec::new(), by_name));
     }
 
     /// Fails by: the seconds-to-milliseconds factor or the fallback mean's
@@ -4518,7 +5360,7 @@ mod tests {
                      arm=base path=e p50=10\narm=base path=f p50=10\n\
                      arm=head path=a p50=13\narm=head path=b p50=26.2\narm=head path=c p50=15\n\
                      arm=head path=e p50=11\narm=head path=f p50=13\n";
-        let exempt = |path: &str, expires: &str| crate::config::PerfExempt {
+        let exempt = |path: &str, expires: &str| crate::config_model::PerfExempt {
             path: path.to_owned(),
             ratio: String::from("2.0"),
             expires: expires.to_owned(),
@@ -4586,17 +5428,17 @@ mod tests {
         let (floor, two) = (root.join("floor"), root.join("two"));
         sweep_fixture(&floor, 0)?;
         assert_eq!(
-            std::fs::read_to_string(floor.join("batten.toml"))?,
+            crate::fsio::read_to_string(floor.join("batten.toml"))?,
             "version = 1\n"
         );
         sweep_fixture(&two, 2)?;
-        let authority = std::fs::read_to_string(two.join("batten.toml"))?;
+        let authority = crate::fsio::read_to_string(two.join("batten.toml"))?;
         assert!(
             authority.contains("documents = [\"config0.toml\", \"config1.toml\"]"),
             "{authority}"
         );
         assert_eq!(
-            std::fs::read_to_string(two.join("config1.toml"))?,
+            crate::fsio::read_to_string(two.join("config1.toml"))?,
             "quiet = true\n"
         );
         assert!(two.join(".git").is_dir());
@@ -4782,9 +5624,58 @@ mod tests {
         );
     }
 
+    /// Fails by: the sibling-directory filter joined with `||`, so a bare
+    /// `../` (an empty name) or a nested `../a/b` is read as a workspace crate.
+    #[test]
+    fn a_path_dependency_names_one_sibling_directory_or_nothing() -> Result<()> {
+        let manifest: toml::Table = "[dependencies]\n\
+             base = { path = \"../batten-base\" }\n\
+             bare = { path = \"../\" }\n\
+             nested = { path = \"../a/b\" }\n"
+            .parse()?;
+        assert_eq!(path_dependencies(&manifest), ["batten-base"]);
+        Ok(())
+    }
+
     // What `sweep_fixture` WRITES is asserted above, in
     // `a_sweep_fixture_declares_one_document_per_point`. Whether the ENGINE
     // accepts what it writes needs the compiled binary, so those cases live in
     // `crates/batten/tests/it/acquisition_sweep.rs`; the builder is public for
     // exactly that.
+
+    /// Fails by: the installs' directory replaced by a name mise never
+    /// reads, so a commit arm installs the whole toolchain inside its first
+    /// timed run (`mise_data_dir` read as `Some("xyzzy")`). The process's own
+    /// environment is the input: `MISE_DATA_DIR` where set, else a `mise`
+    /// directory under a data home.
+    #[test]
+    fn mise_s_data_directory_is_the_one_its_environment_names() {
+        let found = mise_data_dir();
+        match std::env::var_os("MISE_DATA_DIR") {
+            Some(dir) => assert_eq!(found, Some(dir.to_string_lossy().into_owned())),
+            None => assert!(
+                found
+                    .as_deref()
+                    .is_none_or(|dir| std::path::Path::new(dir).ends_with("mise")),
+                "a data home's `mise`: {found:?}"
+            ),
+        }
+    }
+
+    /// Fails by: `mise_data_dir` answering `None` although a data home is
+    /// named, so a commit arm's relocated data home hides every install. Any
+    /// of `MISE_DATA_DIR`, `XDG_DATA_HOME`, `LOCALAPPDATA` or `HOME` yields a
+    /// directory, and the suite always runs with at least `HOME`.
+    #[test]
+    fn a_named_data_home_always_yields_mise_s_directory() {
+        let named = ["MISE_DATA_DIR", "XDG_DATA_HOME", "LOCALAPPDATA", "HOME"]
+            .into_iter()
+            .any(|name| std::env::var_os(name).is_some());
+        assert!(named, "the suite runs with HOME set");
+        let found = mise_data_dir();
+        assert!(
+            found.as_deref().is_some_and(|dir| !dir.is_empty()),
+            "a named data home yields a directory: {found:?}"
+        );
+    }
 }

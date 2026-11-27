@@ -28,11 +28,12 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
+use batten::rules::RuleExt as _;
 
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use batten::config::Config;
+use batten::config_model::Config;
 use batten::severity::RuleSeverity;
 
 /// Items in the pinned source blob `ceba3afd`.
@@ -334,7 +335,7 @@ fn every_source_item_has_exactly_one_recorded_disposition() {
                         )
                     });
                 let expected = match entry.bucket {
-                    Bucket::RuleWarn(_) => RuleSeverity::Warn,
+                    Bucket::RuleWarn(_) => RuleSeverity::Advise,
                     _ => RuleSeverity::Deny,
                 };
                 assert_eq!(
@@ -380,7 +381,7 @@ fn the_materialized_fixture_validates_against_the_derived_schema() {
     let dir = materialize("schema");
     let output = common::batten()
         .args(["generate", "schema"])
-        .output()
+        .streamed_output()
         .expect("run batten generate schema");
     assert_eq!(output.status.code(), Some(0));
     let schema: serde_json::Value =

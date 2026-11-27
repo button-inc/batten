@@ -54,6 +54,9 @@ allowlist := {
 		"pub(crate) fn batten()",
 		"pub(crate) fn batten_at_real_root()",
 		"pub(crate) fn git_command(",
+		# `pkl eval` with the CA selection applied: the suite's one pkl spawn
+		# (CLOUD-2841), so no case can spawn pkl without the flag.
+		"pub(crate) fn pkl_command()",
 		"pub(crate) fn task_bash(",
 		"pub(crate) fn task_command(",
 	],

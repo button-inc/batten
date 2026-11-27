@@ -11,6 +11,13 @@
 // Activation is per-clone and manual — creating this file does nothing until:
 //   hk install
 // is run once (see CONTRIBUTING.md). hk stores the hooks in .git/hooks.
+//
+// A sweep route (this file's path is in `MUTANT_GATES`, CLOUD-2828): the
+// commit-time steps answer to the 100 ms hook ceiling and compile nothing, and
+// the row below proves the gate that holds that, by routing one commit-msg step
+// back through `cargo run` and naming the compiled case that must refuse it.
+//MUTANT-SUITE crates/batten/tests/it/hk_contract.rs
+//MUTANT commit-step-compiles|s@^        check = "batten commit check --message @        check = "cargo run -q -- commit check --message @|no_commit_time_hook_step_compiles
 amends "package://github.com/jdx/hk/releases/download/v1.56.1/hk@1.56.1#/Config.pkl"
 
 import "package://github.com/jdx/hk/releases/download/v1.56.1/hk@1.56.1#/Builtins.pkl"
@@ -26,6 +33,25 @@ import "package://github.com/jdx/hk/releases/download/v1.56.1/hk@1.56.1#/Builtin
 // target-dir lock at a time: parallel steps would only serialize on that lock
 // while oversubscribing the CPU. Each step also reads the formatted, then
 // linted, tree.
+
+// The TOML files `.taplo.toml` binds to a shipped schema, which `taplo-schema`
+// lints at landing rather than at the commit (see `taplo` below). Its
+// `include` lists, restated: `hk_contract.rs` holds the two equal.
+// THE ENGINE A STEP RUNS (CLOUD-2924): the one `verify:gated` built and names
+// in `BATTEN_BIN`, else `vars.batten`'s own fallback. Read here, in Pkl, so each
+// `check` below stays argv rather than a shell expansion in a declared shell
+// home; a step spelling `cargo run` bare waited on cargo's lock beside every
+// sibling build.
+local batten = read?("env:BATTEN_BIN") ?? "cargo run --quiet -p batten --"
+
+local schema_bound_toml =
+  List(
+    "batten.toml",
+    "batten.example.toml",
+    "crates/batten/src/starter.toml",
+    "batten.local.toml",
+  )
+
 local gate = new Mapping<String, Step> {
   // --- repo-specific gates (no upstream builtin exists) ---------------------
 
@@ -58,7 +84,7 @@ local gate = new Mapping<String, Step> {
     // (CLOUD-1397). It runs at `verify` and in CI, before merge.
     profiles = List("slow")
     glob = List(".claude/settings.json", "policy/mcp-timeout-budget.rego")
-    check = "cargo run --quiet -p batten -- check --rule 'bound guard missing'"
+    check = "\(batten) check --rule 'bound guard missing'"
   }
   ["no-docs-tree"] {
     // `slow` tier since CLOUD-1991: the task is `batten check` over a module
@@ -89,7 +115,7 @@ local gate = new Mapping<String, Step> {
     profiles = List("slow")
     glob = List("hk.pkl", ".claude/hooks/git-hook.sh")
     // The rule acquires hk's two plans itself (CLOUD-843); nothing is recorded.
-    check = "cargo run --quiet -p batten -- check --rule 'hook declare other'"
+    check = "\(batten) check --rule 'hook declare other'"
   }
   // The adopted runner's own surface contract (CLOUD-947). BOTH ENDS ARE IN THE
   // GLOB, the same shape the surface-derivation gates carry: the projection is a
@@ -129,6 +155,10 @@ local gate = new Mapping<String, Step> {
         "mise.toml",
         "hk.pkl",
         "batten.toml",
+        // cargo-mutants' own configuration and the nextest profile it runs
+        // under: a change to either changes every mutant's verdict.
+        ".cargo/mutants.toml",
+        ".config/nextest.toml",
       )
     check = "mise run mutant:changed"
   }
@@ -270,7 +300,7 @@ local gate = new Mapping<String, Step> {
     // (CLOUD-1397). It runs at `verify` and in CI, before merge.
     profiles = List("slow")
     glob = List("renovate.json5")
-    check = "cargo run --quiet -p batten -- record validate renovate-config"
+    check = "\(batten) record validate renovate-config"
   }
   // Every module the derived schemas are reachable from, or the step does not
   // fire on the commit that moved them. `provision.rs` and `waiver.rs` were
@@ -298,62 +328,35 @@ local gate = new Mapping<String, Step> {
     // `slow` tier: it builds the engine, so a commit would pay a compile
     // (CLOUD-1397). It runs at `verify` and in CI, before merge.
     profiles = List("slow")
+    // EXACTLY the source files that derive `JsonSchema`, in every crate. The
+    // census (`config_schema.rs`) walks the whole workspace, so a derive that
+    // moves between crates moves this list or fails the test (CLOUD-59). It
+    // read only `crates/batten/src` until the crate split, and the list drifted
+    // both ways unseen: 35 dead entries, and `config_model` and
+    // `preset_catalog` missing.
     glob =
       List(
-        "crates/batten/src/action.rs",
-        "crates/batten/src/advisory.rs",
-        "crates/batten/src/attribution.rs",
-        // CLOUD-1623: `Board` derives `JsonSchema` here rather than in
-        // `config.rs`, so this file is a schema input now. The census test
-        // named it the moment the type moved.
-        "crates/batten/src/board.rs",
-        "crates/batten/src/bot.rs",
-        "crates/batten/src/budget.rs",
-        "crates/batten/src/capture.rs",
-        "crates/batten/src/census.rs",
-        "crates/batten/src/sbom.rs",
-        "crates/batten/src/hk.rs",
-        "crates/batten/src/outcome.rs",
-        "crates/batten/src/hookcost.rs",
-        "crates/batten/src/ci.rs",
-        "crates/batten/src/commit.rs",
+        "crates/batten-base/src/board.rs",
+        "crates/batten-base/src/ci.rs",
+        "crates/batten-base/src/deferral.rs",
+        "crates/batten-base/src/doc.rs",
+        "crates/batten-base/src/effect.rs",
+        "crates/batten-base/src/outcome.rs",
+        "crates/batten-base/src/pattern.rs",
+        "crates/batten-base/src/rest.rs",
+        "crates/batten-base/src/task.rs",
+        "crates/batten-base/src/traversal.rs",
+        "crates/batten-base/src/verbs.rs",
+        "crates/batten-core/src/severity.rs",
+        "crates/batten-core/src/sink.rs",
+        "crates/batten-core/src/step_table.rs",
+        "crates/batten-facts/src/facts.rs",
+        "crates/batten-facts/src/register.rs",
         "crates/batten/src/config.rs",
+        "crates/batten/src/config_model.rs",
         "crates/batten/src/defects.rs",
-        "crates/batten/src/deferral.rs",
         "crates/batten/src/design.rs",
-        "crates/batten/src/doc.rs",
-        "crates/batten/src/drain.rs",
-        "crates/batten/src/effect.rs",
-        "crates/batten/src/engine.rs",
-        "crates/batten/src/exec.rs",
-        "crates/batten/src/facts.rs",
-        "crates/batten/src/handler.rs",
-        "crates/batten/src/hook.rs",
-        "crates/batten/src/judge.rs",
-        "crates/batten/src/markers.rs",
-        "crates/batten/src/mcp.rs",
-        "crates/batten/src/mint.rs",
-        "crates/batten/src/outputs.rs",
-        "crates/batten/src/pattern.rs",
-        "crates/batten/src/provision.rs",
-        "crates/batten/src/prune.rs",
-        "crates/batten/src/record.rs",
-        "crates/batten/src/recorder.rs",
-        "crates/batten/src/redirect.rs",
-        "crates/batten/src/refusal.rs",
-        "crates/batten/src/register.rs",
-        "crates/batten/src/rest.rs",
-        "crates/batten/src/rules.rs",
-        "crates/batten/src/severity.rs",
-        "crates/batten/src/startup.rs",
-        "crates/batten/src/step_table.rs",
-        "crates/batten/src/task.rs",
-        "crates/batten/src/transcript.rs",
-        "crates/batten/src/traversal.rs",
-        "crates/batten/src/verbs.rs",
-        "crates/batten/src/verdict.rs",
-        "crates/batten/src/waiver.rs",
-        "crates/batten/src/wiring.rs",
+        "crates/batten/src/preset_catalog.rs",
         "schema/*",
       )
     check = "mise run test:config-schema"
@@ -381,7 +384,7 @@ local gate = new Mapping<String, Step> {
     // `slow` tier: two whole-tree `syft scan dir:.` passes.
     profiles = List("slow")
     glob = List("Cargo.lock", ".github/workflows/*")
-    check = "cargo run --quiet -p batten -- sbom --record"
+    check = "\(batten) sbom --record"
   }
   // The install path resolves a release asset BY NAME from a machine that has
   // never seen this repository, so a rename in `dist` that forgets one of its
@@ -463,7 +466,7 @@ local gate = new Mapping<String, Step> {
         ".claude/skills/**",
         "crates/batten/tests/it/skill_contract.rs",
         "crates/batten/src/surface.rs",
-        "crates/batten/src/exit.rs",
+        "crates/batten-base/src/exit.rs",
       )
     check = "mise run test:skill-contract"
   }
@@ -548,9 +551,37 @@ local gate = new Mapping<String, Step> {
   // mise.toml is the most-edited file in the repo and had no formatter, so
   // hand edits drifted in spacing and key order. taplo lints it (duplicate
   // keys, bad syntax) and formats it.
-  ["taplo"] = Builtins.taplo
+  //
+  // THE SCHEMA-BOUND FILES ARE LINTED AT LANDING, NOT AT THE COMMIT (CLOUD-2789).
+  // `.taplo.toml` binds them to the schemas Batten ships, and `taplo lint` over
+  // `batten.toml` (19,179 lines against a 512 KB schema) is 88 ms p50 / 110 ms
+  // p95 on a quiet box, over the 100 ms commit ceiling, where `Cargo.toml` is
+  // 16 ms: the file is the cost, so one process over all staged files does not
+  // change it. The commit keeps a stronger proof of the same file: the default
+  // `config-lint-pinned` loads `batten.toml` into the Rust type the schema is
+  // DERIVED from (`test:config-schema`). `taplo-schema` keeps the schema check
+  // itself, `slow`, which `ci:checks` (`hk check --all`) runs in `verify`'s
+  // second tier, so it still runs before anything lands.
+  ["taplo"] = (Builtins.taplo) {
+    exclude = schema_bound_toml
+  }
+  ["taplo-schema"] = (Builtins.taplo) {
+    profiles = List("slow")
+    glob = schema_bound_toml
+  }
+  // THE FORMATTER SPLITS ALONG THE SAME LINE (CLOUD-2852). `taplo format --check`
+  // over `batten.toml` and the unbound TOML measured 101 ms p50 / 129 ms p95 in
+  // `perf`'s commit fixture, and `batten.toml` is the cost for `taplo`'s reason
+  // above. The commit formats the unbound TOML; the schema-bound files are
+  // format-checked in `slow`, which `verify` reaches before anything lands.
   ["taplo-format"] = (Builtins.taplo_format) {
     depends = List("taplo")
+    exclude = schema_bound_toml
+  }
+  ["taplo-format-schema"] = (Builtins.taplo_format) {
+    profiles = List("slow")
+    depends = List("taplo-schema")
+    glob = schema_bound_toml
   }
   // `pkl eval` is the only thing that proves this file is valid. Without it a
   // malformed hk.pkl surfaces when a hook tries to run — the worst possible
@@ -575,7 +606,7 @@ local gate = new Mapping<String, Step> {
     // EVALUATES it — a module that will not evaluate fails that row. A third
     // that nothing evaluates would owe a `[[rule.tools]]` row rather than an
     // argument here.
-    check = "cargo run --quiet -p batten -- record validate config-validator"
+    check = "\(batten) record validate config-validator"
   }
   ["pkl-format"] = (Builtins.pkl_format) {
     depends = List("pkl")
@@ -689,15 +720,34 @@ local gate = new Mapping<String, Step> {
   // --- rust ------------------------------------------------------------------
 
   ["cargo-fmt"] = (Builtins.cargo_fmt) {
-    // Routed through the task so `mise run lint:fmt` and this step cannot
-    // disagree about what "formatted" means. Costs no file-scoping: upstream's
-    // check is already whole-workspace (`--manifest-path
-    // {{workspace_indicator}}`), never file by file. The FIXER stays upstream's,
-    // so the fix/check split still comes from the builtin.
-    check = "mise run lint:fmt"
+    // THE STAGED `.rs` FILES, NOT THE WORKSPACE (CLOUD-2789). This is a default
+    // commit-time step, held to the 100 ms ceiling. `cargo fmt --all --check`
+    // formats every target's root and recurses into each `mod`: 5.0 s p50 on the
+    // commit fixture, whatever the commit touched. `rustfmt` over `{{files}}` is
+    // the formatter on exactly what is being committed, and `skip_children`
+    // stops `lib.rs` dragging its whole module tree in (2.5 s -> 0.31 s for that
+    // one file, measured; honoured on stable). The pinned formatter is the one on
+    // PATH: the hook runs under `mise exec -- hk`, not `mise run`, whose startup
+    // alone is 105-125 ms (CLOUD-1397).
+    //
+    // `workspace_indicator` is CLEARED, so hk forms one job over every staged
+    // file instead of one per Cargo workspace, and the fixer follows the checker
+    // onto the file list: upstream's fixer interpolates the indicator. Landing
+    // still runs `lint:fmt` (`cargo fmt --all --check`) over the whole workspace,
+    // and both read the one `rustfmt.toml`; `hk_contract.rs` holds the edition
+    // here equal to the workspace's, so the two cannot disagree on a file.
+    workspace_indicator = null
+    check = "rustfmt --check --edition 2024 --config skip_children=true {{files}}"
+    check_list_files = "rustfmt --check --edition 2024 --config skip_children=true -l {{files}}"
+    fix = "rustfmt --edition 2024 --config skip_children=true {{files}}"
   }
   ["cargo-clippy"] = (Builtins.cargo_clippy) {
-    // `slow` tier: a whole-workspace compile at --all-targets --all-features.
+    // `slow` tier: a whole-workspace compile at --all-targets --all-features. A
+    // commit hook is a batten hook and answers to the same 10 ms / 100 ms budget:
+    // it proves a commit WELL-FORMED, on pinned released binaries, and compiles
+    // nothing. Warnings are denied where landing proves the tree (`verify` runs
+    // `lint:clippy` with -D warnings) and CI verifies it; a branch pushed without
+    // a lap is unproven, which is what a draft PR is.
     profiles = List("slow")
     // ONE JOB, NOT ONE PER CARGO WORKSPACE (CLOUD-2051). The builtin carries
     // `workspace_indicator = "Cargo.toml"`, so hk formed a job for `fuzz/` (its own
@@ -706,7 +756,10 @@ local gate = new Mapping<String, Step> {
     // one `target/clippy`, and `fuzz/` was checked by nothing while the step read as
     // covering it. Excluding it makes the job count honest; linting `fuzz/` is
     // CLOUD-2052's. `hk_contract.rs` holds every nested workspace to this list.
-    exclude = List("fuzz/**")
+    // `tools/batten-profile` and `tools/batten-semantic` are nested workspaces of
+    // the same shape, and like `fuzz/` nothing lints them yet: both are retired
+    // (folded into a verb or a preset remedy, CLOUD-2812/CLOUD-2817), not linted.
+    exclude = List("fuzz/**", "tools/batten-profile/**", "tools/batten-semantic/**")
     // CHEAP FIRST. Every sub-second lint over a file the build or the gate reads
     // runs before the first compile, so a Rego parse error, a TOML typo or an
     // unformatted file fails in under two seconds instead of after the whole
@@ -992,6 +1045,7 @@ fail_fast = false
 local fixers = new Mapping<String, Step> {
   ["shfmt"] = gate["shfmt"]
   ["taplo-format"] = gate["taplo-format"]
+  ["taplo-format-schema"] = gate["taplo-format-schema"]
   ["pkl-format"] = gate["pkl-format"]
   ["prettier"] = gate["prettier"]
   ["deno-fmt"] = gate["deno-fmt"]
@@ -1048,41 +1102,28 @@ hooks {
   // PRs land by fast-forward, so every commit reaches main with its original
   // SHA and must be conventional for release-plz to compute semver correctly.
   //
-  // THESE TWO STEPS STILL ROUTE THROUGH `mise run`, AND THE BUDGET SAYS THEY
-  // SHOULD NOT (CLOUD-1397). A git hook is a batten hook: README's `wired` row is
-  // 8.0ms p50 against a published <=100ms ceiling, and nothing makes the
-  // commit-msg surface exempt because git is the harness.
+  // THESE TWO STEPS CALL THE BINARY DIRECTLY, NOT `mise run` (CLOUD-1397). A git
+  // hook is a batten hook, held to the same 10 ms target and 100 ms ceiling, and
+  // nothing makes the commit-msg surface exempt because git is the harness.
+  // `mise` alone cost more than the whole budget before a task body ran:
   //
-  // Measured 2026-09-09, same message, warm, three runs each:
-  //
+  //   Measured 2026-09-09, same message, warm, three runs each:
   //   mise run commit-msg, body spelling `cargo run`      582ms
   //   mise run commit-msg, body resolving the binary      ~300ms
   //   batten commit check --message                       121-130ms
   //   batten attribution check --message                  16-18ms
   //   mise --version, the process alone, no task          105-125ms
   //
-  // The task bodies now resolve the binary, which is the 582 -> ~300ms half and
-  // is in `mise.toml`. The other half is unreachable from here: `mise` alone
-  // costs more than the whole budget before a task body runs, so only a step
-  // calling the binary directly can land under it.
-  //
-  // WHY THAT HALF IS NOT HERE YET. Respelling these two steps used to break
-  // `tests/commit-attribution.bats` and `tests/commit-convention.bats`, which
-  // pinned the call site by its text -- correctly, since CLOUD-216 found this
-  // gate wired to nothing -- and a governed bats suite could not be edited to
-  // follow. Both retired under CLOUD-843 onto
-  // `crates/batten/tests/it/commit_wiring.rs`, which pins the WIRING rather than
-  // the spelling: either `mise run <task>` or the engine's own `… check
-  // --message` satisfies it, and a step running neither is still refused.
-  //
-  // So the respelling is unblocked, and CLOUD-1397 carries it. What does
-  // NOT wait is the 8687ms case -- the first commit after touching one
-  // `crates/batten/src` file, which was a hook running the compiler -- because
-  // that lived in the task body and is gone.
+  // So both steps run the pinned engine on PATH (the hook runs under `mise exec
+  // -- hk`). `crates/batten/tests/it/commit_wiring.rs` pins the WIRING, not the
+  // spelling, and `hk_contract.rs` refuses a commit-time step that compiles or
+  // pays mise's startup unbudgeted. Each step is an arm of `perf measure` in the
+  // commit fixture, and `perf-assert` holds its p95 to the 100 ms ceiling
+  // (CLOUD-2789) -- the budget is a gate now, not this comment.
   ["commit-msg"] {
     steps {
       ["conventional-commit"] {
-        check = "mise run commit-msg {{commit_msg_file}}"
+        check = "batten commit check --message {{commit_msg_file}}"
       }
       // The commit-time half of the attribution gate (CLOUD-274). Range mode runs
       // from `commit-lint` and catches an offending commit after it exists; this
@@ -1090,17 +1131,86 @@ hooks {
       // the identity git is about to stamp, so refusing here means the commit is
       // never created and there is nothing to amend or rebase away.
       ["commit-attribution"] {
-        check = "mise run commit-attribution-msg {{commit_msg_file}}"
+        check = "batten attribution check --message {{commit_msg_file}}"
       }
     }
   }
+  // THE COMMIT, NOT `verify`, IS WHERE A WEAKENING IS JUDGED. Measured on #1276:
+  // a waiver written into `batten.toml`, three `#[cfg(unix)]` cases and a
+  // `Revert "…"` subject each reached `verify` before anything refused them,
+  // because the two gates that judge them (`config lint`, `test cover missing`)
+  // sat in the `slow` profile for one reason — `cargo run` would make every
+  // commit pay a compile (CLOUD-1397). The PINNED engine pays none: these steps
+  // call it directly, as `filed-here:guard` does before every write, so the
+  // refusal lands on the commit that introduced the weakening.
+  //
+  // TWO OF THEM COULD NOT STAY THERE, MEASURED (CLOUD-2852). A commit step answers
+  // to the 100 ms hook ceiling, and `perf`'s commit fixture timed
+  // `config-lint-pinned` at 2,872 ms p50 / 3,631 ms p95 (the whole 19k-line
+  // config loaded and linted) and `cfg-gated-test-pinned` at 407 ms / 519 ms
+  // (the staged sources judged against the trunk). Neither cost is a constant a
+  // patch removes, so both are `slow`: `verify` reaches them before anything
+  // lands, and the weakening is refused at the landing rather than at its commit.
   ["pre-commit"] {
     // Check only what is staged, and never let a fixer clobber unstaged work:
     // hk stashes the working tree, runs the steps, then restores it via
     // three-way merge. patch-file is faster than `git stash` and sidesteps
     // index-lock races. See https://hk.jdx.dev/environment_variables.
     stash = "patch-file"
-    steps = gate
+    steps = (gate) {
+      ["config-lint-pinned"] {
+        profiles = List("slow")
+        glob = List("batten.toml", ".batten/asked.jsonl")
+        check = "batten config lint"
+      }
+      ["cfg-gated-test-pinned"] {
+        profiles = List("slow")
+        glob = List("**/*.rs")
+        // `--staged`: the module reads the staged `.rs` files' lines, never the
+        // whole tree's (CLOUD-2789: 4.4 s p50 over every tracked file).
+        check = "batten check --staged --rule 'test cover missing'"
+      }
+      // THE STRUCTURAL CENSUSES, AT THE COMMIT THAT MOVES THEM (CLOUD-2803).
+      // Measured on #1276: the module cycle went 54 -> 76 over five commits
+      // (2d5f5662 onward) and nothing refused it, because these three ran only
+      // in the 15-minute lap while each commit ran a filtered test set. Each
+      // takes seconds over the source tree. The record is `modules.lock`, held
+      // by one ratchet (CLOUD-2821): a worse metric or a record looser than the
+      // tree is refused, and `mise run modules-ratchet` tightens it.
+      //
+      // `slow` UNTIL THE PIN CARRIES THE VERB. A commit step runs the pinned
+      // released binary and compiles nothing (the 10 ms / 100 ms hook budget), and
+      // v0.0.220 has no `modules ratchet`, so the only engine that could run it
+      // here is the tree's own, through `cargo run`: a compile on every commit.
+      // Landing still runs it (`verify` reaches the `slow` profile). Plan step 14,
+      // the bump to v0.0.221, puts this back in the default set as
+      // `batten modules ratchet --record modules.lock --check` on the pinned binary.
+      ["module-census-pinned"] {
+        profiles = List("slow")
+        glob = List("crates/**/src/**/*.rs", "modules.lock")
+        check = "env MISE_TASK_TIMINGS=0 mise run -q modules-ratchet:check"
+      }
+      // A conflict marker is refused at the commit, not first in the slow lap
+      // (CLOUD-2813): a merge commit carried six into `skills/profile/SKILL.md`
+      // and was pushed before `source carry broken` ever ran. The step runs that
+      // row rather than restating its command, so the marker check has one
+      // definition (plan item 4c; the row keeps `--assume-in-merge`).
+      ["merge-conflict-markers"] {
+        glob = List("**")
+        check = "batten enforce --rule 'source carry broken'"
+      }
+    }
+  }
+  // `git revert` and `git cherry-pick` commit through the sequencer, which runs
+  // no `commit-msg` hook, so a `Revert "…"` subject reached `verify` unjudged
+  // (b67a1ae6). The push is the last local point every commit passes, whatever
+  // made it, so the subjects of the whole branch are judged there.
+  ["pre-push"] {
+    steps {
+      ["commit-subjects"] {
+        check = "batten commit check origin/main..HEAD"
+      }
+    }
   }
   // Read-only variant driven by `hk check --all` (via `mise run hooks`) in CI.
   //

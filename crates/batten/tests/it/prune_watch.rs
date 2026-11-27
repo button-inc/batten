@@ -6,23 +6,16 @@
 //! never the running engine, and never a unit a live build has used. The watcher spans the
 //! whole run it is hosted by; the hook collects before each mediated call.
 
-// The rows this suite kills, declared beside the code they mutate and mirrored
-// here so a board obligation naming this file binds:
-/*
-#MUTANT-SUITE crates/batten/tests/it/prune_watch.rs
-#MUTANT reclaim-under-held-lock|s@^            Err(std::fs::TryLockError::WouldBlock) => return None,$@            Err(std::fs::TryLockError::WouldBlock) => {}@|a_tree_a_build_holds_is_never_collected
-#MUTANT reclaim-unlink-unmeasured|s@^            format!("disk-unlink-ms {}", self.wall_ms),$@@|the_arm_watches_past_the_gate
-#MUTANT arm-ends-with-the-gate|s@^    while !stop.load(Ordering::Relaxed) {$@    for _ in 0..1 {@|the_arm_watches_past_the_gate
-*/
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
+use batten::capture::StreamedChild as _;
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
-use batten::prune::Prune;
+use batten::config_model::Prune;
 
 /// A `[prune]` table rooted at `root`, with no band: a case sets its own.
 fn rules(root: &str) -> Prune {
@@ -118,6 +111,8 @@ fn request<'a>(
         deadline: None,
         wait: false,
         live_since: None,
+        copies: None,
+        fixtures_since: None,
     }
 }
 
@@ -126,6 +121,7 @@ fn request<'a>(
 fn request_under_a_live_build(trees: &[PathBuf], need: u64) -> batten::collect::Request<'_> {
     let mut ask = request(trees, &[], need);
     ask.live_since = Some(SystemTime::now() - Duration::from_secs(60));
+    ask.fixtures_since = ask.live_since;
     ask
 }
 
@@ -149,7 +145,7 @@ fn aged_dir(dir: &Path, age: u64) {
 /// THE INCREMENTAL CACHE IS RANKED (CLOUD-2197): measured on #1132, 8.1GB of
 /// `incremental` sat outside every pass while 865 units freed 159MB. A stale
 /// crate cache goes; one written inside the working set — the edit loop's own —
-/// stays while a live build has used it. `#MUTANT incremental-unranked` leaves both.
+/// stays while a live build has used it. A mutant that skips ranking it leaves both.
 #[test]
 fn a_stale_incremental_cache_is_collected_and_a_fresh_one_kept() {
     let root = common::scratch("collect-incremental");
@@ -178,8 +174,8 @@ fn a_stale_incremental_cache_is_collected_and_a_fresh_one_kept() {
 
 /// TEST SCRATCH IS RANKED TOO: cargo's `CARGO_TARGET_TMPDIR` held 4.1GB of
 /// fixtures on #1132 that nothing removed until the next run's setup. A stale
-/// fixture goes; a running suite's fresh one stays. `#MUTANT scratch-unranked`
-/// leaves both.
+/// fixture goes; a running suite's fresh one stays. A mutant that skips ranking
+/// scratch leaves both.
 #[test]
 fn a_stale_test_scratch_entry_is_collected() {
     let root = common::scratch("collect-scratch");
@@ -193,10 +189,70 @@ fn a_stale_test_scratch_entry_is_collected() {
     assert!(tree.join("tmp/live-fixture").exists());
 }
 
+/// A FIXTURE A FINISHED SUITE WROTE GOES, EVEN INSIDE A LIVE BUILD'S WINDOW
+/// (#1276): the `cargo run` hosting a lap lives as long as the lap, and every
+/// fixture its suites wrote read as live until the mutation stage filled the
+/// volume. With no suite running, nothing roots a fixture.
+///
+/// Fails by: fixtures judged by the build window rather than their own.
+#[test]
+fn a_fixture_no_running_suite_wrote_is_collected_inside_a_builds_window() {
+    let root = common::scratch("collect-finished-suite");
+    let tree = root.join("target");
+    aged_dir(&tree.join("tmp/finished-suite-fixture"), 1);
+    let trees = [tree.clone()];
+    let mut ask = request_under_a_live_build(&trees, u64::MAX);
+    ask.fixtures_since = None;
+    let units = batten::collect::collect(&ask).removed;
+    assert_eq!(
+        units, 1,
+        "the finished suite's fixture is outside every window"
+    );
+    assert!(!tree.join("tmp/finished-suite-fixture").exists());
+}
+
+/// A COPY A KILLED SWEEP LEFT IN THE TEMP DIRECTORY IS COLLECTED, AND A LIVE
+/// SWEEP'S IS NOT (#1276). cargo-mutants removes its copy only on a clean exit,
+/// and a lap began 4.5GB down beside its own live 12GB copy on a volume whose
+/// every ranked tree was under the checkout.
+///
+/// THE LIVE COPY IS WRITTEN TWO LEVELS DOWN AND NOWHERE ELSE, because that is how
+/// a sweep writes: a shallow date reads it as idle since it was staged.
+///
+/// Fails by: no copies read; any directory in the temp directory taken; a copy
+/// dated shallow, which collects the live one.
+#[test]
+fn a_stale_mutant_copy_is_collected_and_a_live_one_kept() {
+    let root = common::scratch("collect-mutant-copies");
+    let temp = root.join("temp");
+    let stale = temp.join("cargo-mutants-batten-AAAAAA.tmp");
+    aged_dir(&stale.join("target/debug"), 7200);
+    aged_dir(&stale.join("target"), 7200);
+    aged_dir(&stale, 7200);
+    let live = temp.join("cargo-mutants-batten-BBBBBB.tmp");
+    aged_dir(&live.join("src/deep"), 1);
+    aged_dir(&live.join("src"), 7200);
+    aged_dir(&live, 7200);
+    let other = temp.join("somebody-elses.tmp");
+    aged_dir(&other, 7200);
+    let tree = root.join("target");
+    std::fs::create_dir_all(&tree).unwrap();
+    let trees = [tree];
+    let mut ask = request_under_a_live_build(&trees, u64::MAX);
+    ask.copies = Some(&temp);
+    let _ = batten::collect::collect(&ask);
+    assert!(!stale.exists(), "a copy no live sweep writes goes");
+    assert!(
+        live.exists(),
+        "a copy written since the live build began stays"
+    );
+    assert!(other.exists(), "only cargo-mutants' own copies are taken");
+}
+
 /// A BUILD INSIDE FRESH SCRATCH IS THE SCRATCH ENTRY'S, NOT A UNIT OF ITS OWN:
 /// a suite's fixture tree under `tmp/` carries units of any age, and the entry
-/// that holds them is what a live build's root judges. `#MUTANT scratch-unit-ranked`
-/// collects the nested unit.
+/// that holds them is what a live build's root judges. A mutant ranking the unit
+/// itself collects the nested unit.
 #[test]
 fn a_build_inside_fresh_scratch_is_never_collected() {
     let root = common::scratch("collect-nested-scratch");
@@ -214,8 +270,8 @@ fn a_build_inside_fresh_scratch_is_never_collected() {
 
 /// A NESTED BUILD TREE'S SCRATCH IS RANKED LIKE THE CHECKOUT'S (CLOUD-2286):
 /// measured on #1132, `target/replay/tmp` held 555 MB of fixtures that no pass
-/// could see, because only `target/tmp` was scratch. `#MUTANT
-/// nested-scratch-unseen` leaves the stale fixture.
+/// could see, because only `target/tmp` was scratch. A mutant that misses nested
+/// scratch leaves the stale fixture.
 #[test]
 fn a_nested_build_trees_stale_scratch_is_collected() {
     let root = common::scratch("collect-nested-build-scratch");
@@ -245,8 +301,8 @@ fn a_nested_build_trees_stale_scratch_is_collected() {
 /// measured on #1132, `target/mutate` held 511 MB idle since the day before
 /// while a lap removed the dependencies of the profiles the next lap built.
 /// An idle copy goes before a built profile's older-looking unit; a copy a
-/// running sweep just wrote stays whole. `#MUTANT staged-copy-unranked` takes
-/// the dependency instead.
+/// running sweep just wrote stays whole. A mutant that skips ranking the copy
+/// takes the dependency instead.
 #[test]
 fn an_idle_staged_copy_goes_before_a_built_profiles_units() {
     let root = common::scratch("collect-staged-copy");
@@ -398,6 +454,15 @@ fn with_no_live_build_a_recent_unit_is_collected() {
 /// the installed engine hands every call to, so it survives with nothing
 /// running it. It shares its inode with the unit's artifact, as cargo's uplift
 /// does.
+/// A pass bound no case reaches. An unbounded pass also takes every
+/// `cargo-mutants-*.tmp` copy in the temp directory whole, and the suite's
+/// temp directory is shared: a stale copy a nested sweep left there was
+/// collected by a case that never made it, and freed first, it decided what
+/// else the pass took (CLOUD-2789). Bounded, a pass reads no copies.
+fn unreached() -> std::time::Instant {
+    std::time::Instant::now() + Duration::from_secs(3600)
+}
+
 #[test]
 fn the_checkout_build_is_never_collected() {
     let repo = common::scratch("collect-checkout-build");
@@ -408,8 +473,15 @@ fn the_checkout_build_is_never_collected() {
     let mut config = rules("target");
     config.min_free_mb = Some(10);
     config.max_free_mb = Some(1 << 30);
-    let done =
-        batten::collect::collect_toward_max(&repo, &config, &[], 0, &mut || Ok(0), None, false);
+    let done = batten::collect::collect_toward_max(
+        &repo,
+        &config,
+        &[],
+        0,
+        &mut || Ok(0),
+        Some(unreached()),
+        false,
+    );
     assert!(done.is_some());
     assert!(
         present(&profile, "batten", "cdcdcdcdcdcdcdcd"),
@@ -570,7 +642,8 @@ fn collection_stops_at_max_free() {
     rules.max_free_mb = Some(20);
     let mut plenty = || Ok(1000);
     assert!(
-        batten::collect::collect_if_pressed(&root, &rules, &[], &mut plenty, None, false).is_none()
+        batten::collect::collect_if_pressed(&root, &rules, Vec::new, &mut plenty, None, false)
+            .is_none()
     );
     assert!(present(&profile, "u2", "4444444444444443"));
 }
@@ -684,9 +757,15 @@ fn a_sibling_worktrees_units_are_ranked_with_the_checkouts() {
     rules.min_free_mb = Some(1);
     rules.max_free_mb = Some(2);
     let mut pressed = || Ok(0);
-    let collected =
-        batten::collect::collect_if_pressed(&repo, &rules, &[], &mut pressed, None, false)
-            .expect("below the minimum, it collects");
+    let collected = batten::collect::collect_if_pressed(
+        &repo,
+        &rules,
+        Vec::new,
+        &mut pressed,
+        Some(unreached()),
+        false,
+    )
+    .expect("below the minimum, it collects");
     assert!(collected.units >= 1);
     assert!(
         !present(&sibling.join("target/debug"), "far", "bbbbbbbbbbbbbbbb"),
@@ -734,6 +813,8 @@ fn the_arm_watches_past_the_gate() {
             )
         }),
         kept: Vec::new(),
+        copies: own_copies(&repo),
+        record: None,
     };
     let ((), lines) = batten::disk_watch::around(Some(watch), || {
         // THE FIRST STEP: the volume is fine while it runs, and it returns.
@@ -780,6 +861,25 @@ fn banded(name: &str) -> (PathBuf, PathBuf, Prune) {
     (repo, profile, config)
 }
 
+/// A temp directory of the case's own for a spawned engine, whose unbounded
+/// pass reads cargo-mutants copies from `TMPDIR`: a lap or a sweep under the
+/// suite's shared one frees a copy another suite's sweep staged there
+/// (CLOUD-2789).
+fn own_temp(dir: &Path) -> PathBuf {
+    let name = dir
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("case");
+    common::scratch(&format!("{name}-tmp"))
+}
+
+/// The directory a case's watcher reads cargo-mutants copies from: its own
+/// and never created, so the unbounded pass frees no copy another suite's
+/// sweep staged in the shared temp directory (CLOUD-2789).
+fn own_copies(repo: &Path) -> PathBuf {
+    repo.join("no-mutant-copies")
+}
+
 /// Watch `repo` under `config` with `free_mb` answering each sample by its
 /// count, until `done` holds over the samples taken and what is present.
 fn watched(
@@ -799,6 +899,8 @@ fn watched(
             ))
         }),
         kept: Vec::new(),
+        copies: own_copies(repo),
+        record: None,
     };
     let ((), lines) = batten::disk_watch::around(Some(watch), || {
         wait_for(|| done(samples.load(std::sync::atomic::Ordering::SeqCst)));
@@ -817,7 +919,13 @@ fn a_sample_at_the_minimum_collects_nothing() {
     // reads `stop`, and `around` joins any collection it started.
     let lines = watched(&repo, &config, |_| 10, |taken| taken >= 1);
     assert!(present(&profile, "stale", STALE), "{lines:?}");
-    assert!(lines.is_empty(), "{lines:?}");
+    // Only the watcher's armed line (CLOUD-2782): no collection ran.
+    assert!(
+        lines
+            .iter()
+            .all(|line| line.starts_with("disk-watch-armed ")),
+        "{lines:?}"
+    );
 }
 
 /// The FIRST sample below the minimum collects, when no collection is already
@@ -900,6 +1008,8 @@ fn an_undeclared_band_watches_at_the_default() {
                 Ok(free)
             }),
             kept: Vec::new(),
+            copies: own_copies(&repo),
+            record: None,
         };
         let ((), lines) = batten::disk_watch::around(Some(watch), || {
             wait_for(|| {
@@ -978,7 +1088,7 @@ fn hook(dir: &Path, event: &str, env: &[(&str, &str)]) -> std::process::Output {
         .take()
         .expect("stdin is piped")
         .write_all(payload.as_bytes());
-    child.wait_with_output().expect("wait for batten")
+    child.streamed_wait().expect("wait for batten")
 }
 
 #[test]
@@ -1050,10 +1160,15 @@ fn a_step_run_build_is_watched() {
                  sleep 0.05; done; exit 1";
     let ran = common::batten()
         .current_dir(&dir)
+        .env("TMPDIR", own_temp(&dir))
         .args(["step", "run", "probe", "--", "sh", "-c", waits])
         .env("TARGET_PRUNE_FREE_MB", "50")
         .stdin(std::process::Stdio::null())
-        .output()
+        .streamed_output_keeping(batten::capture::Keep {
+            stdin: true,
+            stdout: false,
+            stderr: false,
+        })
         .expect("the binary runs");
     let said = common::stderr(&ran);
     assert_eq!(
@@ -1063,6 +1178,35 @@ fn a_step_run_build_is_watched() {
     );
     assert!(!present(&profile, "aged", "dddddddddddddddd"), "{said}");
     assert!(said.contains("step run probe: disk-collected "), "{said}");
+}
+
+/// `BATTEN_DISK_TRACE=1` writes each sample the watcher takes to stderr, the
+/// one record of how often the volume was read.
+///
+/// Fails by: the trace line never written, so a trace-on run reads as one the
+/// watcher never sampled.
+#[test]
+fn a_traced_watch_writes_its_samples_to_stderr() {
+    if !cfg!(unix) {
+        return;
+    }
+    let dir = hooked("step-run-traced", true);
+    let ran = common::batten()
+        .current_dir(&dir)
+        .env("TMPDIR", own_temp(&dir))
+        .args(["step", "run", "probe", "--", "sh", "-c", "sleep 0.5"])
+        .env("TARGET_PRUNE_FREE_MB", "50")
+        .env("BATTEN_DISK_TRACE", "1")
+        .stdin(std::process::Stdio::null())
+        .streamed_output_keeping(batten::capture::Keep {
+            stdin: true,
+            stdout: false,
+            stderr: false,
+        })
+        .expect("the binary runs");
+    let said = common::stderr(&ran);
+    assert_eq!(ran.status.code(), Some(0), "{said}");
+    assert!(said.contains("disk-sample"), "{said}");
 }
 
 /// Cargo's `RUSTC_WRAPPER` (CLOUD-2197): every compile unit, whoever started
@@ -1096,7 +1240,11 @@ fn a_wrapped_compile_collects_under_pressure() {
             .arg(&out_dir)
             .env("TARGET_PRUNE_FREE_MB", free)
             .stdin(std::process::Stdio::null())
-            .output()
+            .streamed_output_keeping(batten::capture::Keep {
+                stdin: true,
+                stdout: false,
+                stderr: false,
+            })
             .expect("the binary runs");
         let seen = std::fs::read_to_string(bin.join("ran")).unwrap_or_default();
         (dir, ran, seen)
@@ -1124,6 +1272,72 @@ fn a_wrapped_compile_collects_under_pressure() {
         "aged",
         "dddddddddddddddd"
     ));
+}
+
+/// A compile in a linked worktree reads `[prune]` from the WORKTREE's
+/// `batten.toml` (CLOUD-2532). The main checkout declares no `[prune]`, so a
+/// read through `repo_root` — the main checkout from a worktree — finds no band
+/// and collects nothing; the worktree's own table is what arms it.
+#[test]
+fn a_wrapped_compile_in_a_worktree_reads_the_worktrees_prune() {
+    if !cfg!(unix) {
+        return;
+    }
+    let base = common::scratch("rustc-wrapped-worktree");
+    let main = common::Fixture::at(base.join("repo"))
+        .config("version = 1\n")
+        .file("Cargo.toml", "[workspace]\n")
+        .git()
+        .base_commit()
+        .build();
+    let linked = base.join("linked");
+    common::git_in(
+        &main,
+        &[
+            "worktree",
+            "add",
+            "--quiet",
+            "-b",
+            "linked",
+            linked.to_str().unwrap_or_default(),
+            "HEAD",
+        ],
+    );
+    common::write(&linked, "batten.toml", &hook_config(true));
+    unit(
+        &linked.join("target/debug"),
+        "aged",
+        "dddddddddddddddd",
+        7200,
+        4096,
+    );
+    let rustc = main.join("rustc");
+    std::fs::write(&rustc, "#!/bin/sh\nexit 0\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(&rustc, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let out_dir = linked.join("target/debug/deps");
+    std::fs::create_dir_all(&out_dir).unwrap();
+    let ran = common::batten()
+        .current_dir(&linked)
+        .arg(&rustc)
+        .arg("--out-dir")
+        .arg(&out_dir)
+        .env("TARGET_PRUNE_FREE_MB", "50")
+        .stdin(std::process::Stdio::null())
+        .streamed_output_keeping(batten::capture::Keep {
+            stdin: true,
+            stdout: false,
+            stderr: false,
+        })
+        .expect("the binary runs");
+    assert_eq!(ran.status.code(), Some(0), "{}", common::stderr(&ran));
+    assert!(
+        !present(&linked.join("target/debug"), "aged", "dddddddddddddddd"),
+        "the worktree's own [prune] band armed the collection"
+    );
 }
 
 /// Above the default floor a wrapped compile reads no config at all: resolving
@@ -1161,12 +1375,170 @@ fn a_wrapped_compile_above_the_floor_reads_no_config() {
         .arg(dir.join("target/debug/deps"))
         .env("TARGET_PRUNE_FREE_MB", "5000")
         .stdin(std::process::Stdio::null())
-        .output()
+        .streamed_output_keeping(batten::capture::Keep {
+            stdin: true,
+            stdout: false,
+            stderr: false,
+        })
         .expect("the binary runs");
     assert_eq!(ran.status.code(), Some(0), "{}", common::stderr(&ran));
     assert!(
         present(&dir.join("target/debug"), "aged", "dddddddddddddddd"),
         "5000 MB is above the default floor, so the declared 6000 was never read"
+    );
+}
+
+/// A workspace wrapper between this one and the compiler, as cargo runs
+/// `RUSTC_WRAPPER RUSTC_WORKSPACE_WRAPPER rustc …` for `cargo auditable`
+/// (CLOUD-2789): the wrapper runs, with the compiler and its argv after it,
+/// and the compile's own exit code comes back.
+///
+/// Fails by: the wrapper's path parsed as a verb and refused, which failed
+/// every local `mise run dist`; or the wrapper skipped and the compiler run
+/// directly, dropping what it adds (the dependency list an SBOM reads).
+#[test]
+fn a_workspace_wrapper_between_is_run_with_the_compiler() {
+    if !cfg!(unix) {
+        return;
+    }
+    let dir = common::scratch_repo("rustc-workspace-wrapped");
+    let bin = dir.join("fake-bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let wrapper = bin.join("cargo-auditable");
+    let rustc = bin.join("rustc");
+    std::fs::write(
+        &wrapper,
+        "#!/bin/sh\necho wrapped > \"$(dirname \"$0\")/wrapped\"\nexec \"$@\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        &rustc,
+        "#!/bin/sh\necho \"$@\" > \"$(dirname \"$0\")/ran\"\nexit 7\n",
+    )
+    .unwrap();
+    #[cfg(unix)]
+    for program in [&wrapper, &rustc] {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(program, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let ran = common::batten()
+        .current_dir(&dir)
+        .arg(&wrapper)
+        .arg(&rustc)
+        .args(["-vV"])
+        .stdin(std::process::Stdio::null())
+        .streamed_output_keeping(batten::capture::Keep {
+            stdin: true,
+            stdout: false,
+            stderr: false,
+        })
+        .expect("the binary runs");
+    assert_eq!(
+        ran.status.code(),
+        Some(7),
+        "the compiler's own code: {}",
+        common::stderr(&ran)
+    );
+    assert!(bin.join("wrapped").is_file(), "the workspace wrapper ran");
+    let seen = std::fs::read_to_string(bin.join("ran")).unwrap_or_default();
+    assert_eq!(seen.trim(), "-vV", "the compiler's own argv");
+    // A BARE NAME, as `RUSTC_WORKSPACE_WRAPPER=sccache` reaches it: no path
+    // separator, so only the environment naming it marks it a wrapper.
+    std::fs::remove_file(bin.join("wrapped")).unwrap();
+    let inherited = std::env::var_os("PATH").unwrap_or_default();
+    let path =
+        std::env::join_paths(std::iter::once(bin.clone()).chain(std::env::split_paths(&inherited)))
+            .expect("a PATH entry carries no separator");
+    let bare = common::batten()
+        .current_dir(&dir)
+        .arg("cargo-auditable")
+        .arg(&rustc)
+        .args(["-vV"])
+        .env("PATH", &path)
+        .env("RUSTC_WORKSPACE_WRAPPER", "cargo-auditable")
+        .stdin(std::process::Stdio::null())
+        .streamed_output_keeping(batten::capture::Keep {
+            stdin: true,
+            stdout: false,
+            stderr: false,
+        })
+        .expect("the binary runs");
+    assert_eq!(bare.status.code(), Some(7), "{}", common::stderr(&bare));
+    assert!(bin.join("wrapped").is_file(), "the bare-named wrapper ran");
+    // THE SAME BARE NAME, UNNAMED by the environment: one path component and
+    // no `RUSTC_WORKSPACE_WRAPPER` naming it, so it is a verb, never a
+    // wrapper, and is neither run nor handed the compiler (CLOUD-2789).
+    std::fs::remove_file(bin.join("wrapped")).unwrap();
+    let unnamed = common::batten()
+        .current_dir(&dir)
+        .arg("cargo-auditable")
+        .arg(&rustc)
+        .args(["-vV"])
+        .env("PATH", path)
+        .env_remove("RUSTC_WORKSPACE_WRAPPER")
+        .stdin(std::process::Stdio::null())
+        .streamed_output_keeping(batten::capture::Keep {
+            stdin: true,
+            stdout: false,
+            stderr: false,
+        })
+        .expect("the binary runs");
+    assert_ne!(
+        unnamed.status.code(),
+        Some(7),
+        "{}",
+        common::stderr(&unnamed)
+    );
+    assert!(
+        !bin.join("wrapped").exists(),
+        "a bare name the environment does not name is not a wrapper"
+    );
+}
+
+/// A path whose next argument is no compiler is no workspace wrapper: it is
+/// argv for a verb, and batten never runs it (CLOUD-2789).
+///
+/// Fails by: the wrapper test's `compiles(next) && !compiles(first)` joined by
+/// `||`, so any path-shaped first argument is executed as a wrapper.
+#[test]
+fn a_path_not_followed_by_a_compiler_is_not_run_as_a_wrapper() {
+    if !cfg!(unix) {
+        return;
+    }
+    let dir = common::scratch_repo("rustc-not-wrapped");
+    let bin = dir.join("fake-bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let program = bin.join("not-a-wrapper");
+    std::fs::write(
+        &program,
+        "#!/bin/sh\necho ran > \"$(dirname \"$0\")/ran\"\nexit 7\n",
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let refused = common::batten()
+        .current_dir(&dir)
+        .arg(&program)
+        .args(["-vV"])
+        .stdin(std::process::Stdio::null())
+        .streamed_output_keeping(batten::capture::Keep {
+            stdin: true,
+            stdout: false,
+            stderr: false,
+        })
+        .expect("the binary runs");
+    assert_ne!(
+        refused.status.code(),
+        Some(7),
+        "{}",
+        common::stderr(&refused)
+    );
+    assert!(
+        !bin.join("ran").exists(),
+        "a path batten was not asked to wrap ran"
     );
 }
 
@@ -1177,7 +1549,11 @@ fn the_wrapper_probe_answers_with_this_binary() {
     let probed = common::batten()
         .args(["rustc", batten::RUSTC_WRAPPER_PROBE])
         .stdin(std::process::Stdio::null())
-        .output()
+        .streamed_output_keeping(batten::capture::Keep {
+            stdin: true,
+            stdout: false,
+            stderr: false,
+        })
         .expect("the binary runs");
     assert_eq!(probed.status.code(), Some(0), "{}", common::stderr(&probed));
     let path = String::from_utf8_lossy(&probed.stdout).trim().to_owned();
@@ -1190,11 +1566,16 @@ fn a_sweep_that_cannot_be_brought_above_the_minimum_stops_before_building() {
     let sweep = |free: &str| {
         common::batten()
             .current_dir(&dir)
+            .env("TMPDIR", own_temp(&dir))
             .args(["mutate", "sweep"])
             .env("MUTANT_GATES", "engine-fixture")
             .env("TARGET_PRUNE_FREE_MB", free)
             .stdin(std::process::Stdio::null())
-            .output()
+            .streamed_output_keeping(batten::capture::Keep {
+                stdin: true,
+                stdout: false,
+                stderr: false,
+            })
             .expect("the binary runs")
     };
     let stopped = sweep("5");
@@ -1222,10 +1603,11 @@ fn a_lap_whose_volume_cannot_be_freed_stops_before_the_gate() {
     let verify = |free: &str| {
         common::batten()
             .current_dir(&dir)
+            .env("TMPDIR", own_temp(&dir))
             .args(["land", "verify"])
             .env("LAND_VERIFY", "git tag gate-ran")
             .env("TARGET_PRUNE_FREE_MB", free)
-            .output()
+            .streamed_output()
             .expect("the binary runs")
     };
     let stopped = verify("5");
@@ -1248,8 +1630,8 @@ fn a_lap_whose_volume_cannot_be_freed_stops_before_the_gate() {
 /// refused. Here the case holds `target/debug/.cargo-lock` and a live process
 /// (this one) holds a singleton: the step blocks on the build lock, the case
 /// lets go once the first pass has reported, and the second pass admits. With
-/// no singleton the same volume refuses as before. `#MUTANT singleton-unwaited`
-/// refuses both.
+/// no singleton the same volume refuses as before. A mutant that does not wait
+/// on the singleton refuses both.
 #[test]
 fn a_lap_below_the_floor_waits_for_its_own_background_build() {
     use std::io::BufRead as _;
@@ -1262,6 +1644,7 @@ fn a_lap_below_the_floor_waits_for_its_own_background_build() {
         let mut command = common::batten();
         command
             .current_dir(&dir)
+            .env("TMPDIR", own_temp(&dir))
             .args(["land", "verify"])
             .env("LAND_VERIFY", "git tag gate-ran")
             // The first pass reads 5 twice; the pass after the wait reads 500.
@@ -1272,7 +1655,7 @@ fn a_lap_below_the_floor_waits_for_its_own_background_build() {
         command
     };
 
-    let alone = verify().output().expect("the binary runs");
+    let alone = verify().streamed_output().expect("the binary runs");
     let said = common::stderr(&alone);
     assert_eq!(alone.status.code(), Some(2), "{said}");
     assert!(!said.contains("disk-waited"), "{said}");

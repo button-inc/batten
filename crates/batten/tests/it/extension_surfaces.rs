@@ -22,6 +22,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
+use batten::rules::RuleKindExt as _;
 
 use std::fs;
 use std::path::PathBuf;
@@ -81,7 +82,7 @@ fn run(repo: &std::path::Path, home: &std::path::Path, args: &[&str]) -> (i32, S
         .args(args)
         .current_dir(repo)
         .env_remove("BATTEN_FAIL_ON_WARNING")
-        .output()
+        .streamed_output()
         .expect("run batten");
     (
         output.status.code().expect("exit code"),
@@ -303,7 +304,8 @@ fn only_exec_claims_a_channel_carrying_codes_batten_did_not_choose() {
     // restated here, the idiom `config.rs`'s
     // `every_typed_config_table_has_a_validation_call_site` already uses: a
     // second verb quietly claiming a passthrough channel fails here.
-    let exit_rs = fs::read_to_string(at_root("crates/batten/src/exit.rs")).expect("read exit.rs");
+    let exit_rs =
+        fs::read_to_string(at_root("crates/batten-base/src/exit.rs")).expect("read exit.rs");
     let section = {
         let start = exit_rs
             .find("## The one verb whose code is not in this table")
@@ -389,9 +391,9 @@ fn the_extension_guide_gives_every_rule_kind_a_row_in_the_table() {
         .lines()
         .filter(|line| line.starts_with('|'))
         .collect();
-    let missing: Vec<&str> = batten::rules::RuleKind::ALL
+    let missing: Vec<&str> = batten::config_model::RuleKind::ALL
         .iter()
-        .map(|kind| kind.as_str())
+        .map(batten::rules::RuleKindExt::as_str)
         .filter(|token| !rows.iter().any(|row| row.contains(&format!("`{token}`"))))
         .collect();
     assert!(
@@ -414,27 +416,33 @@ fn the_extension_headings_count_matches_the_enum() {
         "twelve",
     ];
     let expected = spelled
-        .get(batten::rules::RuleKind::ALL.len() - 1)
+        .get(batten::config_model::RuleKind::ALL.len() - 1)
         .expect("the spelled-out numbers cover the enum");
     assert!(
         heading.contains(expected),
         "the heading says `{heading}` over {} rule kinds — it should say `{expected}`",
-        batten::rules::RuleKind::ALL.len()
+        batten::config_model::RuleKind::ALL.len()
     );
 }
 
-/// Every shipped preset is named in the config a new repository starts from.
+/// Every SUGGESTED shipped preset is named in the config a new repository
+/// starts from, and no other is.
 ///
 /// CLOUD-836 vendored the presets so a consumer would not author every predicate
 /// from scratch. That argument was unrealised while the starter mentioned none of
 /// them: the feature shipped and the documented path did not reach it.
+///
+/// Narrowed by CLOUD-2628: an opinionated ban (`suggested: false`) is opted
+/// into knowingly, so the starter must NOT name it either — both directions,
+/// or a ban suggested by the starter would pass.
 #[test]
 fn the_starter_config_names_every_shipped_preset() {
     for file in ["crates/batten/src/starter.toml", "batten.example.toml"] {
         let text =
             fs::read_to_string(at_root(file)).unwrap_or_else(|_| panic!("{file} is readable"));
-        let missing: Vec<&str> = batten::preset::MANIFESTS
+        let missing: Vec<&str> = batten::preset_catalog::MANIFESTS
             .iter()
+            .filter(|manifest| manifest.suggested)
             .map(|manifest| manifest.name)
             .filter(|name| !text.contains(name))
             .collect();
@@ -442,6 +450,17 @@ fn the_starter_config_names_every_shipped_preset() {
             missing.is_empty(),
             "{file} names no {missing:?} — a preset the binary ships that the config a \
              consumer starts from does not mention"
+        );
+        let suggested: Vec<&str> = batten::preset_catalog::MANIFESTS
+            .iter()
+            .filter(|manifest| !manifest.suggested)
+            .map(|manifest| manifest.name)
+            .filter(|name| text.contains(name))
+            .collect();
+        assert!(
+            suggested.is_empty(),
+            "{file} names {suggested:?} — an opt-in ban the config a consumer starts from \
+             must never suggest"
         );
     }
 }

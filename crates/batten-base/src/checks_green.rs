@@ -1,0 +1,1633 @@
+//! Is this SHA green over the required check set? (CLOUD-1143)
+//!
+//! The one definition of that question, ported off `mise-tasks/checks-green.sh`.
+//! It decides over a **reading** the caller already holds — never over the
+//! network — so the fetch stays with [`crate::pr_watch`], which polls
+//! conditionally and hands over the body it got. That is the
+//! agents-fetch-gates-decide split the board gates already use, and it is what
+//! lets every case here run offline.
+//!
+//! # The four states, and why the exit table is not the shell's
+//!
+//! The predecessor used `0` green / `1` red / `2` could-not-look / `3` not-yet.
+//! Three of those numbers mean something else under [`crate::exit::ExitCode`],
+//! which is total with no per-verb exception, so the mapping had to change:
+//!
+//! | state | code |
+//! | --- | --- |
+//! | [`Verdict::Green`] | `Success` |
+//! | [`Verdict::Red`] and [`Verdict::Pending`] | `Violation` — this head is not landable |
+//! | [`Verdict::DeadEnd`] | `Internal` — no answer, and none is coming |
+//! | a roster that will not resolve | `Usage` |
+//! | a reading that could not be taken | `Internal` |
+//!
+//! **[`Verdict::DeadEnd`] shares `Internal` with a reading that could not be
+//! taken, and shares it correctly** (CLOUD-497). `Internal` already means "could
+//! not get an answer", which is exactly what a closed set with a masked required
+//! name is; the two differ in why, and that travels on stdout as every other
+//! distinction here does. Minting a fifth code for it would be the per-verb
+//! exception non-negotiable rule 5 forbids. It is deliberately NOT `Violation`:
+//! that code says "this head is not landable", which invites a caller to ask
+//! again, and asking again is the whole defect.
+//!
+//! **Red and pending collapse onto one code deliberately.** They differ only in
+//! whether the caller should ask again, never in whether the head may land, and
+//! that distinction travels on stdout. Collapsing them makes the fail-safe
+//! direction structural: a reader that branches on the code alone and ignores
+//! stdout treats "not yet" as "do not land". Any mapping that gave pending a `0`
+//! would let that same reader fast-forward a head nothing had judged, which is
+//! CLOUD-337's defect re-introduced by the port meant to preserve it.
+//!
+//! # The three rules this conserves, none of them re-decided here
+//!
+//! * **Latest run per name** (CLOUD-436). A SHA accumulates a check-run per
+//!   event, so a PR created as a draft carries its `opened`-event skip set
+//!   forever. Judged as a union that residue vetoes a verdict that already
+//!   exists — measured three times in one evening, twice as an unbounded poll
+//!   over a green head and once as a poll blind to a completed failure.
+//!   `started_at` orders them (ISO-8601 sorts lexicographically) with the run id
+//!   breaking a same-second tie.
+//! * **Absent is not skipped, and absent is not an answer** (CLOUD-337). A
+//!   path-filtered workflow produces no check-run at all, so absence is
+//!   legitimate for exactly the names the caller declares tolerated; every other
+//!   roster name must be present. An unset tolerated set is the STRICT
+//!   direction, because the two failures are not symmetric — a name this waits
+//!   for that never arrives is a visible stall, while a name it forgives that
+//!   had merely not registered yet is a landing nobody judged.
+//! * **The fan-in split** (CLOUD-900, over CLOUD-363). "No answer" outranks red,
+//!   because a cancelled sibling can MANUFACTURE a fan-in failure — `final`
+//!   declares `needs:` over the others. That is true of the fan-in and of
+//!   nothing else, so a non-fan-in failure is a verdict on the tree whatever
+//!   else has not answered. With no fan-in named every failure is treated as
+//!   manufacturable, which is CLOUD-363's ordering intact and the safe default.
+
+use std::collections::BTreeMap;
+
+/// What a reading says about one SHA.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Verdict {
+    /// Every required check terminal and green.
+    Green,
+    /// A required check failed, and no cancellation could have manufactured it.
+    Red(Vec<Finding>),
+    /// Not an answer yet: still running, no verdict, or never registered.
+    Pending(Pending),
+    /// No answer, and no answer is coming (CLOUD-497).
+    ///
+    /// **"NOT YET" AND "NOT EVER" WERE THE SAME STATE, AND THAT IS THE DEFECT.**
+    /// Every required name is terminal, none is unregistered, and the newest run
+    /// for at least one of them carries a conclusion the caller does not count as
+    /// an answer — a draft-era `skipped`, a `cancelled`. Nothing further will be
+    /// minted for this SHA, so a poll over it is not patience; it is a hang with a
+    /// heartbeat. Measured 2026-08-12 on PR #378: forty-eight minutes on a head
+    /// whose CI was fully green, holding the landing lease against a queue, killed
+    /// by hand.
+    ///
+    /// **The distinction is terminality, never a clock.** A set with anything
+    /// still running stays [`Verdict::Pending`] and waits unbounded exactly as it
+    /// did, which is what `mem:workflow/landing-loop` requires — a wall-clock cap
+    /// reintroduces the VM-reap gap and lands as a false refusal on a slow bot.
+    /// This arm adds no bound; it recognises a set that can no longer change.
+    ///
+    /// **Its own variant rather than a flag on [`Pending`]**, whose doc means "not
+    /// an answer *yet*" and whose every caller reads it as "ask again". A boolean
+    /// inside it would leave that reading true for a reader that did not know to
+    /// look, which is the fail-open direction.
+    DeadEnd(Vec<Finding>),
+}
+
+/// Why a reading is not yet an answer. Carried rather than collapsed, because
+/// "no verdict" has several spellings and a stall you cannot spell is a stall
+/// you cannot diagnose.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Pending {
+    /// Required checks that are registered but not `completed`.
+    Running { pending: usize, graded: usize },
+    /// Required checks whose latest run carries a conclusion that is not an
+    /// answer — a draft-era `skipped`, a `cancelled`, or one GitHub adds
+    /// tomorrow that nobody has seen.
+    NoVerdict(Vec<Finding>),
+    /// Required names with no run at all, which is a fresh SHA.
+    Unregistered(Vec<String>),
+}
+
+/// A pointer, never a payload: the check's name and the conclusion it carries.
+/// Non-negotiable rule 4 — this type cannot hold a run's log because it has
+/// nowhere to put one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Finding {
+    pub check: String,
+    pub conclusion: String,
+}
+
+impl std::fmt::Display for Finding {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} {}", self.check, self.conclusion)
+    }
+}
+
+/// One row of a reading, as the check-runs endpoint projects it.
+#[derive(Debug, Clone)]
+pub struct Run {
+    pub status: String,
+    pub conclusion: String,
+    pub name: String,
+    /// The ordering key's second field. Empty where the caller's reading
+    /// predates CLOUD-436 and carries none.
+    pub started_at: String,
+    /// The ordering key's FIRST field: when this run reached its conclusion.
+    ///
+    /// Empty for a run that has not reached one, and for a reading that carries
+    /// no such column. The two are told apart by `status`, never by this.
+    pub completed_at: String,
+    /// The ordering key's tie-break. Zero where the reading carries none.
+    pub id: u64,
+}
+
+impl Run {
+    /// Its state, classified from both fields (CLOUD-2243).
+    fn state(&self) -> crate::forge::RunState {
+        crate::forge::RunState::of(Some(&self.status), Some(&self.conclusion))
+    }
+
+    /// Whether it has concluded.
+    #[must_use]
+    pub fn completed(&self) -> bool {
+        self.state().conclusion().is_some()
+    }
+
+    /// Whether its conclusion passes the merge gate: success or neutral.
+    fn passes_gate(&self) -> bool {
+        self.state()
+            .conclusion()
+            .is_some_and(crate::forge::Conclusion::passes_gate)
+    }
+}
+
+/// Whether the fan-in's failure in `runs` was MANUFACTURED by its siblings not
+/// answering, and so is no verdict on the commit (CLOUD-363, CLOUD-900).
+///
+/// [`decide`] already reads it this way for a cancelled matrix; the recorder
+/// did not, so a draft run — every sibling `skipped`, the fan-in red by design
+/// since CLOUD-2317 — was written as a verdict, and `forge check red` refused
+/// every head pushed as a draft, wedging the landing it is upstream of (#1276).
+/// One predicate for the recorder, so it reads a run as `decide` does.
+///
+/// Manufactured means: the fan-in's newest run concluded in an answered failure,
+/// no sibling concluded in an answered failure (a real one judges the tree, and
+/// CLOUD-900 keeps it the verdict), every sibling has concluded, and at least
+/// one sibling's conclusion is a non-answer.
+#[must_use]
+pub fn fanin_failure_manufactured(runs: &[Run], answered: &[String], fanin: &str) -> bool {
+    let mut grouped: BTreeMap<&str, Vec<&Run>> = BTreeMap::new();
+    for run in runs {
+        grouped.entry(run.name.as_str()).or_default().push(run);
+    }
+    let latest: BTreeMap<&str, &Run> = grouped
+        .into_iter()
+        .filter_map(|(name, group)| winner(&group, answered).map(|run| (name, run)))
+        .collect();
+    let is_answer = |run: &Run| answered.iter().any(|word| word == &run.conclusion);
+    let Some(fan) = latest.get(fanin) else {
+        return false;
+    };
+    if !fan.completed() || fan.passes_gate() || !is_answer(fan) {
+        return false;
+    }
+    let mut unanswered = false;
+    for (name, run) in &latest {
+        if *name == fanin {
+            continue;
+        }
+        if !run.completed() {
+            return false;
+        }
+        if is_answer(run) {
+            if !run.passes_gate() {
+                return false;
+            }
+        } else {
+            unanswered = true;
+        }
+    }
+    unanswered
+}
+
+/// The roster and its two qualifiers, all of them the consumer's.
+///
+/// None of these is a literal in this crate: a tracker's or a forge's vocabulary
+/// under `crates/batten` is non-negotiable rule 1's violation, so the caller
+/// declares them and this decides over what it is handed.
+#[derive(Debug, Clone)]
+pub struct Roster {
+    /// Every check that carries a verdict about this repository.
+    pub required: Vec<String>,
+    /// The names for which having no run at all is a legitimate reading.
+    pub absent_ok: Vec<String>,
+    /// The conclusions that constitute an answer.
+    pub answered: Vec<String>,
+    /// The one check whose failure a cancelled sibling can manufacture.
+    pub fanin: Option<String>,
+}
+
+/// A roster that cannot decide anything, kept distinct from a reading that says
+/// nothing: the first is a malformed invocation and the second is a real state.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RosterError {
+    /// An empty required set makes every check unrequired, which is the false
+    /// green this whole module exists to stop.
+    NoRequiredChecks,
+    /// An empty answered set makes every conclusion an answer, which is the same
+    /// false green in a new spelling.
+    NoAnsweredConclusions,
+}
+
+impl std::fmt::Display for RosterError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NoRequiredChecks => {
+                f.write_str("the required check set is empty, so every check would be unrequired")
+            }
+            Self::NoAnsweredConclusions => f.write_str(
+                "the answered-conclusion set is empty, so every conclusion would be an answer",
+            ),
+        }
+    }
+}
+
+/// How conclusive a row is, for choosing between two runs of one name that share
+/// an ordering key.
+///
+/// The precedence is what makes an UNORDERABLE pair fail closed: a reading
+/// carrying no `started_at` or id leaves every key equal, and then the LEAST
+/// conclusive row wins — which is the union answer this replaces, so an
+/// unorderable pair can never read greener than it did before ordering existed.
+/// `cancelled` ranks with `skipped` rather than with a failure (CLOUD-363): a
+/// cancelled run judged nothing, so an unorderable pair holding one falls to "no
+/// answer" rather than to red.
+fn rank(run: &Run, answered: &[String]) -> u8 {
+    if !run.completed() {
+        return 4;
+    }
+    if !answered.iter().any(|c| c == &run.conclusion) {
+        return 3;
+    }
+    if run.passes_gate() { 1 } else { 2 }
+}
+
+/// The ordering key for one run. ISO-8601 sorts lexicographically, so a string
+/// compare is chronological; the zero-padded id breaks a tie inside one second.
+///
+/// **`completed_at` LEADS, BECAUSE `started_at` STOPS TRACKING EVENT ORDER ONCE
+/// TWO EVENTS FOR ONE HEAD ARE IN FLIGHT TOGETHER** (CLOUD-1662). `land`'s
+/// pipeline pushes, which fires `synchronize` while the PR is still a draft and
+/// mints the skip set, then readies, which fires `ready_for_review` and mints the
+/// real run. Processed concurrently, the skip's job can start LATER than the run
+/// it exists to be replaced by, and CLOUD-503's mechanism inverts.
+///
+/// Measured twice, in both directions this can fail:
+///
+/// * `9ea4da6a`: `windows` **failure** started 04:05:37 and a `skipped` twin
+///   started 04:05:39, so the reading buried a red head and `land` sat on it for
+///   30 minutes holding the landing lease.
+/// * `9ca2b3ac`: ONE `pull_request` event minted two CI workflow runs at the
+///   identical `run_started_at` 16:10:20Z — 4986 skipped, 4987 ran and
+///   succeeded — whose jobs started 16:10:30 and 16:10:26. The check-run ids
+///   were inverted against the workflow-run ids too, so the tie-break could not
+///   save it either.
+///
+/// **The conclusion stamp is the event's order, recovered from a field the
+/// check-runs projection ALREADY CARRIES** — which is the measurement CLOUD-1662
+/// asked for before choosing between that and a second read per poll. A run that
+/// judged nothing concludes essentially when it is minted (the twin above:
+/// 16:10:21, one second), while a run that judged concludes when the work
+/// finished (16:31:39). It is not the GAP that decides — nothing here is a
+/// duration, so non-negotiable rule 3 is untouched — it is an absolute order over
+/// a fact each run carries.
+///
+/// **This is what lets the draft economy keep its case** (CLOUD-247, CLOUD-327).
+/// A PR readied, graded green, then RE-DRAFTED re-runs the name as a skip that
+/// genuinely concludes AFTER the success it supersedes, so it still speaks for
+/// the name. Both readings are "a success, then a later skip" by `started_at`
+/// alone, which is why CLOUD-1722 could not tell them apart and reversed that
+/// case; by conclusion they are opposite.
+///
+/// A run that has not concluded sorts ABOVE every run that has. That is the
+/// reading rather than a sentinel — not-yet-finished is later than any finish —
+/// and it keeps a head being re-judged `Pending` instead of falling back to the
+/// success it is re-judging, which is the false-green direction this module must
+/// never fail in.
+///
+/// The mutation drops the conclusion stamp back out of the key, which is exactly
+/// "restore clock-ordering" — the shape CLOUD-1662's Done block requires the
+/// suite to refuse. Verified killed: it reddens the arm that can only be decided
+/// by conclusion.
+fn key(run: &Run) -> (bool, String, String, u64) {
+    (
+        run.completed_at.is_empty() && !run.completed(),
+        run.completed_at.clone(),
+        run.started_at.clone(),
+        run.id,
+    )
+}
+
+/// Which run answers for one name?
+///
+/// **A COMPLETED-BUT-UNANSWERED RUN NEVER DISPLACES A REAL VERDICT**, and that
+/// clause is the whole of this function. Everything else is the key-then-rank
+/// order [`latest_per_name`] always had.
+///
+/// MEASURED, AND IT STOPPED THE WHOLE FLEET. GitHub registers the path-filtered
+/// COPY of a workflow one to five seconds after the copy that actually runs, and
+/// the copy that does not apply concludes `skipped`. So the skipped twin is the
+/// LATER run by `started_at` and won outright — `ci` succeeded at 02:34:02 and
+/// was overruled by a `skipped` twin at 02:34:03, and six required checks read
+/// as "no verdict" over a head whose every job was green. `checks green` returned
+/// `Pending`, which is the correct response to that reading; the reading was
+/// wrong. Nothing landed on `main` for six hours across three branches, each
+/// holding the landing lease while `ci-wait` waited for an answer that had
+/// already arrived and been discarded.
+///
+/// CLOUD-436's rule is not weakened by this, it is completed. That rule exists
+/// because a draft-era skip set "vetoes a verdict that already exists" — and
+/// ordering by start time fixed the union only for the case where the residue is
+/// OLDER. The residue here is newer, so the same veto came back through the
+/// ordering that was supposed to end it.
+///
+/// **STILL-RUNNING IS DELIBERATELY NOT COVERED** (rank 4). A rerun in flight over
+/// a name that already succeeded must still read `Pending`: the new run may fail,
+/// and preferring the old success would be a false green on the one path where
+/// the answer is genuinely not in yet. Only a run that COMPLETED without
+/// producing a verdict — `skipped`, `cancelled`, or whatever GitHub adds next —
+/// is refused the displacement, because such a run judged nothing and a reading
+/// that lets it erase a judgement is reporting the absence of an answer it holds.
+/// The named cases are this file's own unit tier, so the declared suite path is
+/// this file (CLOUD-1267's shape, as `landed.rs` uses it).
+///
+/// THE OPENER IS `//`, NOT `///`. `OPENERS` is `["//", "#"]` and the marker must
+/// follow one directly, so a doc comment's third slash leaves `/ MUTANT-SUITE …`
+/// and matches nothing. Declared inside a doc comment this row parses as prose,
+/// the module never becomes a subject, and `mutate census` stays green over a
+/// declaration nobody sweeps — which is the coverage-shaped nothing the verb
+/// exists to refuse. Written here first in exactly that dead form.
+///
+/// The mutation moves `UNANSWERED` off the rank `rank()` actually assigns, so the
+/// guard below can never fire and a later `skipped` twin wins outright again —
+/// which is precisely the state that stopped the fleet. It is a constant rather
+/// than the predicate because a row's script may carry no `|` of its own, and
+/// because a guard commented out would also redden the two arms that must keep
+/// their old behaviour, telling us less about which clause the cases pin.
+///
+/// `pub(crate)` because `record forge --fetch` records one conclusion per name
+/// and must choose the SAME run this does (CLOUD-843): two orderings over one
+/// reading are two authorities, and on an overlapping re-run they disagree.
+#[must_use]
+pub fn winner<'a>(runs: &[&'a Run], answered: &[String]) -> Option<&'a Run> {
+    const UNANSWERED: u8 = 3;
+    // `max_by_key` over `(key, rank)` is the whole ordering, and it is a
+    // FUNCTION OF THE SET rather than of the arrival order — which is the defect
+    // CLOUD-1722's first shape carried. The old pairwise fold applied a
+    // non-transitive predicate, so a success, an in-flight rerun and a newer
+    // skipped twin read `Green` in one slice order and `Pending` in another.
+    //
+    // `Option` RATHER THAN AN `expect`, and the empty case is the caller's to
+    // not have. Every group this is called with is non-empty by construction —
+    // `latest_per_name` builds them by pushing — but a panic message asserting
+    // that is a claim the type could carry instead, and `clippy::expect_used` is
+    // denied here precisely so the assertion goes into the signature. The caller
+    // reads it back with `filter_map`, where an empty group contributes no name
+    // rather than aborting a verdict the rest of the reading could still answer.
+    let latest = *runs
+        .iter()
+        .max_by_key(|run| (key(run), rank(run, answered)))?;
+    if rank(latest, answered) != UNANSWERED {
+        return Some(latest);
+    }
+    // **THE GUARD IS THE BACKSTOP FOR A READING THAT CANNOT BE ORDERED BY
+    // CONCLUSION, AND ONLY THAT** (CLOUD-1662 over CLOUD-1722). Where the rows
+    // carry `completed_at` the key has already put the run that judged on top,
+    // so reaching here at all means the unanswered row concluded LAST — which is
+    // the re-drafted PR, and yielding to the older success would re-open exactly
+    // the draft economy CLOUD-247 and CLOUD-327 established.
+    //
+    // Without the column the key falls back to `started_at`, the concurrent twin
+    // can win it, and this guard is what keeps a green head landable — the
+    // measured six-hour stall. A five-field reading is a live shape, not a legacy
+    // one: any caller whose projection predates the column still emits it, and
+    // `parse_run` accepts it for exactly that reason.
+    if !latest.completed_at.is_empty() {
+        return Some(latest);
+    }
+    // The completed-but-unanswered latest yields to the latest run that DID
+    // judge or is still judging — but only when that run is STRICTLY OLDER.
+    // An equal key is the unorderable pair, which must still fall to the least
+    // conclusive reading: preferring the answer there would make the fail-closed
+    // case fail open, the one direction this module cannot afford.
+    Some(
+        runs.iter()
+            .filter(|run| rank(run, answered) != UNANSWERED)
+            .max_by_key(|run| (key(run), rank(run, answered)))
+            .filter(|candidate| key(candidate) < key(latest))
+            .copied()
+            .unwrap_or(latest),
+    )
+}
+
+/// Latest run per name (CLOUD-436), over the required subset only.
+///
+/// An unrelated check gets neither a vote nor a veto — the same scoping that
+/// stops a third party vetoing a landing.
+///
+/// Shared with [`judged`] rather than rebuilt there, so the view a caller PRINTS
+/// is taken over the same rows the verdict was taken over and the two cannot
+/// contradict each other. The predecessor's summary had that property by
+/// construction, emitted from inside the same pass; two passes would only have
+/// it by inspection.
+#[must_use]
+pub fn latest_per_name<'a>(runs: &'a [Run], roster: &Roster) -> BTreeMap<&'a str, &'a Run> {
+    let mut grouped: BTreeMap<&str, Vec<&Run>> = BTreeMap::new();
+    for run in runs {
+        if !roster.required.iter().any(|name| name == &run.name) {
+            continue;
+        }
+        grouped.entry(&run.name).or_default().push(run);
+    }
+    grouped
+        .into_iter()
+        .filter_map(|(name, group)| Some((name, winner(&group, &roster.answered)?)))
+        .collect()
+}
+
+/// The judged view: one pointer per required name that HAS a run, in roster
+/// order.
+///
+/// Pointer-only (rule 4) and ordered by the roster rather than by a map, because
+/// this is output and output is a contract (house style §6). A name with no run
+/// is absent here rather than reported as something: absence is the reading, and
+/// [`decide`] is where it means anything.
+#[must_use]
+pub fn judged(runs: &[Run], roster: &Roster) -> Vec<Finding> {
+    let best = latest_per_name(runs, roster);
+    roster
+        .required
+        .iter()
+        .filter_map(|name| {
+            best.get(name.as_str()).map(|run| Finding {
+                check: name.clone(),
+                conclusion: run.conclusion.clone(),
+            })
+        })
+        .collect()
+}
+
+/// Decide a reading. Pure: no clock, no network, no filesystem.
+///
+/// # Errors
+///
+/// Returns [`RosterError`] when the roster cannot decide anything. That is a
+/// statement about the invocation, not about the repository, which is why it is
+/// an error here and [`crate::exit::ExitCode::Usage`] at the boundary.
+///
+/// CLOUD-497's terminality split lives in the masked-bucket arm below, and all
+/// three mutations of it are declared here because that is where the source line
+/// is. The opener is `//` and not `///` for the reason [`winner`]'s own
+/// declaration states in full: a doc comment's third slash leaves the marker
+/// unmatched, and the subject silently disappears.
+///
+/// `wait-is-never-a-dead-end` deletes the rule outright, which is the mutation
+/// CLOUD-418's acceptance names. The other two delete one conjunct each, and they
+/// are what keep the case's two mirrors from being decoration: drop `pending == 0`
+/// and a skip beside a running check stops a landing whose answer was moments
+/// away; drop `unregistered.is_empty()` and a fresh SHA stops before its siblings
+/// have registered. A surviving mutant there would mean the mirror asserts
+/// nothing.
+///
+/// **RUN BY HAND, 2026-09-19, because `mutate sweep` cannot currently look at
+/// this gate.** All five `engine-checks-green` rows — the two that predate this
+/// change included — report `names-no-case`, which is a could-not-look rather
+/// than a pass: the cases they name all exist in this file, so the staged-tree
+/// cargo run is selecting none of them. That is a defect in the sweep's
+/// Rust-suite resolution rather than in these declarations, and repairing it is
+/// not this row's. So each declaration was verified directly, applied to this
+/// file with the suite run over it:
+///
+/// | mutation | reddened |
+/// | --- | --- |
+/// | `wait-is-never-a-dead-end` | the case below **and** `a_fanin_failure_over_cancelled_siblings_is_no_verdict` |
+/// | `dead-end-ignores-running` | the case below ALONE — mirror one is the only thing that sees it |
+/// | `dead-end-ignores-unregistered` | the case below **and** `a_cancelled_required_check_is_not_an_answer_either` |
+///
+/// So each conjunct is caught, and the middle row is the one worth reading: one
+/// case, one mirror, nothing else in 5,587 noticing. That is what a mirror is
+/// for, and it is also why removing either would be invisible without it.
+pub fn decide(runs: &[Run], roster: &Roster) -> Result<Verdict, RosterError> {
+    if roster.required.is_empty() {
+        return Err(RosterError::NoRequiredChecks);
+    }
+    if roster.answered.is_empty() {
+        return Err(RosterError::NoAnsweredConclusions);
+    }
+
+    let best = latest_per_name(runs, roster);
+
+    // Iterated in ROSTER order rather than the map's, because this output is a
+    // contract (house style §6) and a set's iteration order is not one.
+    let mut graded = 0usize;
+    let mut pending = 0usize;
+    let mut no_verdict: Vec<Finding> = Vec::new();
+    let mut failed: Vec<Finding> = Vec::new();
+    let mut real_failed: Vec<Finding> = Vec::new();
+    let mut unregistered: Vec<String> = Vec::new();
+
+    for name in &roster.required {
+        let Some(run) = best.get(name.as_str()) else {
+            // Tolerated only for the names the caller declared absent-ok; every
+            // other absence is a name that has not registered yet, which is a
+            // fresh SHA and not an answer (CLOUD-337).
+            if !roster.absent_ok.iter().any(|ok| ok == name) {
+                unregistered.push(name.clone());
+            }
+            continue;
+        };
+        if !run.completed() {
+            pending += 1;
+            continue;
+        }
+        // MEMBERSHIP, NOT A LITERAL PAIR (CLOUD-376). Naming `skipped` and
+        // `cancelled` and letting everything else fall through to red would
+        // report a conclusion GitHub adds tomorrow as a verdict against a head it
+        // never judged.
+        if !roster.answered.iter().any(|c| c == &run.conclusion) {
+            no_verdict.push(Finding {
+                check: name.clone(),
+                conclusion: run.conclusion.clone(),
+            });
+            continue;
+        }
+        graded += 1;
+        if !run.passes_gate() {
+            let finding = Finding {
+                check: name.clone(),
+                conclusion: run.conclusion.clone(),
+            };
+            // THE SPLIT (CLOUD-900). Only the fan-in is excluded, and only
+            // because its `needs:` assertion turns a cancelled sibling into its
+            // own red. `fanin.is_some()` is what makes the unset direction the
+            // safe one: with none named, every failure stays manufacturable,
+            // which is CLOUD-363's ordering intact.
+            if roster.fanin.as_deref().is_some_and(|f| f != name) {
+                real_failed.push(finding.clone());
+            }
+            failed.push(finding);
+        }
+    }
+
+    // A failure no cancellation could have manufactured is a verdict, and it is
+    // tested FIRST (CLOUD-900). After an `abandon-matrix` run a head carries one
+    // real failure beside several deliberately cancelled siblings; under the
+    // ordering alone that reads as "not an answer yet", so the saving would buy a
+    // wedge.
+    if !real_failed.is_empty() {
+        return Ok(Verdict::Red(real_failed));
+    }
+
+    // "No answer" is tested BEFORE "red", and the order is load-bearing
+    // (CLOUD-363): `final` fans in over the others, so its failure over five
+    // cancelled siblings was a CONSEQUENCE of the cancellations rather than an
+    // independent verdict. Promoting red here would put the branch back in that
+    // wedge. A genuine failure leaves this bucket empty and falls through.
+    if !no_verdict.is_empty() {
+        // AND HERE IS WHERE "NOT YET" SPLITS FROM "NOT EVER" (CLOUD-497). The
+        // bucket is the same one; what decides is whether anything can still
+        // arrive to change it. `pending == 0` says every registered required name
+        // has reached a conclusion, and `unregistered.is_empty()` says no required
+        // name is still to register — together, the set is closed. A masked name
+        // in a closed set will be masked forever, so the caller must stop rather
+        // than ask again.
+        //
+        // BOTH CONJUNCTS, and dropping either re-opens a wait as a stop. Without
+        // the first, a skip beside three still-running checks would stop a landing
+        // whose answer was minutes away; without the second, a fresh SHA whose
+        // first run happened to skip would stop before the rest had registered.
+        //
+        // The position is unchanged: still after `real_failed` (a red tree is a
+        // verdict, not a dead end) and still before the `graded`/`pending` test,
+        // so CLOUD-363's precedence — no-answer outranks a fan-in red — holds for
+        // both halves of the split.
+        if pending == 0 && unregistered.is_empty() {
+            return Ok(Verdict::DeadEnd(no_verdict));
+        }
+        return Ok(Verdict::Pending(Pending::NoVerdict(no_verdict)));
+    }
+    if graded == 0 || pending > 0 {
+        return Ok(Verdict::Pending(Pending::Running { pending, graded }));
+    }
+
+    // A required name with no run at all is not an answer either — and unlike
+    // the bucket above it YIELDS to a failure rather than outranking one. An
+    // absent name manufactures nothing, so a completed failure beside it is an
+    // independent verdict and must still be reported; holding the poll open
+    // would leave a PR ready over a tree already known to be red.
+    if !unregistered.is_empty() && failed.is_empty() {
+        return Ok(Verdict::Pending(Pending::Unregistered(unregistered)));
+    }
+
+    if !failed.is_empty() {
+        return Ok(Verdict::Red(failed));
+    }
+    Ok(Verdict::Green)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn roster() -> Roster {
+        Roster {
+            required: ["ci", "perf", "final"]
+                .iter()
+                .map(|s| (*s).to_string())
+                .collect(),
+            absent_ok: vec!["zizmor".to_string()],
+            answered: [
+                "success",
+                "neutral",
+                "failure",
+                "timed_out",
+                "action_required",
+            ]
+            .iter()
+            .map(|s| (*s).to_string())
+            .collect(),
+            fanin: Some("final".to_string()),
+        }
+    }
+
+    fn run(status: &str, conclusion: &str, name: &str, started_at: &str, id: u64) -> Run {
+        Run {
+            status: status.to_string(),
+            conclusion: conclusion.to_string(),
+            name: name.to_string(),
+            started_at: started_at.to_string(),
+            // A reading with no conclusion stamp — every case written before the
+            // column existed. They order on `started_at` exactly as they did and
+            // fall to `winner`'s guard exactly as they did, which is what leaves
+            // them the guard on this change rather than its casualties.
+            completed_at: String::new(),
+            id,
+        }
+    }
+
+    /// The same row with the conclusion stamp the forge actually sends, which is
+    /// the only field that orders two runs minted by concurrent events.
+    fn concluded(
+        conclusion: &str,
+        name: &str,
+        started_at: &str,
+        completed_at: &str,
+        id: u64,
+    ) -> Run {
+        Run {
+            completed_at: completed_at.to_string(),
+            ..run("completed", conclusion, name, started_at, id)
+        }
+    }
+
+    #[test]
+    fn a_roster_error_says_which_set_is_empty() {
+        assert_eq!(
+            RosterError::NoRequiredChecks.to_string(),
+            "the required check set is empty, so every check would be unrequired"
+        );
+        assert_eq!(
+            RosterError::NoAnsweredConclusions.to_string(),
+            "the answered-conclusion set is empty, so every conclusion would be an answer"
+        );
+    }
+
+    /// The judged view is one pointer per required name, in roster order, and an
+    /// unrequired name gets neither a vote nor a line.
+    #[test]
+    fn the_judged_view_is_the_required_names_in_roster_order() {
+        let mut runs = green_set();
+        runs.reverse();
+        runs.push(run(
+            "completed",
+            "failure",
+            "other",
+            "2026-08-12T00:00:00Z",
+            9,
+        ));
+        let judged = judged(&runs, &roster());
+        assert_eq!(
+            judged
+                .iter()
+                .map(|found| (found.check.as_str(), found.conclusion.as_str()))
+                .collect::<Vec<_>>(),
+            vec![("ci", "success"), ("perf", "success"), ("final", "success")]
+        );
+        let unrequired = [run(
+            "completed",
+            "success",
+            "other",
+            "2026-08-12T00:00:00Z",
+            9,
+        )];
+        assert!(latest_per_name(&unrequired, &roster()).is_empty());
+    }
+
+    /// A legacy row with no conclusion stamp that has not finished sorts above a
+    /// finished one started after it: not-yet-finished is later than any finish.
+    #[test]
+    fn an_unstamped_run_still_in_flight_outranks_a_later_started_finish() {
+        let mut runs = green_set();
+        runs.retain(|found| found.name != "ci");
+        runs.push(run("in_progress", "", "ci", "2026-09-09T02:00:00Z", 1));
+        runs.push(run("completed", "success", "ci", "2026-09-09T02:10:00Z", 2));
+        assert!(
+            matches!(decide(&runs, &roster()), Ok(Verdict::Pending(_))),
+            "the run still in flight answers for the name"
+        );
+    }
+
+    /// THE MEASURED SHAPE, and the reason `winner` exists (CLOUD-1722).
+    ///
+    /// GitHub registers the path-filtered COPY of a workflow a few seconds after
+    /// the copy that runs, and the copy that does not apply concludes `skipped`.
+    /// Ordering purely by `started_at` therefore hands the name to the twin that
+    /// judged nothing. Taken from `2ce05b82`: `ci` succeeded at 02:34:02 and was
+    /// overruled by a `skipped` twin at 02:34:03, six required checks read as "no
+    /// verdict", and no branch in the repository could land for six hours.
+    #[test]
+    fn a_later_skipped_twin_does_not_erase_a_verdict() {
+        let mut runs = green_set();
+        runs.push(run(
+            "completed",
+            "skipped",
+            "ci",
+            "2026-09-09T02:34:03Z",
+            102_315_915_050,
+        ));
+        assert_eq!(
+            decide(&runs, &roster()),
+            Ok(Verdict::Green),
+            "a skipped copy of a workflow that did not apply judged nothing"
+        );
+    }
+
+    /// THE ORDER-INDEPENDENCE CASE, and the defect the first shape carried.
+    ///
+    /// A success, an in-flight rerun of the same name, and a NEWER skipped twin.
+    /// The pairwise fold this replaced applied a non-transitive predicate, so the
+    /// slice order decided the verdict: `skipped, in-flight, success` let the old
+    /// success displace the rerun through the unanswered guard and returned
+    /// `Green` while the rerun was still running — a false green over the exact
+    /// path the anti-vacuity case protects. `runs_from_body` preserves the
+    /// source array order, so the reading depended on what GitHub happened to
+    /// serialise first. Both orders must read `Pending`.
+    #[test]
+    fn a_rerun_in_flight_under_a_newer_skipped_twin_is_pending_in_either_order() {
+        let success = run("completed", "success", "ci", "2026-09-09T02:34:02Z", 1);
+        let in_flight = run("in_progress", "", "ci", "2026-09-09T02:40:00Z", 2);
+        let skipped = run("completed", "skipped", "ci", "2026-09-09T02:40:03Z", 3);
+        for order in [
+            vec![skipped.clone(), in_flight.clone(), success.clone()],
+            vec![success, in_flight, skipped],
+        ] {
+            let mut runs = green_set();
+            runs.retain(|existing| existing.name != "ci");
+            runs.extend(order.clone());
+            assert!(
+                matches!(
+                    decide(&runs, &roster()),
+                    Ok(Verdict::Pending(Pending::Running { .. }))
+                ),
+                "a rerun in flight is not answered by an older success, whatever \
+                 order the runs arrive in: {order:?}"
+            );
+        }
+    }
+
+    /// THE ANTI-VACUITY HALF, and the one direction this must not buy.
+    ///
+    /// A rerun IN FLIGHT over a name that already succeeded is not the same shape:
+    /// the new run may fail, so the answer genuinely is not in yet and `Pending`
+    /// is right. A fix that preferred the standing success here would be a false
+    /// green on the only path where waiting is the correct behaviour — which is
+    /// worse than the stall it replaces, because a stall is recoverable.
+    #[test]
+    fn a_rerun_in_flight_still_reads_pending() {
+        let mut runs = green_set();
+        runs.push(run(
+            "in_progress",
+            "",
+            "ci",
+            "2026-09-09T02:40:00Z",
+            102_315_915_051,
+        ));
+        assert!(
+            matches!(decide(&runs, &roster()), Ok(Verdict::Pending(_))),
+            "a rerun that has not concluded is not answered by the run it replaced"
+        );
+    }
+
+    /// The rule stays a completion of CLOUD-436 rather than a reversal of it: an
+    /// OLDER skip set must still lose to the verdict that came after it, which is
+    /// the direction ordering by start time was introduced to fix.
+    #[test]
+    fn an_older_skip_still_loses_to_the_verdict_that_followed() {
+        let mut runs = green_set();
+        runs.insert(
+            0,
+            run(
+                "completed",
+                "skipped",
+                "ci",
+                "2026-09-09T02:00:00Z",
+                102_315_915_049,
+            ),
+        );
+        assert_eq!(decide(&runs, &roster()), Ok(Verdict::Green));
+    }
+
+    /// A REAL FAILURE IS STILL RED, whichever order it arrives in. `failure` is an
+    /// answered conclusion, so it is not what `winner` protects against — and
+    /// a fix that let a stale success outrank a later failure would be the false
+    /// green this whole module exists to stop.
+    #[test]
+    fn a_later_failure_still_wins() {
+        let mut runs = green_set();
+        runs.push(run(
+            "completed",
+            "failure",
+            "ci",
+            "2026-09-09T02:45:00Z",
+            102_315_915_052,
+        ));
+        assert!(matches!(decide(&runs, &roster()), Ok(Verdict::Red(_))));
+    }
+
+    fn green_set() -> Vec<Run> {
+        ["ci", "perf", "final"]
+            .iter()
+            .enumerate()
+            .map(|(i, n)| {
+                run(
+                    "completed",
+                    "success",
+                    n,
+                    "2026-08-12T00:00:00Z",
+                    i as u64 + 1,
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_graded_all_success_required_set_is_green() {
+        assert_eq!(decide(&green_set(), &roster()), Ok(Verdict::Green));
+    }
+
+    #[test]
+    fn a_partial_set_on_a_fresh_sha_is_not_an_answer() {
+        // THE DISCRIMINATING ROW (CLOUD-337): one graded check is the ORDINARY
+        // state of a freshly pushed SHA, and reading the roster from it answered
+        // green over a set of one.
+        let reading = vec![run("completed", "success", "ci", "", 0)];
+        let Ok(Verdict::Pending(Pending::Unregistered(missing))) = decide(&reading, &roster())
+        else {
+            panic!("a partial set must be unregistered-pending");
+        };
+        assert_eq!(missing, vec!["perf".to_string(), "final".to_string()]);
+    }
+
+    #[test]
+    fn a_tolerated_name_with_no_run_is_elided() {
+        // `zizmor` is absent-ok, so its absence is legitimate and must not join
+        // the unregistered list — requiring it would hang the poll.
+        assert_eq!(decide(&green_set(), &roster()), Ok(Verdict::Green));
+    }
+
+    #[test]
+    fn a_failure_outranks_a_name_that_has_not_registered() {
+        // An absent name manufactures nothing, so a completed failure beside it
+        // is an independent verdict and must still be red.
+        let reading = vec![run("completed", "failure", "ci", "", 0)];
+        let Ok(Verdict::Red(findings)) = decide(&reading, &roster()) else {
+            panic!("a real failure outranks an absent name");
+        };
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].to_string(), "ci failure");
+    }
+
+    #[test]
+    fn an_all_skipped_required_set_is_not_an_answer() {
+        let reading = vec![run("completed", "skipped", "ci", "", 0)];
+        let Ok(Verdict::Pending(Pending::NoVerdict(findings))) = decide(&reading, &roster()) else {
+            panic!("a skipped set is not an answer");
+        };
+        assert_eq!(findings[0].to_string(), "ci skipped");
+    }
+
+    #[test]
+    fn a_cancelled_required_check_is_not_an_answer_either() {
+        // CLOUD-363: a cancelled run is the ABSENCE of a verdict, not a bad one.
+        let reading = vec![run("completed", "cancelled", "ci", "", 0)];
+        let Ok(Verdict::Pending(Pending::NoVerdict(findings))) = decide(&reading, &roster()) else {
+            panic!("a cancelled check is not an answer");
+        };
+        assert_eq!(findings[0].to_string(), "ci cancelled");
+    }
+
+    #[test]
+    fn a_fanin_failure_over_cancelled_siblings_is_no_verdict() {
+        // CLOUD-363's measured set on #293: `final failure` plus cancelled
+        // siblings. `final` fans in over them, so its failure was manufactured.
+        //
+        // A DEAD END SINCE CLOUD-497, AND THE PRECEDENCE IS WHAT IS PINNED HERE.
+        // Every name is terminal and none is unregistered, so this closed set
+        // answers `DeadEnd` rather than `Pending` — but the thing CLOUD-363 asked
+        // of this case is that the fan-in's failure does NOT come back as `Red`,
+        // and that is unchanged: the split happens inside the same bucket, below
+        // the same `real_failed` test, so the promotion this refuses stays
+        // refused. Before the split this set was the wedge itself — a closed
+        // reading that spelled "ask again" forever.
+        let reading = vec![
+            run("completed", "cancelled", "ci", "", 0),
+            run("completed", "cancelled", "perf", "", 0),
+            run("completed", "failure", "final", "", 0),
+        ];
+        let Ok(Verdict::DeadEnd(_)) = decide(&reading, &roster()) else {
+            panic!("a manufactured fan-in failure is not a verdict");
+        };
+    }
+
+    /// Fails by: a draft run's red fan-in read as a verdict, which wedged every
+    /// head pushed as a draft (#1276); or a real sibling failure, a green
+    /// fan-in, or a sibling still running read as manufactured.
+    #[test]
+    fn a_draft_runs_red_fanin_is_manufactured_and_a_real_failure_is_not() {
+        let answered: Vec<String> = roster().answered;
+        let draft = vec![
+            run("completed", "skipped", "ci", "", 0),
+            run("completed", "skipped", "perf", "", 0),
+            run("completed", "failure", "final", "", 0),
+        ];
+        assert!(fanin_failure_manufactured(&draft, &answered, "final"));
+        let real = vec![
+            run("completed", "failure", "ci", "", 0),
+            run("completed", "skipped", "perf", "", 0),
+            run("completed", "failure", "final", "", 0),
+        ];
+        assert!(!fanin_failure_manufactured(&real, &answered, "final"));
+        let green = vec![
+            run("completed", "success", "ci", "", 0),
+            run("completed", "success", "final", "", 0),
+        ];
+        assert!(!fanin_failure_manufactured(&green, &answered, "final"));
+        let running = vec![
+            run("in_progress", "", "ci", "", 0),
+            run("completed", "skipped", "perf", "", 0),
+            run("completed", "failure", "final", "", 0),
+        ];
+        assert!(!fanin_failure_manufactured(&running, &answered, "final"));
+        let all_answered = vec![
+            run("completed", "success", "ci", "", 0),
+            run("completed", "failure", "final", "", 0),
+        ];
+        assert!(!fanin_failure_manufactured(
+            &all_answered,
+            &answered,
+            "final"
+        ));
+        // The fan-in's own state decides first: one not completed, whatever its
+        // conclusion field says, and one that passed, are no manufactured red.
+        let unfinished = vec![
+            run("completed", "skipped", "ci", "", 0),
+            run("in_progress", "failure", "final", "", 0),
+        ];
+        assert!(!fanin_failure_manufactured(&unfinished, &answered, "final"));
+        let passed = vec![
+            run("completed", "skipped", "ci", "", 0),
+            run("completed", "success", "final", "", 0),
+        ];
+        assert!(!fanin_failure_manufactured(&passed, &answered, "final"));
+    }
+
+    #[test]
+    fn a_non_fanin_failure_over_cancelled_siblings_is_the_verdict() {
+        // CLOUD-900: `ci` failing judges the tree directly, and no cancellation
+        // can produce it. This is the case `abandon-matrix` deliberately creates.
+        let reading = vec![
+            run("completed", "failure", "ci", "", 0),
+            run("completed", "cancelled", "perf", "", 0),
+            run("completed", "cancelled", "final", "", 0),
+        ];
+        let Ok(Verdict::Red(findings)) = decide(&reading, &roster()) else {
+            panic!("a non-fan-in failure is the verdict");
+        };
+        assert_eq!(findings[0].to_string(), "ci failure");
+    }
+
+    #[test]
+    fn with_no_fanin_named_every_failure_stays_manufacturable() {
+        // The unset direction is CLOUD-363's ordering intact, and it is the safe
+        // one: forgetting the name costs a poll that holds too long, where the
+        // opposite default would report a manufactured failure as a verdict.
+        let mut r = roster();
+        r.fanin = None;
+        let reading = vec![
+            run("completed", "failure", "ci", "", 0),
+            run("completed", "cancelled", "perf", "", 0),
+            run("completed", "cancelled", "final", "", 0),
+        ];
+        // `DeadEnd` since CLOUD-497 — a closed set — and the direction this case
+        // exists for is untouched: with no fan-in named the failure is still not
+        // promoted to `Red`, which is what "stays manufacturable" means.
+        let Ok(Verdict::DeadEnd(_)) = decide(&reading, &r) else {
+            panic!("with no fan-in named, no failure is promoted");
+        };
+    }
+
+    #[test]
+    fn a_later_run_supersedes_a_drafts_skip_residue() {
+        // CLOUD-436, measured on #345: the skip at 03:18:10Z against the success
+        // at 03:20:16Z. Judged as a union the residue vetoes a verdict that
+        // already exists.
+        let mut reading = green_set();
+        for name in ["ci", "perf", "final"] {
+            reading.push(run("completed", "skipped", name, "2026-08-11T00:00:00Z", 1));
+        }
+        assert_eq!(decide(&reading, &roster()), Ok(Verdict::Green));
+    }
+
+    #[test]
+    fn an_unorderable_pair_falls_to_the_least_conclusive() {
+        // The precedence that makes a reading with no ordering key fail CLOSED:
+        // it answers exactly as the union did, so it can never read greener.
+        let reading = vec![
+            run("completed", "success", "ci", "", 0),
+            run("completed", "skipped", "ci", "", 0),
+        ];
+        let Ok(Verdict::Pending(Pending::NoVerdict(findings))) = decide(&reading, &roster()) else {
+            panic!("an unorderable pair falls to the least conclusive row");
+        };
+        assert_eq!(findings[0].to_string(), "ci skipped");
+    }
+
+    #[test]
+    fn a_still_running_check_holds_the_poll_open() {
+        let mut reading = green_set();
+        reading.push(run("in_progress", "-", "ci", "2026-08-13T00:00:00Z", 99));
+        let Ok(Verdict::Pending(Pending::Running { pending, .. })) = decide(&reading, &roster())
+        else {
+            panic!("a running check holds the poll open");
+        };
+        assert_eq!(pending, 1);
+    }
+
+    #[test]
+    fn an_unknown_conclusion_holds_the_poll_open() {
+        // CLOUD-376: not in the answered set means "no answer", so a conclusion
+        // GitHub adds tomorrow is never reported as a verdict.
+        let reading = vec![run("completed", "invented_tomorrow", "ci", "", 0)];
+        let Ok(Verdict::Pending(Pending::NoVerdict(findings))) = decide(&reading, &roster()) else {
+            panic!("an unknown conclusion is not an answer");
+        };
+        assert_eq!(findings[0].to_string(), "ci invented_tomorrow");
+    }
+
+    /// CLOUD-497's discriminating case, and its two mirrors in the same body so
+    /// the distinction cannot be read without what bounds it.
+    ///
+    /// **The measured input.** PR #378, head `f5ac94f8`, 2026-08-12: a second,
+    /// wholly-skipped run minted six minutes AFTER the real one had passed, so
+    /// `ci`'s newest run was `skipped` over a set that was otherwise graded. Forty
+    /// eight minutes of polling a reading that could not change, holding
+    /// `refs/heads/batten-land-lock` against a queue, killed by hand.
+    ///
+    /// **Why the mirrors are in this case rather than beside it.** Each removes
+    /// exactly one conjunct of the predicate, and a reader who sees only the first
+    /// assertion cannot tell a terminality rule from a rule about skips at all:
+    ///
+    /// * **Still running beside the skip** — `pending > 0`, so a verdict may yet
+    ///   arrive. Stays `Pending`, waits unbounded, no clock introduced anywhere.
+    ///   This is the arm `mem:workflow/landing-loop` protects.
+    /// * **A required name not yet registered** — `unregistered` non-empty, so the
+    ///   set is not closed even with nothing running. Stays `Pending`, because a
+    ///   fresh SHA whose first run happens to skip must not stop a landing before
+    ///   its siblings have registered.
+    ///
+    /// Both mirrors answer `Pending::NoVerdict` and carry the SAME finding as the
+    /// dead end, which is what makes them mirrors at all: three readings that name
+    /// `ci skipped` identically, and only one of them closed.
+    ///
+    /// A `Green` mirror is not needed here: `an_all_green_set_is_green` and
+    /// `an_unrelated_check_gets_neither_a_vote_nor_a_veto` already hold that half,
+    /// and a terminal green set has an empty masked bucket so it never reaches
+    /// this branch at all.
+    #[test]
+    fn a_closed_set_with_a_masked_name_is_a_dead_end_and_an_open_one_still_waits() {
+        // CLOSED: every required name terminal, `ci` masked by a skip minted
+        // after its own success. Nothing further will be minted for this sha.
+        let closed = vec![
+            run(
+                "completed",
+                "skipped",
+                "ci",
+                "2026-08-12T21:58:23Z",
+                94_276_140_437,
+            ),
+            run(
+                "completed",
+                "success",
+                "perf",
+                "2026-08-12T21:52:23Z",
+                94_274_706_740,
+            ),
+            run(
+                "completed",
+                "success",
+                "final",
+                "2026-08-12T21:59:13Z",
+                94_276_319_070,
+            ),
+        ];
+        let Ok(Verdict::DeadEnd(findings)) = decide(&closed, &roster()) else {
+            panic!("a closed set with a masked name is a dead end, not a wait");
+        };
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].to_string(), "ci skipped");
+
+        // MIRROR ONE: the same mask, one sibling still running. The answer may be
+        // moments away, so this waits — and waits without a bound.
+        //
+        // IT IS `NoVerdict` AND NOT `Running`, because the masked bucket is tested
+        // above the running tally and always was. That is the point rather than an
+        // accident of ordering: both mirrors and the dead end come out of the ONE
+        // bucket, so what tells them apart is terminality alone and nothing about
+        // which spelling of "not an answer" a set happens to carry.
+        let mut running = closed.clone();
+        running[1] = run(
+            "in_progress",
+            "-",
+            "perf",
+            "2026-08-12T21:52:23Z",
+            94_274_706_740,
+        );
+        let Ok(Verdict::Pending(Pending::NoVerdict(findings))) = decide(&running, &roster()) else {
+            panic!("a skip beside a running check is still a wait");
+        };
+        assert_eq!(findings[0].to_string(), "ci skipped");
+
+        // MIRROR TWO: the same mask, one required name with no run at all. Not
+        // closed either, and for a different reason — `final` may still register.
+        let unregistered: Vec<Run> = closed
+            .iter()
+            .filter(|row| row.name != "final")
+            .cloned()
+            .collect();
+        let Ok(Verdict::Pending(Pending::NoVerdict(findings))) = decide(&unregistered, &roster())
+        else {
+            panic!("a mask over a set still registering is a wait");
+        };
+        assert_eq!(findings[0].to_string(), "ci skipped");
+    }
+
+    /// A red tree is a verdict, never a dead end — the ordering CLOUD-497 must not
+    /// disturb, asserted rather than left to the comment that claims it.
+    ///
+    /// `real_failed` returns above the masked bucket, so a failure no cancellation
+    /// could have manufactured still answers `Red` over a set that is otherwise
+    /// closed and masked. Getting this wrong would turn every red landing into a
+    /// "push to buy a fresh run", which is the opposite of the remedy.
+    #[test]
+    fn a_real_failure_over_a_closed_masked_set_is_still_red() {
+        let reading = vec![
+            run("completed", "failure", "ci", "", 0),
+            run("completed", "cancelled", "perf", "", 0),
+            run("completed", "success", "final", "", 0),
+        ];
+        let Ok(Verdict::Red(findings)) = decide(&reading, &roster()) else {
+            panic!("a real failure is a verdict even where a sibling is masked");
+        };
+        assert_eq!(findings[0].to_string(), "ci failure");
+    }
+
+    #[test]
+    fn an_unrelated_check_gets_neither_a_vote_nor_a_veto() {
+        let mut reading = green_set();
+        reading.push(run("completed", "failure", "SomeAnalyzer", "", 0));
+        assert_eq!(decide(&reading, &roster()), Ok(Verdict::Green));
+    }
+
+    #[test]
+    fn an_empty_roster_is_a_usage_error_and_never_green() {
+        let mut r = roster();
+        r.required.clear();
+        assert_eq!(decide(&green_set(), &r), Err(RosterError::NoRequiredChecks));
+    }
+
+    #[test]
+    fn an_empty_answered_set_is_a_usage_error_and_never_green() {
+        let mut r = roster();
+        r.answered.clear();
+        assert_eq!(
+            decide(&green_set(), &r),
+            Err(RosterError::NoAnsweredConclusions)
+        );
+    }
+
+    #[test]
+    fn an_empty_reading_is_not_an_answer_and_reports_nothing_graded() {
+        // An explicitly empty reading is a real state — a SHA with no check-runs
+        // yet — and must answer "not yet" rather than green.
+        //
+        // WHICH "not yet" IS THE PREDECESSOR'S, AND IT IS THE SURPRISING ONE.
+        // `graded == 0` is tested BEFORE the missing-name branch, so an empty
+        // reading reports as nothing-graded rather than as nothing-registered,
+        // even though every roster name is in fact absent. The bats case that
+        // expects "no run at all" supplies ONE graded check, which is what
+        // carries it past this branch to the later one.
+        //
+        // Asserted rather than corrected: this port moves where the decision
+        // lives and never what it decides, and both spellings are exit 3 to
+        // every caller. Changing the order here would be re-deciding CLOUD-337's
+        // rule under cover of a refactor.
+        let Ok(Verdict::Pending(Pending::Running { pending, graded })) = decide(&[], &roster())
+        else {
+            panic!("an empty reading is not an answer");
+        };
+        assert_eq!((pending, graded), (0, 0));
+    }
+
+    #[test]
+    fn one_graded_check_reaches_the_unregistered_branch() {
+        // The other side of the ordering above, and the case the bats suite
+        // actually pinned: with something graded, the absent names are named.
+        let reading = vec![run("completed", "success", "ci", "", 0)];
+        let Ok(Verdict::Pending(Pending::Unregistered(missing))) = decide(&reading, &roster())
+        else {
+            panic!("a partial set names what has not registered");
+        };
+        assert_eq!(missing, vec!["perf".to_string(), "final".to_string()]);
+    }
+
+    #[test]
+    fn one_cancelled_check_is_not_redeemed_by_another_that_succeeded() {
+        // The bucket is per NAME, not a tally: a cancelled `ci` is still no
+        // verdict however many siblings graded green beside it.
+        //
+        // AND THIS IS CLOUD-497'S OWN MEASURED SHAPE, one conclusion over. PR
+        // #378's head carried `ci skipped` newest beside a graded `final`, and
+        // this is that set with `cancelled` for `skipped` — every name terminal,
+        // one of them masked. It read `Pending` and `ci-wait` polled it for 48
+        // minutes holding the landing lease. The per-name bucketing this case
+        // pins is what makes the mask survive; the terminality split is what
+        // stops the poll.
+        let reading = vec![
+            run("completed", "cancelled", "ci", "", 0),
+            run("completed", "success", "perf", "", 0),
+            run("completed", "success", "final", "", 0),
+        ];
+        let Ok(Verdict::DeadEnd(findings)) = decide(&reading, &roster()) else {
+            panic!("one cancelled name is not redeemed by a sibling");
+        };
+        assert_eq!(findings[0].to_string(), "ci cancelled");
+    }
+
+    #[test]
+    fn a_non_fanin_failure_answers_while_its_siblings_are_still_running() {
+        // CLOUD-900 against the OTHER not-an-answer state. A failure no
+        // cancellation could manufacture is a verdict on the tree whatever else
+        // has yet to report, so a still-running sibling must not hold it back.
+        let reading = vec![
+            run("completed", "failure", "ci", "", 0),
+            run("in_progress", "-", "perf", "", 0),
+            run("in_progress", "-", "final", "", 0),
+        ];
+        let Ok(Verdict::Red(findings)) = decide(&reading, &roster()) else {
+            panic!("a real failure answers past a running sibling");
+        };
+        assert_eq!(findings[0].to_string(), "ci failure");
+    }
+
+    #[test]
+    fn the_fanins_own_failure_still_yields_to_the_pending_bucket() {
+        // The narrow half of CLOUD-900: only the fan-in is excluded from
+        // promotion, so its own red keeps falling through exactly as CLOUD-363
+        // left it.
+        let reading = vec![
+            run("completed", "failure", "final", "", 0),
+            run("in_progress", "-", "ci", "", 0),
+            run("completed", "success", "perf", "", 0),
+        ];
+        let Ok(Verdict::Pending(Pending::Running { .. })) = decide(&reading, &roster()) else {
+            panic!("the fan-in's own failure yields to pending");
+        };
+    }
+
+    #[test]
+    fn third_party_successes_do_not_make_a_draft_era_skip_set_an_answer() {
+        // CLOUD-327's original defect: `SonarCloud` and `release-plz` are not
+        // draft-gated, so on a draft push they grade on their own and satisfy
+        // "something graded" while every check that judges this repository is
+        // skipped. #261 landed on exactly that set.
+        let reading = vec![
+            run("completed", "skipped", "ci", "", 0),
+            run("completed", "skipped", "perf", "", 0),
+            run("completed", "skipped", "final", "", 0),
+            run("completed", "success", "SonarCloud Code Analysis", "", 0),
+        ];
+        // `DeadEnd` since CLOUD-497: the roster's three are all terminal, so this
+        // set is closed. CLOUD-327's rule is what is pinned and it is unchanged —
+        // a third party's success still answers for nobody but itself, and all
+        // three roster names are still named in the findings.
+        let Ok(Verdict::DeadEnd(findings)) = decide(&reading, &roster()) else {
+            panic!("a third party cannot answer for the roster");
+        };
+        assert_eq!(findings.len(), 3);
+    }
+
+    #[test]
+    fn a_known_bad_conclusion_is_still_red() {
+        // The anti-vacuity half of CLOUD-376: membership must not swallow the
+        // conclusions that ARE answers. `timed_out` is declared, so it is a
+        // verdict rather than a hold.
+        let reading = vec![run("completed", "timed_out", "ci", "", 0)];
+        let Ok(Verdict::Red(findings)) = decide(&reading, &roster()) else {
+            panic!("a declared bad conclusion is red");
+        };
+        assert_eq!(findings[0].to_string(), "ci timed_out");
+    }
+
+    #[test]
+    fn a_skip_superseded_by_a_failure_is_red() {
+        // The case that made CLOUD-436 urgent: judged as a union, the draft-era
+        // skip beside a completed failure read as "no answer" and the red that
+        // re-drafts a broken PR never fired (#343).
+        let reading = vec![
+            run("completed", "skipped", "ci", "2026-08-11T00:00:00Z", 1),
+            run("completed", "failure", "ci", "2026-08-12T00:00:00Z", 2),
+            run("completed", "success", "perf", "2026-08-12T00:00:00Z", 3),
+            run("completed", "success", "final", "2026-08-12T00:00:00Z", 4),
+        ];
+        let Ok(Verdict::Red(findings)) = decide(&reading, &roster()) else {
+            panic!("the later failure speaks for the name");
+        };
+        assert_eq!(findings[0].to_string(), "ci failure");
+    }
+
+    #[test]
+    fn a_success_superseded_by_a_skip_is_an_answer_now() {
+        // REVERSED DELIBERATELY (CLOUD-1722), and the reasoning lives here rather
+        // than only in a commit message because the case it replaces was right
+        // for three weeks and a reader needs to know what changed under it.
+        //
+        // It asserted the draft economy (CLOUD-247, CLOUD-327): a name whose
+        // LATEST run skipped is not an answer, whatever graded before it — so a
+        // PR readied, graded green, then RE-DRAFTED does not keep reading green
+        // off the stale run. That case is real and its two runs are a day apart.
+        //
+        // IT CANNOT BE TOLD FROM THE ONE THAT STOPPED THE FLEET. GitHub registers
+        // the path-filtered COPY of a workflow one to five seconds after the copy
+        // that runs, and the copy that does not apply concludes `skipped`. Both
+        // readings are "a success, then a later skip"; only the gap differs, and
+        // a gate deciding on a duration would be estimating rather than deciding
+        // (non-negotiable rule 3). `check_suite`, the workflow-run id and the
+        // check-run id were each checked as discriminators and none is one: two
+        // workflow files dispatched by a single push take their ids in arbitrary
+        // relative order, so "later" means nothing between concurrent copies.
+        //
+        // SO THE DRAFT CONCERN MOVES TO THE GATE THAT ALREADY OWNS IT.
+        // The consumer's fast-forward workflow refuses a draft head
+        // unconditionally, before any checks reading at all — added by CLOUD-853
+        // precisely because the ruleset admitted a draft's empty check set as
+        // satisfying "required checks green". A re-drafted PR cannot fast-forward
+        // whatever this predicate answers, so the cost of this reversal is one
+        // wasted lap of `land`, not a merge nobody graded.
+        //
+        // The cost of NOT reversing it was measured on 2026-09-09: six required
+        // checks reading "no verdict" over a head whose every job had succeeded,
+        // three branches taking the landing lease in turn and holding it, and
+        // nothing reaching `main` for six hours.
+        let reading = vec![
+            run("completed", "success", "ci", "2026-08-11T00:00:00Z", 1),
+            run("completed", "skipped", "ci", "2026-08-12T00:00:00Z", 2),
+            run("completed", "success", "perf", "2026-08-11T00:00:00Z", 3),
+            run("completed", "success", "final", "2026-08-11T00:00:00Z", 4),
+        ];
+        assert_eq!(
+            decide(&reading, &roster()),
+            Ok(Verdict::Green),
+            "a run that completed without judging cannot erase the judgement it followed"
+        );
+    }
+
+    /// THE CASE CLOUD-1722 GAVE UP, AND THIS ROW BUYS BACK.
+    ///
+    /// A PR readied, graded green, then RE-DRAFTED: the re-draft's `skipped` run
+    /// concludes genuinely after the success it supersedes, so it speaks for the
+    /// name and the head is not an answer. Identical in `started_at` terms to the
+    /// concurrent twin — the reason that reversal was needed — and opposite once
+    /// the conclusion stamps are read. The reversal above therefore narrows to a
+    /// reading that lacks the column rather than governing every reading.
+    #[test]
+    fn a_re_drafted_skip_that_concluded_last_still_speaks() {
+        let reading = vec![
+            concluded(
+                "success",
+                "ci",
+                "2026-09-08T10:00:00Z",
+                "2026-09-08T10:20:00Z",
+                1,
+            ),
+            concluded(
+                "skipped",
+                "ci",
+                "2026-09-09T10:00:00Z",
+                "2026-09-09T10:00:01Z",
+                2,
+            ),
+        ];
+        let Ok(Verdict::Pending(Pending::NoVerdict(findings))) = decide(&reading, &roster()) else {
+            panic!("a skip that concluded last is the current state of the name");
+        };
+        assert_eq!(findings[0].to_string(), "ci skipped");
+    }
+
+    /// THE ROW'S OWN MEASURED SHAPE (CLOUD-1662), and the false-green direction.
+    ///
+    /// `9ea4da6a`: `windows` FAILED at 04:05:37 and a `skipped` twin from the
+    /// concurrently-processed event started 04:05:39, so the reading buried a
+    /// definitively red head. `land` sat in `Wait` for 30 minutes holding the
+    /// landing lease over a head it could never call. The twin concluded on the
+    /// instant it was minted; the failure concluded when the job failed.
+    #[test]
+    fn a_concurrent_skip_does_not_bury_the_failure_it_raced() {
+        let reading = vec![
+            concluded(
+                "failure",
+                "ci",
+                "2026-09-08T04:05:37Z",
+                "2026-09-08T04:08:52Z",
+                101_933_616_080,
+            ),
+            concluded(
+                "skipped",
+                "ci",
+                "2026-09-08T04:05:39Z",
+                "2026-09-08T04:05:40Z",
+                101_933_643_878,
+            ),
+            concluded(
+                "success",
+                "perf",
+                "2026-09-08T04:05:35Z",
+                "2026-09-08T04:08:00Z",
+                3,
+            ),
+            concluded(
+                "success",
+                "final",
+                "2026-09-08T04:05:35Z",
+                "2026-09-08T04:08:00Z",
+                4,
+            ),
+        ];
+        let Ok(Verdict::Red(findings)) = decide(&reading, &roster()) else {
+            panic!("a skip that judged nothing cannot bury a failure it raced");
+        };
+        assert_eq!(findings[0].to_string(), "ci failure");
+    }
+
+    /// The bound, in the direction this module must never fail in: a rerun still
+    /// in flight outranks every run that concluded, however recently.
+    #[test]
+    fn a_run_still_going_outranks_every_run_that_concluded() {
+        let reading = vec![
+            concluded(
+                "success",
+                "ci",
+                "2026-09-09T16:10:26Z",
+                "2026-09-09T23:59:59Z",
+                9,
+            ),
+            run("in_progress", "-", "ci", "2026-09-09T16:10:30Z", 2),
+            concluded(
+                "success",
+                "perf",
+                "2026-09-09T16:10:26Z",
+                "2026-09-09T16:31:35Z",
+                3,
+            ),
+            concluded(
+                "success",
+                "final",
+                "2026-09-09T16:10:26Z",
+                "2026-09-09T16:31:39Z",
+                4,
+            ),
+        ];
+        let Ok(Verdict::Pending(Pending::Running { pending, .. })) = decide(&reading, &roster())
+        else {
+            panic!("an in-flight re-run holds the poll open");
+        };
+        assert_eq!(pending, 1);
+    }
+
+    #[test]
+    fn the_id_breaks_a_tie_between_two_runs_started_in_the_same_second() {
+        // Measured on #345's residue: `started_at` alone cannot order a pair
+        // minted inside one second, so the zero-padded id is the tie-break and
+        // either field alone discriminates there.
+        let reading = vec![
+            run("completed", "skipped", "ci", "2026-08-12T00:00:00Z", 100),
+            run("completed", "success", "ci", "2026-08-12T00:00:00Z", 200),
+            run("completed", "success", "perf", "2026-08-12T00:00:00Z", 1),
+            run("completed", "success", "final", "2026-08-12T00:00:00Z", 2),
+        ];
+        assert_eq!(decide(&reading, &roster()), Ok(Verdict::Green));
+    }
+
+    #[test]
+    fn a_pending_rerun_supersedes_a_completed_one() {
+        // A re-run means the answer is not in yet, even though an older run of
+        // the same name is terminal and green.
+        let reading = vec![
+            run("completed", "success", "ci", "2026-08-11T00:00:00Z", 1),
+            run("in_progress", "-", "ci", "2026-08-12T00:00:00Z", 2),
+            run("completed", "success", "perf", "2026-08-12T00:00:00Z", 3),
+            run("completed", "success", "final", "2026-08-12T00:00:00Z", 4),
+        ];
+        let Ok(Verdict::Pending(Pending::Running { pending, .. })) = decide(&reading, &roster())
+        else {
+            panic!("a pending re-run holds the poll open");
+        };
+        assert_eq!(pending, 1);
+    }
+
+    #[test]
+    fn each_name_is_judged_on_its_own_latest() {
+        // Never one name's run against another's: the ordering key is scoped to
+        // a name, so an older success for `ci` is not superseded by a newer skip
+        // belonging to `perf`.
+        let reading = vec![
+            run("completed", "success", "ci", "2026-08-10T00:00:00Z", 1),
+            run("completed", "success", "perf", "2026-08-11T00:00:00Z", 2),
+            run("completed", "skipped", "final", "2026-08-12T00:00:00Z", 3),
+        ];
+        // `DeadEnd` since CLOUD-497 — all three terminal. The scoping this case
+        // pins is what decides WHICH names are masked, and it still reports one.
+        let Ok(Verdict::DeadEnd(findings)) = decide(&reading, &roster()) else {
+            panic!("each name answers for itself");
+        };
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].to_string(), "final skipped");
+    }
+
+    #[test]
+    fn three_runs_on_one_name_are_judged_by_the_latest() {
+        // PRESSURE: supersession is not a two-row special case.
+        let reading = vec![
+            run("completed", "skipped", "ci", "2026-08-10T00:00:00Z", 1),
+            run("completed", "cancelled", "ci", "2026-08-11T00:00:00Z", 2),
+            run("completed", "success", "ci", "2026-08-12T00:00:00Z", 3),
+            run("completed", "success", "perf", "2026-08-12T00:00:00Z", 4),
+            run("completed", "success", "final", "2026-08-12T00:00:00Z", 5),
+        ];
+        assert_eq!(decide(&reading, &roster()), Ok(Verdict::Green));
+    }
+
+    #[test]
+    fn three_runs_whose_latest_is_red_is_still_red() {
+        // The anti-vacuity twin of the case above: supersession must be able to
+        // arrive at red, or "judged by the latest" would only ever be observed
+        // rescuing a head.
+        let reading = vec![
+            run("completed", "skipped", "ci", "2026-08-10T00:00:00Z", 1),
+            run("completed", "success", "ci", "2026-08-11T00:00:00Z", 2),
+            run("completed", "failure", "ci", "2026-08-12T00:00:00Z", 3),
+            run("completed", "success", "perf", "2026-08-12T00:00:00Z", 4),
+            run("completed", "success", "final", "2026-08-12T00:00:00Z", 5),
+        ];
+        let Ok(Verdict::Red(findings)) = decide(&reading, &roster()) else {
+            panic!("the latest of three can be red");
+        };
+        assert_eq!(findings[0].to_string(), "ci failure");
+    }
+
+    #[test]
+    fn an_unset_tolerated_set_is_the_strict_direction() {
+        // CLOUD-337's asymmetry: forgetting the tolerated set makes this wait for
+        // a name that may never come, which is loud; the opposite would forgive a
+        // name that had merely not registered, which is a landing nobody judged.
+        let mut r = roster();
+        r.absent_ok.clear();
+        let reading = vec![run("completed", "success", "ci", "", 0)];
+        let Ok(Verdict::Pending(Pending::Unregistered(missing))) = decide(&reading, &r) else {
+            panic!("an unset tolerated set requires every roster name");
+        };
+        assert!(missing.contains(&"perf".to_string()));
+    }
+}

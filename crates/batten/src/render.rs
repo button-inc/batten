@@ -4,7 +4,7 @@
 //! of the one spec, "so the shipped binary and the generated docs can never
 //! drift." [`crate::spec`] emits the machine reading of that surface and
 //! `clap_complete` emits the shell reading; this module emits the two human
-//! readings. All four walk the same [`crate::surface::SURFACE`]-built
+//! readings. All four walk the same [`crate::surface_table::SURFACE`]-built
 //! [`clap::Command`] tree, so none of them can describe a verb the binary does
 //! not have.
 //!
@@ -222,8 +222,10 @@ fn flag_table(out: &mut String, node: &CommandSpec) {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+    #[cfg(test)]
     use crate::spec;
-    use crate::surface::{self, SURFACE};
+    use crate::surface;
+    use crate::surface_table::SURFACE;
 
     #[test]
     fn every_declared_path_renders_a_non_empty_page() {
