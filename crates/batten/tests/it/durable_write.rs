@@ -30,7 +30,7 @@ fn repo(name: &str, source: &[&str]) -> PathBuf {
 }
 
 fn repo_at(name: &str, path: &str, source: &[&str]) -> PathBuf {
-    let root = common::scratch(name);
+    let root = common::scratch_repo(name);
     let subject = root.join(path);
     fs::create_dir_all(subject.parent().expect("a parent")).expect("scratch parent");
     let mut text = source.join("\n");

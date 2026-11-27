@@ -71,7 +71,7 @@ fn row() -> Rule {
 
 /// A scratch tree carrying a manifest, some workflows and the committed module.
 fn tree(name: &str, manifest: &str, workflows: &[(&str, &str)]) -> PathBuf {
-    let root = common::scratch(&format!("ci-cache-declared-{name}"));
+    let root = common::scratch_repo(&format!("ci-cache-declared-{name}"));
     common::write(&root, "mise.toml", manifest);
     for (file, body) in workflows {
         common::write(&root, &format!(".github/workflows/{file}"), body);
@@ -200,7 +200,7 @@ fn this_repository_is_clean_today() {
     // reason `findings` states; the scratch name is this case's own, because
     // nextest runs each case in its own process and a shared name is a wipe
     // under another process's read.
-    let only = common::scratch("ci-cache-declared-vocabulary-real-tree");
+    let only = common::scratch_repo("ci-cache-declared-vocabulary-real-tree");
     install_module(&only);
     let found = findings_declared_by(&root, &only);
     assert!(
@@ -622,7 +622,7 @@ fn an_unparsed_workflow_is_could_not_look() {
 
 #[test]
 fn a_tree_with_no_workflow_is_not_this_rows_business() {
-    let root = common::scratch("ci-cache-declared-absent");
+    let root = common::scratch_repo("ci-cache-declared-absent");
     common::write(&root, "mise.toml", MANIFEST);
     install_module(&root);
     let found = findings(&root);

@@ -69,7 +69,7 @@ fn row() -> Rule {
 /// A scratch tree carrying a release workflow, a config, and the committed
 /// module.
 fn tree(name: &str, targets: &[&str], platforms: &[&str]) -> PathBuf {
-    let root = common::scratch(&format!("release-provision-parity-{name}"));
+    let root = common::scratch_repo(&format!("release-provision-parity-{name}"));
     let mut matrix = String::new();
     for target in targets {
         write!(
@@ -169,7 +169,7 @@ fn this_repository_is_clean_today() {
     //
     // The scratch name is this case's own: nextest runs each case in its own
     // process, and a shared name is a wipe under another process's read.
-    let only = common::scratch("release-provision-parity-vocabulary-real-tree");
+    let only = common::scratch_repo("release-provision-parity-vocabulary-real-tree");
     install_module(&only);
     let found = findings_declared_by(&root, &only);
     assert!(
@@ -220,7 +220,7 @@ fn a_target_the_mapping_does_not_name_is_refused() {
 /// rather than leaving the finding set empty.
 #[test]
 fn an_unparsed_release_workflow_is_reported() {
-    let root = common::scratch("release-provision-parity-unparsed");
+    let root = common::scratch_repo("release-provision-parity-unparsed");
     common::write(
         &root,
         ".github/workflows/dist.yml",

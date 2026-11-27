@@ -74,7 +74,7 @@ const SOUND_RULES: &str = "\
 
 /// A scratch tree carrying the two instruction files, plus the committed module.
 fn tree(name: &str, index: Option<&str>, rules_doc: Option<&str>) -> PathBuf {
-    let root = common::scratch(&format!("claim-order-{name}"));
+    let root = common::scratch_repo(&format!("claim-order-{name}"));
     if let Some(body) = index {
         common::write(&root, "AGENTS.md", body);
     }
@@ -252,7 +252,7 @@ fn this_repository_states_the_order_today() {
     // reason `findings_declared_by` states; the scratch name is this case's own,
     // because nextest runs each case in its own process and a shared name is a
     // wipe under another process's read.
-    let only = common::scratch("claim-order-vocabulary-real-tree");
+    let only = common::scratch_repo("claim-order-vocabulary-real-tree");
     install_module(&only);
     let found = findings_declared_by(&root, &only);
     assert!(

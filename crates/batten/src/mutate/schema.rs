@@ -10103,7 +10103,7 @@ fn crate_sources(
         ]
     };
     for walked in walks {
-        for entry in crate::git::walker(root.join(&walked))
+        for entry in crate::git::walker(&root.join(&walked))
             .hidden(false)
             .build()
             .flatten()

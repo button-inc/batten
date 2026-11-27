@@ -97,7 +97,7 @@ fn findings(root: &Path) -> Vec<String> {
 
 /// A scratch tree holding a `[tools]` table with `line` appended.
 fn tools_with(name: &str, line: &str) -> PathBuf {
-    let root = common::scratch(&format!("prebuilt-lint-{name}"));
+    let root = common::scratch_repo(&format!("prebuilt-lint-{name}"));
     common::write(
         &root,
         "mise.toml",

@@ -70,7 +70,7 @@ fn row() -> Rule {
 
 /// A scratch tree carrying one workflow and the committed module.
 fn tree(name: &str, workflow: &str) -> PathBuf {
-    let root = common::scratch(&format!("ci-suite-lane-{name}"));
+    let root = common::scratch_repo(&format!("ci-suite-lane-{name}"));
     common::write(&root, ".github/workflows/ci.yml", workflow);
     install_module(&root);
     root
@@ -159,7 +159,7 @@ fn this_repository_is_clean_today() {
     // reason `findings` states; the scratch name is this case's own, because
     // nextest runs each case in its own process and a shared name is a wipe
     // under another process's read.
-    let only = common::scratch("ci-suite-lane-vocabulary-real-tree");
+    let only = common::scratch_repo("ci-suite-lane-vocabulary-real-tree");
     install_module(&only);
     let found = findings_declared_by(&root, &only);
     assert!(
@@ -270,7 +270,7 @@ fn a_workflow_that_carves_nothing_out_is_clean() {
 
 #[test]
 fn a_tree_with_no_such_workflow_is_not_this_rows_business() {
-    let root = common::scratch("ci-suite-lane-absent");
+    let root = common::scratch_repo("ci-suite-lane-absent");
     install_module(&root);
     assert!(
         findings(&root).is_empty(),
