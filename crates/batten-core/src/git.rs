@@ -9858,40 +9858,40 @@ mod tests {
     ///
     /// Fails by: a new such function, or a listed one that stopped (the list
     /// only shrinks).
-    #[test]
-    fn no_function_handed_a_root_discovers_from_the_cwd() {
+    /// Which functions in one Rust `source` discover from the working
+    /// directory, by name: with `cases`, the `#[test]` cases whose body hands
+    /// `Path::new(".")`; without, the non-test functions handed a path whose
+    /// body does. The detection both censuses share, over text, so a planted
+    /// offender can be fed to it directly (CLOUD-2904).
+    ///
+    /// CODE, NOT PROSE: a comment naming `Path::new(".")` asks nothing, and
+    /// `parent().unwrap_or(Path::new("."))` is a bare file name's directory, not
+    /// a discovery.
+    fn cwd_offenders(source: &str, cases: bool) -> Vec<String> {
         use ra_ap_syntax::{AstNode as _, ast, ast::HasAttrs as _, ast::HasName as _};
-        let workspace = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .and_then(Path::parent)
-            .expect("the workspace root");
-        let test_only = |node: &ra_ap_syntax::SyntaxNode| {
-            node.ancestors().filter_map(ast::Item::cast).any(|item| {
-                item.attrs().any(|attr| {
-                    let text: String = attr
-                        .syntax()
-                        .text()
-                        .to_string()
-                        .split_whitespace()
-                        .collect();
-                    text == "#[cfg(test)]" || text == "#[test]"
-                })
-            })
+        let attr_is = |attr: &ast::Attr, want: &str| {
+            attr.syntax()
+                .text()
+                .to_string()
+                .split_whitespace()
+                .collect::<String>()
+                == want
         };
-        let mut found = std::collections::BTreeSet::new();
-        for (path, source) in workspace_sources("src") {
-            let relative = path
-                .strip_prefix(workspace)
-                .unwrap_or(&path)
-                .to_string_lossy()
-                .replace('\\', "/");
-            let root =
-                batten_facts::source::rust_parse(&source, ra_ap_syntax::Edition::Edition2024)
-                    .syntax_node();
-            for function in root.descendants().filter_map(ast::Fn::cast) {
-                if test_only(function.syntax()) {
-                    continue;
-                }
+        let root = batten_facts::source::rust_parse(source, ra_ap_syntax::Edition::Edition2024)
+            .syntax_node();
+        let mut found = Vec::new();
+        for function in root.descendants().filter_map(ast::Fn::cast) {
+            let selected = if cases {
+                function.attrs().any(|attr| attr_is(&attr, "#[test]"))
+            } else {
+                let test_only = function
+                    .syntax()
+                    .ancestors()
+                    .filter_map(ast::Item::cast)
+                    .any(|item| {
+                        item.attrs()
+                            .any(|attr| attr_is(&attr, "#[cfg(test)]") || attr_is(&attr, "#[test]"))
+                    });
                 let handed = function.param_list().is_some_and(|params| {
                     params.params().any(|param| {
                         param
@@ -9899,40 +9899,74 @@ mod tests {
                             .is_some_and(|ty| ty.syntax().text().to_string().contains("Path"))
                     })
                 });
-                let asks_cwd = function.body().is_some_and(|body| {
-                    // CODE, NOT PROSE: a comment naming `Path::new(".")` asks
-                    // nothing, and `parent().unwrap_or(Path::new("."))` is a
-                    // bare file name's directory, not a discovery.
-                    let text: String = body
-                        .syntax()
-                        .descendants_with_tokens()
-                        .filter_map(ra_ap_syntax::NodeOrToken::into_token)
-                        .filter(|token| token.kind() != ra_ap_syntax::SyntaxKind::COMMENT)
-                        .flat_map(|token| {
-                            token
-                                .text()
-                                .split_whitespace()
-                                .map(str::to_owned)
-                                .collect::<Vec<_>>()
-                        })
-                        .collect();
-                    text.replace("unwrap_or(Path::new(\".\"))", "")
-                        .contains("Path::new(\".\")")
-                });
-                if handed
-                    && asks_cwd
-                    && let Some(name) = function.name()
-                {
-                    found.insert(format!("{relative}::{name}"));
-                }
+                !test_only && handed
+            };
+            let asks_cwd = function.body().is_some_and(|body| {
+                let text: String = body
+                    .syntax()
+                    .descendants_with_tokens()
+                    .filter_map(ra_ap_syntax::NodeOrToken::into_token)
+                    .filter(|token| token.kind() != ra_ap_syntax::SyntaxKind::COMMENT)
+                    // A string literal holding a whole call is quoted source
+                    // (a census's own plant), not a call.
+                    .filter(|token| {
+                        token.kind() != ra_ap_syntax::SyntaxKind::STRING
+                            || !token.text().contains("Path::new")
+                    })
+                    .flat_map(|token| {
+                        token
+                            .text()
+                            .split_whitespace()
+                            .map(str::to_owned)
+                            .collect::<Vec<_>>()
+                    })
+                    .collect();
+                text.replace("unwrap_or(Path::new(\".\"))", "")
+                    .contains("Path::new(\".\")")
+            });
+            if selected
+                && asks_cwd
+                && let Some(name) = function.name()
+            {
+                found.push(name.to_string());
             }
         }
+        found
+    }
+
+    /// Every offender [`cwd_offenders`] finds across the workspace's sources,
+    /// `file::function`, skipping `mutate/` for cases (another session's tree).
+    fn workspace_cwd_offenders(cases: bool) -> std::collections::BTreeSet<String> {
+        let workspace = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(Path::parent)
+            .expect("the workspace root");
+        let mut found = std::collections::BTreeSet::new();
+        for (path, source) in workspace_sources("src") {
+            let relative = path
+                .strip_prefix(workspace)
+                .unwrap_or(&path)
+                .to_string_lossy()
+                .replace('\\', "/");
+            if cases && relative.contains("/mutate/") {
+                continue;
+            }
+            for name in cwd_offenders(&source, cases) {
+                found.insert(format!("{relative}::{name}"));
+            }
+        }
+        found
+    }
+
+    #[test]
+    fn no_function_handed_a_root_discovers_from_the_cwd() {
         let listed: std::collections::BTreeSet<String> = CWD_DISCOVERY_RATCHET
             .iter()
             .map(|entry| (*entry).to_owned())
             .collect();
         assert_eq!(
-            found, listed,
+            workspace_cwd_offenders(false),
+            listed,
             "a function handed a path discovers from the working directory; pass it the root it \
              was handed (CLOUD-2904), or, for one that stopped, drop it from the ratchet"
         );
@@ -9940,7 +9974,9 @@ mod tests {
 
     /// The lib cases that still hand the working directory to the code under
     /// test as its root, `file::case`, sorted. A RATCHET, NOT AN ALLOWANCE
-    /// (D3, CLOUD-2904): each needs the function it calls to take a root first.
+    /// (D3, CLOUD-2904). None of the five reads `.git`: two test how a `"."`
+    /// spelling is resolved, and the `lease` three run only under
+    /// `live-remote`.
     const CWD_CASE_RATCHET: &[&str] = &[
         "crates/batten-core/src/lease.rs::a_branch_pushes_to_a_scratch_ref_when_asked",
         "crates/batten-core/src/lease.rs::a_ref_fetches_and_its_objects_arrive",
@@ -9955,73 +9991,47 @@ mod tests {
     /// checkout, so `"."` handed as a root answers about the checkout's `.git`,
     /// HEAD and config instead of the case's fixture.
     ///
-    /// Fails by: a new `#[test]` that hands `"."` (red first: it failed on the
-    /// 41 cases moved in the commit that added it), or a listed one that
-    /// stopped (the list only shrinks).
+    /// Fails by: a new `#[test]` that hands `"."`, or a listed one that stopped
+    /// (the list only shrinks).
     #[test]
     fn no_lib_case_hands_the_cwd_as_a_root() {
-        use ra_ap_syntax::{AstNode as _, ast, ast::HasAttrs as _, ast::HasName as _};
-        let workspace = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .and_then(Path::parent)
-            .expect("the workspace root");
-        let mut found = std::collections::BTreeSet::new();
-        for (path, source) in workspace_sources("src") {
-            let relative = path
-                .strip_prefix(workspace)
-                .unwrap_or(&path)
-                .to_string_lossy()
-                .replace('\\', "/");
-            if relative.contains("/mutate/") {
-                continue;
-            }
-            let root =
-                batten_facts::source::rust_parse(&source, ra_ap_syntax::Edition::Edition2024)
-                    .syntax_node();
-            for function in root.descendants().filter_map(ast::Fn::cast) {
-                let is_case = function.attrs().any(|attr| {
-                    attr.syntax()
-                        .text()
-                        .to_string()
-                        .split_whitespace()
-                        .collect::<String>()
-                        == "#[test]"
-                });
-                if !is_case {
-                    continue;
-                }
-                let asks_cwd = function.body().is_some_and(|body| {
-                    let text: String = body
-                        .syntax()
-                        .descendants_with_tokens()
-                        .filter_map(ra_ap_syntax::NodeOrToken::into_token)
-                        .filter(|token| token.kind() != ra_ap_syntax::SyntaxKind::COMMENT)
-                        .flat_map(|token| {
-                            token
-                                .text()
-                                .split_whitespace()
-                                .map(str::to_owned)
-                                .collect::<Vec<_>>()
-                        })
-                        .collect();
-                    text.replace("unwrap_or(Path::new(\".\"))", "")
-                        .contains("Path::new(\".\")")
-                });
-                if asks_cwd && let Some(name) = function.name() {
-                    found.insert(format!("{relative}::{name}"));
-                }
-            }
-        }
         let listed: std::collections::BTreeSet<String> = CWD_CASE_RATCHET
             .iter()
             .map(|entry| (*entry).to_owned())
             .collect();
         assert_eq!(
-            found, listed,
+            workspace_cwd_offenders(true),
+            listed,
             "a lib case hands the working directory as a root; give it \
              `crate::fixture_root::fixture_root` (CLOUD-2904), or, for one that stopped, drop it \
              from the ratchet"
         );
+    }
+
+    /// RED FIRST for both censuses (CLOUD-2904, f9c9424e): a planted offender
+    /// of each kind is named, and its clean twin, the comment, the bare file
+    /// name's directory and a test-only helper are not. Fails by: a detection
+    /// that misses the plant (the census would pass a new offender) or one that
+    /// names a clean twin (it would refuse correct code).
+    #[test]
+    fn a_planted_cwd_offender_is_named_and_its_clean_twin_is_not() {
+        let source = r#"
+            fn planted_function(root: &Path) -> bool { repo_root(Path::new(".")).is_ok() }
+            fn clean_function(root: &Path) -> bool { repo_root(root).is_ok() }
+            fn bare_file(path: &Path) -> &Path { path.parent().unwrap_or(Path::new(".")) }
+            fn prose_only(root: &Path) -> bool { /* Path::new(".") */ repo_root(root).is_ok() }
+            fn handed_nothing() -> bool { repo_root(Path::new(".")).is_ok() }
+            #[cfg(test)]
+            mod tests {
+                fn helper(root: &Path) -> bool { repo_root(Path::new(".")).is_ok() }
+                #[test]
+                fn planted_case() { assert!(judge(Path::new("."))); }
+                #[test]
+                fn clean_case() { assert!(judge(&fixture_root("clean_case"))); }
+            }
+        "#;
+        assert_eq!(cwd_offenders(source, false), ["planted_function"]);
+        assert_eq!(cwd_offenders(source, true), ["planted_case"]);
     }
 
     #[test]
