@@ -333,9 +333,21 @@ fn a_sweep_under_a_supervising_task_moves_its_signal() {
         "{said}\n{}",
         common::stderr(&output)
     );
+    // EVERY SWEEP LINE ADVANCES THE STEP (9f8b61051), the closing summary
+    // included, so the signal is whichever progress line came last, never a
+    // fixed one. Judging still has to have been said along the way.
+    assert!(
+        said.lines()
+            .any(|line| line.starts_with("mutate schema: judged 5/5")),
+        "the sweep says its judging: {said}"
+    );
+    let last = said
+        .lines()
+        .rfind(|line| line.starts_with("mutate schema: ") || line.starts_with("mutate sweep: "));
+    assert!(last.is_some(), "the sweep printed progress: {said}");
     assert_eq!(
         batten::task::read_field(&repo.join(".git"), "515151", "sig").as_deref(),
-        Some("mutate schema: judged 5/5"),
+        last,
         "the last progress line is the task's signal: {said}"
     );
 }

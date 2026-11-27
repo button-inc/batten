@@ -608,6 +608,157 @@ pub fn lease_object(message: &str, seconds: i64) -> Result<Object> {
     })
 }
 
+/// What kind of object an [`Object`] is, named through this module so a caller
+/// outside the git modules never reaches gix for it.
+///
+/// **THE OBJECT LAYER LIVES HERE, NOT IN ITS CALLERS** (CLOUD-718, widened by
+/// CLOUD-1274): `land::receipts` minted and parsed its blobs, trees and commits
+/// with gix directly, which made it a fourth git module that
+/// `gix_is_confined_to_the_git_modules` refuses. The functions below are the
+/// whole of what it needed, so the list of modules that reach the backend stays
+/// closed.
+pub use gix::object::Kind as ObjectKind;
+
+/// One entry of a tree: its name, its object id as hex, and whether it is
+/// itself a tree (otherwise a blob).
+pub type TreeEntry = (String, String, bool);
+
+/// Hash `body` as an object of `kind`.
+///
+/// # Errors
+///
+/// A hash that will not finalise.
+pub fn hashed(kind: ObjectKind, body: Vec<u8>) -> Result<Object> {
+    let id = gix::objs::compute_hash(gix::hash::Kind::Sha1, kind, &body)
+        .map_err(|err| anyhow::anyhow!("an object will not hash: {err}"))?;
+    Ok(Object {
+        id: id.to_string(),
+        kind,
+        body,
+    })
+}
+
+/// A tree over `entries`, which the caller has already put in git's order.
+///
+/// # Errors
+///
+/// An id that is not hex, or a tree that will not serialise or hash.
+pub fn tree_object(entries: &[TreeEntry]) -> Result<Object> {
+    use gix::objs::WriteTo as _;
+
+    let entries = entries
+        .iter()
+        .map(|(name, id, is_tree)| {
+            let mode = if *is_tree {
+                gix::objs::tree::EntryKind::Tree
+            } else {
+                gix::objs::tree::EntryKind::Blob
+            };
+            Ok(gix::objs::tree::Entry {
+                mode: mode.into(),
+                filename: name.as_str().into(),
+                oid: gix::hash::ObjectId::from_hex(id.as_bytes())?,
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let mut body = Vec::new();
+    gix::objs::Tree { entries }
+        .write_to(&mut body)
+        .map_err(|err| anyhow::anyhow!("a tree will not serialise: {err}"))?;
+    hashed(ObjectKind::Tree, body)
+}
+
+/// A parentless commit over `tree`, authored and committed by `who` (name,
+/// email) at `seconds`, carrying `message`.
+///
+/// # Errors
+///
+/// A tree id that is not hex, or a commit that will not serialise or hash.
+pub fn parentless_commit(
+    tree: &str,
+    who: (&str, &str),
+    seconds: i64,
+    message: &str,
+) -> Result<Object> {
+    use gix::objs::WriteTo as _;
+
+    let signature = gix::actor::Signature {
+        name: who.0.into(),
+        email: who.1.into(),
+        time: crate::git::utc_at(seconds),
+    };
+    let commit = gix::objs::Commit {
+        tree: gix::hash::ObjectId::from_hex(tree.as_bytes())?,
+        parents: std::iter::empty().collect(),
+        author: signature.clone(),
+        committer: signature,
+        encoding: None,
+        message: message.into(),
+        extra_headers: Vec::new(),
+    };
+    let mut body = Vec::new();
+    commit
+        .write_to(&mut body)
+        .map_err(|err| anyhow::anyhow!("the commit will not serialise: {err}"))?;
+    hashed(ObjectKind::Commit, body)
+}
+
+/// The entries of a tree body.
+///
+/// # Errors
+///
+/// A body that does not parse as a tree.
+pub fn tree_entries(body: &[u8]) -> Result<Vec<TreeEntry>> {
+    let tree = gix::objs::TreeRef::from_bytes(body, gix::hash::Kind::Sha1)
+        .map_err(|err| anyhow::anyhow!("a tree will not parse: {err}"))?;
+    Ok(tree
+        .entries
+        .iter()
+        .map(|entry| {
+            (
+                entry.filename.to_string(),
+                entry.oid.to_string(),
+                entry.mode.is_tree(),
+            )
+        })
+        .collect())
+}
+
+/// The id of the tree a commit body points at.
+///
+/// # Errors
+///
+/// A body that does not parse as a commit.
+pub fn commit_tree(body: &[u8]) -> Result<String> {
+    Ok(
+        gix::objs::CommitRef::from_bytes(body, gix::hash::Kind::Sha1)
+            .map_err(|err| anyhow::anyhow!("{err}"))?
+            .tree()
+            .to_string(),
+    )
+}
+
+/// The kind and body of object `id` in `repo`'s odb.
+///
+/// # Errors
+///
+/// A repository that will not open, an id that is not hex, or an object the
+/// odb does not hold.
+pub fn odb_object(repo: &Path, id: &str) -> Result<(ObjectKind, Vec<u8>)> {
+    let opened = crate::git::open_fresh(repo)?;
+    let oid = gix::hash::ObjectId::from_hex(id.as_bytes())?;
+    let found = opened
+        .find_object(oid)
+        .map_err(|err| anyhow::anyhow!("{err}"))?;
+    Ok((found.kind, found.data.clone()))
+}
+
+/// Whether `name` is a full ref name git accepts.
+#[must_use]
+pub fn is_ref_name(name: &str) -> bool {
+    gix::refs::FullName::try_from(name).is_ok()
+}
+
 /// The pack type numbers, which are the wire's own and not gix's.
 ///
 /// Only the four undeltified kinds are named. `6` and `7` are the delta forms,
