@@ -760,6 +760,9 @@ mod outcome_tests {
     /// file a finding for every unrelated tool call in the session.
     #[test]
     fn a_selected_call_that_does_not_answer_is_blocked_and_an_unselected_one_is_not() {
+        let fixture = crate::fixture_root::fixture_root(
+            "a_selected_call_that_does_not_answer_is_blocked_and_an_unselected_one_is_not",
+        );
         let mut patterns = std::collections::BTreeMap::new();
         patterns.insert(
             "fetch".to_owned(),
@@ -777,9 +780,7 @@ mod outcome_tests {
                 input,
                 result,
                 branch: Some("work"),
-                root: &crate::fixture_root::fixture_root(
-                    "a_selected_call_that_does_not_answer_is_blocked_and_an_unselected_one_is_not",
-                ),
+                root: &fixture,
                 patterns: &patterns,
                 programs: &programs,
                 grammar: None,
@@ -796,9 +797,7 @@ mod outcome_tests {
             input: &selected,
             result: &empty,
             branch: Some("work"),
-            root: &crate::fixture_root::fixture_root(
-                "a_selected_call_that_does_not_answer_is_blocked_and_an_unselected_one_is_not",
-            ),
+            root: &fixture,
             patterns: &patterns,
             programs: &programs,
             grammar: None,
@@ -814,9 +813,7 @@ mod outcome_tests {
             input: &unselected,
             result: &empty,
             branch: Some("work"),
-            root: &crate::fixture_root::fixture_root(
-                "a_selected_call_that_does_not_answer_is_blocked_and_an_unselected_one_is_not",
-            ),
+            root: &fixture,
             patterns: &patterns,
             programs: &programs,
             grammar: None,
@@ -833,9 +830,7 @@ mod outcome_tests {
             input: &selected,
             result: &answered,
             branch: Some("work"),
-            root: &crate::fixture_root::fixture_root(
-                "a_selected_call_that_does_not_answer_is_blocked_and_an_unselected_one_is_not",
-            ),
+            root: &fixture,
             patterns: &patterns,
             programs: &programs,
             grammar: None,
@@ -850,6 +845,7 @@ mod outcome_tests {
     /// a row refusing `backgroundTaskId` does not read it as the command's.
     #[test]
     fn a_backgrounded_result_is_not_recorded() {
+        let fixture = crate::fixture_root::fixture_root("a_backgrounded_result_is_not_recorded");
         let mut patterns = std::collections::BTreeMap::new();
         patterns.insert(
             "fetch".to_owned(),
@@ -868,7 +864,7 @@ mod outcome_tests {
             input: &input,
             result,
             branch: Some("work"),
-            root: &crate::fixture_root::fixture_root("a_backgrounded_result_is_not_recorded"),
+            root: &fixture,
             patterns: &patterns,
             programs: &programs,
             grammar: None,
@@ -951,11 +947,12 @@ mod outcome_tests {
     /// table that answers for a status it does not map.
     #[test]
     fn evaluate_and_read_back_answer_exactly() {
+        let fixture = crate::fixture_root::fixture_root("evaluate_and_read_back_answer_exactly");
         let programs = BTreeMap::new();
         let patterns = BTreeMap::new();
         let input = serde_json::json!({"ids": ["A", "B"]});
         let result = serde_json::json!({"id": "R"});
-        let root = &crate::fixture_root::fixture_root("evaluate_and_read_back_answer_exactly");
+        let root = &fixture;
         let context = context_over(&input, &result, &programs, &patterns, root);
         assert_eq!(
             evaluate(&Value::Literal("k".to_owned()), &context),
@@ -1005,19 +1002,14 @@ mod outcome_tests {
     /// joined columns.
     #[test]
     fn a_column_renders_its_tokens_after_every_set_operation() {
+        let fixture = crate::fixture_root::fixture_root(
+            "a_column_renders_its_tokens_after_every_set_operation",
+        );
         let programs = BTreeMap::new();
         let patterns = BTreeMap::new();
         let input = serde_json::json!({});
         let result = serde_json::json!({});
-        let context = context_over(
-            &input,
-            &result,
-            &programs,
-            &patterns,
-            &crate::fixture_root::fixture_root(
-                "a_column_renders_its_tokens_after_every_set_operation",
-            ),
-        );
+        let context = context_over(&input, &result, &programs, &patterns, &fixture);
         let mut col = column(Value::Literal("a b c d".to_owned()));
         col.minus = Some(Value::Literal("b".to_owned()));
         col.without = Some(Value::Literal("c".to_owned()));
@@ -1129,19 +1121,14 @@ mod outcome_tests {
     /// columns, or misses the line carrying all of them.
     #[test]
     fn already_recorded_needs_every_named_column_on_one_line() {
+        let fixture = crate::fixture_root::fixture_root(
+            "already_recorded_needs_every_named_column_on_one_line",
+        );
         let programs = BTreeMap::new();
         let patterns = BTreeMap::new();
         let input = serde_json::json!({});
         let result = serde_json::json!({});
-        let context = context_over(
-            &input,
-            &result,
-            &programs,
-            &patterns,
-            &crate::fixture_root::fixture_root(
-                "already_recorded_needs_every_named_column_on_one_line",
-            ),
-        );
+        let context = context_over(&input, &result, &programs, &patterns, &fixture);
         let recorded = Recorded {
             matches: [
                 (0, Value::Literal("issue".to_owned())),
