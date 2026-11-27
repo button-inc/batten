@@ -9788,6 +9788,47 @@ fn entry_tasks(
         .unwrap_or_default()
 }
 
+/// The words `mise run` forwards to each task it names: everything past the
+/// task in its `:::` group, less one leading `--` (#1276).
+///
+/// Dropped, `mise run test:filter -- -E '<set>'` was read as its body's bare
+/// `cargo nextest run --workspace`, the whole suite, and `gate run twice`
+/// refused the one narrow run its own class excludes.
+fn forwarded_words(entry: &Value) -> std::collections::BTreeMap<String, Vec<String>> {
+    let mut found = std::collections::BTreeMap::new();
+    if entry.get("name").and_then(Value::as_str) != Some("mise") {
+        return found;
+    }
+    let Some(arguments) = entry.get("arguments").and_then(Value::as_array) else {
+        return found;
+    };
+    let words: Vec<&str> = arguments.iter().filter_map(Value::as_str).collect();
+    let Some(verb) = subcommand_index(&words, &MISE_VALUE_OPTIONS) else {
+        return found;
+    };
+    if !matches!(words[verb], "run" | "r") {
+        return found;
+    }
+    for group in words[verb + 1..].split(|word| *word == ":::") {
+        let Some(at) = subcommand_index(group, &MISE_VALUE_OPTIONS) else {
+            continue;
+        };
+        let rest = &group[at + 1..];
+        let rest = rest.strip_prefix(&["--"][..]).unwrap_or(rest);
+        found.insert(
+            group[at].to_owned(),
+            rest.iter().map(|word| (*word).to_owned()).collect(),
+        );
+    }
+    found
+}
+
+/// One word, single-quoted for a POSIX shell, so a forwarded word re-reads as
+/// exactly itself when appended to a task's line.
+fn sh_quote(word: &str) -> String {
+    format!("'{}'", word.replace('\'', r"'\''"))
+}
+
 /// Every program the tasks this call starts reach, each carrying the `task`
 /// whose body ran it; `null` where the task receipt could not be read (step 14).
 ///
@@ -9808,13 +9849,27 @@ pub(crate) fn task_programs(command: &str, bodies: &crate::taskset::TaskBodies) 
     let mut seen = std::collections::BTreeSet::new();
     let mut found: Vec<Value> = Vec::new();
     let mut pending = program_reach(command);
+    // ONLY THE CALL'S OWN TASKS take forwarded words: a task a body starts
+    // gets what that body passes, which its own line already spells.
+    let mut forwarded: std::collections::BTreeMap<String, Vec<String>> =
+        pending.iter().flat_map(forwarded_words).collect();
     while let Some(entry) = pending.pop() {
         for task in entry_tasks(&entry, bodies) {
             if !seen.insert(task.clone()) {
                 continue;
             }
-            for line in bodies.get(&task).into_iter().flatten() {
-                for mut inner in reach_into(line, true, Some("task"), REACH_DEPTH, Stage::call()) {
+            let words = forwarded.remove(&task).unwrap_or_default();
+            let lines = bodies.get(&task).map(Vec::as_slice).unwrap_or_default();
+            for (at, line) in lines.iter().enumerate() {
+                // mise appends the forwarded words to the task's script, so the
+                // LAST body line runs with them.
+                let line = if at + 1 == lines.len() && !words.is_empty() {
+                    let quoted: Vec<String> = words.iter().map(|word| sh_quote(word)).collect();
+                    format!("{line} {}", quoted.join(" "))
+                } else {
+                    line.clone()
+                };
+                for mut inner in reach_into(&line, true, Some("task"), REACH_DEPTH, Stage::call()) {
                     if let Some(object) = inner.as_object_mut() {
                         object.insert("task".to_owned(), serde_json::json!(task));
                     }
@@ -22644,6 +22699,66 @@ deny contains "refused by themodule" if {
         assert_eq!(
             task_programs("ls", &crate::facts::Look::CouldNotLook),
             serde_json::Value::Null
+        );
+    }
+
+    /// The words `mise run <task> [--] <args>` forwards reach the program the
+    /// task's body runs, because mise appends them to the task's script.
+    ///
+    /// Fails by: the forwarded words dropped, so `mise run test:filter --
+    /// -E '<set>'` read as the WHOLE suite and `gate run twice` refused the
+    /// one narrow run its own class excludes (#1276); or the words appended to
+    /// a task the call did not name, or to a task a body started.
+    #[test]
+    fn task_programs_carry_the_words_a_run_forwards() {
+        let bodies: crate::taskset::TaskBodies = crate::facts::Look::Is(
+            [
+                (
+                    "filter",
+                    vec!["cargo nextest run --workspace --no-fail-fast"],
+                ),
+                ("outer", vec!["mise run filter"]),
+            ]
+            .into_iter()
+            .map(|(name, lines)| {
+                (
+                    name.to_owned(),
+                    lines.into_iter().map(str::to_owned).collect(),
+                )
+            })
+            .collect(),
+        );
+        let cargo_args = |command: &str| -> Vec<String> {
+            task_programs(command, &bodies)
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|entry| entry["name"] == "cargo")
+                .expect("the task's body is reached")["arguments"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|word| word.as_str().unwrap().to_owned())
+                .collect()
+        };
+        let forwarded = cargo_args("mise run filter -- -p batten -E 'test(/^x::/) | test(y)'");
+        assert!(
+            forwarded.ends_with(&[
+                "-p".to_owned(),
+                "batten".to_owned(),
+                "-E".to_owned(),
+                "test(/^x::/) | test(y)".to_owned(),
+            ]),
+            "{forwarded:?}"
+        );
+        // Without `--` mise forwards the same words.
+        assert!(cargo_args("mise run filter -E x").ends_with(&["-E".to_owned(), "x".to_owned()]));
+        // A task a body starts gets nothing the outer call forwarded.
+        assert_eq!(
+            cargo_args("mise run outer -- -E x")
+                .last()
+                .map(String::as_str),
+            Some("--no-fail-fast")
         );
     }
 
