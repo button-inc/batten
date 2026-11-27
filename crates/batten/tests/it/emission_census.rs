@@ -425,7 +425,7 @@ fn every_refusal_id_the_engine_raises_resolves() {
     }
     let mut args = vec!["policy", "explain"];
     args.extend(names.iter().map(String::as_str));
-    let explained = common::run(&at_root(""), &args);
+    let explained = common::run(common::committed_repo(), &args);
     assert!(
         explained.status.success(),
         "every engine-raised id resolves through `policy explain`: {}",
@@ -461,7 +461,7 @@ fn every_smell_id_resolves_through_policy_explain() {
     }
     let mut args = vec!["policy", "explain"];
     args.extend(ids.iter().copied());
-    let explained = common::run(&at_root(""), &args);
+    let explained = common::run(common::committed_repo(), &args);
     assert!(
         explained.status.success(),
         "every smell id resolves through `policy explain`: {}",
