@@ -833,6 +833,10 @@ pub enum Fact {
     /// command-position programs it may still be installing, and whether this
     /// call is the dispatch itself (CLOUD-2840).
     InstallPending,
+    /// Whether this session can read the state repository `BATTEN_STATE_REPO`
+    /// names, where it is set and the config does not let a session proceed
+    /// without it: `null` unless it cannot (CLOUD-2939).
+    StateRepo,
     /// The current branch's red-head record: the head a lap's wait stopped red
     /// on, each failed check's newest run with whether its log was read, and
     /// each check the stop abandoned still running (CLOUD-2270).
@@ -1633,6 +1637,11 @@ pub const LAND_LIVE: Class = Class::new(Cost::Read, Surface::Hook);
 /// (CLOUD-2840). No spawn: a stat per `PATH` entry, and none at all once the
 /// setup task has said `ok`.
 pub const INSTALL_PENDING: Class = Class::new(Cost::Read, Surface::Hook);
+/// [`Fact::StateRepo`]: one record read under `$GIT_DIR`, and ref discovery on
+/// the state repository only where no access is recorded: once, then at most
+/// every few seconds while the session is held, never once access is seen
+/// (CLOUD-2939). Bounded, so it is a read; no program is spawned.
+pub const STATE_REPO: Class = Class::new(Cost::Read, Surface::Hook);
 
 /// [`Fact::RedHead`] — one record read and a stat per failed run under
 /// `$GIT_DIR` (CLOUD-2270). A read, asked of the mediated call it gates.
@@ -1701,6 +1710,7 @@ impl Fact {
         Fact::DispatchBrief,
         Fact::LandLive,
         Fact::InstallPending,
+        Fact::StateRepo,
         Fact::RedHead,
         Fact::PathspecStatus,
         Fact::Budgeted,
@@ -1760,6 +1770,7 @@ impl Fact {
             Fact::DispatchBrief => "dispatch-brief",
             Fact::LandLive => "land-live",
             Fact::InstallPending => "install-pending",
+            Fact::StateRepo => "state-repo",
             Fact::RedHead => "red-head",
             Fact::PathspecStatus => "pathspec-status",
             Fact::Budgeted => "budgeted",
@@ -1827,6 +1838,7 @@ impl Fact {
             Fact::DispatchBrief => DISPATCH_BRIEF,
             Fact::LandLive => LAND_LIVE,
             Fact::InstallPending => INSTALL_PENDING,
+            Fact::StateRepo => STATE_REPO,
             Fact::RedHead => RED_HEAD,
             Fact::PathspecStatus => PATHSPEC_STATUS,
             Fact::Budgeted => BUDGETED,
@@ -1924,6 +1936,7 @@ impl Fact {
             | Fact::DispatchBrief
             | Fact::LandLive
             | Fact::InstallPending
+            | Fact::StateRepo
             | Fact::RedHead
             | Fact::PathspecStatus
             | Fact::Budgeted
@@ -2107,6 +2120,7 @@ impl Fact {
             // it would refuse, and a tree walk has none.
             | Fact::LandLive
             | Fact::InstallPending
+            | Fact::StateRepo
             // CLOUD-2270. Hook-only: what a push over this head owes is a
             // question about the call, and a tree walk has none.
             | Fact::RedHead
@@ -2184,6 +2198,7 @@ impl Fact {
             | Fact::DispatchBrief
             | Fact::LandLive
             | Fact::InstallPending
+            | Fact::StateRepo
             | Fact::RedHead
             | Fact::PathspecStatus
             | Fact::Budgeted
@@ -2279,9 +2294,11 @@ impl Fact {
             // count, and it is the seam this function's own doc says to split
             // along. `Instant` arriving is what took it past its ceiling, exactly
             // as `Landing` did for the git family.
-            Fact::Instant | Fact::DispatchBrief | Fact::LandLive | Fact::InstallPending => {
-                self.scalar_schema_fragment()
-            }
+            Fact::Instant
+            | Fact::DispatchBrief
+            | Fact::LandLive
+            | Fact::InstallPending
+            | Fact::StateRepo => self.scalar_schema_fragment(),
             // The description-only family delegates, for the same reason and
             // along the same kind of seam as the git family below: every one of
             // these constrains nothing but its own prose, so a match arm each
@@ -2712,6 +2729,15 @@ impl Fact {
                     "background": {"type": "boolean"},
                 },
             }),
+            Fact::StateRepo => serde_json::json!({
+                "type": ["object", "null"],
+                "description": "Fact::StateRepo (CLOUD-2939). Null unless BATTEN_STATE_REPO is set, the config does not declare `[receipt] state_repo_optional`, and ref discovery on the state repository answered 401, 403 or 404: then `state` is `unattached`, `status` that answer and `repository` the variable's value. Never a transport failure, which is could-not-look and holds nothing.",
+                "properties": {
+                    "state": {"enum": ["unattached"]},
+                    "status": {"type": "integer"},
+                    "repository": {"type": "string"},
+                },
+            }),
             Fact::Instant => serde_json::json!({
                 "type": ["integer", "null"],
                 "description": "Fact::Instant (CLOUD-1170). The epoch second the CALLER supplied, as data -- never a clock the engine read. A module compares a recorded stamp against it and a fixture pins both, so the same instant yields byte-identical output, which is what a clock READ can never do. NULL when the caller supplied none: that is could-not-look, NOT the epoch, and a predicate over it must not hold.",
@@ -2864,6 +2890,7 @@ impl Fact {
             | Fact::DispatchBrief
             | Fact::LandLive
             | Fact::InstallPending
+            | Fact::StateRepo
             | Fact::RedHead
             | Fact::PathspecStatus
             | Fact::Budgeted
@@ -3089,6 +3116,7 @@ impl Fact {
             | Fact::RedHead
             | Fact::LandLive
             | Fact::InstallPending
+            | Fact::StateRepo
             | Fact::PathspecStatus
             | Fact::Budgeted
             | Fact::ShellIntroduced
@@ -3355,6 +3383,7 @@ impl Fact {
             | Fact::RedHead
             | Fact::LandLive
             | Fact::InstallPending
+            | Fact::StateRepo
             | Fact::PathspecStatus
             | Fact::Budgeted
             | Fact::ShellIntroduced
@@ -3428,6 +3457,7 @@ impl Fact {
             | Fact::RedHead
             | Fact::LandLive
             | Fact::InstallPending
+            | Fact::StateRepo
             | Fact::PathspecStatus
             | Fact::Budgeted
             | Fact::ShellIntroduced

@@ -197,6 +197,36 @@ pub fn names_origin(origin: &str, value: &str) -> bool {
     candidates.contains(&path)
 }
 
+/// Whether this session can read the state repository (CLOUD-2939), asked as
+/// the carry asks it: ref discovery for upload-pack.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Access {
+    /// It answered `200`: the carry will reach it.
+    Granted,
+    /// It answered 401, 403 or 404: this session has no access, and every
+    /// carry would answer the same. The status is kept for the reader.
+    Refused(u16),
+    /// Any other answer, or none: could-not-look, never a statement that the
+    /// session lacks access, so nothing is held on it.
+    Unknown,
+}
+
+/// [`Access`] of one ref-discovery answer.
+#[must_use]
+pub fn access_of(answer: &Result<u16>) -> Access {
+    match answer {
+        Ok(200) => Access::Granted,
+        Ok(status @ (401 | 403 | 404)) => Access::Refused(*status),
+        _ => Access::Unknown,
+    }
+}
+
+/// [`Access`] to the state repository at `remote`: one ref discovery.
+#[must_use]
+pub fn access(remote: &str) -> Access {
+    access_of(&lease::discovery_status(remote, Service::UploadPack))
+}
+
 /// Resolve the state repository from the variable's value and the origin.
 ///
 /// Both passed in, so the decision is a pure function of them: unset decides
