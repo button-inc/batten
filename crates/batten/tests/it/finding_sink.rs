@@ -377,7 +377,7 @@ fn a_comment_alone_is_not_a_home() {
     // from a READ receipt, which a listing never mints. The committed verdict
     // row carries both, and `policy explain` is where a reader meets them.
     let explained = common::run(
-        &common::at_root("."),
+        &common::committed_repo().to_path_buf(),
         &["policy", "explain", "turn file missing"],
     );
     let said = format!(

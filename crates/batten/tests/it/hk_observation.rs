@@ -287,7 +287,7 @@ fn a_record_of_another_predicate_is_could_not_look() {
 #[test]
 fn this_session_can_observe_the_pinned_runner() {
     use std::hash::BuildHasher as _;
-    let root = common::at_root(".");
+    let root = common::committed_repo().to_path_buf();
     // A SESSION OF THIS RUN'S OWN (CLOUD-2936). The record lives in the live
     // checkout's real git directory, keyed by the session. Under one fixed id,
     // one recording probed and wrote it and the next read it back without

@@ -430,7 +430,7 @@ fn the_committed_address_resolves_the_launchers_wrapper() {
     );
     let config = dir.join("mcp-config.json");
     let answer = stdout(&common::run(
-        &common::at_root(""),
+        &common::committed_repo().to_path_buf(),
         &[
             "mcp",
             "grant",

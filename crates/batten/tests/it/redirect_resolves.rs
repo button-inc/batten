@@ -301,7 +301,7 @@ fn an_invocation_is_a_code_span_and_bare_prose_is_not_one() {
 /// if the predicate were tightened past what an author actually writes.
 #[test]
 fn the_committed_table_loads() {
-    let root = crate::common::at_root(".");
+    let root = crate::common::committed_repo().to_path_buf();
     let output = run(&root, &["config", "show"]);
     assert!(
         output.status.success(),

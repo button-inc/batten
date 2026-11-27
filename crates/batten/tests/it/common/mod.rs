@@ -1129,11 +1129,23 @@ fn refuse_fall_through_at(cwd: &Path) {
 /// copied as files. One per process, built on first use.
 pub(crate) fn committed_repo() -> &'static Path {
     static REPO: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
-    REPO.get_or_init(|| {
-        let dir = scratch_repo(&format!("committed-{}", std::process::id()));
+    REPO.get_or_init(|| committed_copy("committed", false))
+}
+
+/// [`committed_repo`] with `crates/` too, for a case whose subject reads the
+/// sources: a census over them, a corpus of the suite's own cases.
+pub(crate) fn committed_repo_whole() -> &'static Path {
+    static REPO: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    REPO.get_or_init(|| committed_copy("committed-whole", true))
+}
+
+/// The fixture [`committed_repo`] and [`committed_repo_whole`] build.
+fn committed_copy(name: &str, crates: bool) -> PathBuf {
+    {
+        let dir = scratch_repo(&format!("{name}-{}", std::process::id()));
         let root = at_root(".");
         for relative in batten::git::tree_files(&root).expect("the committed tree is walkable") {
-            if relative.starts_with("crates/") {
+            if !crates && relative.starts_with("crates/") {
                 continue;
             }
             let (from, to) = (root.join(&relative), dir.join(&relative));
@@ -1156,7 +1168,7 @@ pub(crate) fn committed_repo() -> &'static Path {
         git_in(&dir, &["commit", "-q", "-m", "the committed tree"]);
         pin_origin_main(&dir);
         dir
-    })
+    }
 }
 
 /// The cases that still spawn the binary inside the checkout, one name a line,

@@ -966,7 +966,7 @@ fn unregistered(row: &serde_json::Value) -> Vec<serde_json::Value> {
 fn a_flat_host_is_generated_flat() {
     let generate = |harness: &str| -> serde_json::Value {
         let output = common::batten()
-            .current_dir(common::at_root(""))
+            .current_dir(common::committed_repo().to_path_buf())
             .args(["generate", "hooks", "--harness", harness])
             .streamed_output()
             .expect("the binary runs");

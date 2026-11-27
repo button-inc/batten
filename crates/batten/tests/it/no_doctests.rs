@@ -156,7 +156,7 @@ fn the_committed_workspace_carries_no_runnable_doctest() {
     // nowhere. Asserted rather than assumed, because an empty class is not a
     // stable property.
     let output = common::run(
-        &common::at_root(""),
+        &common::committed_repo().to_path_buf(),
         &["check", "--rule", "test run unseen"],
     );
     assert_eq!(

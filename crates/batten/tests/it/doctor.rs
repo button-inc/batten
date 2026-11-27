@@ -1020,7 +1020,7 @@ fn doctor_writes_no_file() {
 /// the three `transcript` cases below, torn, absent and readable alike.
 #[test]
 fn this_repository_is_healthy() {
-    let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let repo = common::committed_repo().to_path_buf();
     let output = batten()
         .args(["doctor", "--json"])
         .current_dir(&repo)

@@ -1186,7 +1186,7 @@ fn config_lint_is_declared_read_in_the_spec() {
 fn this_repositorys_own_config_is_clean() {
     // Consumer #1: the lint Batten ships runs against the config Batten is
     // gated by, which is also what `mise run config-lint` asserts in the gate.
-    let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let repo = common::committed_repo().to_path_buf();
     let output = batten()
         .args(["config", "lint"])
         .current_dir(&repo)

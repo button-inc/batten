@@ -297,7 +297,7 @@ fn a_row_naming_an_unplannable_surface_is_refused() {
 /// spawns — which is itself the row's effect claim, asserted by the exit code.
 #[test]
 fn this_repositorys_plan_row_is_clean_today() {
-    let root = common::at_root(".");
+    let root = common::committed_repo().to_path_buf();
     let output = common::run(&root, &["enforce", "--rule", "plan require missing"]);
     assert_eq!(
         output.status.code(),
