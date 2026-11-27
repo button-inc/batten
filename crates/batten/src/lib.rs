@@ -19383,6 +19383,19 @@ fn run_mutate_cargo(root: &Path, out: &mut dyn Write, err: &mut dyn Write) -> Re
         Some(&handback),
         out,
     )?;
+    // THE LAP'S OWN SWEEP IS THE ONE PRODUCER (CLOUD-2789): it seals a reach
+    // record for every case it ran, over the tree `test:cargo` just passed in
+    // the same lap, so the passes that run left are keyed here, as the reach
+    // seed keys them, and the next head's `test:cargo` holds every case its
+    // change cannot reach instead of re-running each once to earn the pass.
+    // Whatever the mutants' verdict: a sealed record is a pass of the case,
+    // never of the mutant. An economy; a key that cannot be written reruns.
+    if let Ok(keyed) = mutate::resume::seed_passes(root) {
+        writeln!(
+            out,
+            "mutate cargo: keyed {keyed} journaled pass(es) for the next head"
+        )?;
+    }
     Ok(recorded(pass.as_ref(), mutate::schema::exit_of(swept.code)))
 }
 
