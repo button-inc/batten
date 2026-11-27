@@ -15344,8 +15344,11 @@ mod tests {
     fn unproven(text: &str) -> String {
         text.lines()
             .filter(|line| !line.starts_with('P'))
-            .map(|line| format!("{line}\n"))
-            .collect()
+            .fold(String::new(), |mut out, line| {
+                out.push_str(line);
+                out.push('\n');
+                out
+            })
     }
 
     fn no_identity() -> Identity<'static> {

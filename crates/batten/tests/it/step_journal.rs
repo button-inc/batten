@@ -277,6 +277,9 @@ fn selected_repo_with(name: &str, source: &str) -> std::path::PathBuf {
         common::write(&dir, "over", "seed");
         common::write(&dir, "done", "0");
         common::write(&dir, "read", read);
+        // A SEALED RECORD NAMES WHO SEALED IT (CLOUD-2904): one naming none
+        // is never read back.
+        depends.push_str("Pfrom fixture engine seed 1@1\n");
         common::write(&dir, "depends", &depends);
     }
     let resources = schema::resource_ids(&repo).expect("the fixture's content ids");
