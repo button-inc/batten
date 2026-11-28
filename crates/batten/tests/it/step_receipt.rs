@@ -930,34 +930,43 @@ fn every_step_a_task_names_is_declared_and_the_retired_task_is_gone() {
         );
     }
     assert!(!named.is_empty(), "the scan must find the call sites");
-    // TIERS 1 AND 2 ARE ONE `step graph run` (CLOUD-2785); tiers 3 and 4 are
-    // `verify:gated`'s run entries after it, in order (CLOUD-2789).
-    assert!(
-        ["verify-1", "verify-2"]
-            .iter()
-            .all(|tier| groups.iter().any(|group| group == tier)),
-        "the lap runs the first two tiers as graph groups: {groups:?}"
-    );
+    // THE LAP'S FOUR TIERS ARE `verify:gated`'s RUN ENTRIES, IN ORDER, while the
+    // engine pin cannot read the graph rows' `group` (they are withheld until
+    // the pin bump restores `step graph run verify-1 … verify-4`). Each tier is
+    // one entry, found by a task only it runs.
     let gated =
         common::task_block_template("verify:gated").expect("`[tasks.\"verify:gated\"]` exists");
-    let entry = |needle: &str| {
+    let entry = |task: &str| {
         let found: Vec<usize> = gated
             .lines()
+            .filter(|line| line.trim_start().starts_with("\"mise run "))
             .enumerate()
-            .filter(|(_, line)| line.trim_start().starts_with('"') && line.contains(needle))
+            .filter(|(_, line)| {
+                line.trim()
+                    .trim_matches(|c| c == '"' || c == ',')
+                    .split(" ::: ")
+                    .any(|member| member.split_whitespace().any(|word| word == task))
+            })
             .map(|(index, _)| index)
             .collect();
-        assert_eq!(found.len(), 1, "one run entry carries {needle}: {gated}");
+        assert_eq!(found.len(), 1, "one run entry runs {task}: {gated}");
         found[0]
     };
     let tiers = [
-        entry("step graph run verify-1 verify-2=2"),
-        entry("--continue-on-error --jobs 1 test:traced ::: verify:ci-suite"),
-        entry("\"mise run perf-gate\""),
+        entry("batten-check"),
+        entry("semver"),
+        entry("verify:ci-suite"),
+        entry("perf-gate"),
     ];
     assert!(
         tiers.windows(2).all(|pair| pair[0] < pair[1]),
-        "the graph, then the suite tier, then `perf-gate`: {tiers:?}\n{gated}"
+        "the lap runs its four tiers in order: {tiers:?}\n{gated}"
+    );
+    assert!(
+        gated.contains("--continue-on-error verify:commit-lint")
+            && gated.contains("--continue-on-error --jobs 2 semver")
+            && gated.contains("--continue-on-error --jobs 1 test:traced ::: verify:ci-suite"),
+        "every multi-task tier is a `--continue-on-error` fan: {gated}"
     );
 }
 
