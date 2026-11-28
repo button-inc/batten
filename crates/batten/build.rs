@@ -146,24 +146,26 @@ fn stamp_identity(manifest: &Path) -> Built {
         digest: None,
     };
     if facts.marker.is_none()
-        && let Some(top) = git_text(manifest, &["rev-parse", "--show-toplevel"]).map(PathBuf::from)
+        && let Some(repo) = open_repository(manifest)
+        && let Some(top) = repo.workdir().map(Path::to_path_buf)
     {
-        watch(&top);
-        let branch = git_text(&top, &["symbolic-ref", "--quiet", "--short", "HEAD"]);
+        watch(&repo, &top);
+        let branch = repo
+            .head_name()
+            .ok()
+            .flatten()
+            .map(|name| name.shorten().to_string());
         facts.line = Some(identity::line(
             std::env::var(identity::BUILD_PR).ok().as_deref(),
             std::env::var("GITHUB_REF").ok().as_deref(),
             branch.as_deref(),
         )?);
-        // `--` and `--no-mailmap`: without them git probes a worktree file
-        // named `HEAD` (revision or path?) and reads `.mailmap`, two reads the
-        // identity never needs and a receipt-keyed step refuses as undeclared.
-        facts.committed = git_text(
-            &top,
-            &["show", "-s", "--no-mailmap", "--format=%ct", "HEAD", "--"],
-        )
-        .and_then(|ct| ct.parse().ok());
-        facts.digest = digest(&top);
+        facts.committed = repo
+            .head_commit()
+            .ok()
+            .and_then(|commit| commit.time().ok())
+            .and_then(|time| u64::try_from(time.seconds).ok());
+        facts.digest = digest(&repo, &top);
     } else if facts.marker.is_none()
         && let Some(committed) = std::env::var(identity::BUILD_COMMITTED)
             .ok()
@@ -199,19 +201,16 @@ fn stamp_identity(manifest: &Path) -> Built {
 /// never named (it is missing exactly when the ref is packed): `refs/heads` is
 /// watched as a directory, which cargo scans recursively, so a commit on any
 /// branch is seen, and a detached commit rewrites `HEAD`.
-fn watch(top: &Path) {
+fn watch(repo: &gix::Repository, top: &Path) {
     let mut watched: Vec<PathBuf> = ["crates", "Cargo.toml", "Cargo.lock"]
         .iter()
         .map(|path| top.join(path))
         .collect();
-    let named = ["HEAD", "index", "packed-refs", "refs/heads", "reftable"];
-    let mut argv = vec!["rev-parse"];
-    for path in named {
-        argv.extend(["--git-path", path]);
-    }
-    if let Some(paths) = git_text(top, &argv) {
-        watched.extend(paths.lines().map(|path| top.join(path)));
-    }
+    // Where `git rev-parse --git-path` puts each: a worktree's own HEAD and
+    // index live in its git dir, the refs in the common dir it shares.
+    watched.extend(["HEAD", "index"].map(|path| repo.git_dir().join(path)));
+    watched
+        .extend(["packed-refs", "refs/heads", "reftable"].map(|path| repo.common_dir().join(path)));
     for path in watched.iter().filter(|path| path.exists()) {
         println!("cargo:rerun-if-changed={}", path.display());
     }
@@ -222,19 +221,16 @@ fn watch(top: &Path) {
 /// the bytes on disk. `None` when git answers nothing, there is no input, or a
 /// tracked input will not read (deleted but not yet `git rm`'d), which prints
 /// one warning naming it.
-fn digest(top: &Path) -> Option<String> {
-    let listed = git(
-        top,
-        &["ls-files", "-z", "--", "crates", "Cargo.toml", "Cargo.lock"],
-    )?;
+fn digest(repo: &gix::Repository, top: &Path) -> Option<String> {
+    let index = repo.index_or_empty().ok()?;
     let mut inputs = BTreeMap::new();
-    for raw in listed
-        .split(|byte| *byte == 0)
-        .filter(|raw| !raw.is_empty())
-    {
-        let Ok(path) = std::str::from_utf8(raw) else {
+    for entry in index.entries() {
+        let Ok(path) = std::str::from_utf8(entry.path(&index)) else {
             continue;
         };
+        if !(path == "Cargo.toml" || path == "Cargo.lock" || path.starts_with("crates/")) {
+            continue;
+        }
         let Ok(bytes) = std::fs::read(top.join(path)) else {
             println!(
                 "cargo:warning=batten's build identity carries no source digest: {path} is tracked and will not read"
@@ -284,27 +280,14 @@ fn every_file(dir: &Path, into: &mut Vec<PathBuf>) {
     }
 }
 
-/// `git -C dir args`'s stdout, trimmed, or `None` for a failure or nothing.
-fn git_text(dir: &Path, args: &[&str]) -> Option<String> {
-    let text = String::from_utf8(git(dir, args)?).ok()?;
-    let text = text.trim();
-    (!text.is_empty()).then(|| text.to_owned())
-}
-
-/// `git -C dir args`'s stdout, or `None` when git will not run or fails.
-fn git(dir: &Path, args: &[&str]) -> Option<Vec<u8>> {
-    #[expect(
-        clippy::disallowed_types,
-        reason = "stays: a build script reaches neither `crate::git` nor `batten::stream`, and `gix` as a build-dependency would compile a second copy for the host (CLOUD-2903)"
-    )]
-    let mut command = std::process::Command::new("git");
-    command.arg("-C").arg(dir).args(args);
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "stays: the one spawn above, read to completion; the build script has no stream wrapper (CLOUD-2903)"
-    )]
-    let output = command.output().ok()?;
-    output.status.success().then_some(output.stdout)
+/// The repository holding `manifest`, read in process through `gix` and
+/// spawning nothing, or `None` outside one. The nearest ancestor with a `.git`
+/// (a directory, or a worktree's file), opened `isolated`: no global or system
+/// config is read, so the script's reads stay the ones a receipt-keyed step
+/// declares.
+fn open_repository(manifest: &Path) -> Option<gix::Repository> {
+    let top = manifest.ancestors().find(|dir| dir.join(".git").exists())?;
+    gix::open_opts(top, gix::open::Options::isolated()).ok()
 }
 
 /// Refuse the build where the crate's Rust carries a mutation marker anywhere, or
