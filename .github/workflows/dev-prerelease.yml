@@ -2,6 +2,8 @@ name: dev-prerelease
 #MUTANT-SUITE crates/batten/tests/it/dist.rs
 #MUTANT dev-prerelease-unnamespaced|s@^          tag="dev/v.*$@          tag="v${version}"@|a_dev_prerelease_is_published_under_the_dev_namespace
 #MUTANT dev-prerelease-draft-unchecked|s@^              if \[ "$have" != "$want" \]; then$@              if false; then@|a_cancelled_runs_draft_is_published_not_stranded
+#MUTANT dev-prerelease-flagged|s@--draft=false --prerelease=false --latest=false$@--draft=false --prerelease --latest=false@|a_dev_publish_never_carries_the_flag_the_freeze_reads
+#MUTANT dev-prerelease-unflag-widened|s@ | select(.tagName | startswith("dev/"))@@|a_dev_release_already_flagged_is_unflagged_before_the_publish
 
 # workflow-shell: CLOUD-2903 naming the archive by the build's own identity and
 # publishing it are two bodies no verb owns yet; each reads `batten --version`
@@ -123,6 +125,24 @@ jobs:
           pattern: dev-*
           path: dev
           merge-multiple: true
+      # A PUBLISHED DEV RELEASE IS NEVER FLAGGED A PRE-RELEASE (CLOUD-2954): the
+      # released engine's freeze (`release_state::read_flight`) reads a flagged,
+      # non-latest release ahead of `main` as one whose land is owed, and a dev
+      # release has no land, so it freezes every fast-forward. Unflagging is the
+      # one edit an immutable release still takes; nothing is deleted, no tag
+      # moves, no asset is touched. Idempotent: none flagged, it does nothing.
+      - name: Unflag every published dev pre-release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          gh release list --exclude-drafts --limit 1000 --json tagName,isPrerelease \
+            --jq '.[] | select(.isPrerelease) | select(.tagName | startswith("dev/")) | .tagName' |
+            while IFS= read -r tag; do
+              gh release edit "$tag" --prerelease=false --latest=false
+            done
       - name: Publish the dev pre-release
         shell: bash
         env:
@@ -168,4 +188,4 @@ jobs:
                 batten-v*.tar.gz SHA256SUMS
               ;;
           esac
-          gh release edit "$tag" --draft=false --prerelease --latest=false
+          gh release edit "$tag" --draft=false --prerelease=false --latest=false
