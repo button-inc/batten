@@ -6443,7 +6443,7 @@ mod tests {
 /// config a step key reads (CLOUD-2960).
 pub(crate) const STEP_SCHEDULING: [&str; 4] = ["journal", "group", "depends_on", "run"];
 
-/// The config `text` with what `step::config_table` leaves out removed IN PLACE:
+/// The config `text` with what no step key reads removed IN PLACE:
 /// the `engine` pin, each `[[step]]` row's scheduling fields, and a row that
 /// declares nothing else. The view a case reads the config through, so it reads
 /// what the key does (CLOUD-2960). Edited rather than re-serialized, so every
