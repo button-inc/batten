@@ -548,7 +548,7 @@ CI_RETIRING_CHECKS = ""
 # would run it twice. These two are still bash and still have `land.sh` as their
 # only caller — which is what slice 7's deletion would orphan.
 LAND_BODY_SOURCE = "gh pr view --json body --jq .body"
-LAND_BODY_GATES = "mise run deferral-check|mise run closing-key-check"
+LAND_BODY_GATES = "mise run deferral-check|mise run closing-key-check|mise run engine-pin-land-check"
 # THE ENTRY GATES, ASKED ONCE BEFORE THE FIRST LAP (CLOUD-1471). Same grammar and
 # same asymmetry as `LAND_BODY_GATES`, and one difference that matters: the engine
 # appends THE PULL REQUEST NUMBER to each argv, because which task drops a
@@ -2840,6 +2840,15 @@ run = [
 description = "Gate: the engine pin names a release, and that release loads this config and carries every verb the released lanes call (CLOUD-2063)"
 run = [
   "{{vars.batten}} engine gate --lane .github/workflows/auto-bot-land.yml --lane .github/workflows/auto-release-land.yml --lane .github/workflows/fast-forward.yml",
+]
+
+# THE LAP THAT LANDS (CLOUD-2903): a dev pin is accepted by `engine-pin-check`
+# on every lap and refused here, in the ready phase, as a source pin is. A body
+# gate, so `land` runs it once, when it readies; it reads no body.
+[tasks.engine-pin-land-check]
+description = "Gate: the lap that lands refuses a dev pin as it refuses a source pin (CLOUD-2903)"
+run = [
+  "{{vars.batten}} engine gate --landing --lane .github/workflows/auto-bot-land.yml --lane .github/workflows/auto-release-land.yml --lane .github/workflows/fast-forward.yml",
 ]
 
 # The hk step's two halves (CLOUD-2063): a declared source pin is moved to this

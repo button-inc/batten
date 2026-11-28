@@ -3,25 +3,28 @@ name: dev-prerelease
 #MUTANT dev-prerelease-unnamespaced|s@^          tag="dev/v.*$@          tag="v${version}"@|a_dev_prerelease_is_published_under_the_dev_namespace
 #MUTANT dev-prerelease-draft-unchecked|s@^              if \[ "$have" != "$want" \]; then$@              if false; then@|a_cancelled_runs_draft_is_published_not_stranded
 #MUTANT dev-prerelease-flagged|s@--draft=false --prerelease=false --latest=false$@--draft=false --prerelease --latest=false@|a_dev_publish_never_carries_the_flag_the_freeze_reads
-#MUTANT dev-prerelease-cancels-started|s@^  cancel-in-progress: false$@  cancel-in-progress: true@|a_started_dev_publish_is_never_cancelled_by_a_newer_push
+#MUTANT dev-prerelease-cancels-started|s@^  cancel-in-progress: false$@  cancel-in-progress: true@|a_second_dispatch_never_cancels_a_started_dev_publish
+#MUTANT dev-prerelease-on-push|s@^  workflow_dispatch:$@  pull_request:@|the_dev_publish_runs_only_when_dispatched
+#MUTANT dev-prerelease-unnumbered|s@^          BATTEN_BUILD_PR: ${{ inputs.pr }}$@          BATTEN_BUILD_PR: ""@|a_dispatched_build_carries_the_pull_requests_number
 #MUTANT dev-prerelease-unflag-widened|s@ | select(.tagName | startswith("dev/"))@@|a_dev_release_already_flagged_is_unflagged_before_the_publish
 
 # workflow-shell: CLOUD-2903 naming the archive by the build's own identity and
 # publishing it are two bodies no verb owns yet; each reads `batten --version`
 # off the binary it built, so no name is re-derived from the manifest.
 
-# A DEV PRE-RELEASE OF EVERY PULL REQUEST'S HEAD (CLOUD-2903). A branch whose
-# config only its own engine can read runs on a source pin, and
-# `engine-pin-check` refuses a source pin at land; no release can read that
-# config until one contains its engine. This publishes the head's engine as a
-# pre-release whose tag is the build's identity, so the branch can pin it as a
-# RELEASE (`engine = { release = "v<identity>" }`) and land.
+# A DEV PRE-RELEASE OF A PULL REQUEST'S HEAD, CUT ON REQUEST BY MANUAL DISPATCH
+# (CLOUD-2903). The owner: "It was supposed to be a github action that can be
+# manually dispatched". Its one input is the pull request's number; nothing
+# else starts it, so no open, push or ready runs it. A branch pins the build
+# it publishes as a release (`engine = { release = "v<identity>" }`) so its own
+# sessions run on that build instead of compiling the tree. A DEV PIN NEVER
+# LANDS: `engine-pin-check` refuses it at land as it refuses a source pin, and
+# the branch pins a published release before it lands.
 #
-# DRAFTS INCLUDED, ON PURPOSE: `land` readies a pull request only once its own
-# `verify` passes, and `verify` runs `engine-pin-check`, so a pull request that
-# needs a dev pre-release needs it while it is still a draft. The two x86_64
-# Linux legs only — the hook engine's platforms (musl, and the gnu twin a musl
-# engine prefers) — so a push costs two builds, never the release's seven.
+# DRAFTS ARE SERVED: a pull request that wants a build wants it while it is
+# still a draft. The two x86_64 Linux legs only — the hook engine's platforms
+# (musl, and the gnu twin a musl engine prefers) — so a build costs two legs,
+# never the release's seven.
 #
 # THE `dev/` TAG NAMESPACE: the tag is `dev/v<identity less its build
 # metadata>` (`engine::forge_tag`), outside `v*`, so no release reader —
@@ -31,38 +34,65 @@ name: dev-prerelease
 # the shape `release ship other` holds every publish to.
 
 on:
-  pull_request:
-    types: [opened, reopened, synchronize, ready_for_review]
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: "The number of the pull request whose head to build"
+        required: true
+        type: number
 
 permissions: {}
 
 # A CALLER'S `env:` DOES NOT REACH A CALLED WORKFLOW, and this one calls none;
 # the binding is the same as `dist.yml`'s so each job installs its list only.
 env:
-  # DRAFTS AND EVERY PUSH, ON PURPOSE (the owner's ruling, CLOUD-2903): any pull
-  # request cuts a pre-release, and a started run finishes. `ci-hygiene` reads
-  # this declaration in place of a draft guard and a superseding group.
-  CI_SPEND_AUTHORISED: "publishes each pull request head's own engine build, which a draft needs"
+  # CUT ON REQUEST BY MANUAL DISPATCH, DRAFTS SERVED (CLOUD-2903): a run is
+  # one person asking for one build, and a started run finishes. `ci-hygiene`
+  # reads this declaration in place of a draft guard and a superseding group.
+  CI_SPEND_AUTHORISED: "cut on request by manual dispatch: one pull request head's engine build, drafts served; a dev pin never lands"
   MISE_TASK_RUN_AUTO_INSTALL: "false"
   MISE_EXEC_AUTO_INSTALL: "false"
 
 # One publication per pull request at a time, and A STARTED RUN FINISHES: a
-# busy branch pushes faster than a build takes, so cancelling on each push meant
-# no head ever published. The host keeps one run going and one pending, the
-# newest pending replacing an older; each run builds and tags the head it was
-# started on (`head.sha`, the binary's own identity), so a late finish
-# publishes exactly what it built, and later in-tree builds still answer its
-# pin (`dev_pin_answered`).
+# second dispatch for the same pull request waits behind the first rather than
+# cancelling it. Each run builds and tags the head it resolved when it started
+# (`resolve`), so a late finish publishes exactly what it built.
 concurrency:
-  group: dev-prerelease-${{ github.event.pull_request.number }}
+  group: dev-prerelease-${{ inputs.pr }}
   cancel-in-progress: false
 
 jobs:
+  resolve:
+    name: resolve pull request ${{ inputs.pr }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    permissions:
+      pull-requests: read
+    outputs:
+      sha: ${{ steps.head.outputs.sha }}
+    steps:
+      # A fork's head is never published: its token cannot write here, and its
+      # code is not this repository's to ship.
+      - name: Resolve the pull request's head
+        id: head
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          PR: ${{ inputs.pr }}
+        run: |
+          set -euo pipefail
+          repo=$(gh pr view "$PR" --json headRepository,headRepositoryOwner --jq '.headRepositoryOwner.login + "/" + .headRepository.name')
+          if [ "$repo" != "$GH_REPO" ]; then
+            echo "::error:: pull request $PR's head is in $repo, a fork; a fork's head is never published" >&2
+            exit 1
+          fi
+          sha=$(gh pr view "$PR" --json headRefOid --jq '.headRefOid')
+          printf 'sha=%s\n' "$sha" >>"$GITHUB_OUTPUT"
+
   build:
     name: dev build (${{ matrix.target }})
-    # A fork's head is never published: its token cannot write here, and its
-    # code is not this repository's to ship.
-    if: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
+    needs: resolve
     runs-on: ubuntu-latest
     timeout-minutes: 53 # budget: p95=1045s x3 measured=2026-11-24
     permissions:
@@ -74,9 +104,10 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          # The HEAD, as `dist.yml`'s pull-request legs build it: the engine a
-          # pull request publishes is its head's, never GitHub's merge commit.
-          ref: ${{ github.event.pull_request.head.sha }}
+          # The HEAD `resolve` read, as `dist.yml`'s pull-request legs build
+          # it: the engine a pull request publishes is its head's, never a
+          # merge commit.
+          ref: ${{ needs.resolve.outputs.sha }}
           persist-credentials: false
       # cache: false, as `dist.yml`: a published build must not restore a
       # shared cache.
@@ -91,15 +122,17 @@ jobs:
         env:
           TARGET: ${{ matrix.target }}
         run: mise run batten -- ci step --arg-env TARGET -- rustup target add
-      # `GITHUB_REF` is `refs/pull/<N>/merge` on this event, so `build.rs`
-      # stamps a `pr<N>` identity; the release marker is unset, so it is
-      # never the release's.
+      # A dispatched run's `GITHUB_REF` is the ref it was dispatched on, never
+      # `refs/pull/<N>`, so the number comes from the input: `build.rs` stamps
+      # a `pr<N>` identity from `BATTEN_BUILD_PR`. The release marker is unset,
+      # so it is never the release's.
       - name: Build and archive
         id: dist
         shell: bash
         env:
           DIST_BUILD_TOOL: cargo-dist
           DIST_TARGET: ${{ matrix.target }}
+          BATTEN_BUILD_PR: ${{ inputs.pr }}
         run: mise run batten -- ci step --outputs --arg-env DIST_TARGET -- mise run dist --
       - name: Name the archive by the build's identity
         shell: bash
@@ -124,10 +157,7 @@ jobs:
           retention-days: 1
 
   publish:
-    needs: build
-    # Stated here too, not inherited through `needs`: this job holds
-    # `contents: write` (`lane guard other`).
-    if: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
+    needs: [resolve, build]
     runs-on: ubuntu-latest
     timeout-minutes: 2 # budget: p95=21s x3 measured=2026-11-24
     permissions:
@@ -161,7 +191,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-          SHA: ${{ github.event.pull_request.head.sha }}
+          SHA: ${{ needs.resolve.outputs.sha }}
         run: |
           set -euo pipefail
           cd dev
