@@ -8303,6 +8303,31 @@ mod tests {
         assert_eq!(served, BTreeSet::from([forged]));
     }
 
+    /// Each listed commit gets its own identity, in input order, and one this
+    /// clone cannot read gets `None` (CLOUD-2957).
+    ///
+    /// Fails by: `commit_identities` answering a constant vector, empty or of
+    /// one element, which drops the copy test `claim race` relies on.
+    #[test]
+    fn commit_identities_answers_each_commit_in_order() {
+        let (dir, [first, second, third]) = history("commit-identities");
+        crate::testing::contain_state(&dir.join(".git").join("batten-state"));
+        let computed =
+            patch_identities(&dir, Window::DEFAULT, &format!("{first}..{third}")).unwrap();
+        let missing = "f".repeat(40);
+        let answered = commit_identities(&dir, &[second, third, missing]);
+        assert_eq!(answered.len(), 3, "one answer per commit asked");
+        assert!(
+            answered[2].is_none(),
+            "a commit this clone lacks has no identity"
+        );
+        let found: BTreeSet<String> = answered[..2].iter().flatten().cloned().collect();
+        assert_eq!(
+            found, computed,
+            "the two real commits answer their own identities"
+        );
+    }
+
     /// Fails by: a malformed remembered identity served, so `landing` raises
     /// on a cache line where a recomputation was owed.
     #[test]
