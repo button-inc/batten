@@ -1856,7 +1856,7 @@ impl Repo {
         let _ = std::fs::remove_file(&tick);
         mkfifo(&tick);
         let child = self
-            .step_command(&[step], &["loop"], &self.loop_env(&mark, &tick))
+            .step_command(&[step], &["loop"], &Self::loop_env(&mark, &tick))
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .spawn()
@@ -1880,7 +1880,7 @@ impl Repo {
         run
     }
 
-    fn loop_env(&self, mark: &Path, tick: &Path) -> Vec<(String, String)> {
+    fn loop_env(mark: &Path, tick: &Path) -> Vec<(String, String)> {
         vec![
             ("MARK".to_owned(), mark.to_string_lossy().into_owned()),
             ("TICK".to_owned(), tick.to_string_lossy().into_owned()),
@@ -1929,7 +1929,9 @@ impl Repo {
         let mut found: Vec<String> = std::fs::read_dir(self.path(".git"))
             .unwrap()
             .filter_map(|entry| entry.unwrap().file_name().into_string().ok())
-            .filter(|name| name.starts_with("batten-step-trace-") && name.ends_with(".trace"))
+            .filter(|name| {
+                name.starts_with("batten-step-trace-") && name.rsplit('.').next() == Some("trace")
+            })
             .collect();
         found.sort();
         found
@@ -2018,7 +2020,7 @@ fn a_killed_step_run_leaves_no_body_alive_once_the_next_one_starts() {
         alive(first.body),
         "the defect's precondition: the body outlives a killed `step run`"
     );
-    let env = repo.loop_env(&first.mark, &first.tick);
+    let env = Repo::loop_env(&first.mark, &first.tick);
     let out = repo.run_script("mystep", "echo \"$$ second\" >>\"$MARK\"", &env);
     assert_eq!(out.status.code(), Some(0), "{}", common::stderr(&out));
     assert!(
@@ -2049,7 +2051,7 @@ fn two_runs_of_one_step_never_overlap() {
     }
     let repo = Repo::new("overlap");
     let mut first = repo.looping("mystep", "overlap");
-    let mut env = repo.loop_env(&first.mark, &first.tick);
+    let mut env = Repo::loop_env(&first.mark, &first.tick);
     let seen = repo.dir.with_extension("overlap.seen");
     let _ = std::fs::remove_file(&seen);
     env.push(("SEEN".to_owned(), seen.to_string_lossy().into_owned()));
@@ -2089,7 +2091,7 @@ fn a_trace_is_one_runs_and_a_dead_runs_trace_is_removed() {
     first.signal(rustix::process::Signal::KILL);
     let _ = first.child.wait();
     let left = repo.traces();
-    let mut env = repo.loop_env(&first.mark, &first.tick);
+    let mut env = Repo::loop_env(&first.mark, &first.tick);
     let seen = repo.dir.with_extension("traced.seen");
     let _ = std::fs::remove_file(&seen);
     env.push(("SEEN".to_owned(), seen.to_string_lossy().into_owned()));

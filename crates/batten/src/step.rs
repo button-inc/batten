@@ -1217,10 +1217,6 @@ pub fn run_step(
     // receipt as a hit. A lock that cannot be taken runs unlocked: it is an
     // economy, and the step's verdict is its command's alone.
     let held = step_lock(step);
-    // THE BODY HOLDS THE LOCK TOO (CLOUD-2955): its descriptor is inherited by
-    // the command, so a run whose `step run` was killed still holds it while
-    // any of its processes lives, and no second body starts beside it.
-    let _inherited = held.as_ref().map(|held| Inherited::open(held.file()));
     let answer = check(step, args, Some(command));
     let _ = writeln!(err, "{}", answer.line(step));
     if let Answer::Hit(key) = &answer {
@@ -1293,7 +1289,7 @@ pub fn run_step(
         (command, running),
         (journaled.as_ref(), shards),
         traced.as_ref(),
-        (&settings, &published, &mut report),
+        (&settings, &published, &mut report, held.as_ref()),
         err,
     );
     // THE RUN'S DEPENDENCY PASSES OUTLIVE IT only over a tree that stood for
@@ -1531,6 +1527,15 @@ fn shard_coverage(
     }
 }
 
+/// What a miss's command run is handed: the exec settings, the variables
+/// published to it, the report it writes, and the step lock its body inherits.
+type MissIo<'run> = (
+    &'run crate::config_model::ExecConfig,
+    &'run [(String, String)],
+    &'run mut Vec<u8>,
+    Option<&'run batten_facts::lock_wait::Held>,
+);
+
 /// A miss's command run: sharded where `shards` asks for more than one and the
 /// command is a journaled nextest run ([`run_sharded`]), else once as
 /// `running`, under the tracer where one answers; with the trace files to lint.
@@ -1538,13 +1543,13 @@ fn run_miss(
     (command, running): (&[String], &[String]),
     (journaled, shards): (Option<&(Vec<String>, std::path::PathBuf)>, Option<u32>),
     traced: Option<&(String, std::path::PathBuf)>,
-    (settings, published, report): (
-        &crate::config_model::ExecConfig,
-        &[(String, String)],
-        &mut Vec<u8>,
-    ),
+    (settings, published, report, held): MissIo<'_>,
     err: &mut dyn Write,
 ) -> (Result<ExitCode>, Vec<std::path::PathBuf>) {
+    // THE BODY HOLDS THE LOCK TOO (CLOUD-2955): its descriptor is inherited by
+    // the command, so a run whose `step run` was killed still holds it while
+    // any of its processes lives, and no second body starts beside it.
+    let _inherited = held.map(|held| Inherited::open(held.file()));
     let sharded = shards
         .filter(|count| *count > 1)
         .zip(journaled)
@@ -2201,22 +2206,22 @@ fn step_lock_ending(
         if let (Some(pid), None, Some(root)) = (holder, live, root) {
             end_orphaned_run(root, pid, open()?);
         }
-        let stop = Stop::new().ok();
+        let waker = Stop::new().ok();
         let taken = std::thread::scope(|scope| {
-            let cancel = live.zip(stop.as_ref()).and_then(|(pid, stop)| {
+            let cancel = live.zip(waker.as_ref()).and_then(|(pid, raised)| {
                 let (cancel, watched) = std::sync::mpsc::channel::<()>();
                 let woken = HolderWatch::new(pid)?;
                 let ender = woken.ender();
                 scope.spawn(move || {
                     if woken.wait() {
-                        stop.raise();
+                        raised.raise();
                     }
                     drop(watched);
                 });
                 Some((cancel, ender))
             });
             let taken =
-                batten_facts::lock_wait::acquire(open()?, &path, Mode::Exclusive, stop.as_ref());
+                batten_facts::lock_wait::acquire(open()?, &path, Mode::Exclusive, waker.as_ref());
             if let Some((cancel, ender)) = cancel {
                 drop(cancel);
                 ender.end();
@@ -2279,7 +2284,8 @@ fn remove_dead_traces(git_dir: &Path, digest: &str) {
         let Some(rest) = name.to_str().and_then(|name| name.strip_prefix(&prefix)) else {
             continue;
         };
-        if rest.ends_with(".trace") || rest == "trace" || rest.contains(".shard") {
+        let ext = rest.rsplit('.').next().unwrap_or(rest);
+        if ext == "trace" || ext.starts_with("shard") {
             drop(std::fs::remove_file(entry.path()));
         }
     }
@@ -2382,7 +2388,7 @@ impl HolderWatch {
 impl HolderEnder {
     fn end(&self) {
         #[cfg(target_os = "linux")]
-        drop(rustix::io::write(&*self.cancel, &1_u64.to_ne_bytes()));
+        let _ = rustix::io::write(&*self.cancel, &1_u64.to_ne_bytes());
     }
 }
 
@@ -2399,7 +2405,7 @@ impl<'held> Inherited<'held> {
     fn open(file: &'held std::fs::File) -> Self {
         #[cfg(unix)]
         {
-            drop(rustix::io::fcntl_setfd(file, rustix::io::FdFlags::empty()));
+            let _ = rustix::io::fcntl_setfd(file, rustix::io::FdFlags::empty());
             Self { file }
         }
         #[cfg(not(unix))]
@@ -2415,10 +2421,7 @@ impl<'held> Inherited<'held> {
 impl Drop for Inherited<'_> {
     fn drop(&mut self) {
         #[cfg(unix)]
-        drop(rustix::io::fcntl_setfd(
-            self.file,
-            rustix::io::FdFlags::CLOEXEC,
-        ));
+        let _ = rustix::io::fcntl_setfd(self.file, rustix::io::FdFlags::CLOEXEC);
     }
 }
 
