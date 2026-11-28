@@ -40,6 +40,7 @@
 # `shared-key` is consumer config and a CI log is a public surface.
 #
 #MUTANT-SUITE crates/batten/tests/it/ci_cache_declared.rs
+#MUTANT spend-declaration-unread|s@^\ttrim_space(reason) != ""$@\tfalse@|a_workflow_that_declares_its_spend_is_not_asked_for_a_cache
 #MUTANT key-may-carry-a-hash|s@contains(key, "hashFiles")@false@|a_shared_key_carrying_a_content_hash_is_refused
 #MUTANT cargo-reach-may-go-uncached|s@not declares_a_cache(path, name)@false@|a_cargo_job_with_no_cache_step_is_refused
 #MUTANT warmed-family-may-be-written|s@not reads_only(step)@false@|a_pull_request_writer_of_a_warmed_family_is_refused
@@ -107,6 +108,16 @@ triggers(path) := t if {
 }
 
 on_pull_request(path) if _ = triggers(path).pull_request
+
+# A WORKFLOW THAT DECLARES ITS SPEND (CLOUD-2903), as `ci-hygiene` reads it: a
+# workflow-level `env: CI_SPEND_AUTHORISED: "<why>"`, non-blank. Such a
+# workflow publishes what it builds, and a published build must not restore a
+# shared cache. Read per workflow, never by name.
+spend_authorised(path) if {
+	reason := workflow[path].env.CI_SPEND_AUTHORISED
+	is_string(reason)
+	trim_space(reason) != ""
+}
 
 # A TRUNK WRITER IS ONE THAT RUNS ON THE TRUNK, AND THE TRIGGER IS NOT WHAT
 # DECIDES THAT. The earlier version of this predicate read `push` only and
@@ -359,6 +370,7 @@ uncached(path, name, task) if {
 	[path, name, task] in job_task
 	reaches_cargo(task)
 	not declares_a_cache(path, name)
+	not spend_authorised(path)
 }
 
 reach contains [path, name, task] if {

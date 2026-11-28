@@ -28,6 +28,7 @@
 # this file, and it is absent on purpose.
 #
 #MUTANT-OWNER CLOUD-989|the mutation applies and alters reachable code, and the case it names cannot observe the change — a downstream guard or a second arm masks it. That is a defect in the DECLARATION, which `SURVIVED` mis-attributes to the suite; CLOUD-989's fork is what reports it correctly, and these are the live instances its own acceptance says it lacked
+#MUTANT spend-declaration-unread|s@^\ttrim_space(reason) != ""$@\tfalse@|a_workflow_that_declares_its_spend_is_neither_leased_nor_rostered
 #MUTANT roster-may-miss-a-job|s@not job_in_roster(name)@false@|a_pull_request_job_missing_from_the_roster_is_refused
 #MUTANT roster-may-name-a-ghost|s@not roster_name_has_a_job(name)@false@|a_roster_name_matching_no_job_is_refused
 #MUTANT dependabot-may-return|s@not dependabot_absent@false@|a_returned_dependabot_config_is_refused
@@ -225,6 +226,17 @@ on_pull_request(path) if _ = triggers(path).pull_request
 # the BASE name — enough to catch a job added, removed or renamed, which is what
 # rots a hand-maintained list.
 base_name(name) := trim_space(split(name, "(")[0])
+
+# A WORKFLOW THAT DECLARES ITS SPEND (CLOUD-2903), as `ci-hygiene` reads it: a
+# workflow-level `env: CI_SPEND_AUTHORISED: "<why>"`, non-blank. Such a workflow
+# runs on every push, drafts included, and is not a landing check: the lease
+# would cancel exactly the runs it exists for, and the roster would make every
+# land wait on it. Read per workflow, never by name.
+spend_authorised(path) if {
+	reason := workflow[path].env.CI_SPEND_AUTHORISED
+	is_string(reason)
+	trim_space(reason) != ""
+}
 
 # The workflow a job calls with a job-level `uses: ./<path>`, as the key its
 # document is held under (CLOUD-2554). Such a job has no steps of its own: its
@@ -637,6 +649,7 @@ roster_names contains base_name(trim_space(part)) if {
 job_display_names contains base_name(name) if {
 	some path, _ in workflow
 	on_pull_request(path)
+	not spend_authorised(path)
 	some key, job in workflow[path].jobs
 	not calls(path, key)
 	name := object.get(job, "name", key)
@@ -1019,6 +1032,7 @@ violation contains {
 	some name, job in workflow[path].jobs
 	not job.needs
 	not starts_with_the_lease(path, name)
+	not spend_authorised(path)
 }
 
 # AND THE STEP MUST BE ALLOWED TO FAIL. The clause above matches the step's NAME,
