@@ -19,8 +19,8 @@ authors.workspace = true
 
 [dependencies]
 anyhow.workspace = true
-batten-facts = { path = "../batten-facts", version = "=0.0.221" }
-batten-fsio = { path = "../batten-fsio", version = "=0.0.221" }
+batten-facts = { path = "../batten-facts", version = "=0.0.222" }
+batten-fsio = { path = "../batten-fsio", version = "=0.0.222" }
 # The HTTP client (`fetch`, CLOUD-745). Declared here, on the crate that names
 # them, because `macos-link-check` walks ACTIVATED edges from the workspace
 # members.

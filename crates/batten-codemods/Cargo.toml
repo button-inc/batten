@@ -14,7 +14,7 @@ authors.workspace = true
 publish = false
 
 [dependencies]
-batten = { path = "../batten", version = "=0.0.221" }
+batten = { path = "../batten", version = "=0.0.222" }
 rustfix = "0.9.8"
 serde_json = { workspace = true }
 
