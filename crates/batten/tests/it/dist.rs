@@ -714,6 +714,29 @@ fn a_dev_publish_never_carries_the_flag_the_freeze_reads() {
     );
 }
 
+/// `#MUTANT dev-prerelease-cancels-started` reddens here. A branch that pushes
+/// faster than a build takes never published while each push cancelled the
+/// run ahead of it (CLOUD-2903); a started run now finishes, and the build it
+/// targets is the run's own `head.sha`, never the pull request's newest head.
+#[test]
+fn a_started_dev_publish_is_never_cancelled_by_a_newer_push() {
+    let doc = workflow("dev-prerelease.yml");
+    assert_eq!(
+        doc["concurrency"]["cancel-in-progress"].as_bool(),
+        Some(false),
+        "a started dev publish finishes"
+    );
+    let publish = dev_publish_runs().join("\n");
+    assert!(publish.contains("--target \"$SHA\""), "{publish}");
+    let sha = doc["jobs"]["publish"]["steps"]
+        .as_vec()
+        .unwrap()
+        .iter()
+        .find_map(|step| step["env"]["SHA"].as_str())
+        .expect("the publish names the sha it built");
+    assert_eq!(sha, "${{ github.event.pull_request.head.sha }}");
+}
+
 /// `#MUTANT dev-prerelease-unflag-widened` reddens here. A step ahead of the
 /// publish unflags every published release under `dev/` still flagged a
 /// pre-release (CLOUD-2954), selecting by that prefix and nothing wider.

@@ -3,6 +3,7 @@ name: dev-prerelease
 #MUTANT dev-prerelease-unnamespaced|s@^          tag="dev/v.*$@          tag="v${version}"@|a_dev_prerelease_is_published_under_the_dev_namespace
 #MUTANT dev-prerelease-draft-unchecked|s@^              if \[ "$have" != "$want" \]; then$@              if false; then@|a_cancelled_runs_draft_is_published_not_stranded
 #MUTANT dev-prerelease-flagged|s@--draft=false --prerelease=false --latest=false$@--draft=false --prerelease --latest=false@|a_dev_publish_never_carries_the_flag_the_freeze_reads
+#MUTANT dev-prerelease-cancels-started|s@^  cancel-in-progress: false$@  cancel-in-progress: true@|a_started_dev_publish_is_never_cancelled_by_a_newer_push
 #MUTANT dev-prerelease-unflag-widened|s@ | select(.tagName | startswith("dev/"))@@|a_dev_release_already_flagged_is_unflagged_before_the_publish
 
 # workflow-shell: CLOUD-2903 naming the archive by the build's own identity and
@@ -41,11 +42,16 @@ env:
   MISE_TASK_RUN_AUTO_INSTALL: "false"
   MISE_EXEC_AUTO_INSTALL: "false"
 
-# One publication per pull request at a time: a newer push supersedes an older
-# one's build, and each head's identity is its own tag, so nothing is lost.
+# One publication per pull request at a time, and A STARTED RUN FINISHES: a
+# busy branch pushes faster than a build takes, so cancelling on each push meant
+# no head ever published. The host keeps one run going and one pending, the
+# newest pending replacing an older; each run builds and tags the head it was
+# started on (`head.sha`, the binary's own identity), so a late finish
+# publishes exactly what it built, and later in-tree builds still answer its
+# pin (`dev_pin_answered`).
 concurrency:
   group: dev-prerelease-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   build:
