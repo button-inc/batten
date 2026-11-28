@@ -989,3 +989,157 @@ fn a_reduced_read_points_at_a_view_whose_lines_hold_each_field() {
         "a string whose text is `null` is content, not emptiness"
     );
 }
+
+// --- the verb prints the server's whole answer (CLOUD-2956) ------------------
+//
+// Bounding what reaches a context is the hooks' job alone. These drive
+// `mcp::report`, the whole of what `mcp call` writes, against this repository's
+// own `[mcp]` table, so a row `batten.toml` declares is the row in force.
+
+/// This repository's committed `[mcp]` table.
+fn committed_mcp() -> batten::config_model::McpConfig {
+    let text =
+        std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../batten.toml"))
+            .expect("read batten.toml");
+    let document: toml::Table = toml::from_str(&text).expect("batten.toml parses");
+    document
+        .get("mcp")
+        .cloned()
+        .map_or_else(Default::default, |table| {
+            table.try_into().expect("the [mcp] table loads")
+        })
+}
+
+/// A `tools/call` result carrying `document` as its one text block.
+fn text_result(document: &serde_json::Value) -> serde_json::Value {
+    serde_json::json!({"content": [{"type": "text", "text": document.to_string()}]})
+}
+
+/// The bytes the store holds for `result`: the verb files exactly these.
+fn stored_bytes(result: &serde_json::Value) -> String {
+    String::from_utf8(serde_json::to_vec(&batten::mcp::payload(result).value).expect("serialize"))
+        .expect("utf-8")
+}
+
+fn report_for(method: &str, result: &serde_json::Value) -> batten::mcp::Report {
+    batten::mcp::report(
+        &committed_mcp(),
+        result,
+        method,
+        "claude-code-remote",
+        "response:abc123",
+    )
+    .expect("a report")
+}
+
+#[test]
+fn a_large_response_is_printed_whole_and_is_the_stored_capture() {
+    // Several times the hook's default 2,000-token bound, under the list method
+    // a row once narrowed.
+    let issues: Vec<serde_json::Value> = (0..40)
+        .map(|n| {
+            serde_json::json!({
+                "id": format!("KEY-{n}"),
+                "title": format!("issue {n}"),
+                "status": "Todo",
+                "description": "a body no reduction may cut. ".repeat(20),
+                "team": "Team",
+            })
+        })
+        .collect();
+    let result = text_result(&serde_json::json!({"issues": issues, "hasNextPage": false}));
+    let report = report_for("list_issues", &result);
+    assert!(
+        report.stdout.len() > 8_000 * 3,
+        "premise: the response is several times the hook's bound"
+    );
+    let parsed: serde_json::Value =
+        serde_json::from_str(&report.stdout).expect("stdout is one JSON document");
+    assert_eq!(parsed, batten::mcp::payload(&result).value);
+    assert_eq!(
+        report.stdout,
+        stored_bytes(&result),
+        "stdout is byte-identical to the stored capture"
+    );
+    assert!(!report.reduced, "nothing narrows the answer");
+    assert!(
+        report.stderr.iter().all(|line| !line.contains("emitted")),
+        "no `emitted` line: {:?}",
+        report.stderr
+    );
+    assert_eq!(report.exit, batten::exit::ExitCode::Success);
+}
+
+#[test]
+fn a_field_a_reduction_once_dropped_is_on_stdout() {
+    let description = "the whole description, which jq must be able to read. ".repeat(100);
+    let issue = text_result(&serde_json::json!({
+        "id": "KEY-1",
+        "status": "Todo",
+        "team": "Team",
+        "description": description,
+    }));
+    let read: serde_json::Value =
+        serde_json::from_str(&report_for("get_issue", &issue).stdout).expect("JSON");
+    assert_eq!(
+        read.get("description").and_then(serde_json::Value::as_str),
+        Some(description.as_str()),
+        "get_issue's description is on stdout whole"
+    );
+    assert_eq!(
+        read.get("team").and_then(serde_json::Value::as_str),
+        Some("Team")
+    );
+
+    let content = "a document body. ".repeat(200);
+    let document = text_result(&serde_json::json!({
+        "id": "doc-1",
+        "title": "A document",
+        "content": content,
+    }));
+    let read: serde_json::Value =
+        serde_json::from_str(&report_for("get_document", &document).stdout).expect("JSON");
+    assert_eq!(
+        read.get("content").and_then(serde_json::Value::as_str),
+        Some(content.as_str()),
+        "get_document's content is on stdout whole"
+    );
+}
+
+#[test]
+fn a_servers_error_is_printed_whole() {
+    // A refusal longer than 200 bytes, on two lines: both lines travel, uncut.
+    let first = format!("the server refused this call because {}", "x".repeat(250));
+    let second = "and here is the second line of its reason";
+    let body = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "error": {"code": -32000, "message": format!("{first}\n{second}")},
+    })
+    .to_string();
+    let line = refusal(&body);
+    assert!(
+        line.contains(&first),
+        "the first line travels whole: {line}"
+    );
+    assert!(line.contains(second), "and so does the second: {line}");
+    assert!(!line.contains('…'), "nothing is marked cut: {line}");
+
+    // An `isError` result: its body on stdout, byte for byte, at today's exit.
+    let text = format!("Input validation error: {}", "detail ".repeat(60));
+    let result = serde_json::json!({
+        "content": [{"type": "text", "text": text}],
+        "isError": true,
+    });
+    let report = report_for("save_issue", &result);
+    assert_eq!(report.exit, batten::exit::ExitCode::Usage);
+    assert_eq!(
+        report.stdout,
+        stored_bytes(&result),
+        "the error body is on stdout as stored"
+    );
+    assert!(
+        report.stdout.contains(&text),
+        "with the server's whole text"
+    );
+}
