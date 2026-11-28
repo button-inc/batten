@@ -111,7 +111,7 @@ row here, so a new module lands with its line.
 - `doc.rs` (crate `batten-base`) — a class's interaction doc (CLOUD-2143): the `why`/`do`/`dont` sections a first sighting carries beside the gloss, their load-time budget (640 bytes, section limits, no issue keys), and the vendored docs keyed by class id.
 - `history.rs` — a config row's history and the gate on changing it (CLOUD-2144): the row/owner map over the committed authority, the owned text digested at HEAD, the per-context `history-read` receipts, and what `policy explain --history` prints.
 - `markers.rs` — counted suppression markers (CLOUD-36): how many times policy was waved through, and where.
-- `mcp.rs` — Batten as an MCP client (CLOUD-1260): the `[mcp]` table, wiring resolution over `[[mcp.source]]` rows, the JSON-RPC session, and the `[[mcp.result]]` reductions.
+- `mcp.rs` — Batten as an MCP client (CLOUD-1260): the `[mcp]` table, wiring resolution over `[[mcp.source]]` rows, the JSON-RPC session, and the verb's whole-response report (CLOUD-2956).
 - `minted.rs` (crate `batten-facts`) — one declared FIELD of a receipt `mint.rs` already wrote, read on the TREE surface and bounded by age (CLOUD-1310).
 - `mint.rs` — receipts minted from the tool result that earned them (CLOUD-1024): the `[[mint]]` table, the closed six-form body template, and the dotted path selector.
 - `mutate.rs` — mutation coverage over the declared gate set (CLOUD-418), retired out of `mise-tasks/mutant.sh` and `mise-tasks/mutant-census.sh` under CLOUD-1267.

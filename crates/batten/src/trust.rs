@@ -1398,8 +1398,7 @@ pub const CENSUS: &[FieldCoverage] = &[
     // renamed key, so losing either is a silence. The rest of the table is still
     // not policy-bearing, for the reason this row used to give whole: a
     // `[[mcp.source]]` row names the file an endpoint and its headers are
-    // resolved from, and a `[[mcp.result]]` row decides what reaches the CALLER
-    // of `mcp call` — no gate reads either, and the authority they are read from
+    // resolved from, and no gate reads it, and the authority they are read from
     // is guarded structurally, the key being absent from `OverrideConfig`.
     FieldCoverage {
         field: "mcp",

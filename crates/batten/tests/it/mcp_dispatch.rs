@@ -60,7 +60,7 @@ use std::process::Output;
 
 use common::{Fixture, at_root, run, stderr, stdout};
 
-/// A repository declaring one repo-relative wiring source and one reduction.
+/// A repository declaring one repo-relative wiring source.
 fn repo_declaring(name: &str, wiring: &str) -> PathBuf {
     Fixture::new(name)
         .config(
@@ -71,11 +71,6 @@ version = 1
 id = "project"
 path = "wiring.json"
 node = "mcpServers"
-
-[[mcp.result]]
-method = "get_thing"
-reduce = "project"
-fields = ["id", "status"]
 "#,
         )
         .file("wiring.json", wiring)
@@ -213,11 +208,6 @@ id = "project"
 path = "wiring.json"
 node = "mcpServers"
 {credential}
-
-[[mcp.result]]
-method = "get_thing"
-reduce = "project"
-fields = ["id"]
 "#
         ))
         .file(
@@ -423,7 +413,10 @@ node = "mcpServers"
         stderr(&answer)
     );
 
-    let empty_fields = Fixture::new("mcp-empty-fields")
+    // A REDUCTION ROW IS REFUSED, not silently ignored (CLOUD-2956): `mcp call`
+    // prints the server's whole answer, so a row that claims to narrow it would
+    // read as a reduction nothing applies.
+    let empty_fields = Fixture::new("mcp-result-row")
         .config(
             r#"
 version = 1
@@ -431,16 +424,17 @@ version = 1
 [[mcp.result]]
 method = "get_thing"
 reduce = "project"
-fields = []
+fields = ["id"]
 "#,
         )
         .git()
         .build();
     let answer = run(&empty_fields, &["config", "lint"]);
+    // An unknown key is refused by the schema, which `config lint` answers `2`.
     assert_eq!(
         answer.status.code(),
-        Some(1),
-        "a reduction over no fields is a dropped payload wearing a projection's costume: {}",
+        Some(2),
+        "an `[[mcp.result]]` row is refused now that nothing reduces: {}",
         stderr(&answer)
     );
 }
@@ -699,13 +693,10 @@ fn a_successful_envelope_is_still_a_result_and_not_a_refusal() {
 // row demands, which is the property that makes the extraction faithful rather
 // than convenient: this defect passed a status-only assertion for its whole life.
 
-/// The verdict for a result, with the framing decision taken the way the verb
-/// takes it — through `payload`, never hand-built.
+/// The verdict for a result, as the verb decides it.
 fn outcome_for(result: &serde_json::Value) -> batten::mcp::Outcome {
-    let payload = batten::mcp::payload(result);
     batten::mcp::outcome(
         result,
-        &payload,
         "save_issue",
         "claude-code-remote",
         "response:abc123",
@@ -742,14 +733,16 @@ fn a_tool_level_error_result_exits_non_zero_and_names_the_method() {
 fn a_failed_result_is_never_projected() {
     // THE HALF THAT IS NOT THE EXIT CODE. Projecting an error document is what
     // produced `{}` — an empty success indistinguishable from a write that
-    // changed nothing — so the refusal to project is its own assertion.
+    // changed nothing — so the error document reaching stdout whole is its own
+    // assertion.
     let result = serde_json::json!({
         "content": [{"type": "text", "text": "Invalid input"}],
         "isError": true,
     });
-    assert!(
-        !outcome_for(&result).projectable,
-        "a declared projection must never be applied to a failed result"
+    assert_eq!(
+        report_for("save_issue", &result).stdout,
+        stored_bytes(&result),
+        "a failed result is printed whole, never field-picked"
     );
 }
 
@@ -771,8 +764,9 @@ fn an_error_document_in_an_unrecognised_frame_is_not_projected_either() {
         "status": 400,
     });
     let outcome = outcome_for(&result);
-    assert!(
-        !outcome.projectable,
+    assert_eq!(
+        report_for("get_issue", &result).stdout,
+        stored_bytes(&result),
         "an unrecognised frame is passed through whole, never field-picked"
     );
     // AND IT IS STILL EXIT 0, stated rather than hidden. Nothing in this document
@@ -802,9 +796,10 @@ fn a_successful_call_is_byte_identical() {
         batten::exit::ExitCode::Success,
         "a successful call's exit code is unchanged"
     );
-    assert!(
-        outcome.projectable,
-        "and its declared projection still applies"
+    assert_eq!(
+        report_for("get_issue", &result).stdout,
+        stored_bytes(&result),
+        "and its answer is the stored payload"
     );
     assert!(
         outcome.failure.is_none(),

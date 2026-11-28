@@ -5346,45 +5346,6 @@ id = "project"
 path = ".mcp.json"
 node = "mcpServers"
 
-# THE WRITE-SIDE REDUCTION (CLOUD-1122). `save_issue` was 435 calls returning
-# 4.98 MB on the measured session — 38% of the 13.2 MB the tracker cost — because
-# a write echoes the entire stored description back seconds after the author sent
-# it. A `patch` sends a few hundred bytes of anchors and gets a full body back,
-# and that body then sits in context, re-sent every turn, for the rest of the
-# session. It is the one operation whose input the caller already knows.
-#
-# `acknowledge` RATHER THAN A NARROW `project`, and the difference is in KIND
-# rather than in degree. Every field here is held to a bounded SCALAR — past
-# `TOKEN_MAX`, or a container rather than a scalar, and the field is DROPPED
-# rather than truncated, because a prefix of somebody's issue body is still their
-# issue body. So this arm cannot echo a body however the row is written, where
-# `project` above leaves that to the field list.
-#
-# THE BOUND IS LENGTH, NOT `facts::Reduction::Token`'S. That reduction also
-# refuses any value carrying whitespace, and it is right to: its product reaches
-# the POLICY INPUT, where a module could lift a sentence into a pointer. This
-# arm's product reaches the CALLER, and what is being kept out is a 15k-character
-# description, which the length bound stops on its own. Copying the whitespace
-# clause across would have silently dropped `status = "In Progress"` — the one
-# field this row's own remedy names.
-#
-# THE BODY KEEPS ARRIVING AT THE BOUNDARY, which is the half a naive fix breaks.
-# CLOUD-815 compares the stored body against the sent one — that comparison IS the
-# detection — and CLOUD-1118 wants the post-write body so a lint straight after a
-# write decides over what was actually stored. Both read the CAPTURE STORE, and
-# `mcp call` stores every response whole before reducing anything, so neither is
-# starved. What this removes is the copy that arrives in CONTEXT, which is the
-# only copy nobody asked for.
-#
-# THE FIELD LIST IS THE ROW'S OWN REMEDY, `{id, status, handle}`, plus the link a
-# writer wants at exactly this moment. `handle` is not here because it is not a
-# tracker field: it travels in the verb's own pointer line, which is where a
-# pointer belongs.
-[[mcp.result]]
-method = "save_issue"
-reduce = "acknowledge"
-fields = ["id", "status", "url"]
-
 # THE ONE THAT WAS CALLED UNDECLARABLE, NOW DECLARED (CLOUD-1251).
 #
 # A Claude Code REMOTE session's launcher mints its wiring per session, and the
@@ -5478,134 +5439,6 @@ header = "Authorization"
 scheme = "Bearer"
 file_from = "CLAUDE_SESSION_INGRESS_TOKEN_FILE"
 
-# THE READ-SIDE REDUCTION. `get_issue` was 616 calls and 8.27 MB on the measured
-# session — the single largest line — because no projection exists and every read
-# is therefore the whole body.
-#
-# NO `node`/`embedded` OVERRIDE, and the absence is the statement. `tools/call` is
-# specified to answer with content blocks, so unframing one is reading the PROTOCOL
-# rather than guessing a tracker's schema, and the engine does it for every method.
-# Those two keys stay available for a server whose framing it does not recognise;
-# this one is ordinary.
-#
-# FIDELITY IS NOT LOST BY NARROWING THIS. `ready lint`, `graph-check` and
-# `claim check` read the payload from the CAPTURE STORE by key (CLOUD-1121's
-# `--issue`), and `mcp call` stores every response whole — so the gates keep
-# receiving the entire body while the model receives a dozen fields. The field
-# list is what a human reads to know which row this is; the body is what a gate
-# reads, and the two have never needed to be the same channel.
-[[mcp.result]]
-method = "get_issue"
-reduce = "project"
-fields = [
-  "id",
-  "title",
-  "status",
-  "statusType",
-  "assignee",
-  "priority",
-  "labels",
-  "url",
-  "updatedAt",
-  "gitBranchName",
-  # READ BY `claim-before-code`, and absent from this list until CLOUD-1422.
-  # That row's `[[rule.captured]]` reads `node = "project"` off a payload this
-  # projection did not carry, so the reduction answered `present = false` for
-  # every capture and the gate was UNSATISFIABLE by construction — two config
-  # rows disagreeing about the payload's own shape.
-  #
-  # It stayed invisible because the refusal needs a capture to exist: an id
-  # nothing captured is absent from the map and reads as could-not-look, so a
-  # clone that has never read that row passes. It fires the moment someone does.
-  "project",
-]
-
-# THE DOCUMENT-SIDE REDUCTION, and it is the same defect one method over (CLOUD-1742).
-# `get_document` had no row, so every document read was handed back re-serialised
-# rather than reduced — the shape `crates/batten/src/mcp.rs` already records for an
-# undeclared method: MORE OUT THAN IN. A document's `content` is its entire body, so
-# this is the widest single field the tracker returns and the one nobody reading a
-# projection asked for.
-#
-# DROPPING `content` COSTS A GATE NOTHING, for the reason the `get_issue` block above
-# states of its own narrowing: `mcp call` stores every response WHOLE, so a gate reads
-# the body from the capture store by key while the model receives a dozen fields. The
-# two have never needed to be the same channel.
-#
-# THE PROVENANCE FIELDS ARE NOT DECORATION, and choosing them for size would have been
-# the error. `updatedAt`, `updatedBy` and `team` are exactly the three that made
-# CLOUD-1742 legible: a spec `AGENTS.md` cites as authoritative was overwritten in
-# place and reparented to another team, and those fields are what showed it. A
-# projection carrying only `id`, `title` and `url` would have reported the clobbered
-# document as the same document — which is the failure this row's sibling exists to
-# prevent one surface over.
-[[mcp.result]]
-method = "get_document"
-reduce = "project"
-fields = [
-  "id",
-  "title",
-  "url",
-  "slugId",
-  "createdAt",
-  "creator",
-  "updatedAt",
-  "updatedBy",
-  "archivedAt",
-  "project",
-  "team",
-]
-
-# THE LIST-SIDE REDUCTION (CLOUD-1380). `list_issues` had no row and the verb said
-# so on every call — `undeclared — stored 17,313 bytes, emitted 20,366`. MORE OUT
-# THAN IN, because an undeclared result is handed back re-serialised rather than
-# reduced, and a list response is inherently the widest of the three.
-#
-# `reduce = "each"` RATHER THAN `project`, and the arm had to be built before this
-# row could be written. `project` does one flat field-pick against the node it is
-# given: naming `issues` selects an ARRAY, every field lookup against it misses,
-# and the projection is empty; leaving `node` at the root keeps `issues` whole and
-# reduces nothing. `acknowledge` refuses a container outright, so it would drop the
-# array and leave the verb unable to answer the one question a search asks.
-#
-# THE FIELD SET IS NOT CHOSEN FOR SIZE, which is the constraint that decides it.
-# `graph-check` reads `id`, `status`, `description`, `projectMilestone` and
-# `parentId`, and CLOUD-1151's wave ports it onto the capture store — so a
-# projection trimmed to the smallest thing that still looks like a search result
-# would leave that gate quietly unjudgeable rather than red.
-#
-# `description` EARNS ITS PLACE FOR THE SAME REASON, against the obvious objection.
-# `.claude/rules/toolchain.md` records that a list response TRUNCATES it, which
-# makes a projected `list_issues` an invalid input to `spec-ref-check` — that is a
-# statement about CLAUSE citation, which needs the whole body, and says nothing
-# about the presence-and-shape reads every other consumer does. Reading it as a
-# prohibition is the generalisation CLOUD-1380's own body records itself making.
-#
-# `title` and `url` are the identity half — what a human reads to know which row
-# matched — and `issue list unread` is the consumer that must not be blinded: a
-# reduction emitting only `hasNextPage` would satisfy every size predicate and
-# destroy the verb's purpose.
-#
-# `hasNextPage` AND `cursor` ARE NOT DECLARED AND ARRIVE ANYWAY. They are scalar
-# siblings of the array, carried by the arm itself, because they are what make the
-# page size a thing the caller controls — and this arm's bound is the page rather
-# than the declaration. Declaring them as `fields` would instead look them up on
-# every ELEMENT, where they do not exist, and they would be absent from every row.
-[[mcp.result]]
-method = "list_issues"
-reduce = "each"
-node = "issues"
-fields = [
-  "id",
-  "title",
-  "status",
-  "description",
-  "projectMilestone",
-  "parentId",
-  "url",
-  "updatedAt",
-]
-
 # CLOSING THE RAW READ PATH, as the gate `connector-not-granted` structurally
 # cannot be (CLOUD-1264). That row asserts what this repository's own committed
 # `.claude/settings.json` grants, and its module says in as many words that
@@ -5633,10 +5466,8 @@ fields = [
 # FIRST-READ IS NOT EXEMPT, and the exemption is the one a reader reaches for.
 # `mcp call` stores the response WHOLE, and every gate that needs a body reads
 # the store by key — `ready lint --issue`, `claim check --issue`, the board
-# rows. So the model never needs the raw payload for a first read either; what
-# it needs is a dozen declared fields, which is what the `[[mcp.result]]`
-# projection above hands back. Measured 2026-09-02 through the verb: 20,580
-# bytes stored, 609 emitted.
+# rows. The verb prints the response whole and the hook bounds it like any
+# other tool result (CLOUD-2956), so the raw route buys nothing the verb lacks.
 #
 # `tool` MATCHES THE SUFFIX, so every registration episode is covered —
 # `mcp__Linear__get_issue`, `mcp__<uuid>__get_issue` and
@@ -5669,7 +5500,7 @@ scope = "mediated_call"
 severity = "deny"
 tool = "get_issue"
 when_absent = "command"
-reason = "Read the row through the reduction: `batten mcp call Linear get_issue '{\"id\":\"<KEY>\"}'`. It stores the whole response for the gates and hands back the declared projection; a first read is no exception."
+reason = "Read the row with `batten mcp call Linear get_issue '{\"id\":\"<KEY>\"}'`. It stores the whole response for the gates and prints it whole; a first read is no exception."
 
 # THE TRANSPORT THRESHOLD, DECLARED RATHER THAN DEFAULTED (CLOUD-1367).
 #
@@ -10538,7 +10369,7 @@ no_fix_reason = "class 3 (a board resolution): a raced claim is resolved on the 
 # capture, so the honest answer is the one the gate cannot reach.
 #
 # THE OTHER HALF WAS A REAL DEFECT AND IS FIXED RATHER THAN WAIVED: the
-# `get_issue` projection above omitted `project` entirely, so the rule was
+# `get_issue` projection then declared omitted `project` entirely, so the rule was
 # unsatisfiable by construction on every clone. That is why this waiver is narrow
 # — with the field carried, the only thing still wrong is the selection.
 #

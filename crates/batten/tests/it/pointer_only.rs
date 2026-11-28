@@ -1426,18 +1426,9 @@ const CENSUS: &[Verb] = &[
     // `capture find`'s reason rather than the stronger one its pointer line would
     // earn on its own.
     //
-    // Its RECORD is strictly a pointer, and deliberately on stderr: a handle, a
-    // source id, a disposition and two byte counts, never a byte of what was
-    // stored. But its PRODUCT is a reduction on stdout, and a reduction is
-    // content — the declared fields of a payload the caller asked for. That is
-    // the whole point of the verb, and a `PointerOnly` claim over it would be
-    // false.
-    //
-    // The bound that makes this honest is the DECLARATION rather than this field:
-    // a field no `[[mcp.result]]` row names never leaves the store, and the
-    // `acknowledge` arm additionally refuses anything past a bounded scalar. So
-    // what reaches stdout is what a consumer wrote down, and `Passthrough`'s
-    // count still refuses Batten adding a copy of its own.
+    // Its PRODUCT is the server's whole response on stdout (CLOUD-2956), which
+    // is content the caller asked for, so a `PointerOnly` claim over it would be
+    // false. What reaches a context is bounded by the hook, as for any tool result.
     //
     // **What this corpus does not exercise**, stated for `capture show`'s reason:
     // the sweep's fixture declares no `[[mcp.source]]`, so this answers exit 3
@@ -1449,9 +1440,9 @@ const CENSUS: &[Verb] = &[
         args: &["a-server", "a-method"],
         stdin: Stdin::Nothing,
         disposition: Disposition::Passthrough(
-            "its product is a declared reduction over a payload the caller asked for, which is \
-             content by design — the pointer half is the record on stderr, and what may reach \
-             stdout is bounded by the `[[mcp.result]]` row rather than by this field",
+            "its product is the server's whole response, which the caller asked for and which is \
+             content by design; what reaches a context is bounded by the hook, never by this \
+             verb",
         ),
     },
     // THE TWO BOARD VERBS ARE POINTER-ONLY BY CONSTRUCTION, and it is the property

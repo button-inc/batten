@@ -90,11 +90,9 @@ use crate::config_model::Base;
 use crate::config_model::McpConfig;
 use crate::config_model::McpCredential as Credential;
 use crate::config_model::McpSource as Source;
-use crate::config_model::Reduce;
-use crate::config_model::ResultRow;
 #[cfg(test)]
 use crate::config_model::authorization;
-use crate::facts::{Format, Look, Node, TOKEN_MAX};
+use crate::facts::{Format, Look, Node};
 
 /// `Credential` behaviour that belongs to this module's layer, not the type's (CLOUD-2793).
 pub(crate) trait CredentialExt: Sized {
@@ -1170,12 +1168,6 @@ fn granted_in(settings: &[std::path::PathBuf], server: &str, declared: &[String]
     looked.then_some(false)
 }
 
-/// The reduction a method's row declares, or `None` where no row declares one.
-#[must_use]
-pub fn row_for<'a>(config: &'a McpConfig, method: &str) -> Option<&'a ResultRow> {
-    config.results.iter().find(|row| row.method == method)
-}
-
 /// What `batten mcp call` writes for one dispatched result: the stdout
 /// document, the stderr lines, and the exit code.
 ///
@@ -1213,7 +1205,7 @@ pub fn report(
     let payload = payload(result);
     // `to_string` writes the bytes `to_vec` writes, which is what the store holds.
     let stdout = serde_json::to_string(&payload.value)?;
-    let outcome = outcome(result, &payload, method, source, handle);
+    let outcome = outcome(result, method, source, handle);
     Ok(Report {
         stdout,
         stderr: outcome.failure.into_iter().collect(),
@@ -1245,8 +1237,6 @@ pub struct Payload {
 /// together is what makes a case able to check both.
 #[derive(Debug)]
 pub struct Outcome {
-    /// Whether a declared [`ResultRow`] may be applied to this result at all.
-    pub projectable: bool,
     /// The code the verb returns.
     pub exit: crate::exit::ExitCode,
     /// The pointer-only failure line, when there is a failure to report.
@@ -1262,29 +1252,9 @@ pub struct Outcome {
 /// from — and it is the only thing about the response that reaches the line.
 /// Rule 4: a check over sensitive content emits a pointer, never the content.
 #[must_use]
-pub fn outcome(
-    result: &serde_json::Value,
-    payload: &Payload,
-    method: &str,
-    source: &str,
-    handle: &str,
-) -> Outcome {
-    // A FAILED CALL AND AN UNRECOGNISED FRAME ARE BOTH UNPROJECTABLE, for one
-    // reason: `Reduce::Project` is a flat field-pick over the expected SUCCESS
-    // shape, so applying it to any other document does not narrow an answer, it
-    // manufactures one. Measured 2026-09-08, both halves — a tool-level failure
-    // projected to `{}`, indistinguishable from a write that changed nothing;
-    // and a not-found body projected to `{"status": 400}`, where `status` is the
-    // same key `get_issue`'s success projection uses for the BOARD STATE.
-    //
-    // `payload.unwrapped` is the second half and is why this is not `isError`
-    // alone. `tools/call` answers with `content` blocks; a document carrying
-    // neither those nor `structuredContent` is not the shape any row was written
-    // against, and [`payload`] has ALREADY decided that question. So this reads
-    // the protocol rather than guessing a tracker's schema.
+pub fn outcome(result: &serde_json::Value, method: &str, source: &str, handle: &str) -> Outcome {
     let failed = failed(result);
     Outcome {
-        projectable: !failed && payload.unwrapped,
         // `Usage` because the fault is in the invocation the caller composed and
         // no policy was violated — a `2` would tell every harness with a pre-tool
         // hook that policy REFUSED a call the server merely rejected. Not
@@ -1315,15 +1285,6 @@ pub fn outcome(
 /// `result` is ABSENT — so it is structurally unreachable here whatever the tool
 /// answered. CLOUD-1403 fixed the transport half; this is the other one, and
 /// neither subsumes the other.
-///
-/// # Why the caller must consult this BEFORE reducing
-///
-/// A [`ResultRow`] projection is a flat field-pick over the expected success
-/// shape. An error result has a different shape entirely — `content`/`isError`,
-/// not the entity's fields — so projecting one yields nothing, and "yields
-/// nothing" is precisely what a caller cannot tell apart from a write that
-/// changed nothing. Measured 2026-09-08: a `save_issue` with an undeclared
-/// argument emitted `{}` at exit 0 with the row unmodified.
 ///
 /// # Strictly `true`, never merely present
 ///
@@ -1394,200 +1355,6 @@ pub fn payload(result: &serde_json::Value) -> Payload {
             unwrapped: false,
         },
     }
-}
-
-/// Apply a row's reduction to a payload [`payload`] has already unframed.
-///
-/// **A row that cannot find its payload yields `None`**, which the caller reports
-/// as could-not-look and answers by passing the response through whole. That is
-/// the fail-open-loudly half: a reduction that silently emitted `{}` over a node
-/// it never reached would be a correctness disaster rather than a saving, because
-/// an empty projection and a genuinely empty row are byte-identical on the
-/// decision surface.
-///
-/// The row's `node` and `embedded` are applied INSIDE the unframed payload, so
-/// they are an override for a server whose shape [`payload`] did not recognise
-/// rather than the ordinary route. Left at their defaults — an empty `node` and
-/// `embedded` false — the payload itself is what the fields are read from.
-#[must_use]
-pub fn reduce(
-    row: &ResultRow,
-    payload: &serde_json::Value,
-) -> Option<serde_json::Map<String, serde_json::Value>> {
-    // Through the one parse (CLOUD-849), which is also what keeps the canonical
-    // tree the authority here rather than `serde_json`'s value type: a node path
-    // means the same thing in this family as in every declared-read family.
-    let document = crate::rules::parse_node(Format::Json, &payload.to_string()).ok()?;
-    let Look::Is(at) = document.at(&row.node) else {
-        return None;
-    };
-    // A SECOND PARSE ONLY WHERE A ROW ASKED FOR ONE. Guessing that a scalar is a
-    // document is how a reduction ends up reading a tree the server never sent.
-    let owned;
-    let payload = if row.embedded {
-        let text = at.scalar()?;
-        owned = crate::rules::parse_node(Format::Json, &text).ok()?;
-        &owned
-    } else {
-        at
-    };
-
-    // THE ARRAY ARM RETURNS EARLY, because its subject is the node's ELEMENTS
-    // where every other arm's is the node itself. Folding it into the field loop
-    // below would mean iterating fields at the top and elements underneath, which
-    // is the same projection written twice.
-    if row.reduce == Reduce::Each {
-        return each(row, payload, &document);
-    }
-
-    let mut kept = serde_json::Map::new();
-    for field in &row.fields {
-        let Look::Is(node) = payload.at(field) else {
-            // ABSENT RATHER THAN NULL. "the payload does not carry this" and
-            // "the reduction dropped it" are different answers, and a caller
-            // acts on the second.
-            continue;
-        };
-        match row.reduce {
-            Reduce::Project => {
-                kept.insert(field.clone(), node.to_json());
-            }
-            Reduce::Acknowledge => {
-                // REFUSED RATHER THAN TRUNCATED, and this is the line that makes
-                // the write-side arm differ in kind rather than in degree. A
-                // container is refused with it: a list or a map is a shape whose
-                // size the caller did not bound, and `scalar` returning `None` is
-                // exactly that answer.
-                let Some(text) = node.scalar() else { continue };
-                if text.is_empty() || text.len() > TOKEN_MAX {
-                    continue;
-                }
-                kept.insert(field.clone(), serde_json::Value::String(text));
-            }
-            // UNREACHABLE — the array arm returned before this loop. Keeping
-            // nothing rather than panicking: library code may not panic on a
-            // reachable path, and an impossible branch that drops the field is
-            // the safe direction if this ever stops being impossible.
-            Reduce::Each => {}
-        }
-    }
-    Some(kept)
-}
-
-/// [`Reduce::Each`]: the declared fields projected over every element of `at`.
-///
-/// **A node that is not a list yields `None`**, which the caller reports as
-/// could-not-look and answers by passing the response through whole. That is the
-/// same fail-open-loudly posture [`reduce`] documents, and it matters more here:
-/// a row whose `node` names a map would otherwise reduce to an empty array, and
-/// an empty page is a perfectly ordinary answer — so the broken row and the
-/// genuinely empty search would be byte-identical on the decision surface.
-///
-/// The projected elements come back under the array's own final path segment, so
-/// a row declaring `node = "issues"` answers under `issues`. A row whose `node`
-/// is empty — the payload IS the array — has no key to borrow and answers under
-/// [`ITEMS`], because inventing a name from nothing is worse than declaring one.
-fn each(
-    row: &ResultRow,
-    at: &Node,
-    document: &Node,
-) -> Option<serde_json::Map<String, serde_json::Value>> {
-    let Node::List(items) = at else {
-        return None;
-    };
-    let projected = items
-        .iter()
-        .map(|item| {
-            let mut kept = serde_json::Map::new();
-            for field in &row.fields {
-                // ABSENT RATHER THAN NULL, per element, which is the same
-                // contract `reduce` holds for a whole payload — so a caller
-                // reading one projected element cannot tell whether it came from
-                // here or from a `project` row over a single result.
-                if let Look::Is(node) = item.at(field) {
-                    kept.insert(field.clone(), node.to_json());
-                }
-            }
-            serde_json::Value::Object(kept)
-        })
-        .collect();
-
-    let mut out = serde_json::Map::new();
-    out.insert(items_key(&row.node), serde_json::Value::Array(projected));
-
-    // THE SCALAR SIBLINGS, from the array's PARENT rather than from the array.
-    // Paging lives beside the page — `{cursor, hasNextPage, issues: [...]}` — so
-    // a reduction that returned only the projected array would answer the search
-    // and lose the means to ask for the rest of it.
-    //
-    // Read from `document` rather than from `at`, and only where the row named a
-    // node inside it: `embedded` re-parses a scalar into a tree of its own, whose
-    // parent is not addressable from here, and a row whose `node` is empty has no
-    // parent at all. Both answer no siblings rather than a guess.
-    if !row.embedded && !row.node.is_empty() {
-        let parent = row.node.rsplit_once('.').map_or("", |(head, _)| head);
-        if let Look::Is(Node::Map(map)) = document.at(parent) {
-            for (key, node) in map {
-                // Scalars only, and bounded, for `Reduce::Acknowledge`'s reason:
-                // a container beside the page is a shape whose size the caller
-                // did not bound, and this arm has no declaration covering it —
-                // the row's `fields` describe an ELEMENT, not the envelope.
-                // AND THE KEY MUST BE ONE THIS CRATE DECLARES. Bounded and scalar
-                // is a size test, not an authorization: the row's `fields`
-                // describe an ELEMENT, so nothing here declares the envelope, and
-                // a server is free to put `account_email` beside its page. Emitting
-                // it would put an undeclared value into output on the strength of
-                // its LENGTH — non-negotiable rule 4 decided by a byte count.
-                //
-                // A closed list rather than a heuristic, for `AddressDomain`'s
-                // reason: what crosses is then a reviewable set instead of whatever
-                // the server happened to send. A paging key nobody listed is a row
-                // to add here, in a diff, not a silent emission.
-                if !PAGING_KEYS.contains(&key.as_str()) {
-                    continue;
-                }
-                let Some(text) = node.scalar() else { continue };
-                if text.is_empty() || text.len() > TOKEN_MAX {
-                    continue;
-                }
-                out.insert(key.clone(), node.to_json());
-            }
-        }
-    }
-    Some(out)
-}
-
-/// The envelope keys a [`Reduce::Each`] reduction may carry beside its page.
-///
-/// **The whole envelope allowlist, and it is deliberately short.** A row's
-/// `fields` declare an ELEMENT, so nothing in a consumer's config authorizes an
-/// envelope key; without this list the arm emitted every bounded scalar sitting
-/// beside the array, which decides what leaves the process by its byte length.
-/// These are the paging spellings the surveyed connectors use — the means to ask
-/// for the rest of a page, which is the only reason the siblings are read at all.
-///
-/// Adding a key is a diff, which is the point.
-const PAGING_KEYS: &[&str] = &[
-    "cursor",
-    "endCursor",
-    "hasNextPage",
-    "hasPreviousPage",
-    "nextCursor",
-    "startCursor",
-    "total",
-    "totalCount",
-];
-
-/// The key a [`Reduce::Each`] row's projected elements come back under when its
-/// `node` names no path.
-const ITEMS: &str = "items";
-
-/// The final segment of `node`, or [`ITEMS`] where it names nothing.
-fn items_key(node: &str) -> String {
-    node.rsplit('.')
-        .find(|segment| !segment.is_empty())
-        .unwrap_or(ITEMS)
-        .to_owned()
 }
 
 /// The JSON-RPC version every request carries.
@@ -2269,16 +2036,6 @@ mod tests {
         assert!(!is_exec_failure("1\tserena\t2\t0.1\t0\tnot-exec-failed"));
     }
 
-    fn row(reduce: Reduce, fields: &[&str]) -> ResultRow {
-        ResultRow {
-            method: "m".to_owned(),
-            reduce,
-            fields: fields.iter().map(|f| (*f).to_owned()).collect(),
-            node: String::new(),
-            embedded: false,
-        }
-    }
-
     fn source_with(credential: Option<Credential>) -> Source {
         Source {
             endpoint_contains: std::collections::BTreeMap::new(),
@@ -2594,117 +2351,6 @@ mod tests {
     }
 
     #[test]
-    fn a_projection_keeps_the_declared_fields_and_nothing_else() {
-        // The allow half. Without it every case below is satisfied by a
-        // reduction that returns nothing, which would gate nothing and save
-        // everything by dropping the answer.
-        let result = serde_json::json!({"id": "K-1", "body": "a long prose body", "n": 3});
-        let kept = reduce(&row(Reduce::Project, &["id", "n"]), &result).unwrap();
-        assert_eq!(kept.get("id"), Some(&serde_json::json!("K-1")));
-        assert_eq!(kept.get("n"), Some(&serde_json::json!(3)));
-        assert!(
-            !kept.contains_key("body"),
-            "a field no row declared must never leave the store"
-        );
-    }
-
-    #[test]
-    fn an_undeclared_field_is_absent_rather_than_null() {
-        // "the payload does not carry this" and "the reduction dropped it" are
-        // different answers, and a caller acts on the second.
-        let kept = reduce(
-            &row(Reduce::Project, &["missing"]),
-            &serde_json::json!({"id": "K"}),
-        )
-        .unwrap();
-        assert!(kept.is_empty(), "an absent field contributes no key at all");
-    }
-
-    #[test]
-    fn acknowledge_refuses_a_body_rather_than_truncating_it() {
-        // THE DIFFERENCE IN KIND from `project`, and the whole of CLOUD-1122's
-        // rule-4 guarantee: a prefix of somebody's issue body is still their
-        // issue body, so the arm refuses rather than shortens.
-        let long = "x".repeat(TOKEN_MAX + 1);
-        let result = serde_json::json!({
-            "id": "K-1",
-            "status": "In Progress",
-            "labels": ["a", "b"],
-            "description": long,
-        });
-        let kept = reduce(
-            &row(
-                Reduce::Acknowledge,
-                &["id", "status", "labels", "description"],
-            ),
-            &result,
-        )
-        .unwrap();
-        assert_eq!(kept.get("id"), Some(&serde_json::json!("K-1")));
-        assert!(
-            !kept.contains_key("description"),
-            "an over-long value is refused, never truncated"
-        );
-        assert!(
-            !kept.contains_key("labels"),
-            "a container is a shape whose size the caller did not bound"
-        );
-
-        // THE NEAR-MISS THIS ROW ALMOST SHIPPED, pinned so it cannot come back.
-        // An earlier draft copied `facts::Reduction::Token`'s whitespace clause
-        // across, which is right for the POLICY INPUT it serves and wrong here:
-        // `save_issue` answers `status = "In Progress"`, so the arm would have
-        // silently dropped the one field CLOUD-1122's remedy names — `{id,
-        // status, handle}` — with every test still green.
-        assert_eq!(
-            kept.get("status"),
-            Some(&serde_json::json!("In Progress")),
-            "a short status name is what the caller asked for, not prose to refuse"
-        );
-
-        // The same field set under `project` DOES carry the body, which is what
-        // makes the refusals above a statement about the arm rather than about
-        // the payload.
-        let wide = reduce(
-            &row(Reduce::Project, &["id", "labels", "description"]),
-            &result,
-        )
-        .unwrap();
-        assert!(wide.contains_key("description") && wide.contains_key("labels"));
-    }
-
-    #[test]
-    fn a_node_the_row_cannot_reach_is_could_not_look_rather_than_an_empty_reduction() {
-        // The fail-open-loudly half. An empty projection and a genuinely empty
-        // row are byte-identical on the decision surface, so the unreachable
-        // node must not answer with `{}`.
-        let mut unreachable = row(Reduce::Project, &["id"]);
-        unreachable.node = "nowhere.at.all".to_owned();
-        assert_eq!(reduce(&unreachable, &serde_json::json!({"id": "K"})), None);
-
-        // And an `embedded` row over a node that is not a document, which is the
-        // same answer arrived at down a different path.
-        let mut mistaken = row(Reduce::Project, &["id"]);
-        mistaken.embedded = true;
-        assert_eq!(reduce(&mistaken, &serde_json::json!({"id": "K"})), None);
-    }
-
-    #[test]
-    fn an_embedded_payload_is_parsed_only_where_a_row_asked() {
-        // The OVERRIDE route, for a server whose framing `payload` does not
-        // recognise. It reaches inside a document `payload` handed back whole.
-        let odd = serde_json::json!({
-            "envelope": {"blob": r#"{"id":"K-1","body":"prose"}"#},
-        });
-        let mut declared = row(Reduce::Project, &["id"]);
-        declared.node = "envelope.blob".to_owned();
-        declared.embedded = true;
-        let kept = reduce(&declared, &odd).unwrap();
-        assert_eq!(kept.get("id"), Some(&serde_json::json!("K-1")));
-        assert!(!kept.contains_key("body"));
-    }
-
-    #[test]
     fn the_protocols_own_framing_comes_off_without_a_row_asking() {
         // READING THE PROTOCOL, not guessing a schema: `tools/call` is specified
         // to answer with content blocks, so an ordinary row needs no override —
@@ -2825,21 +2471,6 @@ mod tests {
             validate(&config).is_ok(),
             "a relative downward path is fine"
         );
-    }
-
-    #[test]
-    fn a_reduction_over_no_fields_is_refused_at_load() {
-        // An empty projection is a dropped payload wearing the costume of a
-        // narrower answer, and it is refused where a config fault belongs.
-        let mut config = McpConfig::default();
-        config.results.push(ResultRow {
-            method: "m".to_owned(),
-            reduce: Reduce::Project,
-            fields: Vec::new(),
-            node: String::new(),
-            embedded: false,
-        });
-        assert!(validate(&config).is_err());
     }
 
     #[test]
@@ -3384,89 +3015,6 @@ mod tests {
             None,
             "could not look"
         );
-    }
-
-    /// Fails by: a method's row not found, or another method's returned.
-    #[test]
-    fn a_method_s_row_is_its_own() {
-        let mut config = McpConfig::default();
-        for method in ["first", "second"] {
-            let mut declared = row(Reduce::Project, &["id"]);
-            declared.method = method.to_owned();
-            config.results.push(declared);
-        }
-        assert_eq!(
-            row_for(&config, "second").map(|row| row.method.as_str()),
-            Some("second")
-        );
-        assert_eq!(row_for(&config, "third"), None);
-    }
-
-    /// Fails by: a value of exactly the bound refused.
-    #[test]
-    fn acknowledge_keeps_a_value_of_exactly_the_bound() {
-        let edge = "x".repeat(TOKEN_MAX);
-        let kept = reduce(
-            &row(Reduce::Acknowledge, &["id"]),
-            &serde_json::json!({ "id": edge }),
-        )
-        .unwrap();
-        assert_eq!(kept.get("id"), Some(&serde_json::json!(edge)));
-    }
-
-    /// Fails by: the elements, their key, or a paging sibling dropped; an
-    /// undeclared, empty, over-long or container sibling emitted; or one at
-    /// exactly the bound refused.
-    #[test]
-    fn each_projects_every_element_and_only_the_bounded_paging_siblings() {
-        let edge = "c".repeat(TOKEN_MAX);
-        let result = serde_json::json!({"page": {
-            "issues": [{"id": "A", "body": "prose"}, {"id": "B"}],
-            "hasNextPage": true,
-            "cursor": "c1",
-            "nextCursor": edge,
-            "endCursor": "e".repeat(TOKEN_MAX + 1),
-            "total": "",
-            "startCursor": {"nested": 1},
-            "account_email": "someone@example.invalid",
-        }});
-        let mut each = row(Reduce::Each, &["id"]);
-        each.node = "page.issues".to_owned();
-        let reduced = reduce(&each, &result).unwrap();
-        assert_eq!(
-            serde_json::Value::Object(reduced),
-            serde_json::json!({
-                "issues": [{"id": "A"}, {"id": "B"}],
-                "hasNextPage": true,
-                "cursor": "c1",
-                "nextCursor": edge,
-            })
-        );
-    }
-
-    /// Fails by: siblings read beside an embedded document, which has no parent
-    /// here.
-    #[test]
-    fn each_over_an_embedded_document_reads_no_siblings() {
-        let result = serde_json::json!({
-            "blob": r#"[{"id": "A"}]"#,
-            "cursor": "c1",
-        });
-        let mut each = row(Reduce::Each, &["id"]);
-        each.node = "blob".to_owned();
-        each.embedded = true;
-        assert_eq!(
-            serde_json::Value::Object(reduce(&each, &result).unwrap()),
-            serde_json::json!({"blob": [{"id": "A"}]})
-        );
-    }
-
-    /// Fails by: the key a projection answers under misread.
-    #[test]
-    fn a_projection_answers_under_its_node_s_last_segment() {
-        assert_eq!(items_key("page.issues"), "issues");
-        assert_eq!(items_key("issues."), "issues");
-        assert_eq!(items_key(""), ITEMS);
     }
 
     /// Fails by: the ledger named somewhere other than the checkout's git dir.
