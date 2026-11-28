@@ -172,6 +172,11 @@ declared_modules := {
 	# `#[cfg(test)]` cannot be shared across the three scopes that need it (this
 	# crate's unit tests, the `it` binary, and the standalone `tests/*.rs`).
 	"scratch",
+	# `fixture_root` arrived with CLOUD-2904 (D3) and is `scratch`'s class: test
+	# support at the leaf, reading nothing in this crate and read by no library
+	# module. Each lib case takes its own empty root under the temp dir, so
+	# discovery never climbs into the checkout the test process stands in.
+	"fixture_root",
 	# `testing` arrived with CLOUD-2059 and this rule named it on the last gate
 	# before landing. It is `scratch`'s class — test support, `pub` for the same
 	# three scopes, doc-hidden — holding the harness's DECISIONS (which variables
