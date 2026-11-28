@@ -1,5 +1,6 @@
 ---
 source: crates/batten/tests/it/snapshots.rs
+assertion_line: 142
 expression: stdout_of(&output)
 ---
 {
@@ -5194,6 +5195,24 @@ expression: stdout_of(&output)
           "subcommands": []
         },
         {
+          "path": "step config",
+          "id": "step.config",
+          "about": "Print the digests of the config parts a step reads, the step cache's answer to the tool line",
+          "effect": "read",
+          "data_channel": false,
+          "flags": [
+            {
+              "name": "parts",
+              "short": null,
+              "long": null,
+              "takes_value": true,
+              "positional": true,
+              "help": "The config parts, after `--`: a `config <part> <digest>` line each, every part where none"
+            }
+          ],
+          "subcommands": []
+        },
+        {
           "path": "step cover",
           "id": "step.cover",
           "about": "Say whether every required CI check passed at HEAD or is exempt, naming each that did not",
@@ -5330,6 +5349,14 @@ expression: stdout_of(&output)
               "takes_value": true,
               "positional": true,
               "help": "The step's command, after `--`: run only on a miss, recorded only when it exits 0"
+            },
+            {
+              "name": "shards",
+              "short": null,
+              "long": "shards",
+              "takes_value": true,
+              "positional": false,
+              "help": "Run a journaled nextest miss as this many partitions of one archive (a positive integer; default: 1)"
             },
             {
               "name": "step",
@@ -6103,6 +6130,10 @@ expression: stdout_of(&output)
     {
       "id": "step.base",
       "path": "step base"
+    },
+    {
+      "id": "step.config",
+      "path": "step config"
     },
     {
       "id": "step.cover",
