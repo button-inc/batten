@@ -656,9 +656,7 @@ fn a_dev_prerelease_is_published_under_the_dev_namespace() {
         publish.lines().any(|line| line.trim() == spelled),
         "{publish}"
     );
-    for flag in ["--draft", "--prerelease", "--latest=false"] {
-        assert!(publish.contains(flag), "{flag}: {publish}");
-    }
+    assert!(publish.contains("gh release create"), "{publish}");
     // The shell's `${identity%%+*}` is `forge_tag`'s drop of the metadata.
     let identity = "0.0.222-dev.pr1290.20261124120000+abcdef012345";
     let shell = format!(
@@ -667,6 +665,93 @@ fn a_dev_prerelease_is_published_under_the_dev_namespace() {
         identity.split('+').next().unwrap()
     );
     assert_eq!(batten::engine::forge_tag(&format!("v{identity}")), shell);
+}
+
+/// The `publish` job's steps that carry a `run:` body, in order.
+fn dev_publish_runs() -> Vec<String> {
+    workflow("dev-prerelease.yml")["jobs"]["publish"]["steps"]
+        .as_vec()
+        .unwrap()
+        .iter()
+        .filter_map(|step| step["run"].as_str().map(str::to_owned))
+        .collect()
+}
+
+/// The whitespace-split words of the first line in `body` starting `prefix`.
+fn words_of<'a>(body: &'a str, prefix: &str) -> Vec<&'a str> {
+    body.lines()
+        .map(str::trim)
+        .find(|line| line.starts_with(prefix))
+        .unwrap_or_else(|| panic!("{prefix}: {body}"))
+        .split_whitespace()
+        .collect()
+}
+
+/// `#MUTANT dev-prerelease-flagged` reddens here. A published dev release
+/// flagged a pre-release is read by the released engine's freeze as a release
+/// whose land is owed, and freezes every fast-forward (CLOUD-2954). The draft
+/// keeps its flag; the PUBLISH carries exactly `--draft=false
+/// --prerelease=false --latest=false`, word for word.
+#[test]
+fn a_dev_publish_never_carries_the_flag_the_freeze_reads() {
+    let runs = dev_publish_runs();
+    let publish = runs
+        .iter()
+        .find(|run| run.contains("gh release create"))
+        .expect("a step publishes");
+    assert_eq!(
+        words_of(publish, "gh release edit \"$tag\""),
+        [
+            "gh",
+            "release",
+            "edit",
+            "\"$tag\"",
+            "--draft=false",
+            "--prerelease=false",
+            "--latest=false"
+        ],
+        "{publish}"
+    );
+}
+
+/// `#MUTANT dev-prerelease-unflag-widened` reddens here. A step ahead of the
+/// publish unflags every published release under `dev/` still flagged a
+/// pre-release (CLOUD-2954), selecting by that prefix and nothing wider.
+#[test]
+fn a_dev_release_already_flagged_is_unflagged_before_the_publish() {
+    let runs = dev_publish_runs();
+    let publish = runs
+        .iter()
+        .position(|run| run.contains("gh release create"))
+        .expect("a step publishes");
+    let unflag = runs
+        .iter()
+        .position(|run| run.contains("gh release list"))
+        .expect("a step lists the releases to unflag");
+    assert!(unflag < publish, "the unflag runs before the publish");
+    let body = &runs[unflag];
+    assert!(
+        words_of(body, "gh release list").contains(&"--exclude-drafts"),
+        "{body}"
+    );
+    assert!(
+        body.contains(
+            "--jq '.[] | select(.isPrerelease) | select(.tagName | startswith(\"dev/\")) | .tagName'"
+        ),
+        "the selection is the dev/ prefix and nothing wider: {body}"
+    );
+    assert_eq!(
+        words_of(body, "gh release edit"),
+        [
+            "gh",
+            "release",
+            "edit",
+            "\"$tag\"",
+            "--prerelease=false",
+            "--latest=false"
+        ],
+        "{body}"
+    );
 }
 
 /// `#MUTANT dev-prerelease-draft-unchecked` reddens here. A run cancelled
