@@ -254,3 +254,22 @@ fn attribution_judges_one_new_commit() {
         "{said}"
     );
 }
+
+#[test]
+fn a_merge_in_the_range_is_not_judged() {
+    let (dir, base) = fixture("receipt-merge");
+    git_in(&dir, &["checkout", "-q", "-b", "side"]);
+    commit(&dir, "s.txt", "s\n", "feat: side");
+    git_in(&dir, &["checkout", "-q", "main"]);
+    commit(&dir, "a.txt", "a\n", "feat: one");
+    git_in(
+        &dir,
+        &["merge", "-q", "--no-ff", "-m", "chore: merge side", "side"],
+    );
+    let (code, said) = commit_check(&dir, &base);
+    assert_eq!(code, Some(0), "{said}");
+    assert!(
+        said.contains("commit check: judged 2 of 2, 0 held"),
+        "{said}"
+    );
+}
