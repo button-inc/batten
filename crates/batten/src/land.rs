@@ -3952,6 +3952,62 @@ pub struct Ledger {
     pub fresh_ready: bool,
 }
 
+/// The charged-lap count a landing keeps on disk while it runs (CLOUD-2955):
+/// `<git dir>/batten-land-laps-<digest of the branch>`.
+///
+/// The [`Ledger`] lives in memory, so a `land` killed and run again started
+/// at `lap 1 — 1 of 2 charged` every time: four kills, four fresh budgets, and
+/// a landing killed over and over never stopped on the bound meant to stop it
+/// (CLOUD-2904, Q3 "Defect 1"). The record is written as each lap opens and
+/// removed when the landing returns, however it returns, so only a landing that
+/// never returned leaves it, and the next start resumes from its count. A lap
+/// killed after a refund is charged anyway: one lap too many is a budget spent
+/// early, never one that never ends.
+#[derive(Debug, Clone)]
+pub struct LapRecord {
+    path: std::path::PathBuf,
+}
+
+impl LapRecord {
+    /// The record for `branch` under `git_dir`.
+    #[must_use]
+    pub fn at(git_dir: &Path, branch: &str) -> Self {
+        let digest = crate::tools::digest(branch.as_bytes());
+        Self {
+            path: git_dir.join(format!("batten-land-laps-{digest}")),
+        }
+    }
+
+    /// The laps a landing that never returned had charged, `0` for none.
+    #[must_use]
+    pub fn left(&self) -> u32 {
+        std::fs::read_to_string(&self.path)
+            .ok()
+            .and_then(|body| body.trim().parse().ok())
+            .unwrap_or(0)
+    }
+
+    /// A ledger resumed from what a landing that never returned had charged.
+    #[must_use]
+    pub fn resumed(&self) -> Ledger {
+        Ledger {
+            laps: self.left(),
+            ..Ledger::default()
+        }
+    }
+
+    /// Record `ledger`'s charged laps, best effort: a record that cannot be
+    /// written costs a killed landing its count, never this one a lap.
+    pub fn charge(&self, ledger: &Ledger) {
+        let _ = std::fs::write(&self.path, format!("{}\n", ledger.laps));
+    }
+
+    /// The landing returned: nothing is left to resume.
+    pub fn clear(&self) {
+        let _ = std::fs::remove_file(&self.path);
+    }
+}
+
 impl Ledger {
     /// Open a lap.
     pub const fn attempt(&mut self) {
@@ -7721,5 +7777,52 @@ mod hold_tests {
         assert_eq!(ticks_per_beat(s(7), s(2)), 3);
         assert_eq!(ticks_per_beat(s(1), s(2)), 1, "a tick longer than the beat");
         assert_eq!(ticks_per_beat(s(10), Duration::ZERO), 1);
+    }
+}
+
+#[cfg(test)]
+mod lap_record_tests {
+    use super::*;
+
+    fn record(name: &str) -> (std::path::PathBuf, LapRecord) {
+        let dir =
+            std::env::temp_dir().join(format!("batten-lap-record-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("a scratch dir");
+        let record = LapRecord::at(&dir, "feature");
+        (dir, record)
+    }
+
+    /// Fails by: a landing killed after charging its budget's laps resuming
+    /// with a fresh budget, so `may_open_a_lap` lets it open another.
+    #[test]
+    fn a_landing_killed_after_its_budget_opens_no_further_lap() {
+        let (_dir, record) = record("killed");
+        let mut first = record.resumed();
+        for _ in 0..2 {
+            assert!(first.may_open_a_lap(2));
+            first.attempt();
+            record.charge(&first);
+        }
+        // Killed here: nothing called `clear`.
+        let resumed = record.resumed();
+        assert_eq!(resumed.laps, 2, "the killed landing's laps are kept");
+        assert!(
+            !resumed.may_open_a_lap(2),
+            "and the budget stops the next start"
+        );
+    }
+
+    /// Fails by: a landing that returned leaving its count for the next one,
+    /// or one branch's count charged to another.
+    #[test]
+    fn a_landing_that_returned_or_another_branch_starts_fresh() {
+        let (dir, record) = record("returned");
+        let mut ledger = record.resumed();
+        ledger.attempt();
+        record.charge(&ledger);
+        assert_eq!(LapRecord::at(&dir, "other").left(), 0, "per branch");
+        record.clear();
+        assert_eq!(record.resumed().laps, 0, "a returned landing leaves none");
     }
 }

@@ -1929,6 +1929,156 @@ pub(crate) fn kill_group(pgid: u32) {
     let _ = pgid;
 }
 
+/// END WITH THE LAP'S STARTER (CLOUD-2955): once any process this one runs
+/// under exits, every process this one started is sent SIGKILL and this one
+/// exits 3.
+///
+/// A SIGKILL of `mise run verify` left its whole lap running: mise leads a
+/// process group per task, so its `sh -c` child is reparented to init and the
+/// `step graph run` under it, its `mise run <gate>` children and their
+/// `step run`s go on recording and publishing (CLOUD-2904, "Defect 1"). The
+/// direct parent is that surviving `sh`, so what is watched is every ancestor
+/// up to init, each by a pidfd that turns readable when it exits — no timer,
+/// and nothing the dead starter has to do. `mutate::watch_parent` is the same
+/// wait over the parent alone.
+///
+/// THE CALLER IS A CHILD SUBREAPER, so a descendant whose own parent dies
+/// (a body's `&`, a step whose runner was killed) is reparented here, never to
+/// init, and is still found when the lap ends. The end stops every descendant
+/// first, so none forks or reparents while the set is read, then kills them.
+///
+/// LINUX ONLY: pidfds and the subreaper bit are Linux's; elsewhere a lap keeps
+/// the behaviour it had, and the next start's group kill ([`kill_group`]) stays
+/// the only recovery.
+pub(crate) fn end_with_starter() {
+    #[cfg(target_os = "linux")]
+    {
+        let me = rustix::process::getpid();
+        if rustix::process::set_child_subreaper(Some(me)).is_err() {
+            return;
+        }
+        let watched: Vec<rustix::fd::OwnedFd> = ancestors(me)
+            .into_iter()
+            .filter_map(|pid| {
+                rustix::process::pidfd_open(pid, rustix::process::PidfdFlags::empty()).ok()
+            })
+            .collect();
+        if watched.is_empty() {
+            return;
+        }
+        let _ = std::thread::Builder::new()
+            .name("starter-watch".to_owned())
+            .spawn(move || {
+                let mut fds: Vec<rustix::event::PollFd<'_>> = watched
+                    .iter()
+                    .map(|fd| rustix::event::PollFd::new(fd, rustix::event::PollFlags::IN))
+                    .collect();
+                loop {
+                    match rustix::event::poll(&mut fds, None) {
+                        Ok(_) => break,
+                        Err(rustix::io::Errno::INTR) => {}
+                        Err(_) => return,
+                    }
+                }
+                end_descendants(me);
+                std::process::exit(crate::ExitCode::Internal.code())
+            });
+    }
+}
+
+/// The processes `me` runs under, nearest first, init excluded: read off each
+/// one's `/proc/<pid>/stat` parent field. Bounded, so a cycle read across a
+/// pid's reuse cannot loop.
+#[cfg(target_os = "linux")]
+fn ancestors(me: rustix::process::Pid) -> Vec<rustix::process::Pid> {
+    let mut found = Vec::new();
+    let mut at = me;
+    while found.len() < 64 {
+        let Some(parent) = parent_of(at).filter(|parent| parent.as_raw_nonzero().get() > 1) else {
+            break;
+        };
+        found.push(parent);
+        at = parent;
+    }
+    found
+}
+
+/// `pid`'s parent, from the field after the state in `/proc/<pid>/stat`.
+#[cfg(target_os = "linux")]
+fn parent_of(pid: rustix::process::Pid) -> Option<rustix::process::Pid> {
+    let body = std::fs::read_to_string(format!("/proc/{}/stat", pid.as_raw_nonzero())).ok()?;
+    let raw: i32 = body
+        .get(body.rfind(')')? + 1..)?
+        .split_whitespace()
+        .nth(1)?
+        .parse()
+        .ok()?;
+    rustix::process::Pid::from_raw(raw)
+}
+
+/// Every live process whose parent chain reaches `me`.
+#[cfg(target_os = "linux")]
+fn descendants(me: rustix::process::Pid) -> std::collections::BTreeSet<i32> {
+    let mut parents: Vec<(i32, i32)> = Vec::new();
+    for entry in std::fs::read_dir("/proc").into_iter().flatten().flatten() {
+        let Some(pid) = entry
+            .file_name()
+            .to_str()
+            .and_then(|name| name.parse::<i32>().ok())
+            .and_then(rustix::process::Pid::from_raw)
+        else {
+            continue;
+        };
+        if let Some(parent) = parent_of(pid) {
+            parents.push((pid.as_raw_nonzero().get(), parent.as_raw_nonzero().get()));
+        }
+    }
+    let mut found = std::collections::BTreeSet::new();
+    let mut frontier = vec![me.as_raw_nonzero().get()];
+    while let Some(parent) = frontier.pop() {
+        for (pid, _) in parents.iter().filter(|(_, of)| *of == parent) {
+            if found.insert(*pid) {
+                frontier.push(*pid);
+            }
+        }
+    }
+    found
+}
+
+/// Stop, then kill, every descendant of `me`, reaping what is reparented here,
+/// until none is left. Stopped first: a stopped process neither forks nor
+/// exits, so the set read after the stops is the whole tree.
+#[cfg(target_os = "linux")]
+fn end_descendants(me: rustix::process::Pid) {
+    let send = |pid: i32, signal: rustix::process::Signal| {
+        if let Some(pid) = rustix::process::Pid::from_raw(pid) {
+            let _ = rustix::process::kill_process(pid, signal);
+        }
+    };
+    for _ in 0..64 {
+        let mut seen = descendants(me);
+        if seen.is_empty() {
+            return;
+        }
+        loop {
+            for pid in &seen {
+                send(*pid, rustix::process::Signal::STOP);
+            }
+            let now = descendants(me);
+            if now.is_subset(&seen) {
+                break;
+            }
+            seen.extend(now);
+        }
+        for pid in &seen {
+            send(*pid, rustix::process::Signal::KILL);
+        }
+        while let Ok(Some(_)) = rustix::process::waitpid(None, rustix::process::WaitOptions::NOHANG)
+        {
+        }
+    }
+}
+
 // -- The named lock a child may be held under (CLOUD-1710) -------------------
 //
 // `mise-tasks/with-lock.sh` is retired onto this. Everything about WHAT a lock

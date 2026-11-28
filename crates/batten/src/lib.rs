@@ -13476,6 +13476,11 @@ fn run_land_lap(
             watch
         });
         let (ended, lines) = disk_watch::around(watch, || run_land_laps(run, out, err));
+        // RETURNED, HOWEVER IT RETURNED (CLOUD-2955): only a killed landing
+        // leaves its lap record for the next start to resume.
+        if let Ok(git_dir) = git::git_dir(root) {
+            land::LapRecord::at(&git_dir, branch).clear();
+        }
         for line in &lines {
             writeln!(err, "land: {line}")?;
         }
@@ -13718,7 +13723,21 @@ fn run_land_laps(run: Laps<'_>, out: &mut dyn Write, err: &mut dyn Write) -> Res
     // never reached, zero check-runs on the head — and the refusal announced
     // "having spent 2 CI matrices". `laps` is an attempt counter; `paid` moves at
     // the one site that buys a run.
-    let mut ledger = land::Ledger::default();
+    // A KILLED LANDING'S LAPS STAY CHARGED (CLOUD-2955): resumed from the
+    // record it left, which `run_land` clears once this returns.
+    let record = git::git_dir(root)
+        .ok()
+        .map(|git_dir| land::LapRecord::at(&git_dir, branch));
+    let mut ledger = record
+        .as_ref()
+        .map_or_else(land::Ledger::default, land::LapRecord::resumed);
+    if ledger.laps > 0 {
+        writeln!(
+            out,
+            "land: {} lap(s) charged by a landing that never returned",
+            ledger.laps
+        )?;
+    }
     // AT MOST ONE OUTSTANDING BET, which is why it is held here rather than built
     // per lap. `Bet::undo` is this branch's own last NON-speculative HEAD, so a
     // bet re-placed each lap would overwrite it with a head that is itself
@@ -13779,6 +13798,9 @@ fn run_land_laps(run: Laps<'_>, out: &mut dyn Write, err: &mut dyn Write) -> Res
             return honour_the_notice(&from, root, branch, &pipeline, &mut entered, out, err);
         }
         ledger.attempt();
+        if let Some(record) = &record {
+            record.charge(&ledger);
+        }
         writeln!(out, "land: lap {lap} — {} of {laps} charged", ledger.laps)?;
         hold.lap();
         // WHAT THE WAIT SAW, or `None` where no lap took a reading. The tap
