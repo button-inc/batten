@@ -12,10 +12,16 @@
 #   that resolves a PATTERN instead.
 #
 #   THE PREDICATE IS THIS CONSUMER'S, NOT THE ENGINE'S. A release tag's spelling
-#   is this repository's vocabulary — `release-plz` mints `v<major>.<minor>.<patch>`
-#   — and non-negotiable rule 1 keeps that out of `crates/batten`. So the engine
-#   supplies "every tag matching `v*`" and this module decides what a matching
-#   tag must look like.
+#   is this repository's vocabulary — `v` once, then a Semantic Versioning 2.0.0
+#   version — and non-negotiable rule 1 keeps that out of `crates/batten`. So the
+#   engine supplies "every tag matching `v*`" and this module decides what a
+#   matching tag must look like.
+#
+#   A PRE-RELEASE IS WELL-MINTED (CLOUD-2906). The predicate is semver validity
+#   after ONE `v` (`trim_prefix` removes one occurrence, so `vv1.0.0` stays
+#   malformed), not a core-only regex: a pre-release tag is a valid tag that
+#   ships nothing, and whether a tag SHIPPED is decided in Rust
+#   (`batten_base::version::Tag::is_release`), so no module classifies one.
 #
 #   NULL IS THE COMMON CASE HERE and the guard is not defensive style: this
 #   family answers could-not-look for a SHALLOW clone, `linear-check` deepens one
@@ -43,7 +49,7 @@ rules contains "tag mint wrong"
 shipped contains tag if {
 	is_object(input.tree["git-history"])
 	some entry in input.tree["git-history"]["release-tags"]
-	tag := entry.tag
+	tag = entry.tag
 }
 
 violation contains {
@@ -56,7 +62,14 @@ violation contains {
 
 malformed contains tag if {
 	some tag in shipped
-	not regex.match(data.batten.patterns["release-tag"], tag)
+	not well_minted(tag)
+}
+
+# `v` once, then semver. `startswith` first, because `trim_prefix` over a tag
+# with no `v` returns it unchanged and a bare `0.0.134` would read as valid.
+well_minted(tag) if {
+	startswith(tag, "v")
+	semver.is_valid(trim_prefix(tag, "v"))
 }
 
 # --- the load-time tier ------------------------------------------------------
@@ -81,9 +94,23 @@ test_a_tag_missing_its_prefix_is_refused if {
 	v.verdict == "tag mint wrong"
 }
 
-test_a_tag_with_a_trailing_label_is_refused if {
-	some v in violation with input as tags({"v0.0.134-rc1"})
-	v.verdict == "tag mint wrong"
+# A valid pre-release is well-minted (CLOUD-2906): it ships nothing, which Rust
+# decides, but its SHAPE is right. This inverted the case that refused
+# `v0.0.134-rc1`, a valid semver pre-release.
+test_a_valid_pre_release_tag_is_clean if {
+	count(violation) == 0 with input as tags({
+		"v0.0.134-rc1",
+		"v0.0.134-rc.1",
+		"v0.0.221-dev.pr1282.20261124T050057Z+3f9c2a1b7d04",
+	})
+}
+
+# Each is refused on its own, so one valid sibling cannot mask another.
+test_a_non_semver_tag_is_refused if {
+	every name in {"v0.0.134.1", "vv0.0.134", "v01.0.0", "v0.99", "vnext"} {
+		some v in violation with input as tags({name})
+		v.verdict == "tag mint wrong"
+	}
 }
 
 test_no_tags_is_clean if {
@@ -97,5 +124,6 @@ test_a_shallow_clone_does_not_fault if {
 }
 
 #MUTANT-SUITE crates/batten/tests/it/history_facts.rs
-#MUTANT-OWNER CLOUD-845|the tier this module names drives `input.tree["git-history"]` and never installs the module, so no case in it can turn red under a mutation of the predicate
-#MUTANT malformed-tag-unread|s@^\tcount(malformed) > 0$@\tfalse@|a_declared_tag_glob_resolves_its_matching_set
+#MUTANT malformed-tag-unread|s@^\tcount(malformed) > 0$@\tfalse@|a_non_semver_tag_is_refused_through_the_engine
+#MUTANT semver-validity-dropped|s@^\tsemver.is_valid(trim_prefix(tag, "v"))$@\ttrue@|a_non_semver_tag_is_refused_through_the_engine
+#MUTANT semver-swapped-for-core-regex|s@^\tsemver.is_valid(trim_prefix(tag, "v"))$@\tregex.match(`^v[0-9]+[.][0-9]+[.][0-9]+$`, tag)@|a_pre_release_tag_is_well_minted_through_the_engine

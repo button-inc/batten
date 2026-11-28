@@ -7593,10 +7593,6 @@ pub const SURFACE: &[CommandDecl] = &[
     // as positions in a mise array, read from the step table's `group`,
     // `depends_on` and `run`. Unclassified for `step run`'s reason: every node
     // runs a command the consumer declared.
-    // unreached: "step graph" CLOUD-2785 its one caller, `verify:gated`'s
-    // `step graph run verify-1 …` line, is withheld with the `gate:*` rows until
-    // the engine pin reads `group`; the step-14 pin bump restores both and drops
-    // this line.
     CommandDecl {
         path: "step graph",
         id: "step.graph",
@@ -7608,8 +7604,6 @@ pub const SURFACE: &[CommandDecl] = &[
     },
     // `EXITS_VERDICT`: the worst node's code is the verb's, so a refusing step
     // is a violation and a node that could not run is internal.
-    // unreached: "step graph run" CLOUD-2785 withheld with its caller, as
-    // `step graph` above; the step-14 pin bump restores the call and drops this line.
     CommandDecl {
         path: "step graph run",
         id: "step.graph.run",

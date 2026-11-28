@@ -69,6 +69,11 @@
 #MUTANT hk-package-blank-step-counted|s@^\ttrim_space(s) != ""$@\ts != ""@|a_package_task_whose_run_is_blank_is_clean
 #MUTANT hk-package-array-blank-reinlined|s@^\tis_step(step)$@\tstep != ""@|a_package_task_whose_only_step_is_blank_is_clean
 #
+# A CAPTURE IS A VERSION ONLY WHEN IT IS SEMVER (CLOUD-2906). The captures read
+# the whole field, so a pre-release agrees; the guard is what keeps a field that
+# is not a version (a leading zero, `latest`) from being compared as one.
+#MUTANT hk-capture-validity-dropped|s@^\tsemver.is_valid(match\[1\])$@\ttrue@|a_non_semver_hk_capture_names_none_through_the_engine
+#
 #MUTANT-SUITE crates/batten/tests/it/tracked_absent.rs
 
 # METADATA
@@ -91,17 +96,17 @@ config := "hk.pkl"
 # The pin table, bound only when the manifest parsed to an object, so every arm
 # below is UNDEFINED rather than vacuously clean when it was not read.
 tools := t if {
-	t := input.tree.documents["mise.toml"].tools
+	t = input.tree.documents["mise.toml"].tools
 	is_object(t)
 }
 
 pin := v if {
-	v := tools.hk
+	v = tools.hk
 	is_string(v)
 }
 
 lines := ls if {
-	ls := input.tree.lines[config]
+	ls = input.tree.lines[config]
 	is_array(ls)
 }
 
@@ -109,6 +114,7 @@ lines := ls if {
 amends contains {"line": i + 1, "version": match[1]} if {
 	some i, line in lines
 	some match in regex.find_all_string_submatch_n(data.batten.patterns["hk-amends-version"], line, -1)
+	semver.is_valid(match[1])
 }
 
 # The TAG SEGMENT of the same URLs, as a SET OF ITS OWN — and the separation is
@@ -145,6 +151,7 @@ amends contains {"line": i + 1, "version": match[1]} if {
 amend_tags contains {"line": i + 1, "version": match[1]} if {
 	some i, line in lines
 	some match in regex.find_all_string_submatch_n(data.batten.patterns["hk-download-tag"], line, -1)
+	semver.is_valid(match[1])
 }
 
 # A: the config package names a different hk than the binary pin.
@@ -241,12 +248,12 @@ violation contains {
 # are the two shapes read, and every other leaves D and E undefined together,
 # exactly as an absent task does.
 package_run := r if {
-	r := input.tree.documents["mise.toml"].tasks["pkl-package"].run
+	r = input.tree.documents["mise.toml"].tasks["pkl-package"].run
 	is_string(r)
 }
 
 package_run := r if {
-	r := input.tree.documents["mise.toml"].tasks["pkl-package"].run
+	r = input.tree.documents["mise.toml"].tasks["pkl-package"].run
 	is_array(r)
 }
 
@@ -290,6 +297,7 @@ package_steps contains step if {
 packages contains {"version": match[1]} if {
 	some step in package_steps
 	some match in regex.find_all_string_submatch_n(data.batten.patterns["hk-amends-version"], step, -1)
+	semver.is_valid(match[1])
 }
 
 # AND THE TAG SEGMENT, BECAUSE ONE URL NAMES THE VERSION TWICE — in its OWN set,
@@ -309,6 +317,7 @@ packages contains {"version": match[1]} if {
 package_tags contains {"version": match[1]} if {
 	some step in package_steps
 	some match in regex.find_all_string_submatch_n(data.batten.patterns["hk-download-tag"], step, -1)
+	semver.is_valid(match[1])
 }
 
 # D: the fetch URL names a different hk than the binary pin, in EITHER spelling.
@@ -361,8 +370,8 @@ violation contains {
 # shows the engine fills `documents` and `lines` for the committed row.
 
 pattern := {
-	"hk-amends-version": `hk@([0-9]+\.[0-9]+\.[0-9]+)`,
-	"hk-download-tag": `/v([0-9]+\.[0-9]+\.[0-9]+)/hk@`,
+	"hk-amends-version": `hk@([^#/"[:space:]]+)`,
+	"hk-download-tag": `/v([^/]+)/hk@`,
 }
 
 # The two halves of an `amends` URL, separately — which half drifts is then the
@@ -389,6 +398,27 @@ tree_with_tasks(pinned, tasks, pkl) := {"tree": {
 	"documents": {"mise.toml": {"tasks": tasks, "tools": pinned}},
 	"lines": {"hk.pkl": pkl},
 }}
+
+# A PRE-RELEASE IS A VERSION (CLOUD-2906). The captures read the whole field and
+# admit it when it is semver, so an hk pre-release named in all three places
+# agrees; a core-only capture read `1.57.0` out of it and disagreed with the pin.
+test_a_pre_release_hk_pin_agrees if {
+	count(violation) == 0 with input as tree_with_tasks(
+		{"hk": "1.57.0-rc.1"},
+		{"pkl-package": {"run": package_line("1.57.0-rc.1")}},
+		[amends_line("1.57.0-rc.1")],
+	)
+		with data.batten.patterns as pattern
+}
+
+# A CAPTURE THAT IS NOT SEMVER NAMES NONE. `1.056.1` carries a leading zero, so
+# it is no version; the old digit-run capture read it as one and, with the pin
+# spelled the same, agreed. Now the file names no version, which arm B refuses.
+test_a_non_semver_hk_capture_names_none if {
+	found := violation with input as tree({"hk": "1.056.1"}, [amends_line("1.056.1")])
+		with data.batten.patterns as pattern
+	count(found) == 1
+}
 
 test_agreeing_versions_are_clean if {
 	count(violation) == 0 with input as tree({"hk": "1.56.1"}, ["// header", amends_line("1.56.1")])
