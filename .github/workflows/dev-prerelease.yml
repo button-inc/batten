@@ -39,6 +39,10 @@ permissions: {}
 # A CALLER'S `env:` DOES NOT REACH A CALLED WORKFLOW, and this one calls none;
 # the binding is the same as `dist.yml`'s so each job installs its list only.
 env:
+  # DRAFTS AND EVERY PUSH, ON PURPOSE (the owner's ruling, CLOUD-2903): any pull
+  # request cuts a pre-release, and a started run finishes. `ci-hygiene` reads
+  # this declaration in place of a draft guard and a superseding group.
+  CI_SPEND_AUTHORISED: "publishes each pull request head's own engine build, which a draft needs"
   MISE_TASK_RUN_AUTO_INSTALL: "false"
   MISE_EXEC_AUTO_INSTALL: "false"
 
