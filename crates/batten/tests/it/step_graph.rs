@@ -530,8 +530,13 @@ const LAP: &str = "[[step]]\nid = \"fast\"\ngroup = \"g\"\ninputs = [\"input.txt
 /// pid. Returns once that body's FIFO reached end of file, i.e. once no
 /// process holds its write end, asserting the body never logged its end.
 fn killed_lap(name: &str) -> (Graph, u32) {
+    killed_lap_of(name, LAP)
+}
+
+/// [`killed_lap`] over `table`, whose `outer` group starts the held body.
+fn killed_lap_of(name: &str, table: &str) -> (Graph, u32) {
     use std::io::BufRead as _;
-    let graph = Graph::new(name, LAP);
+    let graph = Graph::new(name, table);
     common::write(&graph.dir, "bin/hold", HOLD);
     common::write(&graph.dir, "input.txt", "one\n");
     {
@@ -665,5 +670,27 @@ fn a_lap_after_a_killed_one_hits_what_the_killed_one_recorded() {
         events.iter().filter(|event| *event == "start fast").count(),
         1,
         "`fast` ran once, in the killed lap, and was hit after: {events:?}"
+    );
+}
+
+/// The held body under a bare `step run`, no inner graph: the shape of a lap
+/// stage `verify:gated`'s fan runs (`dist:lap`, the suite, the mutant tier).
+const STAGE: &str = "[[step]]\nid = \"hold\"\ninputs = [\"input.txt\"]\ntools = [[\"sh\", \"-c\", \"echo v1\"]]\n\
+    run = [\"bin/hold\"]\n\n\
+    [[step]]\nid = \"lap\"\ngroup = \"outer\"\n\
+    run = [\"sh\", \"-c\", \"\\\"$BATTEN_BIN\\\" step run hold -- bin/hold; :\"]\n\n";
+
+/// Fails by: a stage's `step run`, started outside any inner graph, running
+/// its body on to the end once the lap that started it is SIGKILLed — the
+/// `dist:lap` build left compiling after `land` died (CLOUD-2955, loop k).
+#[test]
+fn a_step_run_whose_starter_is_killed_leaves_no_live_child() {
+    if !cfg!(target_os = "linux") {
+        return;
+    }
+    let (_graph, body) = killed_lap_of("stage-killed", STAGE);
+    assert!(
+        children_of(body).is_empty(),
+        "nothing the killed body started is alive"
     );
 }

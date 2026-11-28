@@ -15566,6 +15566,10 @@ fn run_step_watched(
     command: &[String],
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
+    // A STEP ENDS WITH ITS STARTER (CLOUD-2955), as a graph does: a lap stage
+    // run outside `step graph` (`verify:gated`'s fan runs `dist:lap`, the suite
+    // and the mutant tier that way) outlived a SIGKILLed `land`, with its build.
+    crate::exec::end_with_starter();
     let root = git::worktree_root(Path::new(".")).ok();
     let prune_rules = root
         .as_deref()
