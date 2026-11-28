@@ -137,6 +137,11 @@ inputs = ["input.txt"]
 tools = [["toolv"], ["batten", "step", "untraced"]]
 
 [[step]]
+id = "dated"
+inputs = ["input.txt"]
+tools = [["toolv"], ["batten", "step", "dated"]]
+
+[[step]]
 id = "recorded"
 inputs = ["input.txt"]
 tools = [["toolv"], ["batten", "step", "untraced"], ["batten", "step", "record", "--", "probe-fam"]]
@@ -695,6 +700,31 @@ fn a_failing_command_passes_its_code_through_and_records_no_pass() {
         assert!(read(receipt).contains(" exit "), "{}", read(receipt));
     }
     assert_eq!(repo.check(&["mystep"]), "miss");
+}
+
+/// CLOUD-2329: a row keyed on the calendar's standing (`batten step dated`,
+/// in place of `date -u +%F`) answers an unchanged tree from its receipt, pass
+/// or fail, and an edit under its inputs still runs it. Fails by: the line not
+/// answered in-process, so no key forms and every run executes.
+#[test]
+fn a_dated_row_answers_an_unchanged_tree_and_runs_an_edited_one() {
+    let repo = Repo::new("dated");
+    let red = || repo.run_step(&["dated"], &["red"], &[("STUB_CODE", "2")]);
+    let runs = || read(&repo.path("bin/red.log")).lines().count();
+    let first = red();
+    assert_eq!(first.status.code(), Some(2), "{}", common::stderr(&first));
+    let again = red();
+    assert_eq!(
+        again.status.code(),
+        Some(2),
+        "the same verdict: {}",
+        common::stderr(&again)
+    );
+    assert_eq!(runs(), 1, "the unchanged tree did not execute");
+    repo.stage("two\n");
+    let edited = red();
+    assert_eq!(edited.status.code(), Some(2), "{}", common::stderr(&edited));
+    assert_eq!(runs(), 2, "the edited tree ran the step");
 }
 
 /// CLOUD-2091: a step is a gate whose reader is a log, so the command's own

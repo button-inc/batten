@@ -714,6 +714,85 @@ pub fn run_exists(specs: &[String], out: &mut dyn Write, err: &mut dyn Write) ->
 /// ([`tree_inputs_digest_in`]).
 pub const INPUTS_DIGEST: [&str; 5] = ["batten", "enforce", "--half", "tree", "--inputs-digest"];
 
+/// The tool line a row keys THE CALENDAR'S STANDING with (CLOUD-2329): `batten
+/// step dated`, answered in-process as one `dated <date> past|today|ahead`
+/// line per date the config declares, where `date -u +%F` keyed the day.
+///
+/// What the day protected is a date crossing: a waiver, a perf exemption, a
+/// handler or a deprecation window lapses ON a declared `YYYY-MM-DD`, and no
+/// policy reads the clock itself. So the key needs where today stands against
+/// each declared date, which moves only when one is crossed. Keying the day
+/// re-ran `enforce-tree` (about 150 s) on every first lap after midnight over
+/// an unchanged tree. `today` beside `past` and `ahead` keeps both a `>=` and a
+/// `>` comparison exact.
+///
+/// The dates are every `YYYY-MM-DD` in the committed and local config's text,
+/// whichever table holds them, and the engine's deprecation table. A date in a
+/// comment only adds a line that never moves on its own. A tool line, not a
+/// field, for [`EXISTS`]'s reason.
+pub const DATED: [&str; 3] = ["batten", "step", "dated"];
+
+/// [`DATED`]'s answer in `root`, or `None` when the clock or the committed
+/// config cannot be read.
+fn dated_said(root: &Path) -> Option<String> {
+    let committed = crate::fsio::read_to_string(root.join(CONFIG_FILE)).ok()?;
+    let local = crate::fsio::read_to_string(root.join(crate::resolve::LOCAL_CONFIG_FILE))
+        .unwrap_or_default();
+    let today = crate::waiver::today().ok()?;
+    let declared = crate::config::DEPRECATED_KEYS
+        .iter()
+        .map(|deprecation| deprecation.expires);
+    Some(dated_lines(
+        [committed.as_str(), local.as_str()]
+            .into_iter()
+            .chain(declared),
+        today,
+    ))
+}
+
+/// One `dated <date> past|today|ahead` line per distinct date in `texts`,
+/// in calendar order, or `dated none` when there is none.
+fn dated_lines<'a>(texts: impl IntoIterator<Item = &'a str>, today: crate::waiver::Date) -> String {
+    let mut dates = std::collections::BTreeSet::new();
+    for text in texts {
+        let bytes = text.as_bytes();
+        for start in 0..bytes.len().saturating_sub(9) {
+            let window = &bytes[start..start + 10];
+            let shaped = window.iter().enumerate().all(|(at, byte)| {
+                if at == 4 || at == 7 {
+                    *byte == b'-'
+                } else {
+                    byte.is_ascii_digit()
+                }
+            });
+            if !shaped {
+                continue;
+            }
+            if let Some(date) = std::str::from_utf8(window)
+                .ok()
+                .and_then(|text| crate::waiver::Date::parse(text).ok())
+            {
+                dates.insert(date);
+            }
+        }
+    }
+    if dates.is_empty() {
+        return String::from("dated none");
+    }
+    dates
+        .into_iter()
+        .map(|date| {
+            let standing = match date.cmp(&today) {
+                std::cmp::Ordering::Less => "past",
+                std::cmp::Ordering::Equal => "today",
+                std::cmp::Ordering::Greater => "ahead",
+            };
+            format!("dated {} {standing}", date.text())
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 /// What `tool` says run in `root`, as its exit code and stdout: answered
 /// in-process for [`INPUTS_DIGEST`], a [`BASE`] line and an
 /// [`ENV`](crate::mutate::resume::ENV) line (one that cannot be answered is a
@@ -727,6 +806,9 @@ fn tool_said(root: &Path, tool: &[String]) -> Option<(i32, String)> {
     }
     if tool.iter().map(String::as_str).eq(UNTRACED) {
         return answered(Some(String::from("untraced")));
+    }
+    if tool.iter().map(String::as_str).eq(DATED) {
+        return answered(dated_said(root));
     }
     if let Some(words) = after(tool, &BASE) {
         let var = |name: &str| std::env::var(name).ok();
@@ -4277,6 +4359,42 @@ mod tests {
             recorded,
             tree_inputs_digest_in(&root).unwrap(),
             "an edited record moves the key"
+        );
+    }
+
+    /// Fails by: the `dated` answer moving with the calendar day where no
+    /// declared date is crossed (what `date -u +%F` did, CLOUD-2329), or
+    /// holding when one is — including the day ON the date, which a `>=`
+    /// waiver lapse and a `>` comparison tell apart.
+    #[test]
+    fn the_dated_line_moves_only_when_a_declared_date_is_crossed() {
+        let day = |text: &str| crate::waiver::Date::parse(text).unwrap();
+        let config = "[[waiver]]\nexpires = \"2026-12-01\"\n# measured 2026-10-07\n";
+        let lines = |today: &str| dated_lines([config], day(today));
+        assert_eq!(
+            lines("2026-11-28"),
+            lines("2026-11-29"),
+            "an uncrossed day keys alike"
+        );
+        assert_ne!(
+            lines("2026-11-30"),
+            lines("2026-12-01"),
+            "the day on it moves"
+        );
+        assert_ne!(
+            lines("2026-12-01"),
+            lines("2026-12-02"),
+            "the day past it moves"
+        );
+        assert_eq!(
+            lines("2026-11-28"),
+            "dated 2026-10-07 past\ndated 2026-12-01 ahead"
+        );
+        assert_eq!(dated_lines(["no dates"], day("2026-11-28")), "dated none");
+        assert_eq!(
+            dated_lines(["2026-13-45 is no date"], day("2026-11-28")),
+            "dated none",
+            "a shape that does not parse is no date"
         );
     }
 
