@@ -217,23 +217,23 @@ select = ["id", "conclusion"]
 "#;
 
 #[test]
-fn a_record_flip_reaches_the_live_half_and_never_the_receipted_one() {
-    // THE UNSOUNDNESS THE SPLIT EXISTS TO CLOSE: a record flipping to a deny
-    // value with no tracked change. CHANGED WITH a1397f5ab (CLOUD-2329): the
-    // tree half now keys the recorder stores it reads, so its receipt DOES see
-    // the flip and both halves deny; what stays pinned is that the live half
-    // reaches it.
+fn a_record_flip_reaches_the_tree_half_that_reads_it() {
+    // A RECORD FLIPPING TO A DENY VALUE WITH NO TRACKED CHANGE. Since a1397f5ab
+    // (CLOUD-2329) the tree half reads the recorder stores and folds them into
+    // its key, so a record row is the tree half's and its receipt is a hit only
+    // on identical records. The flip must therefore move the tree half's own
+    // verdict: before that commit the tree half never saw the record and passed.
     let dir = repo(
         "records",
         RECORDS,
         &[("policy/reads-the-runs.rego", READS_THE_RUNS)],
     );
-    let clean = batten(&dir, &["enforce", "--half", "live"]);
+    let clean = batten(&dir, &["enforce", "--half", "tree"]);
     assert_eq!(
         code(&clean),
         Some(0),
         "no record, no finding: {}",
-        stderr(&clean)
+        stdout(&clean)
     );
 
     let branch = git_in(&dir, &["rev-parse", "--abbrev-ref", "HEAD"]);
@@ -242,18 +242,11 @@ fn a_record_flip_reaches_the_live_half_and_never_the_receipted_one() {
     std::fs::write(&record, "row\t{\"conclusion\":\"failure\",\"id\":1}\n").unwrap();
 
     let tree = batten(&dir, &["enforce", "--half", "tree"]);
-    assert_eq!(
-        code(&tree),
-        Some(2),
-        "the receipted half: {}",
-        stdout(&tree)
-    );
-    let live = batten(&dir, &["enforce", "--half", "live"]);
-    assert_eq!(code(&live), Some(2), "the live half: {}", stderr(&live));
+    assert_eq!(code(&tree), Some(2), "the tree half: {}", stdout(&tree));
     assert!(
-        stdout(&live).contains("record read other"),
+        stdout(&tree).contains("record read other"),
         "{}",
-        stdout(&live)
+        stdout(&tree)
     );
 }
 
