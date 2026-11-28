@@ -19434,7 +19434,10 @@ journal = "nextest"
 # `strace` and nextest they run under. Two rows, one per argv of `test:traced`.
 [[step]]
 id = "test:traced"
-inputs = ["crates", "Cargo.toml", "Cargo.lock"]
+# KEEPS `.` (CLOUD-2784): its traced run is red here (3 of 375 cases), so the
+# lint cannot judge a narrower set, and `this_repositorys_own_census_is_closed`
+# reads the checkout itself.
+inputs = ["."]
 tools = [
   ["batten", "step", "config"],
   ["batten", "step", "untraced"],
