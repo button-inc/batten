@@ -82,8 +82,150 @@ use anyhow::{Context as _, Result};
 use serde::{Deserialize, Serialize};
 
 use crate::identity::{CountChange, FindingKind, Fingerprint, StoredIdentity, compare_to_anchor};
-use crate::rules::Finding;
 use crate::severity::{AdvisoryTier, RuleSeverity, row_for_rule};
+
+/// A single policy finding: the rule that fired and where, as a pointer only.
+///
+/// A finding never carries the matched bytes (non-negotiable rule 4) — only the
+/// rule id and a `path:line` location the caller can open.
+///
+/// The `severity` is the producing rule's — the value the exit contract
+/// consumes: a `deny` finding fails the run, a `warn` finding reports without
+/// failing it (CLOUD-49 promotes it). It rides along for that decision only; it
+/// is **never** an identity input (see [`crate::identity`] — re-rating a
+/// finding must not re-mint it).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Finding {
+    /// The [`crate::config_model::Rule::id`] that produced this finding.
+    pub rule: String,
+    /// The ROW this finding belongs to, where that is not [`Finding::rule`]
+    /// (CLOUD-1087).
+    ///
+    /// `None` means "the rule id is the owner", which is true for every kind but
+    /// `policy` — a policy finding reports the PREDICATE's id (CLOUD-832), and a
+    /// module may carry many predicates under one row.
+    ///
+    /// # Why a field and not a lookup
+    ///
+    /// This replaces `Scan::attributed`, a side map keyed on the scope
+    /// fingerprint. Review of #721 raised the same objection twice in two
+    /// shapes — keyed on the predicate id, then keyed on the fingerprint — and
+    /// re-keying a third time answers the instance rather than the class. Both
+    /// rounds were saying that the owner was being INFERRED from a value that
+    /// means something else, when it can simply be RECORDED. A construction
+    /// where a `command` row's id equals a predicate id and its glob equals the
+    /// verdict token mints the same `scope_fingerprint`, so the map could hand
+    /// one row's findings to another; a field cannot collide, because nothing
+    /// is looked up.
+    ///
+    /// [`Finding::rule`] is deliberately untouched and keeps the predicate id:
+    /// reporting and [`crate::waiver::apply`] ask a different question and their
+    /// answer is already right.
+    ///
+    /// Engine-internal — it reaches no pointer and no record, so rule 4 needs no
+    /// new decision here.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner: Option<String>,
+    /// The producing rule's [`crate::config_model::Rule::severity`], for the exit-contract decision.
+    pub severity: RuleSeverity,
+    /// Where the violation is. A file-scoped kind reports the repo-relative
+    /// path (`/`-separated); a rule-scoped kind — a command whose exit code
+    /// condemns a whole batch rather than one line — reports the rule's `glob`,
+    /// which is the tightest honest pointer available for it.
+    pub path: String,
+    /// The 1-based line number of the offending line, when the kind locates one.
+    /// `None` for a rule-scoped finding.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub line: Option<usize>,
+    /// The finding's identity, minted **engine-side** (CLOUD-164).
+    ///
+    /// Position is deliberately not an input: `line` moves when a neighbour is
+    /// inserted and this does not, which is what lets a store recognise the same
+    /// defect across an edit. Before this field existed the churn pack read the
+    /// matched line and hashed it test-side, which could pin the identity
+    /// *function* but never the extractor — there was none. This is the
+    /// extractor, and deleting that test-side join is how the pack now proves it
+    /// picks the right span.
+    pub identity: crate::identity::StoredIdentity,
+    /// The predicate that settles this finding, captured from the producing rule
+    /// (CLOUD-81). Carried on the finding rather than looked up later, so the
+    /// store never has to reach back into a config it cannot see.
+    pub check: Check,
+    /// The fix, or the stated reason there is none. `None` only for a rule
+    /// [`crate::config_model::Rule::validate`] would have refused; [`crate::findings::record`]
+    /// refuses to store one.
+    pub remediation: Option<Remediation>,
+    /// Which of the producing kind's answers this finding is, where the kind
+    /// has more than one (CLOUD-1787).
+    ///
+    /// `None` for every kind whose findings mean one thing. A `document` row
+    /// has three — the node differs, the node is absent, the document could not
+    /// be read, and now a fourth: there is no document here — and they were
+    /// **computed and then dropped**, reaching only
+    /// [`crate::identity::code_fingerprint`]. So two findings with opposite
+    /// remedies printed the same `path:1 rule-id`, and an author told their
+    /// `tier` was wrong went looking at a `tier` that was correct. That is the
+    /// harm CLOUD-1787 reports first, and it is an OUTPUT defect: the decision
+    /// was always right.
+    ///
+    /// # Still a pointer (rule 4)
+    ///
+    /// A closed vocabulary of `&'static str` tokens the engine owns, never a
+    /// byte of the file. `no-document` says what the reader found, not what the
+    /// file says.
+    ///
+    /// Skipped when absent, so every finding that does not set one serialises
+    /// exactly as it did before — §6 movement is confined to the kind that
+    /// gained the field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<&'static str>,
+    /// A policy finding's subjects other than the one [`Finding::path`] holds,
+    /// rendered, in the module's order (CLOUD-2213).
+    ///
+    /// `path` is one slot, so `issue file same` printed `at batten.toml` and
+    /// dropped the row id it judged. These ride the line after the pointer;
+    /// identity, admission and baseline still key on `path` alone, so nothing
+    /// already recorded moves.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub carried: Vec<String>,
+}
+
+/// The renderer this type went without (CLOUD-371).
+///
+/// Every other emitted type in the engine named its own `line`/`line_text`/
+/// `summary`; the most-emitted one had none, so its pointer shape lived as an
+/// inline `match` on [`Finding::line`] at two separate call sites in
+/// `lib.rs` — `run_policy_hooks` and `run_rules` — which is the asymmetry that
+/// proved the funnel was missing. The bytes below are exactly what both sites
+/// composed, moved rather than rewritten.
+///
+/// **Pointer only, and that is this type above all** (rule 4): the location and
+/// the rule that fired, never the offending line's text. A rule-scoped finding
+/// carries no line and prints its pointer without one rather than inventing a
+/// number it does not have — the `None` arm is a different pointer, not a
+/// degraded one.
+///
+/// One finding in the grammar every Batten finding takes (CLOUD-2145):
+/// `batten <severity> <id> at <path>[:<line>][ <reason>]`. The head names the
+/// source inside a task's interleaved output, where the command a reader ran
+/// (`mise run verify`) does not; a consumer wanting structure reads `-J`.
+impl crate::output::Line for Finding {
+    fn line(&self) -> String {
+        let head = crate::grammar::head(self.severity.finding_severity(), &self.rule);
+        let mut at = match self.line {
+            Some(line) => format!("{head} at {}:{line}", self.path),
+            None => format!("{head} at {}", self.path),
+        };
+        for subject in &self.carried {
+            at.push(' ');
+            at.push_str(subject);
+        }
+        match self.reason {
+            Some(reason) => format!("{at} {reason}"),
+            None => at,
+        }
+    }
+}
 
 /// How a finding settles itself — the predicate whose verdict clears it
 /// (CLOUD-81).
@@ -572,7 +714,7 @@ fn record_path(store_dir: &Path, fingerprint: Fingerprint) -> PathBuf {
 /// from the *future* is still absent — that half stays fail-closed, because a
 /// field this binary cannot see is a field it would silently drop on write.
 fn read_record(path: &Path) -> Option<FindingRecord> {
-    let text = std::fs::read_to_string(path).ok()?;
+    let text = crate::fsio::read_to_string(path).ok()?;
     let record: FindingRecord = serde_json::from_str(&text).ok()?;
     (FINDINGS_SCHEMA_MIN..=FINDINGS_SCHEMA)
         .contains(&record.schema)
@@ -605,6 +747,15 @@ fn write_record(store_dir: &Path, record: &FindingRecord) -> Result<()> {
 /// both the same way.
 pub fn load_one(store_dir: &Path, fingerprint: Fingerprint) -> Result<Option<FindingRecord>> {
     Ok(read_record(&record_path(store_dir, fingerprint)))
+}
+
+/// Whether a record file exists for `fingerprint`, by one `stat` and no read:
+/// what the journal asks of each pending entry on every merge (CLOUD-2820), so
+/// the question must cost no more than the answer is worth. An unreadable file
+/// still counts as present here; [`load_one`] decides whether it parses.
+#[must_use]
+pub fn is_recorded(store_dir: &Path, fingerprint: Fingerprint) -> bool {
+    record_path(store_dir, fingerprint).is_file()
 }
 
 /// Publish one record.
@@ -656,8 +807,25 @@ pub fn forget(store_dir: &Path, fingerprint: Fingerprint) -> Result<()> {
 /// Returns an error only when the findings directory exists but cannot be read.
 pub fn load_all(store_dir: &Path) -> Result<Vec<FindingRecord>> {
     let dir = findings_dir(store_dir);
-    let Ok(entries) = std::fs::read_dir(&dir) else {
+    // ONCE PER PROCESS WHILE THE STORE IS UNCHANGED (CLOUD-2813). Measured: one
+    // `stop` called this from six sites and opened the 689-file store about
+    // 3,560 times, re-parsing every record five times over, at 316 ms against a
+    // 100 ms budget. Every write publishes by rename and every removal unlinks,
+    // and both move the directory's mtime, so one `stat` proves a memo current;
+    // a child process writing the store moves it too, so a long-running verb
+    // re-reads. Nothing persists past the process: crash-only holds.
+    let Ok(stamp) = std::fs::metadata(&dir).and_then(|meta| meta.modified()) else {
         // No findings recorded yet is the ordinary first-run case.
+        return Ok(Vec::new());
+    };
+    if let Some(found) = memo().lock().ok().and_then(|memo| {
+        memo.get(&dir)
+            .filter(|(seen, _)| *seen == stamp)
+            .map(|(_, records)| records.clone())
+    }) {
+        return Ok(found);
+    }
+    let Ok(entries) = std::fs::read_dir(&dir) else {
         return Ok(Vec::new());
     };
     let mut found: Vec<FindingRecord> = entries
@@ -667,7 +835,34 @@ pub fn load_all(store_dir: &Path) -> Result<Vec<FindingRecord>> {
         .filter_map(|path| read_record(&path))
         .collect();
     found.sort_by_key(|a| a.identity.fingerprint);
+    if let Ok(mut memo) = memo().lock() {
+        memo.insert(dir, (stamp, found.clone()));
+    }
     Ok(found)
+}
+
+/// Whether the store holds any finding [`load_all`] would return, stopping at
+/// the first record that reads: a yes-or-no question parses one record, not
+/// the store. A torn or future-schema file is not a record here either.
+#[must_use]
+pub fn any(store_dir: &Path) -> bool {
+    std::fs::read_dir(findings_dir(store_dir)).is_ok_and(|entries| {
+        entries
+            .flatten()
+            .map(|entry| entry.path())
+            .filter(|path| path.extension().is_some_and(|ext| ext == "json"))
+            .any(|path| read_record(&path).is_some())
+    })
+}
+
+/// Each store directory's records, with the directory mtime they were read at.
+type Memo = std::collections::HashMap<PathBuf, (std::time::SystemTime, Vec<FindingRecord>)>;
+
+/// [`load_all`]'s per-process memo: each store directory's records, with the
+/// directory mtime they were read at.
+fn memo() -> &'static std::sync::Mutex<Memo> {
+    static MEMO: std::sync::OnceLock<std::sync::Mutex<Memo>> = std::sync::OnceLock::new();
+    MEMO.get_or_init(Default::default)
 }
 
 /// What one `record` call changed, as pointer-only counts.
@@ -1143,10 +1338,17 @@ pub fn pointer_lines(records: &[FindingRecord]) -> Vec<String> {
     lines
 }
 
+/// Convert a byte offset into a 1-based line number.
+pub(crate) fn line_of(text: &str, offset: usize) -> usize {
+    text.get(..offset)
+        .map_or(1, |prefix| prefix.matches('\n').count() + 1)
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+    #[cfg(test)]
     use crate::identity::{FindingKind, SpanNormalization, code_fingerprint};
 
     fn identity_for(rule: &str, path: &str, span: &str) -> StoredIdentity {
@@ -1206,7 +1408,7 @@ mod tests {
     /// observations. A `PartialEq` over a deserialized enum cannot see a write
     /// path that re-serialized the field differently.
     fn stored_tier_bytes(dir: &Path, fingerprint: Fingerprint) -> String {
-        let text = std::fs::read_to_string(record_path(dir, fingerprint)).unwrap();
+        let text = crate::fsio::read_to_string(record_path(dir, fingerprint)).unwrap();
         text.lines()
             .find(|line| line.trim_start().starts_with("\"tier\""))
             .expect("the record persists a tier")
@@ -1592,14 +1794,14 @@ mod tests {
         let dir = store("re-rated");
         let context = Context::new("refs/heads/a");
         let commit = "0".repeat(40);
-        let fingerprint = finding_for(RuleSeverity::Warn).identity.fingerprint;
+        let fingerprint = finding_for(RuleSeverity::Advise).identity.fingerprint;
 
         record(
             &dir,
             &context,
             &commit,
             None,
-            &[finding_for(RuleSeverity::Warn)],
+            &[finding_for(RuleSeverity::Advise)],
             FINDINGS_SCHEMA,
             &all_evaluated(),
         )
@@ -1625,7 +1827,7 @@ mod tests {
         );
         assert_eq!(
             after.severity,
-            RuleSeverity::Warn,
+            RuleSeverity::Advise,
             "the recorded severity is the one the finding was minted under"
         );
 
@@ -1903,6 +2105,20 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// Fails by: a fingerprint with no record file answered as recorded, or a
+    /// published one answered as absent.
+    #[test]
+    fn is_recorded_answers_by_the_record_file_alone() {
+        let dir = store("is-recorded");
+        let saved = record_of(vec![instance("refs/heads/a", Observation::Observed(1))]);
+        let mut absent = saved.clone();
+        absent.identity = identity_for("r", "src/never.rs", "TODO");
+        save_one(&dir, &saved).unwrap();
+        assert!(is_recorded(&dir, saved.identity.fingerprint));
+        assert!(!is_recorded(&dir, absent.identity.fingerprint));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     // A flap suppression is the engine withholding a finding, so it must be
     // excluded from both sides of the false-positive rate for the same reason the
     // other three reasons are: the agent was never shown it, so its silence is not
@@ -2113,5 +2329,17 @@ mod tests {
         assert_eq!(Disposition::RejectedWrong.as_str(), "rejected-wrong");
         assert_eq!(Disposition::RejectedByDesign.as_str(), "rejected-by-design");
         assert_eq!(Disposition::Acted.as_str(), "acted");
+    }
+
+    /// Fails by: a fingerprint with no record file answered as recorded, which
+    /// tells the journal's merge an entry is already filed when it is not.
+    #[test]
+    fn only_a_saved_fingerprint_is_recorded() {
+        let dir = store("is-recorded");
+        let saved = record_of(vec![instance("refs/heads/a", Observation::Observed(1))]);
+        let absent = identity_for("r", "src/absent.rs", "TODO");
+        save_one(&dir, &saved).unwrap();
+        assert!(is_recorded(&dir, saved.identity.fingerprint));
+        assert!(!is_recorded(&dir, absent.fingerprint));
     }
 }

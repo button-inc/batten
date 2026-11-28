@@ -46,129 +46,183 @@
 //! `manifests_are_inside_the_rule_one_glob` asserts that coverage rather than
 //! leaving it true by accident.
 
+use crate::rules::RuleExt as _;
 use std::collections::BTreeSet;
 use std::path::Path;
 
+use crate::config_model::{Rule, RuleKind};
 use crate::error::UsageError;
-use crate::rules::{Rule, RuleKind, RuleScope};
-use crate::verdict::{DeclaredVerdict, VendoredVerdict, admit, read, run};
+use crate::preset_catalog::Manifest;
+use crate::preset_catalog::PresetModule;
+use crate::preset_catalog::RuleScope;
+use crate::preset_catalog::find;
+use crate::preset_catalog::names;
 
-/// One module inside a preset, with the surface it decides.
-///
-/// A struct rather than a `(RuleScope, &str, &str)` tuple because the two string
-/// fields are not interchangeable and a tuple lets them be swapped silently: a
-/// pointer in the source position compiles, loads, and produces a bundle whose
-/// every rule body is a comment. Named fields make that unwritable.
-#[derive(Debug)]
-#[non_exhaustive]
-pub struct PresetModule {
-    /// The surface this module reads — `input.tree.*` or `input.call`/`facts`.
-    pub scope: RuleScope,
-    /// The CI provider whose expression language this module reads, or `None`
-    /// where it reads none (CLOUD-1625).
-    ///
-    /// **PER MODULE RATHER THAN PER MANIFEST, and that is CLOUD-1672's lesson
-    /// applied before it had to be learned twice.** `scope` was a manifest field
-    /// once — true of every preset that existed when it was written, and false
-    /// the moment one preset had something to say about two surfaces. The same
-    /// is already true here: the `mise` preset's
-    /// `action-version-matches-the-pin` matches a step's `uses:` coordinate and
-    /// so reads one provider's workflow language, while its sibling `task-over-executable`
-    /// decides mise tasks and cares about no provider at all. A manifest-level
-    /// field would have to call that preset GitHub-specific and switch off a
-    /// module that works everywhere.
-    ///
-    /// **`None` is a measured answer, not an unsurveyed one**: it says this
-    /// module reads no provider's language, which is why it applies anywhere.
-    ///
-    /// Decided at LOAD rather than inside the module: a preset cannot read
-    /// consumer data — `data.batten.*` is undefined for it — so no Rego
-    /// conditional could ask "am I on the right provider".
-    pub provider: Option<&'static str>,
-    /// `<preset:name>/….rego`, the pointer a refusal prints.
-    pub pointer: &'static str,
-    /// The module source, `include_str!`d at build time.
-    pub source: &'static str,
+/// The file under a mutation overlay naming the one module the sweep mutated,
+/// as its path under the overlay (CLOUD-2839). The sweep writes it beside the
+/// mutated copy. A reader whose module it names and whose copy will not read
+/// has nothing to judge: the embedded text is the UNMUTATED module.
+pub const OVERLAY_TARGET: &str = ".target";
+
+/// The suffix of the receipt a reader leaves beside an overlay copy it read
+/// (CLOUD-2839). A sweep holding no receipt for its row's copy judged
+/// unmutated code, so its run is no verdict.
+pub const OVERLAY_READ: &str = ".read";
+
+/// What a preset module reads under an overlay ([`read_overlay`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Overlaid {
+    /// No overlay, or not this module's: the embedded source.
+    Embedded,
+    /// The mutated copy, read and receipted.
+    Mutated(String),
+    /// The overlay names this module, and its copy at this path will not read.
+    Unreadable(std::path::PathBuf),
 }
 
-impl PresetModule {
+/// What the module at `relative` under the overlay `dir` reads (CLOUD-2839).
+///
+/// A copy that reads is the source, and leaves its [`OVERLAY_READ`] receipt.
+/// The receipt is how the sweep knows this run judged the mutation. A copy that
+/// will not read, for the module [`OVERLAY_TARGET`] names, is
+/// [`Overlaid::Unreadable`], NEVER the embedded text. Falling back there judged
+/// the unmutated module, and its green run was reported `SURVIVED`.
+#[must_use]
+pub fn read_overlay(dir: Option<&Path>, relative: &str) -> Overlaid {
+    let Some(dir) = dir else {
+        return Overlaid::Embedded;
+    };
+    let copy = dir.join(relative);
+    if let Ok(text) = crate::fsio::read_to_string(&copy) {
+        let mut receipt = copy.into_os_string();
+        receipt.push(OVERLAY_READ);
+        // A receipt that cannot be written leaves the sweep holding none, which it
+        // reads as unjudged: fail-closed, so the error needs no other route.
+        let _ = crate::durable::replace(std::path::PathBuf::from(receipt), "");
+        return Overlaid::Mutated(text);
+    }
+    let targeted = crate::fsio::read_to_string(dir.join(OVERLAY_TARGET))
+        .is_ok_and(|named| named.trim() == relative);
+    if targeted {
+        Overlaid::Unreadable(copy)
+    } else {
+        Overlaid::Embedded
+    }
+}
+
+/// The overlay directory a sweep's suite build reads the engine-default
+/// library from (CLOUD-2253): `$BATTEN_PRESET_OVERLAY` under the
+/// `preset-overlay` feature, and `None` in every other build, whatever the
+/// environment says ([`library_text`]).
+#[must_use]
+pub fn library_overlay() -> Option<std::path::PathBuf> {
+    #[cfg(feature = "preset-overlay")]
+    return std::env::var_os("BATTEN_PRESET_OVERLAY").map(std::path::PathBuf::from);
+    #[cfg(not(feature = "preset-overlay"))]
+    None
+}
+
+/// The text of the library module at `path` (CLOUD-2253): `embedded`, or under
+/// the `preset-overlay` feature the mutated copy at `<overlay>/<path>` where one
+/// is there ([`read_overlay`]), so a sweep judges a library row on binaries
+/// built once rather than recompiling the crate twice per row.
+///
+/// A BUILD FEATURE, NEVER A RUNTIME SWITCH ALONE, for [`PresetModuleExt::text`]'s
+/// reason: a shipped build ignores `overlay` whatever it names, so no caller
+/// under judgement can swap the library it is judged by for a file. The copy
+/// the overlay names as its target and that will not read exits 3 rather than
+/// judging the embedded text (CLOUD-2839).
+#[must_use]
+pub fn library_text(
+    overlay: Option<&Path>,
+    path: &str,
+    embedded: &'static str,
+) -> std::borrow::Cow<'static, str> {
+    #[cfg(feature = "preset-overlay")]
+    match read_overlay(overlay, path) {
+        Overlaid::Mutated(text) => return std::borrow::Cow::Owned(text),
+        Overlaid::Unreadable(copy) => {
+            use std::io::Write as _;
+            let _ = writeln!(
+                std::io::stderr(),
+                "batten: library overlay: {} will not read; could-not-look",
+                copy.display()
+            );
+            std::process::exit(3);
+        }
+        Overlaid::Embedded => {}
+    }
+    #[cfg(not(feature = "preset-overlay"))]
+    let _ = (overlay, path);
+    std::borrow::Cow::Borrowed(embedded)
+}
+
+/// `PresetModule` behaviour that belongs to this module's layer, not the type's (CLOUD-2793).
+pub trait PresetModuleExt: Sized {
+    /// The source an engine compiles: the embedded one, or under the
+    /// `preset-overlay` feature the mutated copy a mutation sweep wrote to
+    /// `$BATTEN_PRESET_OVERLAY/<preset>/<module>.rego`, where one is there
+    /// ([`read_overlay`]). The module the overlay names as its target, with a
+    /// copy that will not read, exits 3 instead of reading the embedded text
+    /// (CLOUD-2839).
+    ///
+    /// A BUILD FEATURE, NEVER A RUNTIME SWITCH ALONE: a variable that swapped a
+    /// shipped rule for a file would let the caller under judgement rewrite the
+    /// rules it is judged by. Only the sweep's own suite build enables it, so the
+    /// suite runs against a mutated module without recompiling the crate per row
+    /// (`MUTANT_OVERLAY_*`, declared by the consumer's task runner).
+    #[must_use]
+    fn text(&self) -> std::borrow::Cow<'static, str>;
+
     /// The module's name: its file stem, as a row's `except` and
     /// `batten preset eject` spell it (CLOUD-2290).
     #[must_use]
-    pub fn name(&self) -> &'static str {
+    fn name(&self) -> &'static str;
+}
+
+impl PresetModuleExt for PresetModule {
+    fn text(&self) -> std::borrow::Cow<'static, str> {
+        #[cfg(feature = "preset-overlay")]
+        if let Some(relative) = self.pointer.strip_prefix("<preset:") {
+            let dir = std::env::var_os("BATTEN_PRESET_OVERLAY");
+            match read_overlay(
+                dir.as_deref().map(Path::new),
+                &relative.replacen('>', "", 1),
+            ) {
+                Overlaid::Mutated(text) => return std::borrow::Cow::Owned(text),
+                // COULD-NOT-LOOK, EXIT 3 (CLOUD-2839): the embedded text is the
+                // module unmutated, and judging it is the laundered verdict. The
+                // run leaves no receipt, so the sweep reads it as unjudged.
+                Overlaid::Unreadable(copy) => {
+                    use std::io::Write as _;
+                    let _ = writeln!(
+                        std::io::stderr(),
+                        "batten: preset overlay: {} will not read; could-not-look",
+                        copy.display()
+                    );
+                    std::process::exit(3);
+                }
+                Overlaid::Embedded => {}
+            }
+        }
+        std::borrow::Cow::Borrowed(self.embedded_source)
+    }
+
+    fn name(&self) -> &'static str {
         let file = self.pointer.rsplit('/').next().unwrap_or(self.pointer);
         file.strip_suffix(".rego").unwrap_or(file)
     }
 }
 
-/// One vendored preset, declared once.
-#[derive(Debug)]
-#[non_exhaustive]
-pub struct Manifest {
-    /// The name a consumer enables, and the only thing they could know before.
-    pub name: &'static str,
-    /// The manifest's own version.
-    ///
-    /// Separate from the crate version deliberately, and for the reason
-    /// `spec::SPEC_VERSION` is separate: a version moving with the binary says
-    /// "the binary changed", which the release tag already says. This moves when
-    /// what the preset DECIDES changes.
-    pub version: u32,
-    /// The modules, each declaring the surface IT decides.
-    ///
-    /// **The scope is per module rather than per manifest, and that is the whole
-    /// of CLOUD-1672's engine half.** It used to be one `scope` on the manifest,
-    /// which said a preset decides exactly one surface — true of every preset
-    /// that existed when it was written, and false the moment a subject has
-    /// something to say about both. `mise` is that subject: whether an agent
-    /// reproduces a task's argv is a question about a CALL, and whether the
-    /// toolchain a workflow installs matches the version the tree pins is a
-    /// question about the TREE. They are one preset because they are one
-    /// concern, and a consumer enabling `mise` should not have to know that the
-    /// engine once could not express that.
-    ///
-    /// What the manifest-level field bought is preserved rather than dropped:
-    /// enabling a preset at a scope none of its modules decide is still refused
-    /// at LOAD, by `decides` below, and the refusal now names the scopes the
-    /// preset DOES decide instead of a single one. A row selects the modules at
-    /// its own scope, so a tree module never loads under a mediated row —
-    /// without that selection it would read `input.tree` on the call surface and
-    /// trip `check_tree_paths_are_emittable`, which is the guard working and not
-    /// a shape to rely on.
-    ///
-    /// The pointer is `<preset:name>/…` rather than a filesystem path: a preset
-    /// has no path in the consumer's tree, and printing one sends a reader
-    /// looking for a file that is not there.
-    pub modules: &'static [PresetModule],
-    /// The refusal classes these modules raise, with their glosses and remedies.
-    ///
-    /// Declared HERE rather than in `verdict.rs`'s native table, which is the
-    /// change that makes the registry's two directions reachable for a preset:
-    /// a token a module raises that no row here declares, and a row here that no
-    /// module raises, are both findings a manifest can now express.
-    pub verdicts: &'static [VendoredVerdict],
-    /// The `[[pattern]]` ids these modules would cite if they could.
-    ///
-    /// **The declaration site CLOUD-934 needs, and deliberately not its fix.** A
-    /// preset reaches a consumer who wrote no `[[pattern]]` rows, so
-    /// `data.batten.patterns["x"]` resolves to undefined there and a preset
-    /// citing one decides nothing while loading clean — which is why the
-    /// exemption exists and why a preset still writes its literal inline.
-    /// Listing the ids is what makes the exemption countable instead of
-    /// invisible; closing it is CLOUD-934's row and this one does not do its work.
-    pub patterns: &'static [&'static str],
-}
-
-impl Manifest {
+/// `Manifest` behaviour that belongs to this module's layer, not the type's (CLOUD-2793).
+pub trait ManifestExt: Sized {
     /// Whether any module here decides `scope`.
     ///
     /// The load-time question `policy::load` asks. It replaces an equality
     /// against one manifest-level scope, and the difference is that a preset
     /// spanning two surfaces answers yes to both rather than having to pick.
     #[must_use]
-    pub fn decides(&self, scope: RuleScope) -> bool {
-        self.modules.iter().any(|module| module.scope == scope)
-    }
+    fn decides(&self, scope: RuleScope) -> bool;
 
     /// The surfaces this preset decides, in manifest order, without repeats.
     ///
@@ -177,15 +231,7 @@ impl Manifest {
     /// table inside the binary they cannot open — the gap CLOUD-1181 recorded
     /// and which a single scope could only half answer.
     #[must_use]
-    pub fn scopes(&self) -> Vec<RuleScope> {
-        let mut seen: Vec<RuleScope> = Vec::new();
-        for module in self.modules {
-            if !seen.contains(&module.scope) {
-                seen.push(module.scope);
-            }
-        }
-        seen
-    }
+    fn scopes(&self) -> Vec<RuleScope>;
 
     /// The modules deciding `scope`, as `(pointer, source)` for the compiler.
     ///
@@ -195,13 +241,7 @@ impl Manifest {
     /// `check_tree_paths_are_emittable` catches that today, and this keeps the
     /// case from arising rather than relying on a downstream guard to notice.
     #[must_use]
-    pub fn modules_at(&self, scope: RuleScope) -> Vec<(String, String)> {
-        self.modules
-            .iter()
-            .filter(|module| module.scope == scope)
-            .map(|module| (module.pointer.to_owned(), module.source.to_owned()))
-            .collect()
-    }
+    fn modules_at(&self, scope: RuleScope) -> Vec<(String, String)>;
 
     /// [`Manifest::modules_at`], narrowed to what this consumer's provider can
     /// decide (CLOUD-1625).
@@ -221,29 +261,16 @@ impl Manifest {
     /// it can claim its ids. Whether every name in `except` exists is the
     /// caller's question, asked before this.
     #[must_use]
-    pub fn modules_for(
+    fn modules_for(
         &self,
         scope: RuleScope,
         provider: Option<&str>,
         except: &[String],
-    ) -> Vec<(String, String)> {
-        self.modules
-            .iter()
-            .filter(|module| module.scope == scope)
-            .filter(|module| match module.provider {
-                None => true,
-                Some(reads) => provider == Some(reads),
-            })
-            .filter(|module| !except.iter().any(|name| name == module.name()))
-            .map(|module| (module.pointer.to_owned(), module.source.to_owned()))
-            .collect()
-    }
+    ) -> Vec<(String, String)>;
 
     /// The module named `name`, if this preset ships one.
     #[must_use]
-    pub fn module(&self, name: &str) -> Option<&'static PresetModule> {
-        self.modules.iter().find(|module| module.name() == name)
-    }
+    fn module(&self, name: &str) -> Option<&'static PresetModule>;
 
     /// The modules that must leave the binary together with `module` for
     /// either side to compile (CLOUD-2290).
@@ -262,7 +289,63 @@ impl Manifest {
     /// helper's name also used as a local, and never under-includes a call; an
     /// over-included module is one more file copied, not a bundle that fails.
     #[must_use]
-    pub fn closure(&self, module: &PresetModule) -> Vec<&'static PresetModule> {
+    fn closure(&self, module: &PresetModule) -> Vec<&'static PresetModule>;
+
+    /// What the modules at this scope read, for a refusal that names both sides.
+    ///
+    /// Deduplicated and ordered by the module table so the message is
+    /// byte-stable (§6). A module reading no provider's language renders as
+    /// `no provider`, which is an answer rather than an omission.
+    #[must_use]
+    fn providers_at(&self, scope: RuleScope) -> Vec<&'static str>;
+}
+
+impl ManifestExt for Manifest {
+    fn decides(&self, scope: RuleScope) -> bool {
+        self.modules.iter().any(|module| module.scope == scope)
+    }
+
+    fn scopes(&self) -> Vec<RuleScope> {
+        let mut seen: Vec<RuleScope> = Vec::new();
+        for module in self.modules {
+            if !seen.contains(&module.scope) {
+                seen.push(module.scope);
+            }
+        }
+        seen
+    }
+
+    fn modules_at(&self, scope: RuleScope) -> Vec<(String, String)> {
+        self.modules
+            .iter()
+            .filter(|module| module.scope == scope)
+            .map(|module| (module.pointer.to_owned(), module.text().into_owned()))
+            .collect()
+    }
+
+    fn modules_for(
+        &self,
+        scope: RuleScope,
+        provider: Option<&str>,
+        except: &[String],
+    ) -> Vec<(String, String)> {
+        self.modules
+            .iter()
+            .filter(|module| module.scope == scope)
+            .filter(|module| match module.provider {
+                None => true,
+                Some(reads) => provider == Some(reads),
+            })
+            .filter(|module| !except.iter().any(|name| name == module.name()))
+            .map(|module| (module.pointer.to_owned(), module.text().into_owned()))
+            .collect()
+    }
+
+    fn module(&self, name: &str) -> Option<&'static PresetModule> {
+        self.modules.iter().find(|module| module.name() == name)
+    }
+
+    fn closure(&self, module: &PresetModule) -> Vec<&'static PresetModule> {
         let peers: Vec<&'static PresetModule> = self
             .modules
             .iter()
@@ -270,15 +353,15 @@ impl Manifest {
             .collect();
         let defined: Vec<BTreeSet<String>> = peers
             .iter()
-            .map(|peer| helpers_defined(peer.source))
+            .map(|peer| helpers_defined(&peer.text()))
             .collect();
-        let code: Vec<String> = peers.iter().map(|peer| uncommented(peer.source)).collect();
+        let code: Vec<String> = peers.iter().map(|peer| uncommented(&peer.text())).collect();
         // A SHARED ID IS AN EDGE TOO. Two modules may each add to one
         // `rules contains` id (`call grant now` has two), and `claim_ids`
         // refuses an id two bundles declare, so splitting them collides.
         let ids: Vec<BTreeSet<String>> = peers
             .iter()
-            .map(|peer| crate::policy::finding_ids(peer.source))
+            .map(|peer| crate::policy::finding_ids(&peer.text()))
             .collect();
         let linked = |a: usize, b: usize| {
             a != b
@@ -310,13 +393,7 @@ impl Manifest {
             .collect()
     }
 
-    /// What the modules at this scope read, for a refusal that names both sides.
-    ///
-    /// Deduplicated and ordered by the module table so the message is
-    /// byte-stable (§6). A module reading no provider's language renders as
-    /// `no provider`, which is an answer rather than an omission.
-    #[must_use]
-    pub fn providers_at(&self, scope: RuleScope) -> Vec<&'static str> {
+    fn providers_at(&self, scope: RuleScope) -> Vec<&'static str> {
         let mut seen: Vec<&'static str> = Vec::new();
         for module in self.modules.iter().filter(|m| m.scope == scope) {
             let reads = module.provider.unwrap_or("no provider");
@@ -326,1838 +403,6 @@ impl Manifest {
         }
         seen
     }
-}
-
-/// Every vendored preset, in a stable order.
-///
-/// The ONE authority. `preset_names`, the modules a preset ships, and the
-/// presets' half of the vendored verdict registry are all read off this table —
-/// never a hand-maintained second list, which is `surface::SURFACE`'s discipline
-/// and the reason a preset cannot be enabled that does not exist.
-pub const MANIFESTS: &[Manifest] = &[
-    // CLOUD-843, carrying CLOUD-441's decision out of a consumer module. A
-    // check's verdict on one commit is its latest run, absent is no veto and
-    // "not yet" is never a pass. The record is `batten record query`'s, under the
-    // family name the module reads; which commit, which repository and which
-    // check names are the consumer's `[[forge.query]]` row, so nothing here names
-    // a repository, an analyzer or a check.
-    //
-    // ITS OWN PRESET RATHER THAN A MODULE OF A WIDER CI BUNDLE, and the engine is
-    // the reason. A row selects a preset's modules by scope and provider, never
-    // one by one, so this per-commit gate beside a scheduled report would make
-    // each row's `--fail-on-warning` fail on the other's findings — and two tree
-    // rows over one preset collide on its predicate ids at load.
-    Manifest {
-        name: "check-verdict",
-        version: 1,
-        modules: &[PresetModule {
-            scope: RuleScope::Tree,
-            // Reads a record, not a workflow document, so no provider's
-            // expression language. The conclusion words are the forge's
-            // check-run vocabulary; on a forge speaking another one every run
-            // reads as no answer yet, which fails closed rather than clean.
-            provider: None,
-            pointer: "<preset:check-verdict>/latest-run-decides.rego",
-            source: include_str!("policy/presets/check-verdict/latest-run-decides.rego"),
-        }],
-        verdicts: &[
-            VendoredVerdict {
-                id: "check grade red",
-                gloss: "a check's latest run on this commit concluded with an objection",
-                class: "The check graded the commit and objected. The pointer is the check's name \
-and its conclusion, never its report: read the run's own details page and fix it locally. A \
-later run of the same name supersedes this one, so an older success does not answer for it.",
-                routes: &[read("source read first", "the check-run's details page")],
-                applicability: crate::verdict::Applicability::Advice,
-            },
-            VendoredVerdict {
-                id: "check grade early",
-                gloss: "a check has no verdict on this commit yet: running, skipped or cancelled",
-                class: "Not an answer, and so never a pass: a run still in flight, or one that \
-completed without judging anything. A skipped or cancelled run cannot be waited out, since \
-nothing further is minted for it; re-read the commit's check-runs once the check has graded it, \
-or give it a fresh run.",
-                routes: &[run(
-                    "task run first",
-                    "batten record query check-runs, for the same commit, then this rule again",
-                )],
-                applicability: crate::verdict::Applicability::Advice,
-            },
-            VendoredVerdict {
-                id: "check read partial",
-                gloss: "the check-runs record is a truncated window, lacks one closing line, or holds a torn row",
-                class: "A part of a commit's check-runs is never judged as all of them. Three \
-shapes are partial. A truncated window: the run that decides a name may sit past the page \
-budget, so raise the query's page budget, or narrow it to the names that carry a verdict, and \
-read it again. A record with no single closing line, or a row torn mid-JSON: something other \
-than the query wrote or cut the family, so no page budget clears it; find that writer, stop it \
-writing the family, and re-mint the record from the query.",
-                routes: &[
-                    read("source read first", "the query row that writes the family"),
-                    read(
-                        "record read first",
-                        "every writer of the family besides its query row",
-                    ),
-                    run(
-                        "task run first",
-                        "batten record query check-runs, for the same commit, then this rule again",
-                    ),
-                ],
-                applicability: crate::verdict::Applicability::Advice,
-            },
-        ],
-        patterns: &[],
-    },
-    Manifest {
-        name: "ci-hygiene",
-        version: 1,
-        modules: &[
-            PresetModule {
-                scope: RuleScope::Tree,
-                // Matches `github.event.pull_request.draft == false` and keys on
-                // documents carrying a `jobs:` mapping — GitHub's workflow
-                // shape. GitLab names jobs at the top level, Buildkite uses
-                // `steps:`, a Jenkinsfile is not YAML: on any of them the set is
-                // empty and every rule here refuses nothing (CLOUD-1625).
-                provider: Some("github-actions"),
-                pointer: "<preset:ci-hygiene>/spend-is-authorised.rego",
-                source: include_str!("policy/presets/ci-hygiene/spend-is-authorised.rego"),
-            },
-            PresetModule {
-                scope: RuleScope::Tree,
-                // `github.event_name`, `github.event.comment.body` and
-                // `github.event.workflow_run` — the same language, same reason.
-                provider: Some("github-actions"),
-                pointer: "<preset:ci-hygiene>/wiring-can-be-reached.rego",
-                source: include_str!("policy/presets/ci-hygiene/wiring-can-be-reached.rego"),
-            },
-        ],
-        verdicts: &[
-            VendoredVerdict {
-                id: "workflow parse unseen",
-                gloss: "a declared workflow would not parse, so no rule here could read it",
-                class: "Could-not-look, and deliberately not spelled the same way as absent. Absent is \
-not-applicable — this tree runs no such workflow — while unparsed means the boundary tried and \
-failed. Every rule in this preset iterates the documents that DID parse, so without this the \
-module reports green over exactly the file it could not read. Its own class rather than the one \
-`mise` raises for the same state, because the registry declares a class once and could not \
-otherwise say which preset raises it.",
-                routes: &[read(
-                    "source read first",
-                    "the workflow that would not parse",
-                )],
-                applicability: crate::verdict::Applicability::Advice,
-            },
-            VendoredVerdict {
-                id: "cache build loose",
-                gloss: "a cache-warming build recompiles and writes nothing on every run",
-                class: "A build that compiles to fill a cache and runs nothing judges nothing, which is \
-why it is exempt from parity rules — and that exemption is what makes it easy to leave running \
-for nothing. Measured: two cache entries carrying the same key across five merges, each cycle \
-compiling for ~145s and saving nothing, because the restore skips saving when the key already \
-exists. One condition reading the restore's hit flag is the whole fix.",
-                routes: &[read("source read first", "the compile step")],
-                applicability: crate::verdict::Applicability::Advice,
-            },
-            VendoredVerdict {
-                id: "cache name unknown",
-                gloss: "the cache guard names a step that does not exist, so it admits every run",
-                class: "The other direction of the same defect, and it has the same symptom with no \
-signal. If the action stops emitting the hit flag the expression is empty, the guard holds, and \
-the compile runs — wasteful, but visible in the bill. If the step id is dropped or renamed while \
-the guard keeps naming it, the expression is ALSO empty and the build silently reverts to \
-compiling every time. So the class names both halves: the guard must be present, and the step it \
-reads must exist.",
-                routes: &[read("source read first", "the restore step")],
-                applicability: crate::verdict::Applicability::Advice,
-            },
-            VendoredVerdict {
-                id: "event bind loose",
-                gloss: "a comment predicate fires from anywhere in a body anyone can write",
-                class: "An unanchored substring test fires from mid-sentence, from inside backticks, from \
-a quoted block. That makes the repository's own writing ABOUT a trigger an invocation of it, and \
-every artifact that has to name the token in order to be about it a live round. The class is the \
-unanchored read of a body anyone can write, not the one token read that way.",
-                routes: &[read("source read first", "the job condition")],
-                applicability: crate::verdict::Applicability::Advice,
-            },
-            VendoredVerdict {
-                id: "event reach dead",
-                gloss: "a declared trigger starts a run in which every job skips",
-                class: "The trigger exists and does nothing: the run list shows a run, and only the job's \
-conclusion says it did not happen. Measured on one lane where a manual trigger was added so it \
-could be exercised without waiting on a late cron, and every job's condition still admitted only \
-the two original events. Judged only where a condition MENTIONS the event name at all, since a \
-workflow that does not discriminate by event answers for every trigger it declares.",
-                routes: &[read("source read first", "the job conditions")],
-                applicability: crate::verdict::Applicability::Advice,
-            },
-            VendoredVerdict {
-                id: "input render dropped",
-                gloss: "an unquoted comment truncates a value before it ever reaches the forge",
-                class: "YAML opens a comment at an unquoted space-hash, so a value carrying an \
-interpolation after one parses to the bare text before it and the rest is discarded. Measured: \
-one workflow carried exactly that for a day and 30 consecutive runs reported a title equal to the \
-workflow name, so a caller keying on the interpolated value could never match. Linters pass over \
-the line because a comment is legal YAML, and review reads it as the thing it was meant to be. \
-Read pre-parse, because the parse is what destroys the evidence. Quoting the value is the fix.",
-                routes: &[read("source read first", "the truncated line")],
-                applicability: crate::verdict::Applicability::Advice,
-            },
-            VendoredVerdict {
-                id: "job require unseen",
-                gloss: "a fan-in enumerates its own dependencies and has gone stale",
-                class: "Branch protection points at one aggregating job so that adding a leg never needs \
-a ruleset change — which only holds if that job's assertion follows its dependency list by \
-itself. Measured: a fan-in enumerated three of its four dependencies, so a red fourth left green \
-the one check the host requires. A set-wide predicate cannot go stale, because it names nothing.",
-                routes: &[read("source read first", "the fan-in job")],
-                applicability: crate::verdict::Applicability::Advice,
-            },
-            VendoredVerdict {
-                id: "job run early",
-                gloss: "a job spends a runner on a pull request still being verified locally",
-                class: "A draft says the author is still verifying locally, and it is also the lever a \
-red run pulls: a lander that re-drafts stops further spend while the failure is diagnosed. A \
-single job missing the guard defeats both, and the run it buys is one nobody reads. Measured on \
-one repository: a workflow triggered by any pull request touching a workflow file spent a runner \
-on every push to a draft for its whole life, and re-drafting did not close the tap.",
-                routes: &[read("source read first", "the job's condition")],
-                applicability: crate::verdict::Applicability::Advice,
-            },
-            VendoredVerdict {
-                id: "job start same",
-                gloss: "two scheduled workflows contend for the same runners at the same minute",
-                class: "Every scheduled workflow's header tends to claim a staggered slot and nothing \
-checks it, so two pairs drifted onto the same minute and the second pair landed after the first \
-was found. Compared as LITERAL expressions rather than firing times: an every-30-minutes \
-schedule genuinely overlaps every hourly slot, and flagging that would make the class fire \
-forever on a workflow doing nothing wrong.",
-                routes: &[read("source read first", "the schedule trigger")],
-                applicability: crate::verdict::Applicability::Advice,
-            },
-            VendoredVerdict {
-                id: "merge run early",
-                gloss: "a comment-triggered merge delegates the draft question to the ruleset",
-                class: "A draft head grades no checks where every pull-request workflow is draft-gated, \
-and a branch ruleset admits that empty set as satisfying required-checks-green. So a merge path \
-that never reads the draft state has no draft check at all, and can advance the trunk to a commit \
-CI never ran on. Deciding not to ask is not the same as asking.",
-                routes: &[read("source read first", "the merge job")],
-                applicability: crate::verdict::Applicability::Advice,
-            },
-            VendoredVerdict {
-                id: "review watch missing",
-                gloss: "a draft-gated workflow can never be superseded once it skips",
-                class: "Omitting `types:` defaults to `[opened, synchronize, reopened]`. Where the jobs \
-are draft-gated, a pull request created as a draft mints a skipped run on `opened`, and with no \
-`ready_for_review` there is no event left that could replace it — a waiter correctly refuses to \
-read a skip as an answer and polls forever. Measured as a deadlock across two pull requests at \
-once, both fully green but for one such name.",
-                routes: &[read(
-                    "source read first",
-                    "the pull_request trigger's types",
-                )],
-                applicability: crate::verdict::Applicability::Advice,
-            },
-            VendoredVerdict {
-                id: "workflow declare missing",
-                gloss: "a workflow can have two runs racing at all",
-                class: "Superseding is the pull-request half of this and is not the whole of it: a \
-comment- or schedule-triggered workflow never reaches that guard, so the property that matters \
-off the landing path — that a workflow cannot race itself — reaches none of them. Measured: N \
-concurrent comment invocations ran N concurrent attempts to advance a trunk branch, at 245 \
-refusals against 6 merges in half an hour. A scheduled workflow must NOT cancel its own previous \
-tick, so declaring a group is all this asks.",
-                routes: &[read("source read first", "the workflow")],
-                applicability: crate::verdict::Applicability::Advice,
-            },
-            VendoredVerdict {
-                id: "workflow run loose",
-                gloss: "a branch scope written where filtering is already too late",
-                class: "A job condition is evaluated AFTER the run exists, so a branch scope expressed \
-only there creates a run and then skips it. Measured on one lane: 1131 inserted-and-skipped runs \
-in 25 hours — no runner minutes, which is why it survived, but 46% of every run in the \
-repository, enough that paginating the run list stops being stable. The filter belongs on the \
-trigger, where it is free.",
-                routes: &[read("source read first", "the workflow_run trigger")],
-                applicability: crate::verdict::Applicability::Advice,
-            },
-            VendoredVerdict {
-                id: "workflow run twice",
-                gloss: "a pull-request workflow pays out a run its own next push made obsolete",
-                class: "A landing lap rebases and pushes. Without `cancel-in-progress` the superseded \
-commit's run is billed in full for a verdict nobody will read, and a lander loses the ability to \
-cancel a doomed run by simply pushing the next one. Declaring the group is not enough — the \
-value is what does the work, and it is a boolean rather than the string `true`.",
-                routes: &[read(
-                    "source read first",
-                    "the workflow's concurrency block",
-                )],
-                applicability: crate::verdict::Applicability::Advice,
-            },
-        ],
-        patterns: &[],
-    },
-    // CLOUD-843. What the CI signal says about a landing loop over a window: it
-    // stays linear (one matrix per landing, run to green), and a required job's
-    // failure reaches a verdict. The records are `batten record divergence`'s and
-    // `batten record nonverdict`'s, under the families those verbs name; every
-    // consumer fact — workflows, roster, fan-in, verdict spellings — was spent by
-    // the producer, so nothing here names one. Two modules, ONE enabling row: a
-    // consumer that runs only one producer has only one family, and the other
-    // module is silent.
-    Manifest {
-        name: "ci-signal",
-        version: 1,
-        modules: &[
-            PresetModule {
-                scope: RuleScope::Tree,
-                // Reads a record of counts, not a workflow document: no provider's
-                // expression language is in it.
-                provider: None,
-                pointer: "<preset:ci-signal>/landing-stays-linear.rego",
-                source: include_str!("policy/presets/ci-signal/landing-stays-linear.rego"),
-            },
-            PresetModule {
-                scope: RuleScope::Tree,
-                provider: None,
-                pointer: "<preset:ci-signal>/required-failures-reach-a-verdict.rego",
-                source: include_str!(
-                    "policy/presets/ci-signal/required-failures-reach-a-verdict.rego"
-                ),
-            },
-            PresetModule {
-                scope: RuleScope::Tree,
-                // A job key two spaces under `jobs:`, a job-level `timeout-minutes:`
-                // at four, and a matrix leg reported as `<key> (<axis>)` are GitHub
-                // Actions' grammar and its jobs endpoint's naming. Another provider's
-                // documents carry no `jobs:` mapping in that shape, so the module
-                // would read no budget and report a clean tree it never read
-                // (CLOUD-1625).
-                provider: Some("github-actions"),
-                pointer: "<preset:ci-signal>/timeout-tracks-its-measurement.rego",
-                source: include_str!(
-                    "policy/presets/ci-signal/timeout-tracks-its-measurement.rego"
-                ),
-            },
-        ],
-        verdicts: &[
-            VendoredVerdict {
-                id: "lane read partial",
-                gloss: "the measurement could not read part of its window, so a green verdict would cover \
-less than it claims",
-                class: "A runs endpoint that caps pagination while still reporting the true total lets a \
-walk that stops on a short page read a PREFIX and look like a clean finish. Measured: 1000 of 1446 \
-runs collected, reporting zero fast-forward refusals over a window carrying 598. Narrow the window.",
-                routes: &[run(
-                    "task run first",
-                    "batten record divergence --ci-workflow <file> --land-workflow <file>",
-                )],
-                applicability: crate::verdict::Applicability::Advice,
-            },
-            VendoredVerdict {
-                id: "lane count spent",
-                gloss: "the landing loop bought more CI matrices per landing than its budget",
-                class: "The ideal is 1.00 — one matrix, run to green, landed. The budget is 2.00 because \
-the second run is a lease precondition cancelling an unauthorised matrix, which is the mechanism \
-working.",
-                routes: &[run(
-                    "task run first",
-                    "batten record divergence --ci-workflow <file> --land-workflow <file>",
-                )],
-                applicability: crate::verdict::Applicability::Advice,
-            },
-            VendoredVerdict {
-                id: "lane grade red",
-                gloss: "red CI runs per landing are over budget",
-                class: "A red run means local verification was skipped or disagreed with CI, and each one \
-spent a full matrix to say so.",
-                routes: &[run(
-                    "task run first",
-                    "batten record divergence --ci-workflow <file> --land-workflow <file>",
-                )],
-                applicability: crate::verdict::Applicability::Advice,
-            },
-            VendoredVerdict {
-                id: "lane reach late",
-                gloss: "cancelled runs have a median lifetime past the budget",
-                class: "LATENCY, NEVER COUNT. An early cancellation is a lease precondition stopping an \
-unauthorised matrix for ~20 runner-seconds instead of billing ~500; a late one is a matrix billed \
-for a verdict nobody reads.",
-                routes: &[run(
-                    "task run first",
-                    "batten record divergence --ci-workflow <file> --land-workflow <file>",
-                )],
-                applicability: crate::verdict::Applicability::Advice,
-            },
-            VendoredVerdict {
-                id: "lease guard dropped",
-                gloss: "more CI matrices ran concurrently than the lease admits",
-                class: "Landing is serialised behind a lease, so concurrency above the admitted-successor \
-bound means something is spending CI without holding it.",
-                routes: &[run(
-                    "task run first",
-                    "batten record divergence --ci-workflow <file> --land-workflow <file>",
-                )],
-                applicability: crate::verdict::Applicability::Advice,
-            },
-            VendoredVerdict {
-                id: "lane measure late",
-                gloss: "runs waited past the budget at p90 before starting",
-                class: "The runner pool saturating, which is a different defect from contention and must \
-not be read as one.",
-                routes: &[run(
-                    "task run first",
-                    "batten record divergence --ci-workflow <file> --land-workflow <file>",
-                )],
-                applicability: crate::verdict::Applicability::Advice,
-            },
-            VendoredVerdict {
-                id: "job measure late",
-                gloss: "individual matrix legs waited past the budget at p90 before starting",
-                class: "A run's own figure is its FIRST job's start, so this is the one that sees a leg \
-queueing behind its siblings — the two disagreeing is what tells a wide matrix apart from a \
-saturated pool.",
-                routes: &[run(
-                    "task run first",
-                    "batten record divergence --ci-workflow <file> --land-workflow <file>",
-                )],
-                applicability: crate::verdict::Applicability::Advice,
-            },
-            VendoredVerdict {
-                id: "branch reach stale",
-                gloss: "the fast-forward bot refused a branch that had gone behind",
-                class: "A refusal means the branch went behind before the bot answered — the thundering \
-herd a landing lease exists to remove (243:5 before, 0:5 after). Any refusal at all is a \
-divergence, so the budget is zero.",
-                routes: &[run(
-                    "task run first",
-                    "batten record divergence --ci-workflow <file> --land-workflow <file>",
-                )],
-                applicability: crate::verdict::Applicability::Advice,
-            },
-            VendoredVerdict {
-                id: "job read partial",
-                gloss: "the scan could not read part of its window, so a green verdict would cover less \
-than it claims",
-                class: "A run that measured two of three paths and reported green over the two is exactly \
-the partial-coverage false green. It fires whatever the count is, because a budget met over part \
-of a window is a budget met over nothing in particular. A persistent read failure is a token or \
-rate-limit problem, not a clean window.",
-                routes: &[run(
-                    "task run first",
-                    "batten record nonverdict --required-check <job> --verdict-step <prefix>",
-                )],
-                applicability: crate::verdict::Applicability::Advice,
-            },
-            VendoredVerdict {
-                id: "job answer missing",
-                gloss: "a required job failed before reaching any verdict-bearing step",
-                class: "The run spent its minutes, redded the branch, and answered nothing. Every \
-occurrence then costs a human or an agent the time to discover it was never a verdict at all — \
-measured as an agent sent to reproduce a lint failure that passed locally because the lint never \
-ran.",
-                routes: &[run(
-                    "task run first",
-                    "batten record nonverdict --required-check <job> --verdict-step <prefix>",
-                )],
-                applicability: crate::verdict::Applicability::Advice,
-            },
-            VendoredVerdict {
-                id: "bound pin loose",
-                gloss: "a job's declared timeout sits well above what its measurement justifies",
-                class: "A budget is a ceiling rather than a target, so headroom is correct and a slack \
-allowance keeps this off a job that merely got a little faster. Past that allowance the number has \
-gone slack, which is the direction a report that only complained about tightness would let rot \
-upward forever. Nothing is broken and no branch is at fault: re-derive the number and commit the \
-new comment.",
-                routes: &[run(
-                    "task run first",
-                    "the writer the `drift-runs` and `drift-jobs` `[[record]]` rows name, \
-                     which re-takes the run window before it re-walks the jobs",
-                )],
-                applicability: crate::verdict::Applicability::Advice,
-            },
-            VendoredVerdict {
-                id: "bound pin wrong",
-                gloss: "a job's measurement has outgrown its declared timeout",
-                class: "The p95 of recent successful runs, times the headroom multiplier, is already \
-above the committed budget. Raise it before it starts failing healthy runs — this is the direction \
-that turns into a red job nobody caused.",
-                routes: &[run(
-                    "task run first",
-                    "the writer the `drift-runs` and `drift-jobs` `[[record]]` rows name, \
-                     which re-takes the run window before it re-walks the jobs",
-                )],
-                applicability: crate::verdict::Applicability::Advice,
-            },
-            VendoredVerdict {
-                id: "bound pin stale",
-                gloss: "a dated debt entry now has a usable sample and can become a measured budget",
-                class: "The prompt, never the conversion. A bot re-baselining the number it is supposed \
-to defend is the one move a budget exists to forbid, so this reports that the debt is now \
-convertible and a deliberate commit does the converting.",
-                routes: &[run(
-                    "task run first",
-                    "the writer the `drift-runs` and `drift-jobs` `[[record]]` rows name, \
-                     which re-takes the run window before it re-walks the jobs",
-                )],
-                applicability: crate::verdict::Applicability::Advice,
-            },
-            VendoredVerdict {
-                id: "bound measure partial",
-                gloss: "too few successful runs to characterise a job, or a measurement that did not \
-close, so no budget is proposed",
-                class: "Below the minimum a job is uncharacterised rather than fast, and saying so is \
-itself the useful signal: jobs that run weekly or on release have a handful of runs in any window, \
-so a naive percentile would compute a confident value from two samples and propose tightening a \
-release job on it. A family present without exactly one closing line was torn by something other \
-than its producer, which writes whole or removes, and reads the same way.",
-                routes: &[run(
-                    "task run first",
-                    "the writer the `drift-runs` and `drift-jobs` `[[record]]` rows name, \
-                     which re-takes the run window before it re-walks the jobs",
-                )],
-                applicability: crate::verdict::Applicability::Advice,
-            },
-        ],
-        // Every module writes the grammar it cites inline, for the reason
-        // `Manifest::patterns` gives: `whole-number` for the two record readers,
-        // GitHub Actions' job and timeout lines for the budget reader.
-        patterns: &[
-            "whole-number",
-            "workflow-job-key",
-            "workflow-top-level-key",
-            "job-timeout-line",
-            "timeout-budget-grandfathered",
-        ],
-    },
-    // CLOUD-1949. The host never halts on a prompt: in plan mode a call reads or
-    // is refused, and a read — or a `batten` lifecycle verb outside plan mode —
-    // is pre-approved. Claude Code's tool names and plan-file path are the
-    // host's vocabulary, which a vendor preset may carry and the core may not.
-    //
-    // VERSION 2 (CLOUD-843): the preset gained its TREE half, whether the host
-    // honours the committed MCP permission rules at all. The settings file, the
-    // project file and the rule grammar are the same host vocabulary; the
-    // coverage it reads is the consumer's own authority, found by shape.
-    //
-    // VERSION 3 (CLOUD-2157): a backgrounded call that names no timeout is
-    // rewritten to the host's maximum.
-    Manifest {
-        name: "claude-code-cloud",
-        version: 3,
-        modules: &[
-            PresetModule {
-                scope: RuleScope::Tree,
-                provider: None,
-                pointer: "<preset:claude-code-cloud>/mcp-grants-are-honoured.rego",
-                source: include_str!(
-                    "policy/presets/claude-code-cloud/mcp-grants-are-honoured.rego"
-                ),
-            },
-            PresetModule {
-                scope: RuleScope::MediatedCall,
-                provider: None,
-                pointer: "<preset:claude-code-cloud>/allowed-call-is-preapproved.rego",
-                source: include_str!(
-                    "policy/presets/claude-code-cloud/allowed-call-is-preapproved.rego"
-                ),
-            },
-            PresetModule {
-                scope: RuleScope::MediatedCall,
-                provider: None,
-                pointer: "<preset:claude-code-cloud>/dispatch-is-preapproved.rego",
-                source: include_str!(
-                    "policy/presets/claude-code-cloud/dispatch-is-preapproved.rego"
-                ),
-            },
-            PresetModule {
-                scope: RuleScope::MediatedCall,
-                provider: None,
-                pointer: "<preset:claude-code-cloud>/subagent-is-preapproved.rego",
-                source: include_str!(
-                    "policy/presets/claude-code-cloud/subagent-is-preapproved.rego"
-                ),
-            },
-            PresetModule {
-                scope: RuleScope::MediatedCall,
-                provider: None,
-                pointer: "<preset:claude-code-cloud>/unwatch-is-preapproved.rego",
-                source: include_str!(
-                    "policy/presets/claude-code-cloud/unwatch-is-preapproved.rego"
-                ),
-            },
-            PresetModule {
-                scope: RuleScope::MediatedCall,
-                provider: None,
-                pointer: "<preset:claude-code-cloud>/plan-mode-refuses-writes.rego",
-                source: include_str!(
-                    "policy/presets/claude-code-cloud/plan-mode-refuses-writes.rego"
-                ),
-            },
-            PresetModule {
-                scope: RuleScope::MediatedCall,
-                provider: None,
-                pointer: "<preset:claude-code-cloud>/write-is-preapproved.rego",
-                source: include_str!("policy/presets/claude-code-cloud/write-is-preapproved.rego"),
-            },
-            // CLOUD-2157: a backgrounded call that names no timeout runs with
-            // the host's maximum, carried on the grant above it.
-            PresetModule {
-                scope: RuleScope::MediatedCall,
-                provider: None,
-                pointer: "<preset:claude-code-cloud>/background-timeout-is-maximal.rego",
-                source: include_str!(
-                    "policy/presets/claude-code-cloud/background-timeout-is-maximal.rego"
-                ),
-            },
-            PresetModule {
-                scope: RuleScope::MediatedCall,
-                provider: None,
-                pointer: "<preset:claude-code-cloud>/read-only-is-preapproved.rego",
-                source: include_str!(
-                    "policy/presets/claude-code-cloud/read-only-is-preapproved.rego"
-                ),
-            },
-            // LAST, so a call a narrower module also grants is named by that
-            // module: the first grant found is the one the host is told.
-            PresetModule {
-                scope: RuleScope::MediatedCall,
-                provider: None,
-                pointer: "<preset:claude-code-cloud>/auto-mode-is-preapproved.rego",
-                source: include_str!(
-                    "policy/presets/claude-code-cloud/auto-mode-is-preapproved.rego"
-                ),
-            },
-        ],
-        verdicts: &[
-            VendoredVerdict {
-                id: "plan write refused",
-                gloss: "a call that is not a read was made while the host is in plan mode",
-                class: "Plan mode is a promise that nothing changes until the plan is approved. The \
-host enforces it by asking the operator, and a session halted on a prompt is the failure this \
-preset exists to remove — so the call is refused instead, and nobody has to answer anything. A \
-read, the plan file itself, and leaving plan mode are never refused.",
-                routes: &[run("plan run first", "ExitPlanMode, then make the call")],
-                applicability: crate::verdict::Applicability::Advice,
-            },
-            VendoredVerdict {
-                id: "grant spelling wrong",
-                gloss: "an MCP allow rule the host skips, so it grants nothing",
-                class: "The host matches an MCP permission rule by server name, and a glob in the \
-server segment, or a bare `*`, is not a name: the rule is skipped with a warning and grants \
-nothing. Its only symptom is an approval prompt on every call, which reads as harness behaviour \
-rather than as a settings bug.",
-                routes: &[run(
-                    "rule fix first",
-                    "name the server literally in the host's settings file (`mcp__<server>` or \
-`mcp__<server>__<tool>`); a tool-segment glob after a literal server is fine",
-                )],
-                applicability: crate::verdict::Applicability::Advice,
-            },
-            VendoredVerdict {
-                id: "grant name missing",
-                gloss: "an enabled MCP server no allow rule names, so every call to it prompts",
-                class: "`enabledMcpjsonServers` turns a project server on, and turning it on grants \
-none of its tools. A server enabled with no allow rule naming it is attached and unusable \
-unattended: every call stops for a human. Measured on one consumer, whose code-navigation server \
-shipped exactly that way.",
-                routes: &[run(
-                    "grant add first",
-                    "add an allow rule naming the server in the host's settings file, or stop \
-enabling it",
-                )],
-                applicability: crate::verdict::Applicability::Advice,
-            },
-            VendoredVerdict {
-                id: "connector deny loose",
-                gloss: "a deny spelled with one host-supplied server name, which the host renames away",
-                class: "A host-supplied connector's exposed name is chosen per registration \
-episode — the same connector was measured under three prefixes. A deny rule naming one of those \
-spellings reads as a prohibition and enforces nothing the moment the connector comes back under \
-another. What survives the rename is a `mediated_call` row keyed on the tool's own name, which \
-matches the tool segment whatever the server is called.",
-                routes: &[run(
-                    "rule cover first",
-                    "add a `mediated_call` `[[rule]]` whose `tool` is the denied tool's suffix, \
-so the refusal holds under any server spelling",
-                )],
-                applicability: crate::verdict::Applicability::Advice,
-            },
-            VendoredVerdict {
-                id: "grant read unread",
-                gloss: "a permission or project file was declared and would not parse, so nothing in it was judged",
-                class: "Could-not-look, and never a clean tree. An absent settings or project file \
-is a repository with nothing to check; one that exists and will not parse is a file the gate \
-tried to read and could not, and reading that as \"no defects\" is the vacuous pass every \
-could-not-look arm exists to refuse.",
-                routes: &[run(
-                    "path fix first",
-                    "make the named file parse as JSON again, then re-run `batten check`",
-                )],
-                applicability: crate::verdict::Applicability::Advice,
-            },
-        ],
-        patterns: &[],
-    },
-    Manifest {
-        name: "commit-hygiene",
-        version: 1,
-        modules: &[PresetModule {
-            scope: RuleScope::MediatedCall,
-            provider: None,
-            pointer: "<preset:commit-hygiene>/no-empty-commit.rego",
-            source: include_str!("policy/presets/commit-hygiene/no-empty-commit.rego"),
-        }],
-        verdicts: &[VendoredVerdict {
-            id: "commit ship empty",
-            gloss: "an empty commit records that somebody wanted a new SHA",
-            class: "A commit records a change. The reachable use of an empty one is kicking a \
-pipeline, which spends a run to re-ask a question the previous run already answered and \
-leaves a commit in the history no reader can act on. If the goal is a fresh run, re-run \
-the pipeline.",
-            routes: &[run("task run first", "re-run the pipeline")],
-            applicability: crate::verdict::Applicability::Advice,
-        }],
-        patterns: &[],
-    },
-    Manifest {
-        name: "landing-loop",
-        version: 1,
-        modules: &[
-            PresetModule {
-                scope: RuleScope::Tree,
-                provider: None,
-                pointer: "<preset:landing-loop>/graded-head-is-not-regraded.rego",
-                source: include_str!(
-                    "policy/presets/landing-loop/graded-head-is-not-regraded.rego"
-                ),
-            },
-            PresetModule {
-                scope: RuleScope::Tree,
-                provider: None,
-                pointer: "<preset:landing-loop>/already-landed-work-is-not-relanded.rego",
-                source: include_str!(
-                    "policy/presets/landing-loop/already-landed-work-is-not-relanded.rego"
-                ),
-            },
-            PresetModule {
-                scope: RuleScope::Tree,
-                provider: None,
-                pointer: "<preset:landing-loop>/lease-authorises-the-branch.rego",
-                source: include_str!(
-                    "policy/presets/landing-loop/lease-authorises-the-branch.rego"
-                ),
-            },
-            PresetModule {
-                scope: RuleScope::Tree,
-                provider: None,
-                pointer: "<preset:landing-loop>/rebase-conflict-stops-the-lap.rego",
-                source: include_str!(
-                    "policy/presets/landing-loop/rebase-conflict-stops-the-lap.rego"
-                ),
-            },
-            PresetModule {
-                scope: RuleScope::Tree,
-                provider: None,
-                pointer: "<preset:landing-loop>/lap-waits-on-one-answer.rego",
-                source: include_str!("policy/presets/landing-loop/lap-waits-on-one-answer.rego"),
-            },
-        ],
-        verdicts: &[
-            VendoredVerdict {
-                id: "head grade twice",
-                gloss: "the forge already judged this commit and a second run would re-ask it",
-                class: "A commit that has not changed cannot get a different verdict, so a second \
-run over it buys an answer that is already recorded and spends the metered tier to do it. \
-Measured on one consumer's landing bot over a half hour: 400 runs, 248 executed, against 5 \
-merges. Read the recorded verdict rather than asking for it again; if the intent was to \
-judge different work, the commit is what has to change.",
-                routes: &[
-                    read("source read first", "the forge record for this commit"),
-                    // THE PRECONDITION IS THE WHOLE OF THIS ROUTE. A re-grade is
-                    // legitimate when the recorded verdict is about the RUNNER rather
-                    // than about the commit — a lost agent, an evicted node, an
-                    // infrastructure fault — because that verdict answers a question
-                    // nobody asked. It is not legitimate because the answer was
-                    // unwelcome, which is the case this condition exists to exclude.
-                    admit(
-                        "path admit first",
-                        "the recorded verdict is about a runner fault rather than about this commit",
-                    ),
-                ],
-                applicability: crate::verdict::Applicability::Advice,
-            },
-            VendoredVerdict {
-                id: "lease grant other",
-                gloss: "a live landing lease names a different branch, and no reservation names this one",
-                class: "A landing lease is how a fleet keeps two branches from buying overlapping CI for \
-a trunk only one of them can fast-forward onto. This branch is neither the holder nor the \
-successor admitted behind it, so a matrix spent now is a matrix the holder's merge invalidates. \
-Wait for the lease to lapse or be released, or reserve the slot behind the holder — the loop that \
-does both lives outside the engine, which only reads the answer. Every reading this refusal \
-cannot take ALLOWS: an unreadable lease stops every job in the fleet, where waving one matrix \
-through costs one matrix.",
-                routes: &[
-                    read(
-                        "lease read first",
-                        "the lease grading recorded for this branch",
-                    ),
-                    // The wedged holder, and it is narrow on purpose. The lease grades
-                    // LIVENESS rather than PROGRESS (CLOUD-499), so a holder that beats
-                    // steadily while making none holds forever and starves the fleet.
-                    // That is the case this admits, and it is not "the wait was
-                    // inconvenient" — a holder that is merely slow is the mechanism
-                    // working.
-                    admit(
-                        "lease admit first",
-                        "the holder is wedged rather than slow — it is beating without advancing, so waiting for a lapse it keeps renewing starves the fleet indefinitely",
-                    ),
-                ],
-                applicability: crate::verdict::Applicability::Advice,
-            },
-            VendoredVerdict {
-                id: "patch ship twice",
-                gloss: "the target already carries this branch's changes, so landing them again buys nothing",
-                class: "A landing attempt over work the target already has runs a matrix, holds the \
-fleet's landing slot while it does, and merges a no-op or a conflict. The answer is decided by \
-PATCH IDENTITY rather than by reachability, which is what makes it trustworthy here: a rebased, \
-squash-merged or cherry-picked branch leaves the same change on the target under a different \
-commit with no ancestry path back, and on a fast-forward trunk that is the ordinary way work \
-lands. Close the branch, or rebase onto the target and see what is genuinely left.",
-                routes: &[
-                    read("record read first", "the landing verdict for this target"),
-                    // The one legitimate re-land, and it is narrow on purpose. Patch
-                    // identity answers about CONTENT, so deliberately re-applying a
-                    // change the target once carried and later reverted is
-                    // indistinguishable from never having landed it — the same bytes,
-                    // arriving for a different reason. That is the case this admits, and
-                    // it is not "the answer was inconvenient".
-                    admit(
-                        "patch admit first",
-                        "the change is being deliberately re-applied after the target reverted it, so identical content is the intent rather than a duplicate",
-                    ),
-                ],
-                applicability: crate::verdict::Applicability::Advice,
-            },
-            VendoredVerdict {
-                id: "replay halt conflict",
-                gloss: "the lap's replay conflicted, so the head it would push was never completed",
-                class: "Landing is a loop and one step of it needs a person: a replay that \
-conflicts is two authors having changed the same lines, and choosing between them is a \
-judgement no gate makes. What is refused is not the conflict — conflicts are the mechanism \
-working, and frequent laps are what keep each one to a single resolvable increment — but a \
-lap CONTINUING past one, which pushes, spends a matrix or fast-forwards a head whose replay \
-never finished. A merge strategy makes that outcome reachable and reports success while \
-doing it, which is why the wrong move here is the one reached for to make the loop always \
-succeed. Resolve the conflict, then lap again.",
-                routes: &[
-                    read("record read first", "the replay outcome this lap recorded"),
-                    // The one legitimate continuation, and it is narrow on purpose.
-                    // A conflict a LATER lap replayed cleanly is already resolved and
-                    // the module reads the last line for exactly that reason — so
-                    // this admits only the case where the resolution happened outside
-                    // the loop's own record, never "the conflict was inconvenient".
-                    admit(
-                        "replay admit first",
-                        "the conflict was resolved outside this lap's record, so the head being pushed is a completed replay rather than a half-applied one",
-                    ),
-                ],
-                applicability: crate::verdict::Applicability::Advice,
-            },
-            VendoredVerdict {
-                id: "wait read both",
-                gloss: "the lap read an answer from both sides of a race the design gives one answer",
-                class: "A landing lap's wait is a race: it asks whether the commit is green and \
-whether the commit is still landable at once, and whichever answers first decides while the \
-loser's answer is VOIDED. That is the economy rather than a detail — the moment the base \
-advances, the run in flight is spend for a verdict nobody will read, and the next lap's push \
-supersedes it through the forge's own cancel-in-progress, which is why nothing cancels it by \
-hand. A lap that reads both sides has thrown that away, and it still lands green work most of \
-the time, so no test over the happy path can see it. Act on the answer that arrived first and \
-abandon the other unread.",
-                routes: &[
-                    read("record read first", "the wait outcomes this lap recorded"),
-                    // The narrow legitimate case, and it is about the RECORD
-                    // rather than about the wait: a lap resumed after a reap can
-                    // carry the previous attempt's answer beside its own, which
-                    // is two answers with only one race behind them. It is not
-                    // "both answers were interesting".
-                    admit(
-                        "wait admit first",
-                        "the second answer belongs to an earlier attempt this lap resumed rather than to a second arm of the same race",
-                    ),
-                ],
-                applicability: crate::verdict::Applicability::Advice,
-            },
-        ],
-        patterns: &[],
-    },
-    // The task runner's own receipt, read as an alias table (CLOUD-946).
-    //
-    // BESIDE `pinned-toolchain` RATHER THAN INSIDE IT, and the difference is the
-    // affordance rather than the subject. That preset asks whether a program was
-    // reached around the pin and can only name the program; this one reads a
-    // receipt mapping task NAME to argv, so its refusal names the task to run
-    // instead. A caller told a program was reached loosely has to go and find
-    // which task wraps it; a caller told the task's name has the remedy in the
-    // refusal.
-    //
-    // NO PATTERNS, and that is honest rather than an omission: the predicate is
-    // set membership over words the boundary already parsed, so there is no
-    // concept here with a spelling. `.claude/rules/policy-modules.md`'s preset
-    // exemption is therefore unexercised — nothing is inline because nothing is
-    // a regex.
-    Manifest {
-        name: "mise",
-        version: 2,
-        // TWO SURFACES, ONE CONCERN (CLOUD-1672). This is the manifest that made
-        // the per-module scope necessary, and the reason is that "mise" is a
-        // subject rather than a surface. Whether an agent reproduces a task's
-        // argv instead of running the task is a question about a CALL. Whether
-        // the toolchain a workflow installs is the one the tree pins is a
-        // question about the TREE. Splitting them into two presets would make a
-        // consumer enable two things to get one concern, and would put the split
-        // where the engine's old limit was rather than where the subject's is.
-        modules: &[
-            PresetModule {
-                scope: RuleScope::MediatedCall,
-                // Decides whether an agent reproduced a task's argv. No CI
-                // provider is involved, so it applies everywhere.
-                provider: None,
-                pointer: "<preset:mise>/task-over-executable.rego",
-                source: include_str!("policy/presets/mise/task-over-executable.rego"),
-            },
-            PresetModule {
-                scope: RuleScope::Tree,
-                // **THIS PAIR IS WHY `provider` IS PER MODULE** (CLOUD-1625).
-                // This one matches a step's `uses: jdx/mise-action@<sha>`, so it
-                // reads one provider's workflow language, while the sibling
-                // above cares about no provider at all. A
-                // manifest-level field would have to call the whole `mise`
-                // preset GitHub-specific and switch off a module that works on
-                // every host — the exact mistake CLOUD-1672 corrected for
-                // `scope`, one subject later.
-                provider: Some("github-actions"),
-                pointer: "<preset:mise>/action-version-matches-the-pin.rego",
-                source: include_str!("policy/presets/mise/action-version-matches-the-pin.rego"),
-            },
-        ],
-        verdicts: &[
-            VendoredVerdict {
-                id: "task reach loose",
-                gloss: "a task's own program was reached directly rather than through the task",
-                class: "A project that defines a task has already decided how that work is \
-invoked — which program, which arguments, and which environment composes around it. \
-Running the task's program directly reproduces the argv and drops the rest, and the \
-failure that produces looks like the failure being investigated rather than like a wrong \
-invocation. The refusal names the task because the mapping it reads is task to argv: the \
-remedy is in the finding rather than a file the reader has to go and search.",
-                routes: &[run(
-                    "task run first",
-                    "the task the refusal names, through the task runner",
-                )],
-                applicability: crate::verdict::Applicability::Advice,
-            },
-            VendoredVerdict {
-                id: "job pin other",
-                gloss: "a job installs a toolchain version that disagrees with the one the tree pins",
-                class: "A pinned toolchain is pinned so that every machine running this commit runs the \
-same one. The action that installs it in CI resolves its own version independently, so a \
-repository can declare one toolchain and run another with nothing comparing them — two \
-authorities on one number, which is the disagreement pinning exists to remove. Measured: a \
-consumer pinned its toolchain by version and digest, the action resolved a newer release whose \
-asset could not be fetched, and every job of every workflow died in the install step inside \
-eleven seconds; the release that followed published its schema and none of its binaries. The \
-pin was committed and correct throughout and simply did not reach that layer. The remedy is to \
-declare the version at the step so the install is the pin rather than a resolution.",
-                routes: &[read("pin read first", "the row that pins the tool")],
-                applicability: crate::verdict::Applicability::Advice,
-            },
-            VendoredVerdict {
-                id: "job pin missing",
-                gloss: "a job installs a pinned toolchain without saying which version",
-                class: "The other direction of the same defect, and the one that actually fires, because \
-an absent version reads as a default rather than as a decision. It is not a milder form of a \
-wrong version: it hands the choice to the installer, which makes the toolchain a property of \
-WHEN the job ran instead of what the commit says — so two runs of one commit can differ, and \
-the run that breaks is the one that happened to start after an upstream release. Conditioned on \
-the tool being pinned somewhere in the tree: a project that pins nothing is not asked to match \
-something that does not exist.",
-                routes: &[read("pin read first", "the row that pins the tool")],
-                applicability: crate::verdict::Applicability::Advice,
-            },
-            VendoredVerdict {
-                id: "workflow parse unread",
-                gloss: "a declared workflow would not parse, so nothing could be compared over it",
-                class: "Could-not-look, and it is deliberately not spelled the same way as absent. Absent \
-is not-applicable — there is no such workflow — while unparsed means the boundary tried and \
-failed. A module that iterates only the documents it could read reports green over the file it \
-could not, which is a gate reporting on a surface it never saw.",
-                routes: &[read(
-                    "source read first",
-                    "the workflow that would not parse",
-                )],
-                applicability: crate::verdict::Applicability::Advice,
-            },
-        ],
-        patterns: &[],
-    },
-    Manifest {
-        name: "pinned-toolchain",
-        version: 1,
-        modules: &[
-            PresetModule {
-                scope: RuleScope::MediatedCall,
-                provider: None,
-                pointer: "<preset:pinned-toolchain>/pinned-program-via-the-pin.rego",
-                source: include_str!(
-                    "policy/presets/pinned-toolchain/pinned-program-via-the-pin.rego"
-                ),
-            },
-            PresetModule {
-                scope: RuleScope::MediatedCall,
-                provider: None,
-                pointer: "<preset:pinned-toolchain>/pinned-program-probed-bare.rego",
-                source: include_str!(
-                    "policy/presets/pinned-toolchain/pinned-program-probed-bare.rego"
-                ),
-            },
-        ],
-        verdicts: &[
-            VendoredVerdict {
-                id: "pin reach loose",
-                gloss: "a program the project's pin provides was reached around the pin",
-                class: "The pinned toolchain is what makes one machine's run mean anything about \
-another's, and it supplies an ENVIRONMENT as well as a binary. A program reached around \
-it runs a different version, or the same version without the variables the project sets \
-— and the failure that produces looks like the failure being investigated rather than \
-like a wrong invocation. Measured on one consumer: sixty runs of a test suite died on an \
-unset variable instead of on the assertion, and the report that followed was published \
-as three claims about the tree, all false.",
-                routes: &[run("task run first", "mise exec -- <program>")],
-                applicability: crate::verdict::Applicability::Advice,
-            },
-            // THE PROBE HALF, AND A SEPARATE CLASS ON PURPOSE (CLOUD-1256).
-            //
-            // Not `pin reach loose`: nothing was bypassed. A pin was rendered
-            // INVISIBLE — the probe ran, answered correctly about the bare PATH,
-            // and the caller read the empty answer as "this tool is not installed
-            // here". A class a reader looks up has to name what happened, and
-            // "reached around the pin" describes a different event.
-            VendoredVerdict {
-                id: "pin probe bare",
-                gloss: "a presence probe asked the bare PATH about a program the pin provides",
-                class: "A probe like `command -v` reports what the CURRENT PATH resolves, which is a \
-correct answer to a question the caller did not mean to ask. Nothing a pin provides is on the bare \
-PATH — nor should it be — so for a pinned tool the answer is empty, and empty does not read as \
-\"not on this PATH\", it reads as \"not installed here\". Measured on one consumer: a session probed \
-for a forge client, got nothing, and routed three operations onto the documented last-resort path, \
-where one of them failed outright on a credential that could not perform it. The pinned route then \
-succeeded first try. The probe is not wrong, it is under-scoped, which is why this is advice rather \
-than a refusal — a deny here would refuse a correct shell habit.",
-                routes: &[run(
-                    "probe run first",
-                    "ask the pin instead — its own `which` answers about the toolchain the project \
-declares, and a probe inside the pin's environment is already correct",
-                )],
-                applicability: crate::verdict::Applicability::Advice,
-            },
-        ],
-        patterns: &[],
-    },
-    // CLOUD-843's `release-hygiene`: a published release's checksum manifest
-    // tells the truth about the release. The record is `batten record release`'s,
-    // read by KIND rather than by family name, because the family is the
-    // consumer's to declare. Which assets a release must carry is read off each
-    // consumer's own build workflow, so that half stays in the consumer's module.
-    Manifest {
-        name: "release-hygiene",
-        version: 1,
-        modules: &[PresetModule {
-            scope: RuleScope::Tree,
-            // Reads a record `batten record release` writes; no CI provider's
-            // expression language is involved, so it applies anywhere.
-            provider: None,
-            pointer: "<preset:release-hygiene>/checksums-cover-the-release.rego",
-            source: include_str!("policy/presets/release-hygiene/checksums-cover-the-release.rego"),
-        }],
-        verdicts: &[
-            VendoredVerdict {
-                id: "release pin broken",
-                gloss: "a release's checksum manifest is missing, lists itself, covers nothing, omits or orphans an asset, or disagrees on bytes",
-                class: "A manifest a packager cannot trust pins nothing. Uploads are routinely \
-idempotent and a failed leg is recovered by re-running it, so an asset can be replaced after the \
-manifest was cut, and nothing downstream notices: every consumer verifying against the manifest \
-either fails for a reason that looks like tampering or, where the manifest omits the asset, \
-verifies nothing at all. Re-derive the manifest from the release as it now stands and re-upload \
-it.",
-                routes: &[run(
-                    "sums run first",
-                    "batten release sums <tag> --manifest <name>, then upload the manifest it writes",
-                )],
-                applicability: crate::verdict::Applicability::Advice,
-            },
-            VendoredVerdict {
-                id: "release record torn",
-                gloss: "a release record carries no census, or one that disagrees with its lines",
-                class: "A record torn mid-write judges part of a release as if it were all of it: \
-a manifest check over half the asset list reports the other half as neither covered nor missing. \
-The census closes the record and counts every kind above it, so a disagreement is a finding about \
-the record rather than a verdict about the release. Record it again.",
-                routes: &[run(
-                    "record run first",
-                    "batten record release <tag> --manifest <name>",
-                )],
-                applicability: crate::verdict::Applicability::Advice,
-            },
-        ],
-        patterns: &[],
-    },
-    // CLOUD-2279's `engine-hygiene`: a consumer's engine pin is no further
-    // behind the latest release than the consumer allows. The thresholds are
-    // the producer's (`batten engine outdated --record`), because a preset
-    // cannot read a consumer's numbers; the module reads the verdict line by
-    // KIND, the family being the consumer's to declare.
-    Manifest {
-        name: "engine-hygiene",
-        version: 1,
-        modules: &[PresetModule {
-            scope: RuleScope::Tree,
-            // Reads a record `batten engine outdated` writes; no CI provider's
-            // expression language is involved, so it applies anywhere.
-            provider: None,
-            pointer: "<preset:engine-hygiene>/engine-pin-fresh.rego",
-            source: include_str!("policy/presets/engine-hygiene/engine-pin-fresh.rego"),
-        }],
-        verdicts: &[VendoredVerdict {
-            id: "release pin stale",
-            gloss: "the engine pin is more releases or days behind the latest release than the consumer allows",
-            class: "A pin left behind still runs, so nothing else says it is stale: the consumer \
-judges its work with an engine whose fixes and gates it does not have, and the distance only grows. \
-`batten engine outdated --record` measured the pin against the release `main` pins, with the \
-consumer's own thresholds, and found it past them. Bring every batten declaration forward in one \
-step.",
-            routes: &[run("update run first", "batten engine update")],
-            applicability: crate::verdict::Applicability::Advice,
-        }],
-        patterns: &[],
-    },
-    // Version 2 (CLOUD-1994) adds the line-unit ban, lifted out of the consumer
-    // module it was written as. Its facts — which manifests, keys, unit headers,
-    // workflow globs and exempt files — are the consumer's `[census.shell]`
-    // table, found by shape in the documents the row declares, so the preset
-    // names none and abstains for a consumer that declares none.
-    Manifest {
-        name: "shell-hygiene",
-        version: 2,
-        modules: &[
-            PresetModule {
-                scope: RuleScope::Tree,
-                provider: None,
-                pointer: "<preset:shell-hygiene>/shebang-names-its-language.rego",
-                source: include_str!(
-                    "policy/presets/shell-hygiene/shebang-names-its-language.rego"
-                ),
-            },
-            PresetModule {
-                scope: RuleScope::Tree,
-                provider: None,
-                pointer: "<preset:shell-hygiene>/sibling-resolves.rego",
-                source: include_str!("policy/presets/shell-hygiene/sibling-resolves.rego"),
-            },
-            PresetModule {
-                scope: RuleScope::Tree,
-                // Reads a workflow's `run:` steps, but only in the files the
-                // consumer's own `[census.shell] workflows` globs name — the
-                // declaration is what says "these files carry `run:` steps", the
-                // same contract `batten census shell` reads them under. Its
-                // manifest and file arms read no provider at all.
-                provider: None,
-                pointer: "<preset:shell-hygiene>/no-new-shell.rego",
-                source: include_str!("policy/presets/shell-hygiene/no-new-shell.rego"),
-            },
-        ],
-        verdicts: &[
-            VendoredVerdict {
-                id: "program name unnamed",
-                gloss: "the file runs a shell and its name does not say so",
-                class: "Every instrument that selects by extension — a formatter, a linter, a \
-CI path filter — covers this file silently and exits 0. A green run over it therefore \
-means nothing was looked at rather than nothing was found, which is worse than a red \
-one. Name the language in the filename, or declare the file's coverage another way.",
-                routes: &[run("patch run first", "git mv")],
-                applicability: crate::verdict::Applicability::Advice,
-            },
-            VendoredVerdict {
-                id: "program resolve missing",
-                gloss: "a run-time sibling path is computed and the tree carries no such file",
-                class: "The shape resolves a path beside the running program and then guards it \
-with a test that exits 0, so the reference does not fail — it goes silent, and the \
-behaviour it was reaching for simply never happens. A path that must exist should be \
-asserted rather than tested.",
-                routes: &[read("source read first", "the computed path")],
-                applicability: crate::verdict::Applicability::Advice,
-            },
-            VendoredVerdict {
-                id: "task write refused",
-                gloss: "a declared manifest's shell code lines rose against the base",
-                class: "This repository has declared where its shell lives and that it writes no \
-more. A command key's shell lines — every code line of a triple-quoted body, and each one-line \
-value or array entry carrying shell syntax — may fall and may never rise. Counted in lines rather \
-than bodies because a body count reads a 245-line body as one, and relocating whole programs into \
-command strings then reads as the surface shrinking. Put the decision in a policy module, the \
-fetch in a declared recorder, and the glue in an argv command; what is left over is a verb.",
-                routes: &[read(
-                    "source read first",
-                    "the manifest's grown unit and the census declaration",
-                )],
-                applicability: crate::verdict::Applicability::Advice,
-            },
-            VendoredVerdict {
-                id: "task add refused",
-                gloss: "a manifest unit that carried no shell at the base carries some now",
-                class: "The arm relocation cannot offset: moving a body into a new unit while deleting \
-a bigger one elsewhere keeps the line count level and still gives a unit shell it did not have. \
-The pointer is the unit's header. Deleting shell is always free, and an edit inside a body that \
-does not grow it is admitted, so a fix to an existing body lands; a new one does not.",
-                routes: &[read("source read first", "the unit's header")],
-                applicability: crate::verdict::Applicability::Advice,
-            },
-            VendoredVerdict {
-                id: "step write refused",
-                gloss: "a declared workflow's run: shell lines rose against the base",
-                class: "A workflow step is where a shell line is the native spelling, which is why the \
-step itself stays allowed and a single-command step is not counted. What is counted is the shell \
-around it: every code line of a `run: |` or `run: >` block and every one-liner carrying shell \
-syntax. Move the logic into a declared task or the engine and call it from the step.",
-                routes: &[read("source read first", "the workflow's grown step")],
-                applicability: crate::verdict::Applicability::Advice,
-            },
-            VendoredVerdict {
-                id: "shell place refused",
-                gloss: "a shell file was added outside the declared set of files that must be shell",
-                class: "A `.sh`, `.bash` or `.bats` path, or a file whose first line names a shell, \
-was added. The only files that must be shell are the ones that run where nothing else can — an \
-installer or bootstrap that brings the toolchain to a host, a hook launcher the toolchain cannot \
-reach — and the consumer names them in its census declaration, where widening the set is a \
-reviewed change to the committed config. Anything else is a verb, a module or a recorder.",
-                routes: &[read(
-                    "source read first",
-                    "the census declaration's exempt set",
-                )],
-                applicability: crate::verdict::Applicability::Advice,
-            },
-        ],
-        patterns: &[],
-    },
-    // CLOUD-843. The board's own claims held to what the tree and the forge
-    // already say: a Done that no release carries, a Done over a pull request
-    // still open, a duplicate close taken in its target's operation, a deferral
-    // with no owner, and a body that never closes what its branch served.
-    //
-    // EVERY MODULE READS A FAMILY `record derive` WRITES, and the family names are
-    // the engine's rather than a consumer's: `crate::tracker_reading` owns both
-    // the names and the line shapes, so nothing here names a consumer fact. A
-    // consumer declares one `[[record]]` row per family it produces, as for any
-    // record a module reads.
-    //
-    // ONE ROW JUDGES ALL FIVE, which is safe only because the producer clears
-    // every tracker family before it reads: the store then holds the answer to
-    // the question just asked and nothing older (`record::run_derive`).
-    // CLOUD-1221 (P14 of CLOUD-843) folded the BOARD half into this entry rather
-    // than a second `Manifest` of the same name, which `no_preset_is_declared_twice`
-    // refuses: a column that lies, a cyclic or unfetched relation, a gloss the
-    // board contradicts, an unready ready queue, a citation naming nothing. Those
-    // five read the `board-*` families `batten board check` writes and evaluates
-    // in process; `crate::board_check` owns their names, so nothing here names a
-    // consumer fact either.
-    Manifest {
-        name: "tracker-hygiene",
-        version: 1,
-        modules: &[
-            PresetModule {
-                scope: RuleScope::Tree,
-                provider: None,
-                pointer: "<preset:tracker-hygiene>/closing-key-closes.rego",
-                source: include_str!("policy/presets/tracker-hygiene/closing-key-closes.rego"),
-            },
-            PresetModule {
-                scope: RuleScope::Tree,
-                provider: None,
-                pointer: "<preset:tracker-hygiene>/deferral-has-an-owner.rego",
-                source: include_str!("policy/presets/tracker-hygiene/deferral-has-an-owner.rego"),
-            },
-            PresetModule {
-                scope: RuleScope::Tree,
-                provider: None,
-                pointer: "<preset:tracker-hygiene>/done-has-no-open-pull.rego",
-                source: include_str!("policy/presets/tracker-hygiene/done-has-no-open-pull.rego"),
-            },
-            PresetModule {
-                scope: RuleScope::Tree,
-                provider: None,
-                pointer: "<preset:tracker-hygiene>/done-is-released.rego",
-                source: include_str!("policy/presets/tracker-hygiene/done-is-released.rego"),
-            },
-            PresetModule {
-                scope: RuleScope::Tree,
-                provider: None,
-                pointer: "<preset:tracker-hygiene>/duplicate-close-is-argued.rego",
-                source: include_str!(
-                    "policy/presets/tracker-hygiene/duplicate-close-is-argued.rego"
-                ),
-            },
-            PresetModule {
-                scope: RuleScope::Tree,
-                provider: None,
-                pointer: "<preset:tracker-hygiene>/shipping-is-not-sufficient.rego",
-                source: include_str!(
-                    "policy/presets/tracker-hygiene/shipping-is-not-sufficient.rego"
-                ),
-            },
-            PresetModule {
-                scope: RuleScope::Tree,
-                provider: None,
-                pointer: "<preset:tracker-hygiene>/board-columns-tell-the-truth.rego",
-                source: include_str!(
-                    "policy/presets/tracker-hygiene/board-columns-tell-the-truth.rego"
-                ),
-            },
-            PresetModule {
-                scope: RuleScope::Tree,
-                provider: None,
-                pointer: "<preset:tracker-hygiene>/board-graph-is-acyclic.rego",
-                source: include_str!("policy/presets/tracker-hygiene/board-graph-is-acyclic.rego"),
-            },
-            PresetModule {
-                scope: RuleScope::Tree,
-                provider: None,
-                pointer: "<preset:tracker-hygiene>/board-claims-agree.rego",
-                source: include_str!("policy/presets/tracker-hygiene/board-claims-agree.rego"),
-            },
-            PresetModule {
-                scope: RuleScope::Tree,
-                provider: None,
-                pointer: "<preset:tracker-hygiene>/board-frontier-is-ready.rego",
-                source: include_str!("policy/presets/tracker-hygiene/board-frontier-is-ready.rego"),
-            },
-            PresetModule {
-                scope: RuleScope::Tree,
-                provider: None,
-                pointer: "<preset:tracker-hygiene>/board-citations-resolve.rego",
-                source: include_str!("policy/presets/tracker-hygiene/board-citations-resolve.rego"),
-            },
-        ],
-        verdicts: &[
-            VendoredVerdict {
-                id: "diff key missing",
-                gloss: "the pull request body names its issue but never in closing form, so the merge moves nothing",
-                class: "A tracker's merged-event automation fires only for a closing pull request: a \
-trailer-only reference merges and never moves the row, where a closing keyword moves it in \
-seconds. Write the closing keyword before the key, or a line-anchored hold marker if this pull \
-request is not meant to complete it.",
-                routes: &[run(
-                    "task run first",
-                    "write the closing keyword, then record the body again with `batten record derive closing-key`",
-                )],
-                applicability: crate::verdict::Applicability::Advice,
-            },
-            VendoredVerdict {
-                id: "diff key dropped",
-                gloss: "the pull request body closes some of the keys its commits served and strands the rest",
-                class: "A served key the body does not close never reaches review while its work is on \
-the trunk. Close each one, or name it on a hold marker line to decline just that one.",
-                routes: &[run(
-                    "task run first",
-                    "close the stranded key, then record the body again with `batten record derive closing-key`",
-                )],
-                applicability: crate::verdict::Applicability::Advice,
-            },
-            VendoredVerdict {
-                id: "diff read partial",
-                gloss: "the closing-key record is missing one of its four readings",
-                class: "A record missing a reading decides over part of the answer, so it is refused \
-rather than judged.",
-                routes: &[run(
-                    "task run first",
-                    "record the body again with `batten record derive closing-key`",
-                )],
-                applicability: crate::verdict::Applicability::Advice,
-            },
-            VendoredVerdict {
-                id: "prose own unnamed",
-                gloss: "a pull-request paragraph defers a decision and names no owning issue besides the one it claims",
-                class: "A pull-request body is not a durable home: nothing sweeps merged bodies, and the \
-board is what others read. File the decision and name its key in the same paragraph; the key \
-this pull request claims names the work in hand, not a home for what it leaves open.",
-                routes: &[run(
-                    "task run first",
-                    "file the owning issue, name it in the paragraph, then record the body again with `batten record derive deferral`",
-                )],
-                applicability: crate::verdict::Applicability::Advice,
-            },
-            VendoredVerdict {
-                id: "prose read partial",
-                gloss: "the deferral record carries no closing census, or one that disagrees with its lines",
-                class: "A record torn mid-write judges part of a body as if it were all of it.",
-                routes: &[run(
-                    "task run first",
-                    "record the body again with `batten record derive deferral`",
-                )],
-                applicability: crate::verdict::Applicability::Advice,
-            },
-            VendoredVerdict {
-                id: "issue ship early",
-                gloss: "an issue is headed for Done while one of its own pull requests is still open",
-                class: "A merged pull request completes a diff, and a board reading it as completing an \
-issue is right only when the issue carries one. Every pull request an issue carries has to have \
-landed or been closed before the issue is done, and a draft is open. The refusal is arithmetic: \
-whether the merged ones did the work is not judged.",
-                routes: &[read(
-                    "record read first",
-                    "the open pull request the refusal names",
-                )],
-                applicability: crate::verdict::Applicability::Advice,
-            },
-            VendoredVerdict {
-                id: "issue point missing",
-                gloss: "an issue is headed for Done and carries no pull request at all",
-                class: "Review already requires a linked pull request, so Done cannot need less. An \
-issue with none either shipped nothing or links its work somewhere the gate cannot read.",
-                routes: &[read("record read first", "the issue's attachments")],
-                applicability: crate::verdict::Applicability::Advice,
-            },
-            VendoredVerdict {
-                id: "issue list partial",
-                gloss: "the done-pr record carries no closing census, or one that disagrees with its lines",
-                class: "A record torn mid-write judges part of a board as if it were all of it.",
-                routes: &[run(
-                    "task run first",
-                    "record the board again with `batten record derive done-pr`",
-                )],
-                applicability: crate::verdict::Applicability::Advice,
-            },
-            VendoredVerdict {
-                id: "issue ship ahead",
-                gloss: "an issue reads Done while its commits are on the trunk and no release contains them",
-                class: "Done means released, and landed-but-unreleased is review. Refs come from commit \
-messages, so a ref inside a release cannot confirm a Done — but a ref on the trunk that no \
-release tag reaches is conclusive: nothing shipped it.",
-                routes: &[read(
-                    "record read first",
-                    "the release that has not been cut",
-                )],
-                applicability: crate::verdict::Applicability::Advice,
-            },
-            VendoredVerdict {
-                id: "issue read partial",
-                gloss: "the done record carries no closing census, or one that disagrees with its lines",
-                class: "A record torn mid-write judges part of a board as if it were all of it. The \
-census is written last and counts the lines above it, so a missing or wrong one is a write that \
-did not finish rather than a clean board.",
-                routes: &[run(
-                    "task run first",
-                    "record the board again with `batten record derive done`",
-                )],
-                applicability: crate::verdict::Applicability::Advice,
-            },
-            VendoredVerdict {
-                id: "issue ship held",
-                gloss: "a release shipped this row, and it holds itself open: shipping is necessary for Done, not sufficient",
-                class: "A row in review carries the hold marker in its own description. The tag \
-contains its work, and the row still says it is not finished. Resolve the hold, or strike the \
-marker, before moving it to Done.",
-                routes: &[read("record read first", "the row's description")],
-                applicability: crate::verdict::Applicability::Advice,
-            },
-            VendoredVerdict {
-                id: "issue ship refused",
-                gloss: "a release shipped this row, and the board gate rejects its column: fix the board before moving it",
-                class: "Review to Done is a conjunction: the tag must have shipped the row AND the \
-board must be labelling it honestly. The second half is the board gate's own verdict, forwarded \
-by the producer rather than re-derived, and the pointer names the rule it raised.",
-                routes: &[run("task run first", "batten board check")],
-                applicability: crate::verdict::Applicability::Advice,
-            },
-            VendoredVerdict {
-                id: "tag read partial",
-                gloss: "the released record carries no closing census, or one that disagrees with its lines",
-                class: "A record torn mid-write judges part of a release as if it were all of it.",
-                routes: &[run(
-                    "task run first",
-                    "record the release again with `batten record derive released`",
-                )],
-                applicability: crate::verdict::Applicability::Advice,
-            },
-            VendoredVerdict {
-                id: "issue grade twice",
-                gloss: "a duplicate close was decided in the same operation as its target's own close",
-                class: "Whether two rows contradict is not computable, and this does not claim to. A \
-duplicate close whose target entered a completed state in the same second is two decisions taken \
-as one, and one was never argued. Argue the close on its own: either the rows really say the same \
-thing, or the closed one carries a finding about the survivor and needs reopening.",
-                routes: &[read("record read first", "both rows the pointer names")],
-                applicability: crate::verdict::Applicability::Advice,
-            },
-            VendoredVerdict {
-                id: "issue count partial",
-                gloss: "the duplicate-close record carries no closing census, or one that disagrees with its lines",
-                class: "A record torn mid-write judges part of a board as if it were all of it. The \
-census is written last and counts the lines above it.",
-                routes: &[run(
-                    "task run first",
-                    "record the board again with `batten record derive duplicate-close`",
-                )],
-                applicability: crate::verdict::Applicability::Advice,
-            },
-            VendoredVerdict {
-                id: "issue state wrong",
-                gloss: "a board column, relation or status gloss says something the board contradicts",
-                class: "A column is a claim about the work, and the board is the surface everyone \
-else reads it from. Pulled means somebody has it; landed means a pull request is attached unless \
-the row declares it lands no commit; a started row names its phase; the ready queue holds only \
-rows whose Ready block passes; the blocked-by relation has no cycle; and a body glossing another \
-row's column agrees with the board. The pointer names the row and the rule, never the body.",
-                routes: &[read("source read first", "the row the pointer names")],
-                applicability: crate::verdict::Applicability::Advice,
-            },
-            VendoredVerdict {
-                id: "issue judge partial",
-                gloss: "the piped payload set is too thin to judge, so the board has not been judged",
-                class: "Could-not-look, and it outranks a refusal: a verdict over a set only partly \
-read is not a verdict, because the next action is a re-fetch after which more refusals may \
-appear. A row without its relations, attachments, milestone or description, a blocker, parent \
-or claimed row the set does not carry, and a claimed column nobody piped occupies are each this \
-class, keyed to the set when the set is what is short.",
-                routes: &[read(
-                    "source read first",
-                    "the rows the pointer names, fetched again with relations and attachments",
-                )],
-                applicability: crate::verdict::Applicability::Advice,
-            },
-            VendoredVerdict {
-                id: "path point missing",
-                gloss: "a Ready block cites a test or a path the tree does not carry",
-                class: "This checks existence, never relevance. A cited test must be carried by \
-the declared corpus — a fixture quoting the citation is not the thing cited — and a cited path \
-must exist or be marked prospective beside its own path. A marked path an ancestor deleted is \
-refused anyway: history may refute a marker and is never asked to grant one.",
-                routes: &[read(
-                    "source read first",
-                    "the Ready block's live obligations clause",
-                )],
-                applicability: crate::verdict::Applicability::Advice,
-            },
-            VendoredVerdict {
-                id: "source point wrong",
-                gloss: "a clause citation in the tree names a clause its issue does not carry",
-                class: "A citation of a clause that is not there points a reader at nothing. Cite \
-the clause that holds the content, or the issue's own clause if it moved. A sparse clause set is \
-not a defect; only the citation of an absent clause is.",
-                routes: &[read("source read first", "the cited issue's Ready block")],
-                applicability: crate::verdict::Applicability::Advice,
-            },
-            VendoredVerdict {
-                id: "source point unread",
-                gloss: "a clause citation names an issue the piped set does not carry",
-                class: "Could-not-look, never a pass: an unfetched issue looks exactly like a clean \
-one. Fetch the cited issue and pipe the set again.",
-                routes: &[read("source read first", "the cited issue, fetched")],
-                applicability: crate::verdict::Applicability::Advice,
-            },
-        ],
-        patterns: &[],
-    },
-    // CLOUD-843's `supply-chain`: what a release and a commit claim about where
-    // they came from is checkable. ONE MANIFEST FOR THE WHOLE BUNDLE: the SBOM
-    // readings (`binary-inventory-is-lockfile-bound.rego`, `cargo list empty`,
-    // `cargo list wrong`) are further modules and verdicts in THIS entry, never a
-    // second `Manifest` of the same name — `no_preset_is_declared_twice` refuses
-    // that, and `find` would answer with whichever came first. Each module binds
-    // its own `package` so their helpers cannot collide. These two read records
-    // the ENGINE's own producers write under the producer's name (`record derive
-    // signing-posture`, `record attestation`), and git facts a row declares, so no
-    // consumer fact travels inside one.
-    Manifest {
-        name: "supply-chain",
-        version: 1,
-        modules: &[
-            PresetModule {
-                scope: RuleScope::Tree,
-                // A forge's attestation endpoint answered through the engine's
-                // producer, never a workflow's expression language.
-                provider: None,
-                pointer: "<preset:supply-chain>/attestation-is-verified.rego",
-                source: include_str!("policy/presets/supply-chain/attestation-is-verified.rego"),
-            },
-            PresetModule {
-                scope: RuleScope::Tree,
-                // git's own config scopes and commit headers; no CI provider.
-                provider: None,
-                pointer: "<preset:supply-chain>/signer-is-verifiable.rego",
-                source: include_str!("policy/presets/supply-chain/signer-is-verifiable.rego"),
-            },
-            PresetModule {
-                scope: RuleScope::Tree,
-                provider: None,
-                pointer: "<preset:supply-chain>/binary-inventory-is-lockfile-bound.rego",
-                source: include_str!(
-                    "policy/presets/supply-chain/binary-inventory-is-lockfile-bound.rego"
-                ),
-            },
-        ],
-        verdicts: &[
-            VendoredVerdict {
-                id: "release ship unsafe",
-                gloss: "a release archive's binary carries no verifiable provenance",
-                class: "The verifier refused the executable inside a published archive while the \
-platform DOES offer attestation for this repository. That is a release to fix rather than a gap \
-to report, and the two are told apart by the attestations endpoint's own status code: 200 with an \
-empty list where the feature exists, 404 on the resource where it does not. The subject is the \
-BINARY and not the archive, because a release attests the executable so that repackaging cannot \
-launder the claim.",
-                routes: &[run(
-                    "record run first",
-                    "batten record attestation <tag> --binary <name>",
-                )],
-                applicability: crate::verdict::Applicability::Advice,
-            },
-            VendoredVerdict {
-                id: "release carry missing",
-                gloss: "a release archive carries no executable to verify",
-                class: "The archive unpacked and held no binary of the declared name, so there was \
-nothing for the verifier to judge. A packaging problem rather than a provenance one, and its own \
-class for that reason: collapsing it into the unverified finding would send a reader after a \
-signing identity when the build matrix dropped a file.",
-                routes: &[run(
-                    "record run first",
-                    "batten record attestation <tag> --binary <name>",
-                )],
-                applicability: crate::verdict::Applicability::Advice,
-            },
-            VendoredVerdict {
-                id: "release list empty",
-                gloss: "the producer looked at a tag and found no archive on it",
-                class: "A green verdict over a release carrying nothing would be about nothing. \
-Present-and-empty and absent are different readings and must not collapse: an absent record is \
-the producer unable to look, where this is the producer having looked and found a tag with no \
-archives.",
-                routes: &[run(
-                    "record run first",
-                    "batten record attestation <tag> --binary <name>",
-                )],
-                applicability: crate::verdict::Applicability::Advice,
-            },
-            VendoredVerdict {
-                id: "config carry unsafe",
-                gloss: "signing is on in this checkout with a signer whose key cannot be verified or reproduced",
-                class: "NOT A VERDICT ABOUT SIGNING, which is good. It is about a signature that \
-LOOKS like provenance and carries none: a key whose public half cannot be read, or a signer under \
-a directory the environment reclaims. The refusal is the CONFLICT — something turns signing on and \
-no local `false` answers it — never the mere absence of a local override, because a CI runner has \
-no launcher and an absent local value is correct there.",
-                routes: &[run("repair run first", "batten attribution signing")],
-                applicability: crate::verdict::Applicability::Advice,
-            },
-            VendoredVerdict {
-                id: "commit carry unsafe",
-                gloss: "a commit in range carries a gpgsig from a key this repository cannot verify or reproduce",
-                class: "The posture already produced one. Config can be repaired AFTER a commit was \
-written, so a repaired checkout still carries what it signed before the repair — and those are \
-exactly what must not land. That is why this is a separate class from the config one rather than \
-the same finding twice: repairing the config clears that arm and leaves this one firing. Rewrite \
-the range unsigned, or publish the key's public half so the signature becomes verifiable.",
-                routes: &[read(
-                    "module read first",
-                    "<preset:supply-chain>/signer-is-verifiable.rego",
-                )],
-                applicability: crate::verdict::Applicability::Advice,
-            },
-            VendoredVerdict {
-                id: "cargo list empty",
-                gloss: "a binary's inventory recovered fewer than two rust-crate packages",
-                class: "0 is a build that lost its `cargo auditable` wrapper, 1 is the binary \
-cataloging only itself; both are an empty document that exits 0, and a gate that checks nothing \
-must not report green. Rebuild the binary through the wrapper and scan it again.",
-                routes: &[run(
-                    "task run first",
-                    "batten sbom --binary <binary> --target <triple>",
-                )],
-                applicability: crate::verdict::Applicability::Advice,
-            },
-            VendoredVerdict {
-                id: "cargo list wrong",
-                gloss: "a binary's inventory names a crate the lockfile does not declare",
-                class: "Subset, never equality: the lockfile spans every target's build and dev \
-dependencies. A recovered crate outside it means the binary was not built from this lockfile.",
-                routes: &[run(
-                    "task run first",
-                    "batten sbom --binary <binary> --target <triple>",
-                )],
-                applicability: crate::verdict::Applicability::Advice,
-            },
-        ],
-        patterns: &[],
-    },
-    Manifest {
-        name: "trunk-based",
-        version: 1,
-        modules: &[PresetModule {
-            scope: RuleScope::MediatedCall,
-            provider: None,
-            pointer: "<preset:trunk-based>/no-force-push.rego",
-            source: include_str!("policy/presets/trunk-based/no-force-push.rego"),
-        }],
-        verdicts: &[VendoredVerdict {
-            id: "trunk push forced",
-            gloss: "a force push rewrites a shared branch under whoever already fetched it",
-            class: "Rewriting a published branch invalidates every checkout of it that \
-already exists, and the holder finds out by having their next pull fail in a way that \
-looks like their own mistake. `--force-with-lease` refuses when the remote moved, which \
-is the same operation with the one check that makes it safe.",
-            // THE EXPLICIT FORM, never the bare flag (CLOUD-2057): a bare
-            // `--force-with-lease` compares against this clone's tracking ref and
-            // is itself refused by `branch write unsafe`, so naming it here sent a
-            // refused reader straight into a second refusal.
-            routes: &[run(
-                "patch run first",
-                "git push --force-with-lease=<ref>:<sha>",
-            )],
-            applicability: crate::verdict::Applicability::Advice,
-        }],
-        patterns: &[],
-    },
-    // CLOUD-2273: the call that makes the merge commit a linear trunk refuses at
-    // the fast-forward, refused where it is one command to undo. Its own bundle
-    // rather than a second `trunk-based` module, so each enabling row is named
-    // for the one class it raises.
-    Manifest {
-        name: "linear-history",
-        version: 1,
-        modules: &[PresetModule {
-            scope: RuleScope::MediatedCall,
-            provider: None,
-            pointer: "<preset:linear-history>/no-merge-into-branch.rego",
-            source: include_str!("policy/presets/linear-history/no-merge-into-branch.rego"),
-        }],
-        verdicts: &[VendoredVerdict {
-            id: "commit write loose",
-            gloss: "a merge or a merging pull wove a commit a linear trunk will refuse",
-            class: "A trunk requiring linear history refuses a merge commit at the \
-fast-forward, after CI has run. `git merge <ref>` writes one, and so does `git pull` without \
-`--rebase`; replaying the branch onto the base makes the same change as a line.",
-            routes: &[run("patch run first", "batten land replay <base>")],
-            applicability: crate::verdict::Applicability::Advice,
-        }],
-        patterns: &[],
-    },
-    // CLOUD-2270: a push replacing a head whose wait stopped red erases the
-    // failed checks' verdicts, so each one's log is read before the push. The
-    // record is the `red-head` fact `land` writes; its own bundle, so the row
-    // enabling it names the one class it raises.
-    Manifest {
-        name: crate::land::RED_HEAD,
-        version: 1,
-        modules: &[PresetModule {
-            scope: RuleScope::MediatedCall,
-            provider: None,
-            pointer: "<preset:red-head>/no-push-over-unread-red.rego",
-            source: include_str!("policy/presets/red-head/no-push-over-unread-red.rego"),
-        }],
-        verdicts: &[VendoredVerdict {
-            id: "job read unread",
-            gloss: "a push would replace a red head whose failed checks were never read",
-            class: "When a landing stops red, the failed checks' logs say why, and a push \
-replacing that head starts a new run that buries them. Reading one failure and pushing \
-erases the others, and a check still running at the stop reports on a head nobody will \
-look at again. Read each named failed job's log first; reading is what admits the push.",
-            routes: &[
-                run(
-                    "job read first",
-                    "batten mcp call github get_job_logs '{\"owner\":\"<owner>\",\"repo\":\"<repo>\",\"job_id\":<id>,\"return_content\":true}'",
-                ),
-                // A FAILED CHECK NO ACTIONS JOB RUNS has a check run and no log,
-                // so its read is the run itself (review of #1180).
-                run(
-                    "job read other",
-                    "batten mcp call github get_check_run '{\"owner\":\"<owner>\",\"repo\":\"<repo>\",\"check_run_id\":<id>}'",
-                ),
-            ],
-            applicability: crate::verdict::Applicability::Advice,
-        }],
-        patterns: &[],
-    },
-    // EVERY GIT CALL BATTEN ALLOWS IS PUT TO NO ONE (CLOUD-2057). One module and
-    // no verdicts: it never refuses, it only stops the host re-deciding a call
-    // the engine already allowed. Destructive calls are left to the host.
-    Manifest {
-        name: "git",
-        version: 1,
-        modules: &[PresetModule {
-            scope: RuleScope::MediatedCall,
-            provider: None,
-            pointer: "<preset:git>/git-call-is-preapproved.rego",
-            source: include_str!("policy/presets/git/git-call-is-preapproved.rego"),
-        }],
-        verdicts: &[],
-        patterns: &[],
-    },
-    // CLOUD-2383. A session's first plan is refused once, with the operator's own
-    // correction as the reason, and the next is admitted. Claude Code's plan-exit
-    // tool is the host's vocabulary, which a vendor preset may carry.
-    //
-    // ITS OWN PRESET RATHER THAN A `claude-code-cloud` MODULE, for the row that
-    // enables it. A preset row compiles every module the preset ships at its
-    // scope, so a module added there rides the consumer's existing row — and that
-    // row is named after the one class the preset used to raise. An engine that
-    // ships the module refuses the old name; an engine that does not refuses any
-    // other. Here the enabling row is new and raises one class, so it carries
-    // that class's name under every engine.
-    //
-    // It reads `input.facts.extracted["plan-exits"]`, which the enabling row
-    // declares; a row that declares no extract leaves the module deciding nothing.
-    Manifest {
-        name: "claude-code-plan",
-        version: 1,
-        modules: &[PresetModule {
-            scope: RuleScope::MediatedCall,
-            provider: None,
-            pointer: "<preset:claude-code-plan>/first-plan-is-pressure-tested.rego",
-            source: include_str!(
-                "policy/presets/claude-code-plan/first-plan-is-pressure-tested.rego"
-            ),
-        }],
-        verdicts: &[VendoredVerdict {
-            id: "plan check first",
-            gloss: "verify, pressure test, validate; present corrected plan",
-            class: "A session's first plan is built from reports nobody re-read against the \
-tree, and the pass that corrects it re-reads with tools: every cited path, symbol and line opened, \
-every number reproduced, the plan handed to a reader that did not write it. Refused once per \
-session, by a count of presentations in its transcript; the next is admitted.",
-            routes: &[run(
-                "plan read first",
-                "re-read every pointer the plan cites, reproduce its numbers, have an isolated \
-reader check it, then present the corrected plan",
-            )],
-            applicability: crate::verdict::Applicability::Advice,
-        }],
-        patterns: &[],
-    },
-];
-
-/// Every vendored preset's name, in a stable order.
-#[must_use]
-pub fn names() -> Vec<&'static str> {
-    MANIFESTS.iter().map(|manifest| manifest.name).collect()
-}
-
-/// The manifest for a named preset, or `None` when nothing ships under it.
-#[must_use]
-pub fn find(name: &str) -> Option<&'static Manifest> {
-    MANIFESTS.iter().find(|manifest| manifest.name == name)
 }
 
 /// The helpers a module defines at column zero: functions and complete rules,
@@ -2222,15 +467,18 @@ const EJECTED: &str = "# batten-ejected: ";
 /// What an ejected file's header records: the preset, the module and the
 /// manifest version it was copied at. `None` for a file no eject wrote.
 #[must_use]
-pub fn ejected_from(source: &str) -> Option<(String, String, u32)> {
+///
+/// The version is semver. A header an older binary wrote carries a bare integer
+/// `N`, which reads as `0.0.N`: an integer counter promised no stable major, so
+/// the faithful translation is an increment below `1.0.0`, never a major.
+pub fn ejected_from(source: &str) -> Option<(String, String, semver::Version)> {
     let header = source.lines().find_map(|line| line.strip_prefix(EJECTED))?;
     let (target, version) = header.split_once(" version ")?;
     let (preset, module) = target.split_once('/')?;
-    Some((
-        preset.to_owned(),
-        module.to_owned(),
-        version.trim().parse().ok()?,
-    ))
+    let version = version.trim();
+    let version = crate::version::parse(version)
+        .or_else(|| Some(crate::version::from_integer(version.parse().ok()?)))?;
+    Some((preset.to_owned(), module.to_owned(), version))
 }
 
 /// The copy of `module` an eject writes: the header, then the vendored source
@@ -2245,10 +493,8 @@ fn ejected_source(manifest: &Manifest, module: &PresetModule) -> String {
         module.name(),
         manifest.version,
     );
-    for line in module.source.lines() {
-        if line.starts_with("#MUTANT") {
-            continue;
-        }
+    let source = module.text();
+    for line in crate::preset_catalog::decided_lines(&source) {
         text.push_str(line);
         text.push('\n');
     }
@@ -2261,8 +507,11 @@ fn ejected_source(manifest: &Manifest, module: &PresetModule) -> String {
 pub struct Ejection {
     /// The files written, repository-relative, in manifest order.
     pub written: Vec<String>,
-    /// The preset row that now excepts them.
+    /// The preset row that now excepts them, or that was removed.
     pub row: String,
+    /// Whether the preset row was removed because the eject left it compiling
+    /// no module, rather than given an `except`.
+    pub removed: bool,
     /// The row that loads the copies.
     pub copies: String,
     /// Whether this eject appended `copies` rather than finding it.
@@ -2349,18 +598,8 @@ pub fn eject(root: &Path, config: &Path, rules: &[Rule], target: &str) -> anyhow
         crate::durable::replace(root.join(path), ejected_source(manifest, member))?;
     }
 
-    let mut except: Vec<String> = row.except.clone();
-    except.extend(closure.iter().map(|member| member.name().to_owned()));
-    except.sort();
-    except.dedup();
-    let mut edits = vec![crate::config_edit::Edit::InRow {
-        array: String::from("rule"),
-        id: row.id.clone(),
-        edits: vec![crate::config_edit::Edit::Set {
-            path: vec![String::from("except")],
-            value: crate::config_edit::Scalar::Strings(except),
-        }],
-    }];
+    let (preset_edit, emptied) = switch_off(manifest, row, &closure);
+    let mut edits = vec![preset_edit];
     let copies = existing.map_or(copies_id, |rule| rule.id.clone());
     if existing.is_none() {
         edits.push(crate::config_edit::Edit::AppendRow {
@@ -2372,9 +611,48 @@ pub fn eject(root: &Path, config: &Path, rules: &[Rule], target: &str) -> anyhow
     Ok(Ejection {
         written,
         row: row.id.clone(),
+        removed: emptied,
         copies,
         added: existing.is_none(),
     })
+}
+
+/// The edit that switches the ejected `closure` off on the preset `row`, and
+/// whether it removes the row.
+///
+/// A ROW LEFT COMPILING NOTHING IS REMOVED, not excepted: the engine refuses a
+/// preset row whose `except` covers every module it compiles at its scope
+/// ("delete the row instead"), so ejecting a preset's last module there would
+/// otherwise write a config `check` cannot load. The same selection the engine
+/// compiles decides it.
+fn switch_off(
+    manifest: &Manifest,
+    row: &Rule,
+    closure: &[&PresetModule],
+) -> (crate::config_edit::Edit, bool) {
+    let mut except: Vec<String> = row.except.clone();
+    except.extend(closure.iter().map(|member| member.name().to_owned()));
+    except.sort();
+    except.dedup();
+    if manifest
+        .modules_for(row.scope, row.provider.as_deref(), &except)
+        .is_empty()
+    {
+        let edit = crate::config_edit::Edit::RemoveRow {
+            array: String::from("rule"),
+            id: row.id.clone(),
+        };
+        return (edit, true);
+    }
+    let edit = crate::config_edit::Edit::InRow {
+        array: String::from("rule"),
+        id: row.id.clone(),
+        edits: vec![crate::config_edit::Edit::Set {
+            path: vec![String::from("except")],
+            value: crate::config_edit::Scalar::Strings(except),
+        }],
+    };
+    (edit, false)
 }
 
 /// The row that loads the copies: the preset row's scope, severity, remedy and
@@ -2406,6 +684,7 @@ fn copy_row(row: &Rule, id: &str, folder: &str) -> Vec<(String, crate::config_ed
         ("line_sources", &row.line_sources),
         ("invocation_sources", &row.invocation_sources),
         ("use_sources", &row.use_sources),
+        ("unit_sources", &row.unit_sources),
         ("delta_sources", &row.delta_sources),
     ];
     for (key, values) in selectors {
@@ -2422,14 +701,17 @@ fn copy_row(row: &Rule, id: &str, folder: &str) -> Vec<(String, crate::config_ed
 /// Selected out of the preset by name rather than re-included, so a session with
 /// no authority judges a call by the same bytes a consumer enabling the preset
 /// does. `unwatch-is-preapproved` rides along because the plan rule reads its
-/// `unwatch_method`.
+/// `unwatch_method`, and `host-decided` because the mode grant imports its
+/// `git_host.call_decided` (e0675d43): left out, every call with no authority
+/// faulted and was answered `engine-cannot-adjudicate`.
 #[must_use]
 pub fn mode_sources() -> Vec<(String, String)> {
-    const MODE: [&str; 4] = [
+    const MODE: [&str; 5] = [
         "read-only-is-preapproved.rego",
         "unwatch-is-preapproved.rego",
         "plan-mode-refuses-writes.rego",
         "auto-mode-is-preapproved.rego",
+        "host-decided.rego",
     ];
     find("claude-code-cloud")
         .map(|manifest| {
@@ -2437,34 +719,25 @@ pub fn mode_sources() -> Vec<(String, String)> {
                 .modules
                 .iter()
                 .filter(|module| MODE.iter().any(|name| module.pointer.ends_with(name)))
-                .map(|module| (module.pointer.to_owned(), module.source.to_owned()))
+                .map(|module| (module.pointer.to_owned(), module.text().into_owned()))
                 .collect()
         })
         .unwrap_or_default()
 }
 
-/// Every verdict row the vendored presets declare, as the registry carries them.
-///
-/// Chained onto the native rows by [`crate::verdict::vendored`]. Derived rather
-/// than declared a second time: before this, adding a preset class meant editing
-/// a table in another module under a comment, and nothing tied the two together.
-#[must_use]
-pub fn verdict_rows() -> Vec<DeclaredVerdict> {
-    MANIFESTS
-        .iter()
-        .flat_map(|manifest| manifest.verdicts.iter())
-        .map(crate::verdict::declared_from)
-        .collect()
-}
-
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
-    use super::{
-        MANIFESTS, Manifest, PresetModule, eject, ejected_from, ejected_source, find,
-        helpers_defined, mode_sources, names, uses, verdict_rows,
-    };
-    use crate::rules::{Rule, RuleScope};
+    use super::{eject, ejected_from, ejected_source, helpers_defined, mode_sources, uses};
+    #[cfg(test)]
+    use crate::config_check::preset::verdict_rows;
+    use crate::config_model::Rule;
+    #[cfg(test)]
+    use crate::preset::ManifestExt as _;
+    #[cfg(test)]
+    use crate::preset::PresetModuleExt as _;
+    use crate::preset_catalog::RuleScope;
+    use crate::preset_catalog::{MANIFESTS, Manifest, PresetModule, find, names};
 
     use std::collections::BTreeSet;
 
@@ -2473,31 +746,33 @@ mod tests {
     /// provider's language.
     const FIXTURE: Manifest = Manifest {
         name: "fixture",
-        version: 3,
+        version: semver::Version::new(3, 1, 0),
+        suggested: true,
+        install: None,
         modules: &[
             PresetModule {
                 scope: RuleScope::Tree,
                 provider: None,
                 pointer: "<preset:fixture>/a.rego",
-                source: "package a\n#MUTANT row|s@x@y@|case\nhelper(x) if { x }\n",
+                embedded_source: "package a\n#MUTANT row|s@x@y@|case\nhelper(x) if { x }\n",
             },
             PresetModule {
                 scope: RuleScope::Tree,
                 provider: Some("github"),
                 pointer: "<preset:fixture>/b.rego",
-                source: "package b\nrules contains \"x\" if { helper(1) }\n",
+                embedded_source: "package b\nrules contains \"x\" if { helper(1) }\n",
             },
             PresetModule {
                 scope: RuleScope::MediatedCall,
                 provider: None,
                 pointer: "<preset:fixture>/c.rego",
-                source: "package c\n",
+                embedded_source: "package c\n",
             },
             PresetModule {
                 scope: RuleScope::Tree,
                 provider: None,
                 pointer: "<preset:fixture>/d.rego",
-                source: "package d\n# helper(1) in a comment links nothing\nlone := 1\n",
+                embedded_source: "package d\n# helper(1) in a comment links nothing\nlone := 1\n",
             },
         ],
         verdicts: &[],
@@ -2506,6 +781,84 @@ mod tests {
 
     fn pointers(pairs: &[(String, String)]) -> Vec<&str> {
         pairs.iter().map(|(pointer, _)| pointer.as_str()).collect()
+    }
+
+    /// A wiped overlay directory, keyed by pid so concurrent runs never meet.
+    fn overlay_dir(name: &str) -> std::path::PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("batten-overlay-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("demo")).expect("create overlay dir");
+        dir
+    }
+
+    /// A SHIPPED BUILD NEVER READS THE LIBRARY OVERLAY (CLOUD-2253): only the
+    /// sweep's `preset-overlay` build reads a mutated copy, and every other
+    /// build answers the embedded text whatever the overlay holds, so no
+    /// variable redirects the rules a shipped engine enforces.
+    ///
+    /// Fails by: the overlay honoured without the feature (a bypass of the
+    /// shipped library), or ignored with it (every library row judged on the
+    /// unmutated module).
+    #[test]
+    fn only_the_sweep_build_reads_the_library_overlay() {
+        use super::{OVERLAY_READ, library_text};
+        let (path, embedded) = crate::policy::LIBRARY[0];
+        let dir = overlay_dir("library");
+        let copy = dir.join(path);
+        std::fs::create_dir_all(copy.parent().expect("a parent")).expect("the copy's dir");
+        std::fs::write(&copy, "package batten.library\n").expect("write the copy");
+        let read = library_text(Some(&dir), path, embedded);
+        let receipted = dir.join(format!("{path}{OVERLAY_READ}")).is_file();
+        if cfg!(feature = "preset-overlay") {
+            assert_eq!(
+                read, "package batten.library\n",
+                "the sweep build reads the copy"
+            );
+            assert!(receipted, "and leaves its receipt");
+        } else {
+            assert_eq!(read, embedded, "a shipped build reads the embedded text");
+            assert!(!receipted, "and never touches the overlay");
+        }
+        assert_eq!(library_text(None, path, embedded), embedded);
+        assert_eq!(
+            super::library_overlay().is_some(),
+            cfg!(feature = "preset-overlay") && std::env::var_os("BATTEN_PRESET_OVERLAY").is_some(),
+            "only the sweep build reads the variable"
+        );
+    }
+
+    /// CLOUD-2839's three cases at the reader, plus the module the sweep did not
+    /// mutate. Fails by: reading the embedded text for a targeted copy that will
+    /// not read, which judged the unmutated module and reported it `SURVIVED`.
+    #[test]
+    fn an_overlay_copy_is_read_receipted_or_refused_never_silently_skipped() {
+        use super::{OVERLAY_READ, OVERLAY_TARGET, Overlaid, read_overlay};
+        // Variable unset: the embedded source, as today.
+        assert_eq!(read_overlay(None, "demo/a.rego"), Overlaid::Embedded);
+
+        // Overlay mutated: the copy, and its receipt beside it.
+        let dir = overlay_dir("mutated");
+        std::fs::write(dir.join("demo/a.rego"), "mutated\n").expect("write copy");
+        std::fs::write(dir.join(OVERLAY_TARGET), "demo/a.rego\n").expect("write target");
+        assert_eq!(
+            read_overlay(Some(&dir), "demo/a.rego"),
+            Overlaid::Mutated(String::from("mutated\n"))
+        );
+        assert!(dir.join(format!("demo/a.rego{OVERLAY_READ}")).is_file());
+
+        // A module the sweep did not mutate: the embedded source, unreceipted.
+        assert_eq!(read_overlay(Some(&dir), "demo/b.rego"), Overlaid::Embedded);
+        assert!(!dir.join(format!("demo/b.rego{OVERLAY_READ}")).exists());
+
+        // Variable set, target named, copy absent: refused, never embedded.
+        let dir = overlay_dir("absent");
+        std::fs::write(dir.join(OVERLAY_TARGET), "demo/a.rego\n").expect("write target");
+        assert_eq!(
+            read_overlay(Some(&dir), "demo/a.rego"),
+            Overlaid::Unreadable(dir.join("demo/a.rego"))
+        );
+        assert!(!dir.join(format!("demo/a.rego{OVERLAY_READ}")).exists());
     }
 
     #[test]
@@ -2604,16 +957,33 @@ mod tests {
     fn an_ejected_copy_records_where_it_came_from_and_drops_the_mutant_rows() {
         let copy = ejected_source(&FIXTURE, &FIXTURE.modules[0]);
         assert!(
-            copy.starts_with("# batten-ejected: fixture/a version 3\n"),
+            copy.starts_with("# batten-ejected: fixture/a version 3.1.0\n"),
             "{copy}"
         );
         assert!(!copy.contains("#MUTANT"), "{copy}");
         assert!(copy.ends_with("helper(x) if { x }\n"), "{copy}");
         assert_eq!(
             ejected_from(&copy),
-            Some(("fixture".to_owned(), "a".to_owned(), 3))
+            Some((
+                "fixture".to_owned(),
+                "a".to_owned(),
+                semver::Version::new(3, 1, 0)
+            ))
         );
         assert_eq!(ejected_from("package a\n"), None);
+        assert_eq!(
+            ejected_from("# batten-ejected: fixture/a version 2\n"),
+            Some((
+                "fixture".to_owned(),
+                "a".to_owned(),
+                semver::Version::new(0, 0, 2)
+            )),
+            "a header an integer-versioned binary wrote reads as 0.0.N"
+        );
+        assert_eq!(
+            ejected_from("# batten-ejected: fixture/a version two\n"),
+            None
+        );
     }
 
     #[test]
@@ -2631,7 +1001,37 @@ mod tests {
             .map(|manifest| manifest.verdicts.len())
             .sum();
         assert_eq!(verdict_rows().len(), declared);
-        assert_eq!(mode_sources().len(), 4);
+        assert_eq!(mode_sources().len(), 5);
+    }
+
+    /// THE NO-AUTHORITY BUNDLE CARRIES EVERY PACKAGE ITS MODULES IMPORT. It is
+    /// selected by name, so a module that starts importing a sibling's package
+    /// (e0675d43: the mode grant reads `data.batten.git_host`) compiles alone
+    /// there and faults on every call outside a repository, which the hook
+    /// answers `engine-cannot-adjudicate`. Fails by: a name list that misses
+    /// the module an import names.
+    #[test]
+    fn every_package_the_mode_sources_import_is_among_them() {
+        let sources = mode_sources();
+        let declared: BTreeSet<String> = sources
+            .iter()
+            .filter_map(|(_, text)| {
+                text.lines()
+                    .find_map(|line| line.strip_prefix("package "))
+                    .map(|package| package.trim().to_owned())
+            })
+            .collect();
+        for (pointer, text) in &sources {
+            for line in text.lines() {
+                let Some(package) = line.trim().strip_prefix("import data.") else {
+                    continue;
+                };
+                assert!(
+                    declared.contains(package.trim()),
+                    "{pointer} imports `data.{package}`, which no module in the set declares"
+                );
+            }
+        }
     }
 
     fn rule(text: &str) -> Rule {
@@ -2659,7 +1059,7 @@ mod tests {
 
         let refused = |rules: &[Rule]| {
             assert!(eject(&root, &config, rules, target).is_err());
-            assert_eq!(std::fs::read_to_string(&config).unwrap(), text);
+            assert_eq!(crate::fsio::read_to_string(&config).unwrap(), text);
         };
         refused(&[rule(GIT_ROW), rule(&GIT_ROW.replace("git calls", "again"))]);
         refused(&[
@@ -2687,20 +1087,34 @@ mod tests {
             target,
         )
         .unwrap();
+        // THE CALL CLOSURE COMES TOO: the grant reads `git_host.call_decided`
+        // since e0675d43, so the copy carries `host-decided` beside it.
         assert_eq!(
             done.written,
-            vec!["policy/git/git-call-is-preapproved.rego"]
+            vec![
+                "policy/git/git-call-is-preapproved.rego",
+                "policy/git/host-decided.rego"
+            ]
         );
+        // THE CLOSURE IS EVERY MODULE `git` SHIPS AT THIS SCOPE, so the preset
+        // row would compile nothing: it is REMOVED, not excepted, because the
+        // engine refuses a row whose `except` covers its whole selection
+        // ("delete the row instead") and `check` could not load the config.
         assert_eq!(
-            (done.row.as_str(), done.copies.as_str(), done.added),
-            ("git calls", "git ejected", true)
+            (
+                done.row.as_str(),
+                done.removed,
+                done.copies.as_str(),
+                done.added
+            ),
+            ("git calls", true, "git ejected", true)
         );
-        let copy = std::fs::read_to_string(root.join(&done.written[0])).unwrap();
+        let copy = crate::fsio::read_to_string(root.join(&done.written[0])).unwrap();
         assert!(copy.starts_with("# batten-ejected: git/git-call-is-preapproved version "));
-        let edited = std::fs::read_to_string(&config).unwrap();
+        let edited = crate::fsio::read_to_string(&config).unwrap();
         assert!(
-            edited.contains("except = [\"git-call-is-preapproved\"]"),
-            "{edited}"
+            !edited.contains("id = \"git calls\"") && !edited.contains("except"),
+            "the emptied preset row is gone: {edited}"
         );
         assert!(edited.contains("bundle = \"policy/git\""), "{edited}");
         assert!(
@@ -2724,7 +1138,7 @@ mod tests {
             .flat_map(|manifest| manifest.verdicts.iter())
             .filter(|entry| {
                 entry.routes.iter().any(|route| {
-                    route.kind == crate::verdict::RouteKind::Command
+                    route.kind == crate::preset_catalog::RouteKind::Command
                         && route.target.starts_with("run ")
                 })
             })
@@ -2751,7 +1165,7 @@ mod tests {
         for manifest in MANIFESTS {
             let declared: BTreeSet<&str> = manifest.verdicts.iter().map(|entry| entry.id).collect();
             for module in manifest.modules {
-                for token in raised_in(module.source) {
+                for token in raised_in(&module.text()) {
                     assert!(
                         declared.contains(token.as_str()),
                         "`{}` raises `{token}` in `{}`, which its manifest does not \
@@ -2776,7 +1190,7 @@ mod tests {
             let raised: BTreeSet<String> = manifest
                 .modules
                 .iter()
-                .flat_map(|module| raised_in(module.source))
+                .flat_map(|module| raised_in(&module.text()))
                 .collect();
             for entry in manifest.verdicts {
                 assert!(
@@ -2837,7 +1251,7 @@ mod tests {
         for manifest in MANIFESTS {
             for module in manifest.modules {
                 let mut in_test_rule = false;
-                for (index, line) in module.source.lines().enumerate() {
+                for (index, line) in module.text().lines().enumerate() {
                     let trimmed = line.trim_start();
                     // A rule header at column zero opens a rule; `test_` opens one
                     // this scan does not read. Tracked by header rather than by
@@ -2856,7 +1270,7 @@ mod tests {
                         continue;
                     }
                     if line.contains("github.event") {
-                        found.push((module.source, index + 1));
+                        found.push((module.pointer, index + 1));
                     }
                 }
             }
@@ -2881,12 +1295,12 @@ mod tests {
             .iter()
             .flat_map(|manifest| manifest.modules)
             .filter(|module| module.provider.is_some())
-            .map(|module| module.source)
+            .map(|module| module.pointer)
             .collect();
 
         let undeclared: Vec<usize> = provider_syntax_sites()
             .into_iter()
-            .filter(|(source, _)| !declared.contains(source))
+            .filter(|(pointer, _)| !declared.contains(pointer))
             .map(|(_, line)| line)
             .collect();
 
@@ -2895,6 +1309,60 @@ mod tests {
             "a preset module reads a CI provider's expression language and declares \
              no `provider`, so it would compile for a consumer on any host and match \
              nothing there; lines: {undeclared:?}"
+        );
+    }
+
+    /// NO PRESET TEXT IS READ PAST THE OVERLAY (#1276's mutation-tier audit).
+    ///
+    /// A mutation sweep writes a preset's mutant to the overlay, and only
+    /// [`PresetModuleExt::text`] reads it there. A raw read of the embedded
+    /// field, or an `include_str!` of a preset file, holds the unmutated bytes,
+    /// so a case reading either never sees the mutation and its row reads
+    /// SURVIVED over a mutant it was never run against. The one embedding is
+    /// the catalog's and the one raw read is `text`'s own fallback (and the
+    /// catalog's lock digest, which hashes what ships). Fails by: either
+    /// spelling anywhere else in this crate's sources or tests.
+    #[test]
+    fn no_preset_text_is_read_past_the_overlay() {
+        // Spelled in pieces so this case is not its own finding.
+        let raw = [".", "embedded_source"].concat();
+        let embed = ["include_str", "!("].concat();
+        let presets = ["presets", "/"].concat();
+        let fallback = format!("std::borrow::Cow::Borrowed(self{raw})");
+        let crate_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let mut found = Vec::new();
+        let mut dirs = vec![crate_dir.join("src"), crate_dir.join("tests")];
+        while let Some(dir) = dirs.pop() {
+            for entry in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    dirs.push(path);
+                    continue;
+                }
+                if path.extension().is_none_or(|ext| ext != "rs") {
+                    continue;
+                }
+                let relative = path
+                    .strip_prefix(crate_dir)
+                    .map(|rest| rest.to_string_lossy().replace('\\', "/"))
+                    .unwrap_or_default();
+                let catalog = relative == "src/preset_catalog.rs";
+                let text = crate::fsio::read_to_string(&path).unwrap_or_default();
+                for (index, line) in text.lines().enumerate() {
+                    let raw_read = line.contains(&raw)
+                        && !catalog
+                        && !(relative == "src/preset.rs" && line.trim() == fallback);
+                    let embedded = line.contains(&embed) && line.contains(&presets) && !catalog;
+                    if raw_read || embedded {
+                        found.push(format!("{relative}:{}", index + 1));
+                    }
+                }
+            }
+        }
+        assert!(
+            found.is_empty(),
+            "a preset's text is read past the overlay, so a mutation sweep's mutant is \
+             invisible to it: {found:?}"
         );
     }
 

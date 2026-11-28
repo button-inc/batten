@@ -33,7 +33,8 @@ use crate::common;
 
 use std::path::{Path, PathBuf};
 
-use batten::rules::{self, Rule};
+use batten::config_model::Rule;
+use batten::rules;
 
 /// The row as `batten.toml` declares it, deserialized rather than
 /// struct-literalled: `Rule` carries `deny_unknown_fields`, so this goes through
@@ -72,7 +73,7 @@ fn row() -> Rule {
 /// in-repo module there is nothing to copy into the fixture. That is also what
 /// makes this tier the only place the vendored bytes are exercised at all.
 fn tree(name: &str, pins: &str, workflow: &str) -> PathBuf {
-    let root = common::scratch(&format!("mise-preset-{name}"));
+    let root = common::scratch_repo(&format!("mise-preset-{name}"));
     common::write(&root, "batten.toml", pins);
     common::write(&root, ".github/workflows/ci.yml", workflow);
     root
@@ -155,6 +156,9 @@ fn bare() -> String {
 
 #[test]
 fn this_repository_is_clean_today() {
+    // ITS OWN STATE ROOT (CLOUD-2936): the policy load writes its cache, and
+    // against the developer's store one recording wrote it and the next read it.
+    common::scratch_state_root();
     let root = common::at_root(".")
         .canonicalize()
         .expect("this checkout is where the manifest says it is");
@@ -173,10 +177,14 @@ fn a_drifted_version_in_this_repository_is_refused() {
     // keep passing over a row that never reads the consumer's. This one copies
     // the real checkout's workflows and real pin table, moves ONE version, and
     // requires the finding.
-    let real = common::at_root(".")
-        .canonicalize()
-        .expect("this checkout is where the manifest says it is");
-    let root = common::scratch("mise-preset-real-drift");
+    //
+    // THE REAL FILES COME FROM THE COMMITTED-TREE FIXTURE (owner, 2026-11-27,
+    // CLOUD-2904): the committed `batten.toml` and workflow, never the live
+    // checkout's working copy. The drift is written into a repository of the
+    // case's own, because the committed fixture is shared by every case in
+    // this process and must not be edited.
+    let real = common::committed_repo();
+    let root = common::scratch_repo("mise-preset-real-drift");
     let pins = std::fs::read_to_string(real.join("batten.toml")).expect("the committed authority");
     common::write(&root, "batten.toml", &pins);
 

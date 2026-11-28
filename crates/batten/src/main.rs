@@ -33,6 +33,35 @@ fn main() -> ExitCode {
     if let Some(code) = batten::rustc_wrapped(std::env::args_os()) {
         return code;
     }
+    // AS A LOCK-WAIT HELPER (CLOUD-2789): a waiter off Linux re-enters this
+    // binary to block on a lock it can end; the argv is the mode and the path.
+    if let Some(code) = batten_facts::lock_wait::helped(std::env::args_os()) {
+        return code;
+    }
+    // AND AS ITS WAITER: a held lock off Linux is waited on through such a
+    // helper, started by `exec`'s placed spawn. Installed once, here, because
+    // only this binary has the helper entry above; a library or a test harness
+    // installs none and is refused by name instead of spawning itself.
+    let _installed = batten_facts::lock_wait::install(batten::exec::spawn_lock_helper);
+    // A SCHEMA SWEEP OVER A LISTING FILE (CLOUD-2253), and AS NEXTEST'S
+    // `run-wrapper` while the sweep records reach: everything after the marker
+    // is the listing, or the case's argv.
+    if let Some(code) = batten::mutate::schema::ran(std::env::args_os()) {
+        return code;
+    }
+    if let Some(code) = batten::mutate::schema::recorded(std::env::args_os()) {
+        return code;
+    }
+    // THE WRAPPER EACH CASE OF A JOURNALED STEP RUNS UNDER (CLOUD-2772): the
+    // argv is the journal's directory, then the case's.
+    if let Some(code) = batten::mutate::resume::wrapped(std::env::args_os()) {
+        return code;
+    }
+    // AS A GIT HOOK (CLOUD-2339): every git hook links to this binary, and
+    // everything after a hook name in argv[0] is git's.
+    if let Some(code) = batten::githook::dispatched(std::env::args_os()) {
+        return code.into();
+    }
     // Resolved before parsing, and from the raw argument list, because a *usage*
     // error must still be reported — and at that point `clap` has refused to
     // produce any parsed value to read the mode from.
@@ -141,7 +170,7 @@ fn report_usage(rendered: &str, mode: Mode, err: &mut dyn Write) {
         .to_owned();
     let subjects = [batten::verdict::artifact(&head)];
     let refusal = batten::refusal::Refusal::engine(
-        batten::verdict::Native::UsageRefused,
+        batten::error::Native::UsageRefused,
         &subjects,
         batten::refusal::Fix::None,
     );

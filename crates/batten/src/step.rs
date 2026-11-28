@@ -42,6 +42,15 @@
 //! cache and must not be declared; `--arg` is the one door for a value outside
 //! the tree, and only where the caller can compute the whole of it.
 //!
+//! ONE TOOL LINE IS THE ENGINE'S OWN, AND ANSWERED IN-PROCESS (step 17):
+//! [`INPUTS_DIGEST`], the digest of the out-of-tree state `enforce --half tree`
+//! reads. Spawned, it cost a `cargo run` build check and a policy load on every
+//! lap, for a value this binary computes directly. A tool line rather than a
+//! new row key, because the released engine reads this authority too and a
+//! row it does not know would refuse the whole file; an engine without the
+//! in-process answer spawns the line, and one that cannot answer it has no key
+//! and runs the step.
+//!
 //! # Fail closed, everywhere
 //!
 //! A key that cannot be computed — an authority that will not load, an
@@ -62,8 +71,26 @@
 //!
 //! `run` is the pair composed so a caller writes no shell around it: check, run
 //! the command on a miss through [`crate::exec::run`] (the child's code is the
-//! verb's, passed through unchanged), and record only on a zero exit. A record
-//! that refuses after a passing run is an economy lost, never the step's verdict.
+//! verb's, passed through unchanged), and record the verdict. A record that
+//! refuses after a run is an economy lost, never the step's verdict.
+//!
+//! # A failure is a verdict too (CLOUD-2253)
+//!
+//! A receipt written only on a pass left a failed step with no record of its
+//! inputs, so a lap on a known-red tree re-ran the whole fan to say red again
+//! (measured on #1276: three failures known, a held lap still ran ~35 minutes).
+//! So `run` records a FAILURE receipt under exactly the key a pass would use,
+//! carrying the child's code and a pointer to its stored log, and a later `run`
+//! at that key answers `red` with that code without running anything. A pass
+//! at the key replaces it, and [`BYPASS`] still forces a run.
+//!
+//! Red is reused only where the change could have caused it: a journaled run
+//! whose every failing case is flaky-suspect (its sealed reach misses the
+//! change, CLOUD-2786) is recorded as such and re-runs. A code past 125 is a
+//! signal or a shell that could not start the command, never a verdict over
+//! the inputs, and is not recorded. The failure's first line keeps the key off
+//! its last field, so an engine released before this reads it as no receipt
+//! and runs the step — never as a pass.
 //!
 //! # Local only
 //!
@@ -99,12 +126,21 @@ use std::path::Path;
 use anyhow::Result;
 use sha2::Digest as _;
 
+use crate::config_model::CONFIG_FILE;
 use crate::exit::ExitCode;
 use crate::resolve::Overrides;
 use crate::step_table::Step;
 
-/// The keyed family a passed step's receipt lives in: one record per step.
-pub const RECEIPTS: &str = "steps";
+/// The grouped family a passed step's receipts live in: one record per (step,
+/// key), so a return to a tree the step already judged is a hit (CLOUD-2784).
+pub const RECEIPTS: &str = "step-receipts";
+
+/// The family that held ONE receipt per step before CLOUD-2784. A step's first
+/// write under [`RECEIPTS`] removes its record here, so none is left unread.
+const SUPERSEDED_RECEIPTS: &str = "steps";
+
+/// How many receipts a step keeps. Past it, the oldest go first ([`evict`]).
+const KEPT_RECEIPTS: usize = 32;
 
 /// The keyed family `check` files the key under that a `record` must match.
 pub const PENDING: &str = "step-pending";
@@ -122,23 +158,8 @@ const SHOWN: usize = 12;
 // The cache's mutation rows, carried from the retired task's six and widened by
 // the three the composed `run` arm adds. Each breaks one clause a receipt's
 // soundness rests on, and each is caught by the compiled-binary case it names.
-//MUTANT-SUITE crates/batten/tests/it/step_receipt.rs
-//MUTANT hit-without-key-match|s@^    if stored.as_deref() == Some(key.as_str()) {$@    if true {@|a_changed_input_file_misses
-//MUTANT args-not-keyed|s@^    lines.extend(args.iter().map(.arg. format!("arg {}", quoted(arg))));$@    let _ = args;@|a_changed_argument_misses
-//MUTANT command-not-keyed|s@^        lines.push(format!("command {}", serde_json::to_string(command).ok()?));$@        let _ = command;@|a_changed_command_misses
-//MUTANT tools-not-keyed|s@^            quoted(said)$@            quoted("")@|a_changed_tool_version_misses
-//MUTANT dirty-index-trusted|s@^        if !clean {$@        if clean == !clean {@|unstaged_divergence_is_no_key
-//MUTANT weld-unchecked|s@^    if key.as_deref() != Some(expected.as_str()) {$@    if key.is_none() {@|inputs_changing_while_the_step_ran_refuse_the_record
-//MUTANT ci-caches|s@^    if bypassed() {$@    if false {@|under_ci_the_cache_neither_hits_nor_records
-//MUTANT failure-recorded|s@^    let passed = matches!(ran, Ok(ExitCode::Success));$@    let passed = true;@|a_failing_command_passes_its_code_through_and_records_nothing
-//MUTANT hit-runs-anyway|s@^    if answer.is_hit() {$@    if false {@|a_hit_does_not_run_the_command
 // And the three the review added: the row as key material, the table read from
 // the keyed tree alone, and no key running the step rather than skipping it.
-//MUTANT row-not-keyed|s@^    lines.push(format!("row {}", serde_json::to_string(row).ok()?));$@    let _ = row;@|an_edited_row_is_a_miss
-//MUTANT config-source-honoured|s@&Overrides::default()).ok()?;$@\&{ let mut o = Overrides::default(); o.config_in = std::env::var("BATTEN_CONFIG_IN").ok(); o }).ok()?;@|a_config_source_override_does_not_reach_the_step_table
-//MUTANT no-key-skips|s@^    if answer.is_hit() {$@    if !matches!(answer, Answer::Miss(_)) {@|an_authority_that_will_not_load_still_runs_the_step
-//MUTANT step-run-drops-child-stderr|s@^    settings.tee = true;$@    settings.tee = false;@|a_failing_step_shows_the_commands_own_output
-//MUTANT record-refusal-fails-step|s@^        let _ = record(step, args, Some(command), &mut recorded, &mut refused);$@        if !matches!(record(step, args, Some(command), \&mut recorded, \&mut refused), Ok(ExitCode::Success)) { return Ok(ExitCode::Violation); }@|a_passing_step_whose_record_refuses_stays_green
 
 /// What a check found.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -151,6 +172,22 @@ enum Answer {
     Hit(String),
     /// A key, and no receipt for it.
     Miss(String),
+    /// A failure receipt covers this exact key (CLOUD-2253): not re-run.
+    Red(String, Failure),
+    /// A failure receipt covers this key, but every failing case was a flaky
+    /// suspect: run again, like a miss.
+    Suspect(String),
+}
+
+/// What a failure receipt recorded: the child's code and its pointers.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Failure {
+    /// The code the failed run exited with.
+    code: i32,
+    /// The stored streams' capture handles, space-separated.
+    log: Option<String>,
+    /// The failing cases and the command that confirms a fix, as said.
+    cases: Option<String>,
 }
 
 impl Answer {
@@ -174,10 +211,29 @@ impl Answer {
                     shown(key)
                 )
             }
+            Answer::Red(key, failure) => format!(
+                "red {} — {step}: a failure receipt (exit {}) already covers these exact \
+                 inputs, command and tools; not re-running",
+                shown(key),
+                failure.code
+            ),
+            Answer::Suspect(key) => format!(
+                "miss — {step}: the failure recorded for {} is flaky-suspect; running the step",
+                shown(key)
+            ),
+        }
+    }
+
+    /// The key a run of this answer records under, where it may record.
+    fn recording(&self) -> Option<&str> {
+        match self {
+            Answer::Miss(key) | Answer::Suspect(key) => Some(key),
+            _ => None,
         }
     }
 
     /// Whether the step may be answered from its receipt.
+    #[cfg(test)]
     const fn is_hit(&self) -> bool {
         matches!(self, Answer::Hit(_))
     }
@@ -192,27 +248,46 @@ fn shown(key: &str) -> &str {
 /// [`BYPASS`]. Also the rule the mutation pass record follows
 /// (`mutate::ChangePass`), so every local-only answer is off in the same place.
 pub(crate) fn bypassed() -> bool {
-    ["CI", BYPASS]
-        .iter()
-        .any(|name| std::env::var_os(name).is_some_and(|value| !value.is_empty()))
+    under_ci() || set(BYPASS)
+}
+
+/// Whether this is a forge runner's `$CI`: the half of [`bypassed`] under which
+/// no journal answers either (CLOUD-2850). [`BYPASS`] switches off the receipt
+/// alone and keeps the journals, which a fixture needs to drive them.
+pub(crate) fn under_ci() -> bool {
+    set("CI")
+}
+
+/// Whether `name` is set to something.
+fn set(name: &str) -> bool {
+    std::env::var_os(name).is_some_and(|value| !value.is_empty())
 }
 
 /// Say which step a supervising task is on (CLOUD-425). Best-effort:
 /// bookkeeping never changes a verdict, and a pid nothing registered is a no-op.
 fn announce(step: &str) {
+    push_to_supervisor(crate::task::Signal::Phase, step);
+}
+
+/// Say that a long step moved forward without changing which step it is
+/// (CLOUD-2369's other half): the `Sig` field, which the self-stall arm reads
+/// beside the phase. MEASURED ON #1276: the schema sweep judged 3,723 mutants
+/// in 8,193 s inside the one `mutant:changed` step, past the 240-beat bound,
+/// and the lap was cancelled as stalled while it was still advancing.
+pub(crate) fn advanced(what: &str) {
+    push_to_supervisor(crate::task::Signal::Sig, what);
+}
+
+/// One push to the record of the task exported in [`TASK_PID`]. Best-effort,
+/// like every bookkeeping write: no supervisor, or no repository, is a no-op.
+fn push_to_supervisor(signal: crate::task::Signal, value: &str) {
     let Some(pid) = std::env::var(TASK_PID).ok().filter(|pid| !pid.is_empty()) else {
         return;
     };
     let Ok(git_dir) = crate::git::git_dir(Path::new(".")) else {
         return;
     };
-    crate::task::push(
-        &git_dir,
-        &pid,
-        crate::task::Signal::Phase,
-        step,
-        crate::boundary_epoch(),
-    );
+    crate::task::push(&git_dir, &pid, signal, value, crate::clock::now_unix());
 }
 
 /// The row the keyed tree's own committed `batten.toml` declares for `step`.
@@ -227,6 +302,30 @@ fn declared(step: &str) -> Option<Step> {
     config.steps.into_iter().find(|row| row.id == step)
 }
 
+/// The part of a row a key hashes: the three fields a row had before it could
+/// schedule (CLOUD-2785), serialized exactly as the whole row then was.
+#[derive(serde::Serialize)]
+struct KeyRow<'a> {
+    id: &'a str,
+    inputs: &'a [String],
+    tools: &'a [Vec<String>],
+}
+
+/// The key's `row` line: ONLY `id`, `inputs` and `tools` (CLOUD-2785), in the
+/// order and spelling the whole row serialized to before it could schedule, so
+/// no field added since moves a key. `None` for a schedule-only node.
+fn row_line(row: &Step) -> Option<String> {
+    let (Some(inputs), Some(tools)) = (&row.inputs, &row.tools) else {
+        return None;
+    };
+    let projected = KeyRow {
+        id: &row.id,
+        inputs,
+        tools,
+    };
+    Some(format!("row {}", serde_json::to_string(&projected).ok()?))
+}
+
 /// Everything the key hashes, or `None` where any part cannot be read.
 ///
 /// Each component is a line of its own and every free-form value is JSON-quoted,
@@ -237,17 +336,26 @@ fn material(
     args: &[String],
     command: Option<&[String]>,
 ) -> Option<String> {
+    // A SCHEDULE-ONLY NODE KEYS NOTHING (CLOUD-2785): it declares neither list.
+    let (Some(inputs), Some(tools)) = (&row.inputs, &row.tools) else {
+        return None;
+    };
     let mut lines: Vec<String> = vec![format!("step {}", serde_json::to_string(&row.id).ok()?)];
     // The declaration itself: a receipt earned under one `inputs`/`tools` set
     // never answers under a narrower one.
-    lines.push(format!("row {}", serde_json::to_string(row).ok()?));
+    lines.push(row_line(row)?);
     lines.extend(args.iter().map(|arg| format!("arg {}", quoted(arg))));
     if let Some(command) = command {
-        lines.push(format!("command {}", serde_json::to_string(command).ok()?));
+        let var = |name: &str| std::env::var(name).ok();
+        let engine = || crate::engine::digest(root).ok();
+        let keyed = keyed_command(command, tools, &engine, &trusted_stamp, &var);
+        lines.push(format!("command {}", serde_json::to_string(&keyed).ok()?));
     }
-    for tool in &row.tools {
-        let (code, said) =
-            crate::exec::piped_argv(root, tool, "", crate::exec::Diagnostics::Drop, &[])?;
+    // THE DECLARED ENVIRONMENT (CLOUD-2786) is a `batten step env` entry of
+    // `tools`, answered in-process by `tool_said`: a row without one keys byte
+    // for byte as before, and one that will not parse is no key.
+    for tool in tools {
+        let (code, said) = tool_said(root, tool)?;
         let said = said.trim();
         if code != 0 || said.is_empty() {
             return None;
@@ -258,17 +366,29 @@ fn material(
             quoted(said)
         ));
     }
-    let facts = crate::git::index_facts(root, &row.inputs).ok()?;
+    let facts = crate::git::index_facts(root, inputs).ok()?;
     let mut entries: BTreeMap<(String, u32), String> = BTreeMap::new();
     for fact in facts.values() {
         // THE INDEX IS WHAT THE KEY HASHES, so the worktree must agree with it
         // over the set: a receipt over index bytes the run never saw is the one
         // thing this cache may not mint.
-        let clean = fact.diverged.is_empty() && fact.untracked.is_empty();
+        //
+        // THE CONFIG IS NEVER AN INPUT (CLOUD-2960): it reaches a key only
+        // through a `batten step config` line, as the parts a row reads, so
+        // its own state here neither keys nor refuses one.
+        let clean = !fact
+            .diverged
+            .iter()
+            .chain(&fact.untracked)
+            .any(|path| path != CONFIG_FILE);
         if !clean {
             return None;
         }
-        for entry in &fact.entries {
+        for entry in fact
+            .entries
+            .iter()
+            .filter(|entry| entry.path != CONFIG_FILE)
+        {
             entries.insert(
                 (entry.path.clone(), entry.stage),
                 format!(
@@ -286,6 +406,671 @@ fn material(
     lines.push(String::from("inputs"));
     lines.extend(entries.into_values());
     Some(lines.join("\n"))
+}
+
+/// The tool line prefix the cache answers in-process for what a step only
+/// PROBES (CLOUD-2835): `batten step exists -- <pathspec>...`, by the same
+/// function [`run_exists`] prints with ([`exists_said`]).
+///
+/// A TOOL LINE, NOT A FIELD, for `step env`'s reason (CLOUD-2786): the
+/// declaration is the row's own `tools` entry, so an engine that predates it
+/// still loads the row and keys nothing from the line it cannot answer, which
+/// runs the step rather than dropping its row.
+pub const EXISTS: [&str; 3] = ["batten", "step", "exists"];
+
+/// The tool line a row declares UNTRACED with (CLOUD-2789): `batten step
+/// untraced`, answered in-process as one fixed line, so it is key material
+/// like any other, and a miss of the row runs with no tracer attached. For a
+/// step whose command must itself see none: `test:traced`'s cases take their
+/// traced branch only where nothing traces them, and fail under
+/// `BATTEN_TEST_TRACED_REQUIRED` where something does. Its inputs are the
+/// row's declaration alone, since no trace lints them.
+///
+/// A TOOL LINE, NOT A FIELD, for [`EXISTS`]'s reason: the released engine
+/// refuses a row field it does not know (`deny_unknown_fields`), while it loads
+/// this line, cannot answer it, keys nothing, and runs the step.
+pub const UNTRACED: [&str; 3] = ["batten", "step", "untraced"];
+
+/// The tool line a row keys a RECORD'S ADDRESS with (CLOUD-2789): `batten step
+/// record -- <family>...`, answered in-process as one `record <family> <name>
+/// present|absent` line per family, `<name>` the file this branch and its claim
+/// key the family under. For a step whose command WRITES a claim-partitioned
+/// record a policy reads (`evaluator-io-record`): a re-claim or a lost record
+/// moves the answer, so the step misses and writes the record the new address
+/// reads, where a key on the tree alone would hit and leave the gate reading
+/// an absent record as silence.
+pub const RECORD: [&str; 3] = ["batten", "step", "record"];
+
+/// The families a `step record` line's words after [`RECORD`] name: every word
+/// after the leading `--`, or `None` for any other shape, an empty list or a
+/// name that is not one path component — which keys nothing.
+fn record_ask(words: &[String]) -> Option<&[String]> {
+    let (first, families) = words.split_first()?;
+    (first == "--"
+        && !families.is_empty()
+        && families.iter().all(|family| {
+            !family.is_empty() && !family.starts_with('.') && !family.contains(['/', '\\'])
+        }))
+    .then_some(families)
+}
+
+/// One line per family in `families`: its record's file name under this
+/// branch's claim, and whether that file is there. `None` outside a repository
+/// or where `HEAD` keys no record.
+fn record_said(root: &Path, families: &[String]) -> Option<String> {
+    let git_dir = crate::git::git_dir(root).ok()?;
+    let branch = crate::git::record_key(root).ok()?;
+    let lines: Vec<String> = families
+        .iter()
+        .map(|family| {
+            let path = crate::record::family_path(&git_dir, &branch, family);
+            let name = path
+                .file_name()
+                .map_or_else(String::new, |name| name.to_string_lossy().into_owned());
+            let state = if path.is_file() { "present" } else { "absent" };
+            format!("record {family} {} {state}", quoted(&name))
+        })
+        .collect();
+    Some(lines.join("\n"))
+}
+
+/// The tool line a row reads the config through (CLOUD-2960): `batten step
+/// config [-- <part>...]`, answered in-process as one `config <part> <digest>`
+/// line per part of the config's view ([`config_view`]), every part where none
+/// is named. The config file is never an `inputs` entry, so this line is the
+/// only way it reaches a key: a comment, the `engine` pin or a row's
+/// scheduling moves none, and an edit to one part moves only the rows that
+/// declare it.
+///
+/// A TOOL LINE, NOT A FIELD, for [`EXISTS`]'s reason.
+pub const CONFIG: [&str; 3] = ["batten", "step", "config"];
+
+/// The fields of a `[[step]]` row that only schedule it, in no part.
+const SCHEDULING: [&str; 4] = crate::config::STEP_SCHEDULING;
+
+/// The parts a `step config` line's words after [`CONFIG`] name: none for
+/// every part, or every word after a leading `--`. `None` for any other shape
+/// or an empty name, which keys nothing.
+fn config_ask(words: &[String]) -> Option<&[String]> {
+    let Some((first, parts)) = words.split_first() else {
+        return Some(words);
+    };
+    (first == "--" && parts.iter().all(|part| !part.is_empty())).then_some(parts)
+}
+
+/// The config `text` as the key sees it (CLOUD-2960): parsed, without the
+/// `engine` pin, without each `[[step]]` row's scheduling fields
+/// ([`SCHEDULING`]), and without a row that declares nothing else. `None`
+/// where `text` is not TOML.
+#[must_use]
+pub fn config_table(text: &str) -> Option<toml::Table> {
+    let mut table: toml::Table = toml::from_str(text).ok()?;
+    table.remove("engine");
+    if let Some(toml::Value::Array(rows)) = table.get_mut("step") {
+        for row in rows.iter_mut() {
+            if let Some(row) = row.as_table_mut() {
+                for field in SCHEDULING {
+                    row.remove(field);
+                }
+            }
+        }
+        rows.retain(|row| {
+            row.as_table()
+                .is_none_or(|row| row.keys().any(|key| key != "id"))
+        });
+        if rows.is_empty() {
+            table.remove("step");
+        }
+    }
+    Some(table)
+}
+
+/// The config `text` as a case reads it: [`crate::config::config_view`], the
+/// pin and the scheduling removed in place (CLOUD-2960).
+#[must_use]
+pub fn config_view(text: &str) -> Option<String> {
+    crate::config::config_view(text)
+}
+
+/// One value in a canonical spelling: every table's keys sorted, whatever
+/// order the file or the map wrote them in.
+fn canonical(value: &toml::Value) -> String {
+    match value {
+        toml::Value::Table(table) => {
+            let mut keys: Vec<&String> = table.keys().collect();
+            keys.sort();
+            let body: Vec<String> = keys
+                .into_iter()
+                .map(|key| format!("{}:{}", quoted(key), canonical(&table[key.as_str()])))
+                .collect();
+            format!("{{{}}}", body.join(","))
+        }
+        toml::Value::Array(items) => {
+            let body: Vec<String> = items.iter().map(canonical).collect();
+            format!("[{}]", body.join(","))
+        }
+        toml::Value::String(text) => quoted(text),
+        other => other.to_string(),
+    }
+}
+
+/// One `config "<part>" <digest>` line per part of `text`'s view, sorted, or
+/// `config "<part>" none` for a named part it does not carry: every part
+/// where `parts` is empty. `None` where `text` is not TOML. The digest of
+/// part 2 that a caller outside the step cache keys with (CLOUD-2959).
+#[must_use]
+pub fn config_digest(text: &str, parts: &[String]) -> Option<String> {
+    let table = config_table(text)?;
+    let mut names: Vec<String> = if parts.is_empty() {
+        table.keys().cloned().collect()
+    } else {
+        parts.to_vec()
+    };
+    names.sort();
+    names.dedup();
+    let lines: Vec<String> = names
+        .iter()
+        .map(|name| match table.get(name) {
+            Some(value) => format!("config {} {}", quoted(name), key_of(&canonical(value))),
+            None => format!("config {} none", quoted(name)),
+        })
+        .collect();
+    if lines.is_empty() {
+        return Some(String::from("config none"));
+    }
+    Some(lines.join("\n"))
+}
+
+/// [`config_digest`] over the config committed at `root`. The worktree must
+/// agree with the index over the file, as for `inputs`; `None` otherwise, or
+/// where the file is absent or unreadable.
+fn config_said(root: &Path, parts: &[String]) -> Option<String> {
+    let facts = crate::git::index_facts(root, &[String::from(CONFIG_FILE)]).ok()?;
+    let fact = facts.values().next()?;
+    if !(fact.diverged.is_empty() && fact.untracked.is_empty()) || fact.entries.is_empty() {
+        return None;
+    }
+    let text = std::fs::read_to_string(root.join(CONFIG_FILE)).ok()?;
+    config_digest(&text, parts)
+}
+
+/// `step config` (CLOUD-2960): print the part digests `parts` name, every part
+/// where none, the step cache's answer to the tool line; exit 0. 1 for an
+/// empty part name, 3 where the config is unread or disagrees with the index.
+///
+/// # Errors
+///
+/// `out` or `err` cannot be written.
+pub fn run_config(parts: &[String], out: &mut dyn Write, err: &mut dyn Write) -> Result<ExitCode> {
+    if parts.iter().any(String::is_empty) {
+        writeln!(err, "step config: a part name may not be empty")?;
+        return Ok(ExitCode::Usage);
+    }
+    let Some(lines) = config_said(Path::new("."), parts) else {
+        writeln!(
+            err,
+            "step config: the config is not committed, not TOML, or the worktree disagrees with \
+             the index over it"
+        )?;
+        return Ok(ExitCode::Internal);
+    };
+    writeln!(out, "{lines}")?;
+    Ok(ExitCode::Success)
+}
+
+/// Whether `row` reads the config through a [`CONFIG`] line.
+fn reads_config(row: &Step) -> bool {
+    row.tools()
+        .iter()
+        .any(|tool| after(tool, &CONFIG).is_some())
+}
+
+/// Whether `row` declares its misses untraced ([`UNTRACED`]).
+fn untraced(row: &Step) -> bool {
+    row.tools()
+        .iter()
+        .any(|tool| tool.iter().map(String::as_str).eq(UNTRACED))
+}
+
+/// The pathspecs a `step exists` line's words after [`EXISTS`] declare: every
+/// word after the leading `--`, or `None` for any other shape, an empty list
+/// or a pathspec this build does not read — which keys nothing.
+fn exists_ask(words: &[String]) -> Option<&[String]> {
+    let (first, specs) = words.split_first()?;
+    (first == "--"
+        && !specs.is_empty()
+        && specs
+            .iter()
+            .all(|spec| crate::git::pathspec_is_supported(spec)))
+    .then_some(specs)
+}
+
+/// The pathspecs `row` declares only probed: those of its `step exists` lines.
+fn exists_specs(row: &Step) -> Vec<String> {
+    row.tools()
+        .iter()
+        .filter_map(|tool| after(tool, &EXISTS).and_then(exists_ask))
+        .flatten()
+        .cloned()
+        .collect()
+}
+
+/// PRESENCE, NEVER BYTES (CLOUD-2835): one `exists <path>` line per index
+/// path `specs` select, without its mode or object id, so an edit to one keeps
+/// the answer and adding or removing one moves it; `exists none` where they
+/// select nothing. The worktree must agree over the set, as for `inputs`: a
+/// diverged or untracked path under a spec is `None`, no key.
+fn exists_said(root: &Path, specs: &[String]) -> Option<String> {
+    let facts = crate::git::index_facts(root, specs).ok()?;
+    let mut present = std::collections::BTreeSet::new();
+    for fact in facts.values() {
+        if !(fact.diverged.is_empty() && fact.untracked.is_empty()) {
+            return None;
+        }
+        present.extend(
+            fact.entries
+                .iter()
+                .map(|entry| format!("exists {}", quoted(&entry.path))),
+        );
+    }
+    if present.is_empty() {
+        return Some(String::from("exists none"));
+    }
+    Some(present.into_iter().collect::<Vec<_>>().join("\n"))
+}
+
+/// `step exists` (CLOUD-2835): print the presence lines `specs` select in this
+/// checkout, the step cache's answer to the tool line; exit 0. 1 for no
+/// pathspec or one this build does not read, 3 where the worktree disagrees
+/// with the index over the set or the index cannot be read.
+///
+/// # Errors
+///
+/// `out` or `err` cannot be written.
+pub fn run_exists(specs: &[String], out: &mut dyn Write, err: &mut dyn Write) -> Result<ExitCode> {
+    let mut words = vec![String::from("--")];
+    words.extend_from_slice(specs);
+    let Some(specs) = exists_ask(&words) else {
+        writeln!(
+            err,
+            "step exists: at least one pathspec is required, and none may be empty or `:` magic"
+        )?;
+        return Ok(ExitCode::Usage);
+    };
+    let Some(lines) = exists_said(Path::new("."), specs) else {
+        writeln!(
+            err,
+            "step exists: the worktree disagrees with the index over these paths, or the index \
+             cannot be read"
+        )?;
+        return Ok(ExitCode::Internal);
+    };
+    writeln!(out, "{lines}")?;
+    Ok(ExitCode::Success)
+}
+
+/// The tool line the cache answers in-process rather than spawning: the
+/// digest `enforce --half tree --inputs-digest` prints, by the same function
+/// ([`tree_inputs_digest_in`]).
+pub const INPUTS_DIGEST: [&str; 5] = ["batten", "enforce", "--half", "tree", "--inputs-digest"];
+
+/// The tool line a row keys THE CALENDAR'S STANDING with (CLOUD-2329): `batten
+/// step dated`, answered in-process as one `dated <date> past|today|ahead`
+/// line per date the config declares, where `date -u +%F` keyed the day.
+///
+/// What the day protected is a date crossing: a waiver, a perf exemption, a
+/// handler or a deprecation window lapses ON a declared `YYYY-MM-DD`, and no
+/// policy reads the clock itself. So the key needs where today stands against
+/// each declared date, which moves only when one is crossed. Keying the day
+/// re-ran `enforce-tree` (about 150 s) on every first lap after midnight over
+/// an unchanged tree. `today` beside `past` and `ahead` keeps both a `>=` and a
+/// `>` comparison exact.
+///
+/// The dates are every `YYYY-MM-DD` in the committed and local config's text,
+/// whichever table holds them, and the engine's deprecation table. A date in a
+/// comment only adds a line that never moves on its own. A tool line, not a
+/// field, for [`EXISTS`]'s reason.
+pub const DATED: [&str; 3] = ["batten", "step", "dated"];
+
+/// [`DATED`]'s answer in `root`, or `None` when the clock or the committed
+/// config cannot be read.
+fn dated_said(root: &Path) -> Option<String> {
+    let committed = crate::fsio::read_to_string(root.join(CONFIG_FILE)).ok()?;
+    let local = crate::fsio::read_to_string(root.join(crate::resolve::LOCAL_CONFIG_FILE))
+        .unwrap_or_default();
+    let today = crate::waiver::today().ok()?;
+    let declared = crate::config::DEPRECATED_KEYS
+        .iter()
+        .map(|deprecation| deprecation.expires);
+    Some(dated_lines(
+        [committed.as_str(), local.as_str()]
+            .into_iter()
+            .chain(declared),
+        today,
+    ))
+}
+
+/// One `dated <date> past|today|ahead` line per distinct date in `texts`,
+/// in calendar order, or `dated none` when there is none.
+fn dated_lines<'a>(texts: impl IntoIterator<Item = &'a str>, today: crate::waiver::Date) -> String {
+    let mut dates = std::collections::BTreeSet::new();
+    for text in texts {
+        let bytes = text.as_bytes();
+        for start in 0..bytes.len().saturating_sub(9) {
+            let window = &bytes[start..start + 10];
+            let shaped = window.iter().enumerate().all(|(at, byte)| {
+                if at == 4 || at == 7 {
+                    *byte == b'-'
+                } else {
+                    byte.is_ascii_digit()
+                }
+            });
+            if !shaped {
+                continue;
+            }
+            if let Some(date) = std::str::from_utf8(window)
+                .ok()
+                .and_then(|text| crate::waiver::Date::parse(text).ok())
+            {
+                dates.insert(date);
+            }
+        }
+    }
+    if dates.is_empty() {
+        return String::from("dated none");
+    }
+    dates
+        .into_iter()
+        .map(|date| {
+            let standing = match date.cmp(&today) {
+                std::cmp::Ordering::Less => "past",
+                std::cmp::Ordering::Equal => "today",
+                std::cmp::Ordering::Greater => "ahead",
+            };
+            format!("dated {} {standing}", date.text())
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// What `tool` says run in `root`, as its exit code and stdout: answered
+/// in-process for [`INPUTS_DIGEST`], a [`BASE`] line and an
+/// [`ENV`](crate::mutate::resume::ENV) line (one that cannot be answered is a
+/// non-zero code, so no key), spawned through the placed boundary for every
+/// other line. `None` where it could not be spawned.
+fn tool_said(root: &Path, tool: &[String]) -> Option<(i32, String)> {
+    let answered =
+        |said: Option<String>| Some(said.map_or_else(|| (1, String::new()), |said| (0, said)));
+    if tool.iter().map(String::as_str).eq(INPUTS_DIGEST) {
+        return answered(tree_inputs_digest_in(root).ok());
+    }
+    if tool.iter().map(String::as_str).eq(UNTRACED) {
+        return answered(Some(String::from("untraced")));
+    }
+    if tool.iter().map(String::as_str).eq(DATED) {
+        return answered(dated_said(root));
+    }
+    if let Some(words) = after(tool, &BASE) {
+        let var = |name: &str| std::env::var(name).ok();
+        return answered(base_ask(words).and_then(|ask| base_said(root, &ask, &var)));
+    }
+    if let Some(words) = after(tool, &EXISTS) {
+        return answered(exists_ask(words).and_then(|specs| exists_said(root, specs)));
+    }
+    if let Some(words) = after(tool, &RECORD) {
+        return answered(record_ask(words).and_then(|families| record_said(root, families)));
+    }
+    if let Some(words) = after(tool, &CONFIG) {
+        return answered(config_ask(words).and_then(|parts| config_said(root, parts)));
+    }
+    if let Some(words) = after(tool, &crate::mutate::resume::ENV) {
+        return answered(
+            crate::mutate::resume::env_ask(words)
+                .and_then(|declared| env_lines(&declared, std::env::vars_os()))
+                .map(|lines| lines.join("\n")),
+        );
+    }
+    crate::exec::piped_argv(root, tool, "", crate::exec::Diagnostics::Drop, &[])
+}
+
+/// The words of `tool` after `head`, where it begins with `head`.
+fn after<'a>(tool: &'a [String], head: &[&str]) -> Option<&'a [String]> {
+    tool.get(..head.len())
+        .filter(|start| start.iter().map(String::as_str).eq(head.iter().copied()))
+        .and_then(|_| tool.get(head.len()..))
+}
+
+/// `step env` (CLOUD-2786): print the sorted `env "NAME=value"` and
+/// `env "PATTERN" none` lines the declaration keys in this process's
+/// environment, the lines the step cache answers the row's tool line with;
+/// exit 0. 1 for a declaration that names no pattern or a malformed name, 3
+/// for a keyed value that is not Unicode.
+///
+/// # Errors
+///
+/// `out` or `err` cannot be written.
+pub fn run_env(
+    exclude: &[String],
+    patterns: &[String],
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
+    let Some(declared) = crate::mutate::resume::declare(patterns.to_vec(), exclude.to_vec()) else {
+        writeln!(
+            err,
+            "step env: at least one NAME or PREFIX* pattern after `--`, and --exclude takes a NAME"
+        )?;
+        return Ok(ExitCode::Usage);
+    };
+    let Some(lines) = env_lines(&declared, std::env::vars_os()) else {
+        writeln!(err, "step env: a keyed variable's value is not Unicode")?;
+        return Ok(ExitCode::Internal);
+    };
+    for line in lines {
+        writeln!(out, "{line}")?;
+    }
+    Ok(ExitCode::Success)
+}
+
+/// The tool line prefix the cache answers in-process for a two-tree step's
+/// base half (CLOUD-2787): `batten step base --ref <ref> [--ref-env <VAR>] --
+/// <path>...`, by the same function [`run_base`] prints with ([`base_said`]).
+pub const BASE: [&str; 3] = ["batten", "step", "base"];
+
+/// What a `step base` line asks: the ref, the variable that overrides it when
+/// set and non-empty, and the pathspecs whose content ids are its answer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct BaseAsk {
+    reference: String,
+    ref_env: Option<String>,
+    paths: Vec<String>,
+}
+
+/// The command as its key reads it (CLOUD-2904): by what it runs, never by how
+/// the lap spelled it.
+///
+/// Measured on #1276: an unchanged red `test-replay` ran again in full (596 s)
+/// because its key took the argv verbatim, and two laps over one tree spell it
+/// two ways. The engine is `$BATTEN_BIN` when the lap's build is current and
+/// `cargo run --quiet -p batten --` when it is not, and the base is
+/// `$BATTEN_SPEC_BASE` when a bet is out and `origin/main` when none is.
+///
+/// - **A launcher that runs this tree's engine is `engine <digest>`**
+///   ([`crate::engine::digest`]): `cargo run` naming only `-p batten` and
+///   `--quiet`, which builds the tree it runs in, or a binary whose stamp
+///   ([`trusted_stamp`]) is that digest. Any other launcher keys literally, as
+///   before, so an engine the tree did not build never shares a key with one
+///   it did.
+/// - **A word spelling the ref a `step base` tool of the row resolves is
+///   `<base>`**: that tool already keys the base by its content, so its name
+///   adds only the spelling.
+fn keyed_command(
+    command: &[String],
+    tools: &[Vec<String>],
+    engine: &dyn Fn() -> Option<String>,
+    stamp: &dyn Fn(&Path) -> Option<String>,
+    var: &dyn Fn(&str) -> Option<String>,
+) -> Vec<String> {
+    let rest = launched_rest(command).or_else(|| {
+        let first = Path::new(command.first()?);
+        let named = first.file_name().is_some_and(|name| name == "batten");
+        (named && stamp(first).is_some_and(|built| Some(built) == engine()))
+            .then(|| command.get(1..).unwrap_or_default())
+    });
+    let mut keyed = match (rest, rest.and_then(|_| engine())) {
+        (Some(rest), Some(digest)) => {
+            let mut keyed = vec![format!("engine {digest}")];
+            keyed.extend(rest.iter().cloned());
+            keyed
+        }
+        _ => command.to_vec(),
+    };
+    let refs: Vec<String> = tools
+        .iter()
+        .filter_map(|tool| after(tool, &BASE))
+        .filter_map(base_ask)
+        .map(|ask| base_ref(&ask, var))
+        .collect();
+    for word in &mut keyed {
+        if refs.contains(word) {
+            *word = String::from("<base>");
+        }
+    }
+    keyed
+}
+
+/// The words after `cargo run [--quiet|-q] -p batten [--quiet|-q] --`, or
+/// `None` for any other shape: another package, a feature, a profile or a
+/// target each builds something else, so each keys literally.
+fn launched_rest(command: &[String]) -> Option<&[String]> {
+    let words: Vec<&str> = command.iter().map(String::as_str).collect();
+    let ["cargo", "run", ..] = words.as_slice() else {
+        return None;
+    };
+    let dash = words.iter().position(|word| *word == "--")?;
+    let flags = words.get(2..dash)?;
+    let mut package = false;
+    let mut at = flags.iter();
+    while let Some(word) = at.next() {
+        match *word {
+            "--quiet" | "-q" => {}
+            "-p" | "--package" if at.next() == Some(&"batten") && !package => package = true,
+            _ => return None,
+        }
+    }
+    package.then(|| command.get(dash + 1..)).flatten()
+}
+
+/// `binary`'s stamp, trusted only when the stamp is at least as new as the
+/// binary: a build after stamping leaves a stamp naming source the binary may
+/// no longer be, and that one is no stamp.
+fn trusted_stamp(binary: &Path) -> Option<String> {
+    let modified = |path: &Path| std::fs::metadata(path).ok()?.modified().ok();
+    let stamped = modified(&crate::engine::stamp_path(binary))?;
+    (stamped >= modified(binary)?)
+        .then(|| crate::engine::stamp_of(binary))
+        .flatten()
+}
+
+/// The [`BaseAsk`] a tool line's words after [`BASE`] spell, or `None` for any
+/// other shape — which keys nothing, so the step runs. Only the canonical
+/// spelling is read: `--ref` and `--ref-env` as separate tokens, then `--`.
+fn base_ask(words: &[String]) -> Option<BaseAsk> {
+    let (mut reference, mut ref_env) = (None, None);
+    let mut rest = words.iter();
+    loop {
+        match rest.next()?.as_str() {
+            "--ref" => reference = Some(rest.next()?.clone()),
+            "--ref-env" => ref_env = Some(rest.next()?.clone()),
+            "--" => break,
+            _ => return None,
+        }
+    }
+    let paths: Vec<String> = rest.cloned().collect();
+    let reference = reference.filter(|named: &String| !named.is_empty())?;
+    (!paths.is_empty()).then_some(BaseAsk {
+        reference,
+        ref_env,
+        paths,
+    })
+}
+
+/// The ref `ask` compares against: `ref_env`'s value when that variable is set
+/// and non-empty under `var`, else the declared ref.
+fn base_ref(ask: &BaseAsk, var: &dyn Fn(&str) -> Option<String>) -> String {
+    ask.ref_env
+        .as_deref()
+        .and_then(var)
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| ask.reference.clone())
+}
+
+/// The base lines for `ask`: one `base <path> <id>` per pathspec, read at the
+/// MERGE BASE of `HEAD` and [`base_ref`], never the ref's tip — the revision
+/// `test replay` and `perf-gate` actually compare against. `None` where the
+/// ref or the merge base cannot be resolved: no key, so the step runs.
+///
+/// NO COMMIT ID ENTERS THE ANSWER: a trunk that gains a commit touching none of
+/// the paths moves the merge base after a rebase, never these lines.
+fn base_said(root: &Path, ask: &BaseAsk, var: &dyn Fn(&str) -> Option<String>) -> Option<String> {
+    let fork = crate::git::merge_base(root, &base_ref(ask, var)).ok()??;
+    base_lines_at(root, &fork, &ask.paths)
+}
+
+/// One `base <path> <id>` line per path, `<id>` the object `commit:<path>`
+/// names (`.` naming the commit's root tree), `absent` where the path is
+/// missing there. `None` only when the repository cannot be read.
+pub(crate) fn base_lines_at(root: &Path, commit: &str, paths: &[String]) -> Option<String> {
+    let mut lines = Vec::with_capacity(paths.len());
+    for path in paths {
+        let trimmed = path.trim_end_matches('/');
+        let rev = if trimmed.is_empty() || trimmed == "." {
+            format!("{commit}^{{tree}}")
+        } else {
+            format!("{commit}:{trimmed}")
+        };
+        let id = crate::git::resolve_ref(root, &rev)
+            .ok()?
+            .unwrap_or_else(|| String::from("absent"));
+        lines.push(format!("base {path} {id}"));
+    }
+    Some(lines.join("\n"))
+}
+
+/// `step base` (CLOUD-2787): print the base lines for `reference` (or
+/// `ref_env`'s value when set and non-empty) over `paths`, exit 0; 3 when the
+/// ref or its merge base with `HEAD` does not resolve, 1 for an empty ref.
+///
+/// # Errors
+///
+/// `out` or `err` cannot be written.
+pub fn run_base(
+    reference: &str,
+    ref_env: Option<&str>,
+    paths: &[String],
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
+    if reference.is_empty() || paths.is_empty() {
+        writeln!(err, "step base: --ref and at least one path are required")?;
+        return Ok(ExitCode::Usage);
+    }
+    let ask = BaseAsk {
+        reference: reference.to_owned(),
+        ref_env: ref_env.map(str::to_owned),
+        paths: paths.to_vec(),
+    };
+    let var = |name: &str| std::env::var(name).ok();
+    let Some(lines) = base_said(Path::new("."), &ask, &var) else {
+        writeln!(
+            err,
+            "step base: {} or its merge base with HEAD does not resolve",
+            base_ref(&ask, &var)
+        )?;
+        return Ok(ExitCode::Internal);
+    };
+    writeln!(out, "{lines}")?;
+    Ok(ExitCode::Success)
 }
 
 /// A free-form value as one JSON string, or the value itself where it cannot be
@@ -351,16 +1136,73 @@ fn check(step: &str, args: &[String], command: Option<&[String]>) -> Answer {
         }
         return Answer::NoKey;
     };
-    let stored = read_key(git_dir.as_deref(), RECEIPTS, step);
+    // THE RECEIPT FOR THIS KEY, among the step's many (CLOUD-2784): one record
+    // per key it passed under, so the lookup is by the fresh key itself, and its
+    // last field still has to equal that key for a hit.
+    let body = git_dir
+        .as_deref()
+        .and_then(|git_dir| crate::record::keyed_group_read(git_dir, RECEIPTS, step, &key));
+    let stored = body.as_deref().and_then(stored_key);
     if stored.as_deref() == Some(key.as_str()) {
         return Answer::Hit(key);
     }
+    // A FAILURE AT THIS KEY (CLOUD-2253), read only where `run` wrote it: a
+    // check's key carries no command, so it never meets one.
+    let failed = command
+        .and(body.as_deref())
+        .and_then(|body| failure_of(body, &key));
+    if let Some((failure, false)) = failed {
+        return Answer::Red(key, failure);
+    }
+    let suspect = failed.is_some();
     // The pending key is what a later `record` must match. A store that will not
     // take it costs the economy, never the verdict: `record` then refuses.
     if let Some(git_dir) = &git_dir {
         let _ = crate::record::keyed_write(git_dir, PENDING, step, &format!("{key}\n"));
     }
+    if suspect {
+        return Answer::Suspect(key);
+    }
     Answer::Miss(key)
+}
+
+/// The failure a receipt body records for `key`, and whether it was
+/// flaky-suspect: a first line `<stamp> <n>ms <key> exit <code>[ flaky]`, then
+/// optional `log <handles>` and `cases <said>` lines. `None` for a pass, or for
+/// anything malformed, which every caller treats as "run".
+fn failure_of(body: &str, key: &str) -> Option<(Failure, bool)> {
+    let mut lines = body.lines();
+    let first: Vec<&str> = lines.next()?.split_whitespace().collect();
+    let at = first.iter().position(|field| *field == key)?;
+    let (word, code) = (first.get(at + 1)?, first.get(at + 2)?);
+    if *word != "exit" {
+        return None;
+    }
+    let code = code.parse::<i32>().ok().filter(|code| *code != 0)?;
+    let flaky = match first.get(at + 3..)? {
+        [] => false,
+        ["flaky"] => true,
+        _ => return None,
+    };
+    let mut failure = Failure {
+        code,
+        log: None,
+        cases: None,
+    };
+    for line in lines {
+        if let Some(log) = line.strip_prefix("log ") {
+            failure.log = Some(log.to_owned());
+        } else if let Some(cases) = line.strip_prefix("cases ") {
+            failure.cases = Some(cases.to_owned());
+        }
+    }
+    Some((failure, flaky))
+}
+
+/// Whether a failed run's code is a verdict over its inputs: a child's own
+/// code, never a signal (`128 + N`) or a shell that could not run it.
+const fn recordable_failure(code: i32) -> bool {
+    1 <= code && code <= 125
 }
 
 /// Record the step's receipt, refusing when the key moved since the check.
@@ -370,6 +1212,21 @@ fn record(
     step: &str,
     args: &[String],
     command: Option<&[String]>,
+    elapsed: Option<std::time::Duration>,
+    said: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
+    record_as(step, args, command, elapsed, None, said, err)
+}
+
+/// [`record`], of a failure when `failed` names one (CLOUD-2253): the same key,
+/// the same refusals, the same slot, so a pass and a failure replace each other.
+fn record_as(
+    step: &str,
+    args: &[String],
+    command: Option<&[String]>,
+    elapsed: Option<std::time::Duration>,
+    failed: Option<(&Failure, bool)>,
     said: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
@@ -399,13 +1256,20 @@ fn record(
         )?;
         return Ok(ExitCode::Violation);
     }
-    let receipt = format!(
-        "{} {expected}\n",
-        crate::receipt::rfc3339_utc(crate::boundary_epoch())
+    // THE RUN'S WALL TIME RIDES THE RECEIPT (CLOUD-2776), between the stamp and
+    // the key, so a hit can say what the run it stands for cost. The key stays
+    // the last field, which is all `stored_key` reads.
+    let stamp = crate::clock::rfc3339_utc(crate::clock::now_unix());
+    let mut receipt = elapsed.map_or_else(
+        || format!("{stamp} {expected}\n"),
+        |elapsed| format!("{stamp} {}ms {expected}\n", elapsed.as_millis()),
     );
-    let written = git_dir
-        .as_deref()
-        .map(|git_dir| crate::record::keyed_write(git_dir, RECEIPTS, step, &receipt));
+    if let Some((failure, flaky)) = failed {
+        receipt = failure_body(&receipt, failure, flaky);
+    }
+    let written = git_dir.as_deref().map(|git_dir| {
+        crate::record::keyed_group_write(git_dir, RECEIPTS, step, &expected, &receipt)
+    });
     if !matches!(written, Some(Ok(()))) {
         writeln!(
             err,
@@ -413,8 +1277,44 @@ fn record(
         )?;
         return Ok(ExitCode::Internal);
     }
-    writeln!(said, "step record: {step} — recorded {}", shown(&expected))?;
+    if let Some(git_dir) = git_dir.as_deref() {
+        // Housekeeping after the receipt is durable, so its failure costs disk,
+        // never the receipt just written.
+        let _ = crate::record::keyed_remove(git_dir, SUPERSEDED_RECEIPTS, step);
+        let entries: Vec<(String, String)> =
+            crate::record::keyed_group_entries(git_dir, RECEIPTS, step)
+                .into_iter()
+                .map(|(name, value)| (name, receipt_stamp(&value)))
+                .collect();
+        for name in evict(&entries, KEPT_RECEIPTS) {
+            let _ = crate::record::keyed_group_remove(git_dir, RECEIPTS, step, &name);
+        }
+    }
+    let what = if failed.is_some() { "failure " } else { "" };
+    writeln!(
+        said,
+        "step record: {step} — recorded {what}{}",
+        shown(&expected)
+    )?;
     Ok(ExitCode::Success)
+}
+
+/// A pass's receipt line made a failure's: the code after the key, so the key
+/// is no longer the line's last field, then the pointers.
+fn failure_body(pass: &str, failure: &Failure, flaky: bool) -> String {
+    use std::fmt::Write as _;
+    let mut body = format!(
+        "{} exit {}{}\n",
+        pass.trim_end(),
+        failure.code,
+        if flaky { " flaky" } else { "" }
+    );
+    for (tag, value) in [("log", &failure.log), ("cases", &failure.cases)] {
+        if let Some(value) = value {
+            let _ = writeln!(body, "{tag} {value}");
+        }
+    }
+    body
 }
 
 /// `batten step check <step> [--arg V]...`: `hit` or `miss`, in words, at exit 0.
@@ -448,7 +1348,7 @@ pub fn run_record(
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
-    record(step, args, None, out, err)
+    record(step, args, None, None, out, err)
 }
 
 /// `batten step run <step> [--arg V]... -- <command...>`: the pair composed.
@@ -468,44 +1368,2269 @@ pub fn run_record(
 /// A [`crate::Passthrough`] carrying the command's non-zero code, and a
 /// [`crate::error::UsageError`] when the command cannot be started — each
 /// [`crate::exec::run`]'s own, passed through unchanged.
+///
+/// `shards` above one SHARDS A JOURNALED NEXTEST MISS (CLOUD-2843): the suite
+/// archived once and each `hash:k/n` partition run over it ([`run_sharded`]),
+/// recorded only where the shards' cases are exactly the archive's list. Never
+/// key material: a sharded pass covers the cases an unsharded one does. Any
+/// other command runs as declared.
 pub fn run_step(
     step: &str,
-    args: &[String],
+    (args, shards): (&[String], Option<u32>),
     command: &[String],
+    watched: Option<&Path>,
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
+    // ONE RUNNER PER STEP AT A TIME (CLOUD-2783). hk's hooks start the same
+    // step in parallel, each found no receipt, and each ran it: measured on lap
+    // 33, `lint:clippy` ran three times at once, ~20 minutes a lap. Held across
+    // check, run and record, so a second runner waits, then reads the first's
+    // receipt as a hit. A lock that cannot be taken runs unlocked: it is an
+    // economy, and the step's verdict is its command's alone.
+    let held = step_lock(step);
     let answer = check(step, args, Some(command));
     let _ = writeln!(err, "{}", answer.line(step));
-    if answer.is_hit() {
+    if let Answer::Hit(key) = &answer {
+        // A HIT REPORTS THE RUN IT STANDS FOR (CLOUD-2776), never its own few
+        // milliseconds: a resumed lap must not look faster than the work was.
+        // The matched record is the one for this key (CLOUD-2784).
+        let recorded = crate::git::git_dir(Path::new("."))
+            .ok()
+            .and_then(|git_dir| crate::record::keyed_group_read(&git_dir, RECEIPTS, step, key))
+            .and_then(|body| recorded_millis(&body));
+        let _ = writeln!(err, "{}", stage_line(step, "hit", recorded));
+        record_pass(step);
         return Ok(ExitCode::Success);
     }
+    if let Answer::Red(key, failure) = &answer {
+        return answer_red(step, key, failure, err);
+    }
+    let started = std::time::Instant::now();
     // TEED, NOT ONLY CAPTURED (CLOUD-2091). `exec::run`'s default stores the
     // child's bytes and prints none of them, which is right for `batten exec` and
     // wrong here: a step is a gate whose reader is a log, and on a CI runner the
     // capture store dies with the job. A failing `test:cargo` then said only
     // `ERROR task failed`, with no case named anywhere a person could read it.
-    let mut settings = crate::exec::ExecConfig::DEFAULT;
+    let mut settings = crate::config_model::ExecConfig::DEFAULT;
     settings.tee = true;
-    let ran = crate::exec::run_with(command, &[], &settings, &mut std::io::sink());
+    // A MISS KEEPS WHAT IT FINISHES, CASE BY CASE, when the command is a
+    // nextest run (CLOUD-2772): a stopped run resumes rather than re-running
+    // every case it passed. Keyed by the command's own argv, never a config key,
+    // so the released engine reading the authority meets nothing new. The
+    // receipt's key stays the declared command's; a journal that cannot be set
+    // up runs the command as declared, because the journal is an economy and
+    // the step's verdict is the command's alone.
+    // BY THE ROW, NEVER BY THE ARGV (CLOUD-2785): `journal = "nextest"`. NOT
+    // UNDER CI (CLOUD-2850), for "Local only"'s reason: a runner that kept the
+    // journal would answer a case from an earlier run.
+    let journaled = declared(step)
+        .filter(|_| !under_ci())
+        .is_some_and(|row| row.journal == Some(crate::step_table::Journal::Nextest))
+        .then_some(command)
+        .and_then(|_| crate::git::repo_root(Path::new(".")).ok())
+        .and_then(|root| Some((crate::mutate::resume::journaled(&root, command).ok()?, root)));
+    let running = journaled
+        .as_ref()
+        .map_or(command, |(argv, _)| argv.as_slice());
+    // A MISS ON LINUX IS TRACED (CLOUD-2784), so a read outside the row's
+    // declared inputs is seen before a receipt is minted over it. Where no
+    // tracer answers the step runs untraced and records as before, and so does
+    // a row that declares itself [`UNTRACED`] (CLOUD-2789).
+    let traced = answer
+        .recording()
+        .is_some()
+        .then(|| crate::mutate::trace::Host::here().tracer())
+        .flatten()
+        .filter(|_| !declared(step).is_some_and(|row| untraced(&row)))
+        .and_then(|strace| Some((strace, run_trace_file(step)?)));
+    let mut report = Vec::new();
+    // A WATCHED STEP TELLS ITS COMMAND SO (CLOUD-2925): the watcher collects
+    // from this process, outside the trace, and a collection run inside the
+    // command — the rustc wrapper's — had its reads charged to the step.
+    // THE WORKTREE IT WATCHES, never a bare flag (CLOUD-2789): a command that
+    // reaches ANOTHER repository — a suite's fixture checkout above all — is
+    // not covered by this watcher, and told only "watched" it skipped its own
+    // collection and its own watcher, and every disk case under `test:cargo`
+    // went red or hung.
+    let published: Vec<(String, String)> = watched
+        .map(|root| (DISK_WATCHED.to_owned(), root.to_string_lossy().into_owned()))
+        .into_iter()
+        .collect();
+    let (ran, trace_files) = run_miss(
+        (command, running),
+        (journaled.as_ref(), shards),
+        traced.as_ref(),
+        (&settings, &published, &mut report, held.as_ref()),
+        err,
+    );
+    // THE RUN'S DEPENDENCY PASSES OUTLIVE IT only over a tree that stood for
+    // the whole of it; an economy either way, so its failure is swallowed.
+    if let Some((_, root)) = &journaled {
+        let _ = crate::mutate::resume::promote(root);
+    }
+    let elapsed = started.elapsed();
+    // EVERY JOURNALED RUN SEEDS ITS PASSED CASES (CLOUD-2842, CLOUD-2961); the
+    // verdict is `ran`'s, save that a run whose own key moved under it fails.
+    let settled = journaled
+        .as_ref()
+        .and_then(|(_, root)| crate::mutate::resume::settle(step, root, err));
+    let ran = settled.map_or(ran, Ok);
     let passed = matches!(ran, Ok(ExitCode::Success));
-    if passed && matches!(answer, Answer::Miss(_)) {
+    if !passed {
+        let run = Ran {
+            root: journaled.as_ref().map(|(_, root)| root.as_path()),
+            outcome: &ran,
+            elapsed,
+            report: &report,
+        };
+        after_failure(step, args, command, answer.recording().is_some(), &run, err);
+    }
+    // EVERY TRACE IS LINTED, one per shard where the run was sharded, and the
+    // gravest answer stands: one shard's undeclared read refuses the receipt.
+    let stops: Vec<LintStop> = trace_files
+        .iter()
+        .filter(|_| passed)
+        .map(|file| lint_stop(step, lint_trace(step, file), err))
+        .collect();
+    // THE TRACE IS READ ONCE, THEN REMOVED, pass or fail (lap 16): a whole
+    // test run traces to gigabytes, so one kept per step filled the disk. The
+    // listing beside it is what a reader needs, and it stays.
+    for file in &trace_files {
+        let _ = std::fs::remove_file(file);
+    }
+    // A HAZARD OR AN UNREAD TRACE ENDS THE STEP UNRECORDED: a failure is the
+    // hazard's own code, an unread trace leaves the step's verdict standing.
+    if stops.iter().any(|stop| matches!(stop, LintStop::Fail)) {
+        return Ok(ExitCode::Violation);
+    }
+    if stops
+        .iter()
+        .any(|stop| matches!(stop, LintStop::Unrecorded))
+    {
+        return ran;
+    }
+    if passed && answer.recording().is_some() {
         // A record that refuses or fails here — the inputs moved while the
         // command ran, the store would not take the write — costs the next run
         // a re-derive and says so on stderr. Its `Result` is discarded, never
         // `?`-propagated: a passing step stays a passing step.
         let mut recorded = Vec::new();
         let mut refused = Vec::new();
-        let _ = record(step, args, Some(command), &mut recorded, &mut refused);
+        let _ = record(
+            step,
+            args,
+            Some(command),
+            Some(elapsed),
+            &mut recorded,
+            &mut refused,
+        );
         let _ = err.write_all(&recorded);
         let _ = err.write_all(&refused);
     }
+    if passed {
+        record_pass(step);
+    }
+    let millis = u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX);
+    let _ = writeln!(err, "{}", stage_line(step, "ran", Some(millis)));
     ran
+}
+
+/// A nextest suite case as `JUnit` and `nextest list` name it: its name and
+/// its binary id.
+type SuiteCase = (String, String);
+
+/// The options of a `cargo nextest run` that choose what is BUILT (CLOUD-2843),
+/// each with whether it takes a value: the archive takes them once, and a run
+/// or a list over the archive is given none of them.
+const BUILD_SCOPE: [(&str, bool); 23] = [
+    ("--workspace", false),
+    ("--all", false),
+    ("-p", true),
+    ("--package", true),
+    ("--exclude", true),
+    ("-F", true),
+    ("--features", true),
+    ("--all-features", false),
+    ("--no-default-features", false),
+    ("--cargo-profile", true),
+    ("--release", false),
+    ("-r", false),
+    ("--target", true),
+    ("--lib", false),
+    ("--bins", false),
+    ("--tests", false),
+    ("--examples", false),
+    ("--benches", false),
+    ("--all-targets", false),
+    ("--bin", true),
+    ("--test", true),
+    ("--example", true),
+    ("--bench", true),
+];
+
+/// `options` split into the build scope ([`BUILD_SCOPE`]) and the rest, each
+/// in the order written, a `--flag=value` and a `--flag value` alike.
+fn split_scope(options: &[String]) -> (Vec<String>, Vec<String>) {
+    let (mut scope, mut rest) = (Vec::new(), Vec::new());
+    let mut words = options.iter();
+    while let Some(word) = words.next() {
+        let head = word.split_once('=').map_or(word.as_str(), |(head, _)| head);
+        match BUILD_SCOPE.iter().find(|(flag, _)| *flag == head) {
+            Some((_, takes_value)) => {
+                scope.push(word.clone());
+                if *takes_value
+                    && !word.contains('=')
+                    && let Some(value) = words.next()
+                {
+                    scope.push(value.clone());
+                }
+            }
+            None => rest.push(word.clone()),
+        }
+    }
+    (scope, rest)
+}
+
+/// `argv` split at its first `--`: what nextest reads, and the rest with the
+/// `--`, which nextest hands to the test binaries.
+fn split_tail(argv: &[String]) -> (&[String], &[String]) {
+    argv.split_at(
+        argv.iter()
+            .position(|word| word == "--")
+            .unwrap_or(argv.len()),
+    )
+}
+
+/// The `cargo nextest archive` building what `command`, a `cargo nextest run`,
+/// would run, into `archive`; `None` for any other command.
+fn archive_argv(command: &[String], archive: &Path) -> Option<Vec<String>> {
+    let (head, _) = split_tail(command);
+    let options = head.get(3..)?;
+    if head.get(..3)? != ["cargo", "nextest", "run"] {
+        return None;
+    }
+    let mut argv: Vec<String> = ["cargo", "nextest", "archive", "--archive-file"]
+        .map(str::to_owned)
+        .to_vec();
+    argv.push(archive.to_string_lossy().into_owned());
+    argv.extend(split_scope(options).0);
+    Some(argv)
+}
+
+/// Shard `k` of `n` (CLOUD-2843): the journaled run over `archive`, its build
+/// scope dropped and its `hash:k/n` partition added ahead of any `--`.
+fn shard_argv(journaled: &[String], archive: &Path, k: u32, n: u32) -> Vec<String> {
+    let (head, tail) = split_tail(journaled);
+    let (program, options) = head.split_at(head.len().min(3));
+    let mut argv = program.to_vec();
+    argv.extend(split_scope(options).1);
+    argv.extend([
+        String::from("--archive-file"),
+        archive.to_string_lossy().into_owned(),
+        String::from("--partition"),
+        format!("hash:{k}/{n}"),
+    ]);
+    argv.extend(tail.iter().cloned());
+    argv
+}
+
+/// Every case `nextest list --message-format json` says the run selects: each
+/// suite's cases whose filter match is `matches`. `None` where it will not
+/// parse.
+fn listed_cases(json: &str) -> Option<std::collections::BTreeSet<SuiteCase>> {
+    let doc: serde_json::Value = serde_json::from_str(json).ok()?;
+    let mut listed = std::collections::BTreeSet::new();
+    for (binary, suite) in doc.get("rust-suites")?.as_object()? {
+        for (name, case) in suite.get("testcases")?.as_object()? {
+            if case["filter-match"]["status"] == "matches" {
+                listed.insert((name.clone(), binary.clone()));
+            }
+        }
+    }
+    Some(listed)
+}
+
+/// Every case a `JUnit` report shows passed: no `failure`, `error` or
+/// `skipped` beneath it. `None` where it will not parse.
+fn passed_cases(xml: &str) -> Option<std::collections::BTreeSet<SuiteCase>> {
+    let doc = roxmltree::Document::parse(xml).ok()?;
+    Some(
+        doc.descendants()
+            .filter(|node| node.has_tag_name("testcase"))
+            .filter(|case| {
+                !case
+                    .children()
+                    .any(|child| matches!(child.tag_name().name(), "failure" | "error" | "skipped"))
+            })
+            .filter_map(|case| {
+                Some((
+                    case.attribute("name")?.to_owned(),
+                    case.attribute("classname")?.to_owned(),
+                ))
+            })
+            .collect(),
+    )
+}
+
+/// Whether a sharded pass may stand for the whole suite (CLOUD-2843): the
+/// shards' cases together are exactly `listed`, and none ran nothing
+/// (CLOUD-1392's guard). Why not, otherwise.
+fn shard_coverage(
+    listed: &std::collections::BTreeSet<SuiteCase>,
+    shards: &[std::collections::BTreeSet<SuiteCase>],
+) -> Result<(), String> {
+    if listed.is_empty() {
+        return Err(String::from("the archive lists no case"));
+    }
+    if let Some(at) = shards.iter().position(std::collections::BTreeSet::is_empty) {
+        return Err(format!("shard {}/{} ran no case", at + 1, shards.len()));
+    }
+    let union: std::collections::BTreeSet<&SuiteCase> = shards.iter().flatten().collect();
+    let covered = listed.iter().filter(|case| union.contains(case)).count();
+    let unlisted = union.iter().filter(|case| !listed.contains(**case)).count();
+    if covered == listed.len() && unlisted == 0 {
+        Ok(())
+    } else {
+        Err(format!(
+            "the shards ran {covered} of {} listed case(s) and {unlisted} unlisted",
+            listed.len()
+        ))
+    }
+}
+
+/// What a miss's command run is handed: the exec settings, the variables
+/// published to it, the report it writes, and the step lock its body inherits.
+type MissIo<'run> = (
+    &'run crate::config_model::ExecConfig,
+    &'run [(String, String)],
+    &'run mut Vec<u8>,
+    Option<&'run batten_facts::lock_wait::Held>,
+);
+
+/// A miss's command run: sharded where `shards` asks for more than one and the
+/// command is a journaled nextest run ([`run_sharded`]), else once as
+/// `running`, under the tracer where one answers; with the trace files to lint.
+fn run_miss(
+    (command, running): (&[String], &[String]),
+    (journaled, shards): (Option<&(Vec<String>, std::path::PathBuf)>, Option<u32>),
+    traced: Option<&(String, std::path::PathBuf)>,
+    (settings, published, report, held): MissIo<'_>,
+    err: &mut dyn Write,
+) -> (Result<ExitCode>, Vec<std::path::PathBuf>) {
+    // THE BODY HOLDS THE LOCK TOO (CLOUD-2955): its descriptor is inherited by
+    // the command, so a run whose `step run` was killed still holds it while
+    // any of its processes lives, and no second body starts beside it.
+    let _inherited = held.map(|held| Inherited::open(held.file()));
+    let sharded = shards
+        .filter(|count| *count > 1)
+        .zip(journaled)
+        .filter(|_| archive_argv(command, Path::new("")).is_some());
+    if let Some((count, (argv, root))) = sharded {
+        return run_sharded(
+            root,
+            (command, argv),
+            count,
+            traced,
+            (settings, published, report),
+            err,
+        );
+    }
+    let spawned: Vec<String> = match (traced, running.split_first()) {
+        (Some((strace, file)), Some((program, rest))) => std::iter::once(strace.clone())
+            .chain(crate::mutate::trace::trace_args(file, program, rest))
+            .collect(),
+        _ => running.to_vec(),
+    };
+    (
+        run_published(&spawned, settings, published, report),
+        traced.map(|(_, file)| file.clone()).into_iter().collect(),
+    )
+}
+
+/// One command of a miss, run at the repository root with the watcher's
+/// variables published (CLOUD-2925), as an unsharded run always was.
+fn run_published(
+    argv: &[String],
+    settings: &crate::config_model::ExecConfig,
+    published: &[(String, String)],
+    report: &mut Vec<u8>,
+) -> Result<ExitCode> {
+    crate::git::repo_root(Path::new(".")).and_then(|root| {
+        crate::exec::run_owned_in_with_env(&root, argv, settings, published, report)
+    })
+}
+
+/// A sharded miss (CLOUD-2843): the suite archived once, its case list read,
+/// then each `hash:k/n` partition of the journaled command run over the
+/// archive in turn, each traced to its own file where a tracer answers, and
+/// each shard's passes read off its `JUnit` report. Cases keep their per-case
+/// journal markers, so the shards' passes compose. The verdict is the first
+/// failing step's code, else could-not-look where the shards do not cover the
+/// list ([`shard_coverage`]); the trace files are the caller's to lint.
+fn run_sharded(
+    root: &Path,
+    (command, journaled): (&[String], &[String]),
+    shards: u32,
+    traced: Option<&(String, std::path::PathBuf)>,
+    (settings, published, report): (
+        &crate::config_model::ExecConfig,
+        &[(String, String)],
+        &mut Vec<u8>,
+    ),
+    err: &mut dyn Write,
+) -> (Result<ExitCode>, Vec<std::path::PathBuf>) {
+    let mut shard_traces = Vec::new();
+    let archive = crate::state::repo_state_dir(root)
+        .ok()
+        .map(|dir| dir.join("test-run").join("suite.tar.zst"));
+    let Some((archive, archiving)) =
+        archive.and_then(|archive| Some((archive.clone(), archive_argv(command, &archive)?)))
+    else {
+        let _ = writeln!(err, "step run: the suite cannot be archived; not recording");
+        return (Ok(ExitCode::Internal), shard_traces);
+    };
+    let built = run_published(&archiving, settings, published, report);
+    if !matches!(built, Ok(ExitCode::Success)) {
+        return (built, shard_traces);
+    }
+    let list: Vec<String> = [
+        "cargo",
+        "nextest",
+        "list",
+        "--archive-file",
+        &archive.to_string_lossy(),
+        "--message-format",
+        "json",
+    ]
+    .map(str::to_owned)
+    .to_vec();
+    let Some(listed) =
+        crate::exec::piped_argv(root, &list, "", crate::exec::Diagnostics::Drop, &[])
+            .filter(|(code, _)| *code == 0)
+            .and_then(|(_, said)| listed_cases(&said))
+    else {
+        let _ = writeln!(
+            err,
+            "step run: the archive's case list cannot be read; not recording"
+        );
+        return (Ok(ExitCode::Internal), shard_traces);
+    };
+    let mut ran = Vec::new();
+    for k in 1..=shards {
+        let argv = shard_argv(journaled, &archive, k, shards);
+        let spawned: Vec<String> = match (traced, argv.split_first()) {
+            (Some((strace, file)), Some((program, rest))) => {
+                let file = file.with_extension(format!("shard{k}"));
+                let spawned = std::iter::once(strace.clone())
+                    .chain(crate::mutate::trace::trace_args(&file, program, rest))
+                    .collect();
+                shard_traces.push(file);
+                spawned
+            }
+            _ => argv,
+        };
+        // A STALE REPORT IS NO SHARD'S: cleared before each, so a shard that
+        // wrote none reads as having run nothing.
+        crate::mutate::resume::clear_report(root);
+        let outcome = run_published(&spawned, settings, published, report);
+        if !matches!(outcome, Ok(ExitCode::Success)) {
+            return (outcome, shard_traces);
+        }
+        let passed = crate::mutate::resume::report_path(root)
+            .and_then(|path| crate::fsio::read_to_string(path).ok())
+            .and_then(|xml| passed_cases(&xml))
+            .unwrap_or_default();
+        let _ = writeln!(
+            err,
+            "step run: shard {k}/{shards} passed {} case(s)",
+            passed.len()
+        );
+        ran.push(passed);
+    }
+    match shard_coverage(&listed, &ran) {
+        Ok(()) => (Ok(ExitCode::Success), shard_traces),
+        Err(why) => {
+            let _ = writeln!(err, "step run: {why}; not recording");
+            (Ok(ExitCode::Internal), shard_traces)
+        }
+    }
+}
+
+/// The keyed family a step's last pass is filed under (CLOUD-2788): per step
+/// id, the tree id of `HEAD` it passed at.
+///
+/// A PASS, NOT A RECEIPT KEY. `step cover` asks whether a row passed at this
+/// tree, and a receipt key cannot answer that: it depends on the `--arg`s the
+/// caller passed, which a later verb does not have, and a schedule-only row
+/// takes no receipt at all.
+pub const PASSES: &str = "step-passes";
+
+/// File that `step` passed at `HEAD`'s tree. Best-effort: a store that will not
+/// take it costs `step cover` a refusal later, never this step its verdict.
+fn record_pass(step: &str) {
+    let root = Path::new(".");
+    let (Ok(git_dir), Ok(Some(tree))) = (
+        crate::git::git_dir(root),
+        crate::git::resolve_ref(root, "HEAD^{tree}"),
+    ) else {
+        return;
+    };
+    let _ = crate::record::keyed_write(&git_dir, PASSES, step, &format!("{tree}\n"));
+}
+
+/// A KNOWN FAILURE IS ANSWERED, NOT RE-RUN (CLOUD-2253): its code, the pointer
+/// to its log, the cases and the command that confirms a fix, and a word to a
+/// supervising lap, which stops at once. The code is the recorded run's.
+fn answer_red(step: &str, key: &str, failure: &Failure, err: &mut dyn Write) -> Result<ExitCode> {
+    say_failure(step, failure, err);
+    let recorded = crate::git::git_dir(Path::new("."))
+        .ok()
+        .and_then(|git_dir| crate::record::keyed_group_read(&git_dir, RECEIPTS, step, key))
+        .and_then(|body| recorded_millis(&body));
+    let _ = writeln!(err, "{}", stage_line(step, "red", recorded));
+    red_to_supervisor(step);
+    Err(crate::error::Passthrough::raise(failure.code))
+}
+
+/// What a traced pass's lint leaves the step to do.
+#[derive(Debug, PartialEq, Eq)]
+enum LintStop {
+    /// A written or undeclared input: the step fails, unrecorded.
+    Fail,
+    /// A trace that cannot be read whole: no receipt, the verdict stands.
+    Unrecorded,
+    /// Nothing the lint can see: on to the record.
+    Go,
+}
+
+/// What a traced pass's lint ends the step with, saying why on `err`.
+fn lint_stop(step: &str, linted: Linted, err: &mut dyn Write) -> LintStop {
+    match linted {
+        Linted::Wrote(count, listing) => {
+            let _ = writeln!(
+                err,
+                "step run: {step} wrote {count} declared input(s); read {}",
+                listing.display()
+            );
+            LintStop::Fail
+        }
+        Linted::Undeclared(count, listing) => {
+            let _ = writeln!(
+                err,
+                "step run: {step} read {count} path(s) outside its inputs; read {}",
+                listing.display()
+            );
+            LintStop::Fail
+        }
+        // The row no longer reads (the command moved the authority): the
+        // record below recomputes the key and refuses on its own words.
+        Linted::Declared | Linted::RowUnread => LintStop::Go,
+        Linted::Unread => {
+            // A trace that cannot be read whole proves nothing about the
+            // declaration, so no receipt: the step's own verdict stands.
+            let _ = writeln!(
+                err,
+                "step run: {step} — its trace could not be read whole; not recording"
+            );
+            LintStop::Unrecorded
+        }
+    }
+}
+
+/// What a failed run left for [`after_failure`].
+struct Ran<'a> {
+    /// The checkout a journaled run ran in, which holds its report.
+    root: Option<&'a Path>,
+    /// The run's own answer.
+    outcome: &'a Result<ExitCode>,
+    /// How long it ran.
+    elapsed: std::time::Duration,
+    /// `exec`'s record of it, which names the stored streams.
+    report: &'a [u8],
+}
+
+/// After a failed run: the flaky-suspect label and the failing cases with
+/// the command that confirms a fix (a journaled run's), then the failure
+/// receipt where the answer had a key and the code is a verdict (CLOUD-2253).
+fn after_failure(
+    step: &str,
+    args: &[String],
+    command: &[String],
+    keyed: bool,
+    run: &Ran<'_>,
+    err: &mut dyn Write,
+) {
+    let flaky = run.root.and_then(|root| report_flaky(step, root, err));
+    let cases = run.root.and_then(|root| failed_cases_said(root, command));
+    if let Some(cases) = &cases {
+        let _ = writeln!(err, "step run: {step} {cases}");
+    }
+    let code = run
+        .outcome
+        .as_ref()
+        .err()
+        .and_then(|error| error.downcast_ref::<crate::error::Passthrough>())
+        .map(|carried| carried.0)
+        .filter(|code| recordable_failure(*code));
+    if let (Some(code), true) = (code, keyed) {
+        let failure = Failure {
+            code,
+            log: logged(run.report),
+            cases,
+        };
+        let all_suspect =
+            matches!(flaky, Some((suspects, failed)) if failed > 0 && suspects == failed);
+        record_failure(
+            step,
+            args,
+            command,
+            run.elapsed,
+            (&failure, all_suspect),
+            err,
+        );
+    }
+}
+
+/// THE FAILURE IS RECORDED LIKE A PASS, under the key the check filed, and
+/// every refusal and store failure is swallowed the same way: the step's
+/// verdict is its command's, and the receipt is an economy.
+fn record_failure(
+    step: &str,
+    args: &[String],
+    command: &[String],
+    elapsed: std::time::Duration,
+    failed: (&Failure, bool),
+    err: &mut dyn Write,
+) {
+    let mut recorded = Vec::new();
+    let mut refused = Vec::new();
+    let _ = record_as(
+        step,
+        args,
+        Some(command),
+        Some(elapsed),
+        Some(failed),
+        &mut recorded,
+        &mut refused,
+    );
+    let _ = err.write_all(&recorded);
+    let _ = err.write_all(&refused);
+}
+
+/// The keyed family a step answered from a failure receipt is filed under,
+/// keyed by the supervising task's pid (CLOUD-2253): the lap's gate arm reads
+/// it and cancels the gate at once, so a known-red tree costs seconds.
+pub const RED: &str = "step-red";
+
+/// File that `step` was answered red under the task exported in [`TASK_PID`].
+/// Best-effort, like every supervisor write: no supervisor is a no-op.
+fn red_to_supervisor(step: &str) {
+    let Some(pid) = std::env::var(TASK_PID).ok().filter(|pid| !pid.is_empty()) else {
+        return;
+    };
+    let Ok(git_dir) = crate::git::git_dir(Path::new(".")) else {
+        return;
+    };
+    let _ = crate::record::keyed_write(&git_dir, RED, pid.trim(), &format!("{step}\n"));
+}
+
+/// The step a receipt-answered failure filed under task `pid`, if any.
+pub(crate) fn red_under(git_dir: &Path, pid: u32) -> Option<String> {
+    crate::record::keyed_read(git_dir, RED, &pid.to_string())
+        .map(|step| step.trim().to_owned())
+        .filter(|step| !step.is_empty())
+}
+
+/// Clear what [`red_under`] reads, before a gate starts under `pid`.
+pub(crate) fn clear_red(git_dir: &Path, pid: u32) {
+    let _ = crate::record::keyed_remove(git_dir, RED, &pid.to_string());
+}
+
+/// A failure's pointer lines: the code and the stored log's handles, then the
+/// cases and the focused command. Pointers only, never the log (rule 4).
+fn say_failure(step: &str, failure: &Failure, err: &mut dyn Write) {
+    let _ = match &failure.log {
+        Some(log) => writeln!(
+            err,
+            "step run: {step} failed with exit {}; read {log}",
+            failure.code
+        ),
+        None => writeln!(err, "step run: {step} failed with exit {}", failure.code),
+    };
+    if let Some(cases) = &failure.cases {
+        let _ = writeln!(err, "step run: {step} {cases}");
+    }
+}
+
+/// The capture handles `exec`'s record names, space-separated: the
+/// `exec: <stream> <n> byte(s) <handle>` lines' last fields.
+fn logged(report: &[u8]) -> Option<String> {
+    let handles: Vec<&str> = std::str::from_utf8(report)
+        .ok()?
+        .lines()
+        .filter(|line| line.starts_with("exec: ") && line.contains(" byte(s) "))
+        .filter_map(|line| line.split_whitespace().last())
+        .collect();
+    (!handles.is_empty()).then(|| handles.join(" "))
+}
+
+/// A journaled run's failing cases and the command that confirms a fix: the
+/// step's own argv before any `--`, filtered to exactly those cases.
+fn failed_cases_said(root: &Path, command: &[String]) -> Option<String> {
+    let failed = crate::mutate::resume::failed(root)?;
+    if failed.is_empty() {
+        return None;
+    }
+    let names: Vec<String> = failed
+        .iter()
+        .map(|(name, binary)| format!("{binary} {name}"))
+        .collect();
+    let filter = failed
+        .iter()
+        .map(|(name, binary)| format!("(binary_id({binary}) & test(={name}))"))
+        .collect::<Vec<_>>()
+        .join(" | ");
+    let program: Vec<String> = command
+        .iter()
+        .take_while(|word| word.as_str() != "--")
+        .map(|word| shell_word(word))
+        .collect();
+    Some(format!(
+        "failed {} case(s): {}; confirm a fix with: {} -E {}",
+        failed.len(),
+        names.join(", "),
+        program.join(" "),
+        shell_word(&filter)
+    ))
+}
+
+/// `word` as one shell word: bare where nothing in it is special, otherwise
+/// single-quoted.
+fn shell_word(word: &str) -> String {
+    let plain = !word.is_empty()
+        && word
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || "_-./:=@,+".contains(ch));
+    if plain {
+        word.to_owned()
+    } else {
+        format!("'{}'", word.replace('\'', "'\\''"))
+    }
+}
+
+/// The roster `step cover` covers: the host's required check names.
+pub const ROSTER_VAR: &str = "CI_REQUIRED_CHECKS";
+
+/// Which local step stands for each required check: `check=step` pairs,
+/// comma-separated (CLOUD-2788).
+pub const PROOF_VAR: &str = "CI_LOCAL_PROOF";
+
+/// The required checks no local run stands for: names, or prefixes ending in
+/// `*`, comma-separated (CLOUD-2788).
+pub const EXEMPT_VAR: &str = "CI_EXEMPT_CHECKS";
+
+/// The non-empty, trimmed entries of a comma-separated variable's value.
+fn listed(value: &str) -> Vec<&str> {
+    value
+        .split(',')
+        .map(str::trim)
+        .filter(|entry| !entry.is_empty())
+        .collect()
+}
+
+/// Whether the exemption `entry` covers the required check `check`: equal, or
+/// a prefix when `entry` ends in `*`.
+fn exempts(entry: &str, check: &str) -> bool {
+    entry
+        .strip_suffix('*')
+        .map_or(entry == check, |prefix| check.starts_with(prefix))
+}
+
+/// What `step cover` refuses: the roster entries with neither a pass of their
+/// step at `tree` nor an exemption, and the mapped checks the roster does not
+/// hold. Pure over `passed`, a step id's recorded pass tree.
+fn cover_gaps<'a>(
+    roster: &[&'a str],
+    proof: &[(&'a str, &'a str)],
+    exempt: &[&str],
+    tree: &str,
+    passed: &dyn Fn(&str) -> Option<String>,
+) -> (Vec<&'a str>, Vec<&'a str>) {
+    let uncovered = roster
+        .iter()
+        .copied()
+        .filter(|check| {
+            !exempt.iter().any(|entry| exempts(entry, check))
+                && !proof.iter().any(|(mapped, step)| {
+                    mapped == check && passed(step).is_some_and(|at| at.trim() == tree)
+                })
+        })
+        .collect();
+    let stale = proof
+        .iter()
+        .map(|(mapped, _)| *mapped)
+        .filter(|mapped| !roster.contains(mapped))
+        .collect();
+    (uncovered, stale)
+}
+
+/// `step cover` (CLOUD-2788): exit 0 iff every check [`ROSTER_VAR`] names is
+/// covered by the step [`PROOF_VAR`] maps it to having passed at `HEAD`'s
+/// tree, or by an [`EXEMPT_VAR`] entry; 2 naming each uncovered check and each
+/// mapped check the roster does not hold; 1 for a malformed mapping; 3 when
+/// the roster is unset or `HEAD` names no tree.
+///
+/// ALL THREE FROM THE ENVIRONMENT, never `batten.toml` or an argument: check
+/// names carry spaces (`mutants (0)`), and the roster, which checks have a
+/// local counterpart and which are exempt are the consumer's CI vocabulary
+/// (rule 1), declared where its task runner already declares the roster.
+///
+/// # Errors
+///
+/// `out` or `err` cannot be written.
+pub fn run_cover(out: &mut dyn Write, err: &mut dyn Write) -> Result<ExitCode> {
+    let var = |name: &str| std::env::var(name).unwrap_or_default();
+    let (roster, proof, exempt) = (var(ROSTER_VAR), var(PROOF_VAR), var(EXEMPT_VAR));
+    let roster = listed(&roster);
+    if roster.is_empty() {
+        writeln!(
+            err,
+            "step cover: {ROSTER_VAR} is unset, so there is no roster to cover"
+        )?;
+        return Ok(ExitCode::Internal);
+    }
+    let mut pairs = Vec::new();
+    for entry in listed(&proof) {
+        let Some((check, step)) = entry
+            .split_once('=')
+            .map(|(check, step)| (check.trim(), step.trim()))
+            .filter(|(check, step)| !check.is_empty() && !step.is_empty())
+        else {
+            writeln!(
+                err,
+                "step cover: {PROOF_VAR} entry is not check=step: {entry}"
+            )?;
+            return Ok(ExitCode::Usage);
+        };
+        pairs.push((check, step));
+    }
+    let exempt = listed(&exempt);
+    let root = Path::new(".");
+    let (Ok(git_dir), Ok(Some(tree))) = (
+        crate::git::git_dir(root),
+        crate::git::resolve_ref(root, "HEAD^{tree}"),
+    ) else {
+        writeln!(err, "step cover: HEAD names no tree")?;
+        return Ok(ExitCode::Internal);
+    };
+    let passed = |step: &str| crate::record::keyed_read(&git_dir, PASSES, step);
+    let (uncovered, stale) = cover_gaps(&roster, &pairs, &exempt, &tree, &passed);
+    let stale: Vec<String> = stale
+        .iter()
+        .map(|check| format!("{PROOF_VAR} maps {check}"))
+        .collect();
+    for check in &uncovered {
+        writeln!(out, "uncovered {check}")?;
+    }
+    for line in &stale {
+        writeln!(out, "stale {line}")?;
+    }
+    if uncovered.is_empty() && stale.is_empty() {
+        writeln!(
+            err,
+            "step cover: {} required check(s) covered",
+            roster.len()
+        )?;
+        return Ok(ExitCode::Success);
+    }
+    writeln!(
+        err,
+        "step cover: {} required check(s) without a pass or exemption, {} stale mapping(s)",
+        uncovered.len(),
+        stale.len()
+    )?;
+    Ok(ExitCode::Violation)
+}
+
+/// A RED JOURNALED RUN SAYS WHETHER THE CHANGE COULD HAVE CAUSED IT
+/// (CLOUD-2786): a failed case whose sealed reach still holds ran nothing that
+/// moved. A label beside the trace, never a verdict: the run's exit stands.
+/// Returns the suspects and the failed count, which decide whether the
+/// failure receipt re-runs (CLOUD-2253).
+fn report_flaky(step: &str, root: &Path, err: &mut dyn Write) -> Option<(usize, usize)> {
+    use std::fmt::Write as _;
+    let (suspects, failed) = crate::mutate::resume::flaky_suspects(root)?;
+    let counts = (suspects.len(), failed);
+    let Some(listing) = flaky_listing(trace_file(step), failed) else {
+        return Some(counts);
+    };
+    let body = suspects
+        .iter()
+        .fold(String::new(), |mut body, (name, binary)| {
+            let _ = writeln!(body, "{binary} {name}");
+            body
+        });
+    if crate::durable::replace(&listing, body).is_ok() {
+        let _ = writeln!(
+            err,
+            "step run: {step} flaky-suspect {} of {failed} failing case(s); read {}",
+            suspects.len(),
+            listing.display()
+        );
+    }
+    Some(counts)
+}
+
+/// Where a red run's suspects are listed, beside its `trace`: only where a
+/// case `failed`.
+fn flaky_listing(trace: Option<std::path::PathBuf>, failed: usize) -> Option<std::path::PathBuf> {
+    trace
+        .map(|file| file.with_extension("flaky"))
+        .filter(|_| failed > 0)
+}
+
+/// Where a step's traced run writes its trace: a file directly under the git
+/// dir, which exists, so nothing is created here; the run removes it once
+/// linted. `None` where the git dir cannot be found, which runs the step
+/// untraced.
+fn trace_file(step: &str) -> Option<std::path::PathBuf> {
+    let git_dir = crate::git::git_dir(Path::new(".")).ok()?;
+    Some(git_dir.join(format!(
+        "{TRACES}-{}.trace",
+        crate::tools::digest(step.as_bytes())
+    )))
+}
+
+/// Where THIS run of `step` traces (CLOUD-2955): [`trace_file`]'s name with
+/// this process's pid before the extension, so two runs never write one file
+/// and a killed run's trace is told apart from the live one's.
+fn run_trace_file(step: &str) -> Option<std::path::PathBuf> {
+    trace_file(step).map(|file| file.with_extension(format!("{}.trace", std::process::id())))
+}
+
+/// A listing beside a trace: the step's own name, `<TRACES>-<digest>.<ext>`,
+/// whichever run or shard the trace was. One listing per step, as before
+/// traces were per run.
+fn listing_of(trace: &Path, ext: &str) -> std::path::PathBuf {
+    let name = trace
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default();
+    let base = name.split('.').next().unwrap_or(name);
+    trace.with_file_name(format!("{base}.{ext}"))
+}
+
+/// The exclusive lock one runner of `step` holds (CLOUD-2783), waiting until
+/// any other runner of the same step lets go; released when the guard drops.
+/// `None` where the git dir or the lock cannot be had.
+///
+/// THE WAIT IS [`batten_facts::lock_wait`]'S (CLOUD-2789): on the other runner's
+/// release, never a blocking `flock`, and a lock this process already holds
+/// is refused as re-entry rather than waited on for ever.
+///
+/// AND A START ENDS THE LAST RUN (CLOUD-2955). Crash-only: a `step run` that
+/// was killed leaves its body running, holding the lock it inherited. The lock
+/// file names the pid of the `step run` that took it; where that process is
+/// gone and the lock is still held, its recorded group is sent SIGKILL and the
+/// wait goes on until every holder has let go. A wait on a live holder is also
+/// woken by that holder's death, for the same check.
+fn step_lock(step: &str) -> Option<batten_facts::lock_wait::Held> {
+    let git_dir = crate::git::git_dir(Path::new(".")).ok()?;
+    let root = crate::git::repo_root(Path::new(".")).ok();
+    step_lock_ending(&git_dir, root.as_deref(), step)
+}
+
+/// [`step_lock`] under an explicit git dir, for a case to hold.
+#[cfg(test)]
+fn step_lock_at(git_dir: &Path, step: &str) -> Option<batten_facts::lock_wait::Held> {
+    step_lock_ending(git_dir, None, step)
+}
+
+/// How many times a start re-reads the lock after a holder died under its
+/// wait: each round follows a death, so this bounds a chain of them.
+const LOCK_ROUNDS: usize = 16;
+
+/// [`step_lock`]'s body: `root` is where the last run's group record is read,
+/// `None` to read none.
+fn step_lock_ending(
+    git_dir: &Path,
+    root: Option<&Path>,
+    step: &str,
+) -> Option<batten_facts::lock_wait::Held> {
+    use batten_facts::lock_wait::{Mode, Stop, Taken};
+    let digest = crate::tools::digest(step.as_bytes());
+    let path = git_dir.join(format!("{LOCKS}-{digest}"));
+    let open = || {
+        std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .open(&path)
+            .ok()
+    };
+    for _ in 0..LOCK_ROUNDS {
+        let holder = std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|body| body.trim().parse::<u32>().ok());
+        let live = holder.filter(|pid| process_alive(*pid));
+        if let (Some(pid), None, Some(root)) = (holder, live, root) {
+            end_orphaned_run(root, pid, open()?);
+        }
+        let waker = Stop::new().ok();
+        let taken = std::thread::scope(|scope| {
+            let cancel = live.zip(waker.as_ref()).and_then(|(pid, raised)| {
+                let (cancel, watched) = std::sync::mpsc::channel::<()>();
+                let woken = HolderWatch::new(pid)?;
+                let ender = woken.ender();
+                scope.spawn(move || {
+                    if woken.wait() {
+                        raised.raise();
+                    }
+                    drop(watched);
+                });
+                Some((cancel, ender))
+            });
+            let taken =
+                batten_facts::lock_wait::acquire(open()?, &path, Mode::Exclusive, waker.as_ref());
+            if let Some((cancel, ender)) = cancel {
+                drop(cancel);
+                ender.end();
+            }
+            taken.ok()
+        })?;
+        match taken {
+            Taken::Held(held) => {
+                stamp(&held);
+                if let Some(root) = root {
+                    drop(
+                        holder
+                            .and_then(|pid| crate::exec::recorded_group(root, pid))
+                            .map(|(record, _)| std::fs::remove_file(record)),
+                    );
+                }
+                remove_dead_traces(git_dir, &digest);
+                return Some(held);
+            }
+            Taken::Stopped => {}
+            Taken::Reentrant => return None,
+        }
+    }
+    None
+}
+
+/// End the run a dead `step run` of pid `holder` left (CLOUD-2955): where the
+/// lock is still held — by the body, which inherited it — the group recorded
+/// under `holder` is sent SIGKILL. A free lock means nothing of that run lives,
+/// and its record is only removed.
+fn end_orphaned_run(root: &Path, holder: u32, probe: std::fs::File) {
+    let held = probe.try_lock().is_err();
+    drop(probe);
+    if let Some((record, pgid)) = crate::exec::recorded_group(root, holder) {
+        if held {
+            crate::exec::kill_group(pgid);
+        }
+        drop(std::fs::remove_file(record));
+    }
+}
+
+/// Write this process's pid into the held lock file, in place: replacing the
+/// file would put a new inode under the path and the lock on the old one.
+fn stamp(held: &batten_facts::lock_wait::Held) {
+    use std::io::{Seek as _, Write as _};
+    let mut file = held.file();
+    let _ = file
+        .set_len(0)
+        .and_then(|()| file.seek(std::io::SeekFrom::Start(0)))
+        .and_then(|_| writeln!(file, "{}", std::process::id()));
+}
+
+/// Remove every trace of the step `digest` under `git_dir`: called with its
+/// lock held, so every earlier run is over and none is still writing. The
+/// listings stay.
+fn remove_dead_traces(git_dir: &Path, digest: &str) {
+    let prefix = format!("{TRACES}-{digest}.");
+    for entry in std::fs::read_dir(git_dir).into_iter().flatten().flatten() {
+        let name = entry.file_name();
+        let Some(rest) = name.to_str().and_then(|name| name.strip_prefix(&prefix)) else {
+            continue;
+        };
+        let ext = rest.rsplit('.').next().unwrap_or(rest);
+        if ext == "trace" || ext.starts_with("shard") {
+            drop(std::fs::remove_file(entry.path()));
+        }
+    }
+}
+
+/// Whether `pid` names a process that has not exited. A zombie has: its
+/// descriptors, the lock among them, are closed. Off Linux, whether it can be
+/// signalled.
+fn process_alive(pid: u32) -> bool {
+    if cfg!(target_os = "linux") {
+        return std::fs::read_to_string(format!("/proc/{pid}/stat")).is_ok_and(|body| {
+            body.rfind(')')
+                .and_then(|end| body[end + 1..].split_whitespace().next())
+                .is_some_and(|state| state != "Z")
+        });
+    }
+    #[cfg(unix)]
+    {
+        i32::try_from(pid)
+            .ok()
+            .and_then(rustix::process::Pid::from_raw)
+            .is_some_and(|pid| rustix::process::test_kill_process(pid).is_ok())
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = pid;
+        false
+    }
+}
+
+/// A wait on a live lock holder's exit, ended early by its [`HolderEnder`]: a
+/// pidfd and an eventfd polled together, with no timeout. Linux only; elsewhere
+/// none is made and a waiter waits on the lock alone.
+struct HolderWatch {
+    #[cfg(target_os = "linux")]
+    pidfd: rustix::fd::OwnedFd,
+    #[cfg(target_os = "linux")]
+    cancel: std::sync::Arc<rustix::fd::OwnedFd>,
+}
+
+/// Ends a [`HolderWatch`]'s wait from another thread.
+struct HolderEnder {
+    #[cfg(target_os = "linux")]
+    cancel: std::sync::Arc<rustix::fd::OwnedFd>,
+}
+
+impl HolderWatch {
+    fn new(pid: u32) -> Option<Self> {
+        #[cfg(target_os = "linux")]
+        {
+            let pid = rustix::process::Pid::from_raw(i32::try_from(pid).ok()?)?;
+            let pidfd =
+                rustix::process::pidfd_open(pid, rustix::process::PidfdFlags::empty()).ok()?;
+            let cancel = rustix::event::eventfd(0, rustix::event::EventfdFlags::CLOEXEC).ok()?;
+            Some(Self {
+                pidfd,
+                cancel: std::sync::Arc::new(cancel),
+            })
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = pid;
+            None
+        }
+    }
+
+    fn ender(&self) -> HolderEnder {
+        HolderEnder {
+            #[cfg(target_os = "linux")]
+            cancel: std::sync::Arc::clone(&self.cancel),
+        }
+    }
+
+    /// Wait for the holder's exit or the end: `true` when the holder exited.
+    fn wait(&self) -> bool {
+        #[cfg(target_os = "linux")]
+        {
+            use rustix::event::{PollFd, PollFlags};
+            loop {
+                let mut fds = [
+                    PollFd::new(&self.pidfd, PollFlags::IN),
+                    PollFd::new(&*self.cancel, PollFlags::IN),
+                ];
+                match rustix::event::poll(&mut fds, None) {
+                    Ok(_) => {
+                        let [holder, cancel] = &fds;
+                        return holder.revents().contains(PollFlags::IN)
+                            && !cancel.revents().contains(PollFlags::IN);
+                    }
+                    Err(rustix::io::Errno::INTR) => {}
+                    Err(_) => return false,
+                }
+            }
+        }
+        #[cfg(not(target_os = "linux"))]
+        false
+    }
+}
+
+impl HolderEnder {
+    fn end(&self) {
+        #[cfg(target_os = "linux")]
+        let _ = rustix::io::write(&*self.cancel, &1_u64.to_ne_bytes());
+    }
+}
+
+/// The held lock's descriptor made inheritable for the length of a run
+/// (CLOUD-2955), so the body holds the lock too; close-on-exec again on drop.
+struct Inherited<'held> {
+    #[cfg(unix)]
+    file: &'held std::fs::File,
+    #[cfg(not(unix))]
+    file: std::marker::PhantomData<&'held ()>,
+}
+
+impl<'held> Inherited<'held> {
+    fn open(file: &'held std::fs::File) -> Self {
+        #[cfg(unix)]
+        {
+            let _ = rustix::io::fcntl_setfd(file, rustix::io::FdFlags::empty());
+            Self { file }
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = file;
+            Self {
+                file: std::marker::PhantomData,
+            }
+        }
+    }
+}
+
+impl Drop for Inherited<'_> {
+    fn drop(&mut self) {
+        #[cfg(unix)]
+        let _ = rustix::io::fcntl_setfd(self.file, rustix::io::FdFlags::CLOEXEC);
+    }
+}
+
+/// Published to a watched step's command (CLOUD-2925): the worktree a disk
+/// watcher outside the command collects for, so nothing inside the command
+/// collects for THAT worktree. A collection in a traced command is reads the
+/// command did not declare.
+pub const DISK_WATCHED: &str = "BATTEN_DISK_WATCHED";
+
+/// Whether an enclosing step's watcher covers the worktree at `root`
+/// ([`DISK_WATCHED`] names it). Another worktree — a suite's fixture, a
+/// sibling checkout — is never covered: its trees are not the ones that
+/// watcher collects.
+#[must_use]
+pub fn watched_by_an_outer_step(root: &Path) -> bool {
+    std::env::var_os(DISK_WATCHED).is_some_and(|watched| {
+        match (std::fs::canonicalize(&watched), std::fs::canonicalize(root)) {
+            (Ok(watched), Ok(root)) => watched == root,
+            _ => false,
+        }
+    })
+}
+
+/// The prefix of each step's run lock under the git dir.
+pub(crate) const LOCKS: &str = "batten-step-lock";
+
+/// Remove every step trace under `git_dir` whose step no runner holds, and
+/// answer how many and how many bytes (CLOUD-2783).
+///
+/// A run removes its own trace once read, but a run that is killed first
+/// leaves it: a stopped lap left a 15 GB `ci-suite` trace in `.git`, and the
+/// disk admission refused the next lap with nothing it could collect. A trace
+/// and its step's lock share one digest, so a trace whose lock can be taken has
+/// no writer: that is the whole test, exact rather than an age guess.
+#[must_use]
+pub fn sweep_orphaned_traces(git_dir: &Path) -> (usize, u64) {
+    let mut swept = (0, 0);
+    for entry in std::fs::read_dir(git_dir).into_iter().flatten().flatten() {
+        let name = entry.file_name();
+        let Some(digest) = name
+            .to_str()
+            .and_then(|name| name.strip_prefix(&format!("{TRACES}-")))
+            .and_then(|rest| rest.strip_suffix(".trace"))
+            .and_then(|rest| rest.split('.').next())
+        else {
+            continue;
+        };
+        let lock = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(git_dir.join(format!("{LOCKS}-{digest}")));
+        let free = lock.as_ref().is_ok_and(|file| file.try_lock().is_ok());
+        if !free {
+            continue;
+        }
+        let bytes = entry.metadata().map_or(0, |meta| meta.len());
+        if std::fs::remove_file(entry.path()).is_ok() {
+            swept.0 += 1;
+            swept.1 += bytes;
+        }
+    }
+    swept
+}
+
+/// The prefix of each step's last trace, and its undeclared listing, under the
+/// git dir.
+pub(crate) const TRACES: &str = "batten-step-trace";
+
+/// What a traced run's reads say about its row's declaration.
+#[derive(Debug, PartialEq, Eq)]
+enum Linted {
+    /// Every read was declared, outside the worktree, or ignored.
+    Declared,
+    /// This many worktree paths were read undeclared; the listing names them.
+    Undeclared(usize, std::path::PathBuf),
+    /// This many declared inputs were written (CLOUD-2786); the listing names
+    /// them. Checked before [`Linted::Undeclared`].
+    Wrote(usize, std::path::PathBuf),
+    /// The trace could not be read whole, so nothing is proven.
+    Unread,
+    /// The row no longer reads; the record's own recompute decides.
+    RowUnread,
+}
+
+/// Read `file`'s trace against `step`'s declared inputs, writing the
+/// undeclared paths, one per line, beside it.
+fn lint_trace(step: &str, file: &Path) -> Linted {
+    let (Some(row), Ok(root)) = (declared(step), crate::git::repo_root(Path::new("."))) else {
+        return Linted::RowUnread;
+    };
+    let root = crate::git::canonical(&root);
+    let cwd = std::env::current_dir()
+        .ok()
+        .map(|dir| crate::git::canonical(&dir));
+    let Some(accessed) = crate::mutate::trace::await_trace(file)
+        .as_deref()
+        .and_then(|text| crate::mutate::trace::accesses(text, cwd.as_deref()))
+    else {
+        return Linted::Unread;
+    };
+    let mut cache = BTreeMap::new();
+    let mut ignored = |path: &str| {
+        *cache
+            .entry(path.to_owned())
+            .or_insert_with(|| crate::git::check_ignore(&root, path).unwrap_or(false))
+    };
+    let declaration = Declaration {
+        root: &root,
+        inputs: row.inputs(),
+        exists: &exists_specs(&row),
+        config: reads_config(&row),
+    };
+    lint_accessed(&declaration, &accessed, file, &mut ignored)
+}
+
+/// A row's declaration as the trace lint reads it: the worktree it is taken
+/// against, its declared input pathspecs and its existence-only ones.
+struct Declaration<'a> {
+    root: &'a Path,
+    inputs: &'a [String],
+    exists: &'a [String],
+    /// Whether the row reads the config through a [`CONFIG`] line.
+    config: bool,
+}
+
+/// What `accessed`, a whole trace's reads and writes, says about
+/// `declaration`, writing the offending paths beside `file`. Apart from
+/// [`lint_trace`] so a case can hand it a synthetic trace on any host, traced
+/// or not, `strace` or none (CLOUD-2789).
+fn lint_accessed(
+    declaration: &Declaration<'_>,
+    accessed: &[(std::path::PathBuf, crate::mutate::trace::Access)],
+    file: &Path,
+    ignored: &mut dyn FnMut(&str) -> bool,
+) -> Linted {
+    let root = declaration.root;
+    // THE WRITE HAZARD FIRST (CLOUD-2786): a run that wrote a declared input
+    // and put it back leaves the key unmoved, though its verdict judged bytes
+    // the tree never held (Rattle, Spall et al. OOPSLA 2020).
+    let written: Vec<std::path::PathBuf> = accessed
+        .iter()
+        .filter(|(_, access)| *access == crate::mutate::trace::Access::Write)
+        .map(|(path, _)| path.clone())
+        .collect();
+    let wrote = written_inputs(root, declaration.inputs, &written, ignored);
+    if !wrote.is_empty() {
+        let listing = listing_of(file, "wrote");
+        let mut body = wrote.join("\n");
+        body.push('\n');
+        if crate::durable::replace(&listing, body).is_err() {
+            return Linted::Unread;
+        }
+        return Linted::Wrote(wrote.len(), listing);
+    }
+    let found = undeclared(
+        root,
+        declaration.inputs,
+        declaration.exists,
+        declaration.config,
+        accessed,
+        ignored,
+    );
+    if found.is_empty() {
+        return Linted::Declared;
+    }
+    let listing = listing_of(file, "undeclared");
+    let mut body = found.join("\n");
+    body.push('\n');
+    if crate::durable::replace(&listing, body).is_err() {
+        return Linted::Unread;
+    }
+    Linted::Undeclared(found.len(), listing)
+}
+
+/// The declared inputs among `written` (CLOUD-2786): a worktree path under
+/// `root`, outside the git dir, that a declared pathspec selects and that
+/// `ignored` does not answer for, an ignored ancestor answering for all
+/// beneath it — so a build's `target/` writes never count. Sorted, each once.
+fn written_inputs(
+    root: &Path,
+    inputs: &[String],
+    written: &[std::path::PathBuf],
+    ignored: &mut dyn FnMut(&str) -> bool,
+) -> Vec<String> {
+    let mut out = std::collections::BTreeSet::new();
+    for path in written {
+        let Ok(relative) = path.strip_prefix(root) else {
+            continue;
+        };
+        let relative = relative.to_string_lossy().replace('\\', "/");
+        if relative.is_empty() || relative == ".git" || relative.starts_with(".git/") {
+            continue;
+        }
+        if inputs
+            .iter()
+            .any(|spec| crate::git::pathspec_matches(spec, &relative))
+        {
+            out.insert(relative);
+        }
+    }
+    out.into_iter()
+        .filter(|relative| {
+            let mut ancestors: Vec<&str> = relative
+                .match_indices('/')
+                .map(|(at, _)| &relative[..at])
+                .collect();
+            ancestors.push(relative);
+            !ancestors.into_iter().any(&mut *ignored)
+        })
+        .collect()
+}
+
+/// The key's `env` lines for `declared` over `vars` (CLOUD-2786), sorted: one
+/// `env "NAME=value"` per variable it keys ([`DeclaredEnv::keys`]), and one
+/// `env "PATTERN" none` per declaration nothing matched. `None` where a keyed
+/// value is not Unicode, which is no key.
+///
+/// [`DeclaredEnv::keys`]: crate::mutate::resume::DeclaredEnv::keys
+fn env_lines(
+    declared: &crate::mutate::resume::DeclaredEnv,
+    vars: impl Iterator<Item = (std::ffi::OsString, std::ffi::OsString)>,
+) -> Option<Vec<String>> {
+    let mut lines = std::collections::BTreeSet::new();
+    let mut matched = std::collections::BTreeSet::new();
+    for (name, value) in vars {
+        let Some(name) = name.to_str() else {
+            continue;
+        };
+        if !declared.keys(name) {
+            continue;
+        }
+        let value = value.to_str()?;
+        lines.insert(format!("env {}", quoted(&format!("{name}={value}"))));
+        for pattern in &declared.env {
+            if crate::mutate::resume::env_matches(name, pattern) {
+                matched.insert(pattern.as_str());
+            }
+        }
+    }
+    for pattern in &declared.env {
+        if !matched.contains(pattern.as_str()) {
+            lines.insert(format!("env {} none", quoted(pattern)));
+        }
+    }
+    Some(lines.into_iter().collect())
+}
+
+/// The worktree paths among `touched` that `inputs` does not declare (CLOUD-2784).
+///
+/// Kept out: a path outside `root` (the toolchain, which `tools` keys), the git
+/// dir, the root itself and every ancestor directory of a declared pathspec (a
+/// run reaching a declared file walks them), anything a declared pathspec
+/// selects ([`crate::git::pathspec_matches`], git's own reading), and anything
+/// `ignored` answers for, judged ancestor first, so `target/` is asked once and
+/// never per file beneath it. Sorted, each once.
+///
+/// AN `exists` SPEC DECLARES PROBES ONLY (CLOUD-2835): a path it selects, or an
+/// ancestor of one, is declared for an [`Access::Probe`] and undeclared for any
+/// access that reads bytes, since the key holds its presence and not its bytes.
+///
+/// THE CONFIG FILE IS DECLARED BY A [`CONFIG`] LINE ALONE (CLOUD-2960): it is
+/// never key material through `inputs`, so a read of its bytes is declared
+/// when `config` holds and undeclared when it does not, whatever `inputs`
+/// selects. A probe of it is judged as any path's.
+///
+/// [`Access::Probe`]: crate::mutate::trace::Access::Probe
+fn undeclared(
+    root: &Path,
+    inputs: &[String],
+    exists: &[String],
+    config: bool,
+    touched: &[(std::path::PathBuf, crate::mutate::trace::Access)],
+    ignored: &mut dyn FnMut(&str) -> bool,
+) -> Vec<String> {
+    let selects = |specs: &[String], relative: &str| {
+        specs
+            .iter()
+            .any(|spec| crate::git::pathspec_matches(spec, relative) || ancestor_of(relative, spec))
+    };
+    let mut out = std::collections::BTreeSet::new();
+    for (path, access) in touched {
+        let Ok(relative) = path.strip_prefix(root) else {
+            continue;
+        };
+        let relative = relative.to_string_lossy().replace('\\', "/");
+        if relative.is_empty() || relative == ".git" || relative.starts_with(".git/") {
+            continue;
+        }
+        let probe = *access == crate::mutate::trace::Access::Probe;
+        if relative == CONFIG_FILE && !probe {
+            if !config {
+                out.insert(relative);
+            }
+            continue;
+        }
+        if selects(inputs, &relative) || (probe && selects(exists, &relative)) {
+            continue;
+        }
+        out.insert(relative);
+    }
+    out.into_iter()
+        .filter(|relative| {
+            let mut ancestors: Vec<&str> = relative
+                .match_indices('/')
+                .map(|(at, _)| &relative[..at])
+                .collect();
+            ancestors.push(relative);
+            !ancestors.into_iter().any(&mut *ignored)
+        })
+        .collect()
+}
+
+/// Whether `dir` is an ancestor directory of what `spec` selects: the literal
+/// part of the spec, up to its first wildcard, lies beneath `dir`.
+fn ancestor_of(dir: &str, spec: &str) -> bool {
+    let spec = spec.strip_prefix("./").unwrap_or(spec);
+    let literal = spec
+        .find(['*', '?', '[', '\\'])
+        .map_or(spec, |at| &spec[..at]);
+    literal
+        .strip_prefix(dir)
+        .is_some_and(|rest| rest.starts_with('/'))
+}
+
+/// A receipt's stamp: the first field of its first line, RFC 3339 in UTC, so
+/// it orders as text. A receipt without one sorts first, as the oldest.
+pub(crate) fn receipt_stamp(value: &str) -> String {
+    value
+        .lines()
+        .next()
+        .and_then(|line| line.split_whitespace().next())
+        .unwrap_or_default()
+        .to_owned()
+}
+
+/// The names to drop so at most `cap` of `entries` remain: the oldest by stamp,
+/// ties broken by name, first in first out. A hit writes nothing, so recency
+/// is the write, never a read, and the read path stays write-free under
+/// concurrent runs of one step.
+pub(crate) fn evict(entries: &[(String, String)], cap: usize) -> Vec<String> {
+    let mut ranked: Vec<&(String, String)> = entries.iter().collect();
+    ranked.sort_by(|(a_name, a_stamp), (b_name, b_stamp)| {
+        a_stamp.cmp(b_stamp).then_with(|| a_name.cmp(b_name))
+    });
+    let excess = ranked.len().saturating_sub(cap);
+    ranked
+        .into_iter()
+        .take(excess)
+        .map(|(name, _)| name.clone())
+        .collect()
+}
+
+/// `batten step graph run <group>... [--jobs N]` (CLOUD-2785): every row of
+/// each group, each as a child process from its `run` argv, a row starting only
+/// once every `depends_on` exited 0, at most `jobs` at once (or the group's own
+/// `NAME=N`).
+///
+/// THE GROUPS ARE TIERS, RUN IN ORDER, AND A RED ONE STOPS NOTHING BY ITSELF
+/// (CLOUD-2904): a later group starts once every earlier one has ENDED, and a
+/// failure skips only the rows naming it in `depends_on`, in its own group or
+/// a later one. Twenty-one laps of #1276 each surfaced one red because a red
+/// first tier skipped every later one, so the suite never ran in a lap; an
+/// order is not an input, and only a declared edge is. A dependency on a row
+/// that never ran in this lap (its group not named, or named later) skips the
+/// row too. Every red row, a skipped one with the red row it waited on, is
+/// listed once more at the end.
+///
+/// A CHILD PROCESS PER NODE, never `run_step` on a thread: `check`, `record`
+/// and `declared` read the working directory, `announce` pushes one phase per
+/// process, and a tee writes to the process's own streams. The spawn is
+/// [`crate::exec::run_with`], the placed boundary, so the inventory does not
+/// grow; a node's lines carry its task runner's own prefix.
+///
+/// Prints one pointer line per node (`ran <code> <seconds>` or `skipped`) and
+/// the peak concurrency reached, and exits with the worst node's code.
+///
+/// EACH NODE'S VERDICT IS WRITTEN WHEN THE NODE ENDS (CLOUD-2838):
+/// `step graph: <ok|red> <group> <id> <exit> <seconds> <pointer>`, the pointer
+/// being its captured streams' handles, comma-joined, or `-`. The per-group and
+/// end-of-lap lists still follow, and they come after every node. On #1276 a
+/// tier-2 red waited behind the ~25-minute suite before anyone could read it.
+///
+/// # Errors
+///
+/// An I/O error when a line cannot be written.
+pub fn run_graph(groups: &[String], jobs: Option<&str>, err: &mut dyn Write) -> Result<ExitCode> {
+    let positive = |text: &str| text.parse::<std::num::NonZeroUsize>().ok();
+    let jobs = match jobs.map(positive) {
+        None => None,
+        Some(Some(jobs)) => Some(jobs),
+        Some(None) => {
+            writeln!(err, "step graph: --jobs takes a positive integer")?;
+            return Ok(ExitCode::Usage);
+        }
+    };
+    let steps = match crate::resolve::committed(Path::new("."), &Overrides::default()) {
+        Ok(config) => config.steps,
+        Err(error) => {
+            writeln!(err, "step graph: the step table did not load: {error}")?;
+            return Ok(ExitCode::Usage);
+        }
+    };
+    // EVERY GROUP IS RESOLVED BEFORE ANY ROW RUNS, so a misspelt third group is
+    // a usage error, not a refusal an hour in.
+    let mut phases: Vec<(&str, Vec<&Step>, Option<std::num::NonZeroUsize>)> = Vec::new();
+    for spelled in groups {
+        let (group, bound) = match spelled.split_once('=') {
+            None => (spelled.as_str(), jobs),
+            Some((group, bound)) => {
+                let Some(bound) = positive(bound) else {
+                    writeln!(
+                        err,
+                        "step graph: {spelled}: a group's bound is a positive integer"
+                    )?;
+                    return Ok(ExitCode::Usage);
+                };
+                (group, Some(bound))
+            }
+        };
+        let rows: Vec<&Step> = steps
+            .iter()
+            .filter(|row| row.group.as_deref() == Some(group))
+            .collect();
+        if rows.is_empty() {
+            writeln!(err, "step graph: no [[step]] row is in group {group}")?;
+            return Ok(ExitCode::Usage);
+        }
+        phases.push((group, rows, bound));
+    }
+    // A LAP ENDS WITH ITS STARTER (CLOUD-2955): armed once the table resolved,
+    // before any row runs, so a SIGKILLed `mise run verify` or `land` takes
+    // every node, gate and step under this graph with it.
+    crate::exec::end_with_starter();
+    let mut done: BTreeMap<String, i32> = BTreeMap::new();
+    let mut because: BTreeMap<String, String> = BTreeMap::new();
+    let mut worst = 0_i32;
+    for (group, rows, bound) in &phases {
+        let outcome = graph_phase(group, rows, *bound, &mut done, err);
+        because.extend(outcome.because.clone());
+        for line in &outcome.lines {
+            writeln!(err, "step graph: {line}")?;
+        }
+        writeln!(
+            err,
+            "step graph: {group} peak {} of {}",
+            outcome.peak,
+            bound.map_or_else(|| String::from("unbounded"), |jobs| jobs.to_string())
+        )?;
+        worst = worst.max(outcome.worst);
+    }
+    // THE LAP'S ONE LIST OF REDS (CLOUD-2789): every row that ran and failed, in
+    // run order, after every group has finished — the pointer each needs is its
+    // id and code, and its own output is above, under its runner's prefix.
+    for (group, rows, _) in &phases {
+        for row in rows {
+            if let Some(code) = done.get(&row.id).filter(|code| **code != 0) {
+                let how = if *code == SKIPPED {
+                    format!(
+                        "skipped {}",
+                        because.get(&row.id).map_or("", String::as_str)
+                    )
+                } else {
+                    format!("ran {code}")
+                };
+                writeln!(err, "step graph: red {group} {} {how}", row.id)?;
+            }
+        }
+    }
+    if worst == 0 {
+        return Ok(ExitCode::Success);
+    }
+    ExitCode::from_code(worst).map_or_else(|| Err(crate::error::Passthrough::raise(worst)), Ok)
+}
+
+/// The code a skipped row is recorded under: never a code a child exits with,
+/// so the red list can tell a row that ran and failed from one that never ran.
+const SKIPPED: i32 = -1;
+
+/// One group of [`run_graph`]: its rows, run as child processes, against the
+/// codes every earlier group left in `done`.
+fn graph_phase(
+    group: &str,
+    rows: &[&Step],
+    jobs: Option<std::num::NonZeroUsize>,
+    done: &mut BTreeMap<String, i32>,
+    err: &mut dyn Write,
+) -> Scheduled {
+    let bound = jobs.map_or(usize::MAX, std::num::NonZeroUsize::get);
+    let run = |row: &Step| {
+        let mut settings = crate::config_model::ExecConfig::DEFAULT;
+        settings.tee = true;
+        let argv = row.run.clone().unwrap_or_default();
+        // THE EXEC REPORT IS KEPT FOR ITS CAPTURE HANDLES (CLOUD-2838): the
+        // pointer a node's verdict line carries ([`logged`]).
+        let mut report = Vec::new();
+        // A NON-ZERO CHILD ARRIVES AS A `Passthrough` carrying its own code,
+        // which may sit outside the §7 table; anything else is a spawn that
+        // never decided, which is internal.
+        let code = match crate::exec::run_with(&argv, &[], &settings, &mut report) {
+            Ok(code) => code.code(),
+            Err(error) => error
+                .downcast_ref::<crate::error::Passthrough>()
+                .map_or(ExitCode::Internal.code(), |carried| carried.0),
+        };
+        // A NODE THAT EXITS 0 PASSED AT THIS TREE (CLOUD-2788), schedule-only
+        // nodes included: they take no receipt, and `step cover` reads this.
+        if code == 0 {
+            record_pass(&row.id);
+        }
+        (code, logged(&report))
+    };
+    let mut emit = |line: String| {
+        let _ = writeln!(err, "step graph: {line}");
+        let _ = err.flush();
+    };
+    schedule(group, rows, bound, done, &run, &mut emit)
+}
+
+/// A node's verdict line as it ends (CLOUD-2838), after `step graph: `:
+/// `<ok|red> <group> <id> <exit> <seconds> <pointer>`. The pointer is the
+/// node's capture handles joined by `,`, so it stays one field, or `-`.
+fn verdict_line(group: &str, id: &str, code: i32, seconds: f64, log: Option<&str>) -> String {
+    let verdict = if code == 0 { "ok" } else { "red" };
+    // ONLY `<stream>:<handle>` FIELDS (CLOUD-2838): `logged` takes the last
+    // field of any `exec: … byte(s) …` line, and a held pipe's line ends in
+    // `open`, which is no handle and must never reach the pointer.
+    let handles: Vec<&str> = log
+        .unwrap_or_default()
+        .split_whitespace()
+        .filter(|field| {
+            field.split_once(':').is_some_and(|(stream, handle)| {
+                matches!(stream, "stdout" | "stderr") && !handle.is_empty()
+            })
+        })
+        .collect();
+    let pointer = if handles.is_empty() {
+        String::from("-")
+    } else {
+        handles.join(",")
+    };
+    format!("{verdict} {group} {id} {code} {seconds:.3} {pointer}")
+}
+
+/// What a scheduled graph did: a pointer line per node, the most rows that ran
+/// at once, and the worst code.
+struct Scheduled {
+    lines: Vec<String>,
+    /// Each skipped row's `(<dependency> red|not run)`, as decided when it
+    /// was skipped (CLOUD-2904): by the closing list a later group may have
+    /// run the dependency.
+    because: BTreeMap<String, String>,
+    peak: usize,
+    worst: i32,
+}
+
+/// Run `rows` as a dependency graph with at most `bound` at once, each through
+/// `run`, recording each row's code in `done`. Each row's [`verdict_line`]
+/// goes to `emit` the moment its run returns. A `depends_on` names a row of
+/// its own group (the step table refuses any other at load). Pure over `run`,
+/// so the order, the bound and the skips are testable without a process.
+fn schedule(
+    group: &str,
+    rows: &[&Step],
+    bound: usize,
+    done: &mut BTreeMap<String, i32>,
+    run: &(dyn Fn(&Step) -> (i32, Option<String>) + Sync),
+    emit: &mut dyn FnMut(String),
+) -> Scheduled {
+    // EACH ROW BY ITS POSITION, and what runs is the SET of positions in
+    // flight, never a count (CLOUD-2789): a count a change stops decrementing
+    // left the loop waiting on an arrival no thread would ever send, which hung
+    // the suite instead of failing a case.
+    let mut waiting: Vec<(usize, &Step)> = rows.iter().copied().enumerate().collect();
+    let mut lines = Vec::new();
+    let mut because = BTreeMap::new();
+    let mut running: std::collections::BTreeSet<usize> = std::collections::BTreeSet::new();
+    let mut peak = 0_usize;
+    let mut worst = 0_i32;
+    std::thread::scope(|scope| {
+        let (finished, arrivals) =
+            std::sync::mpsc::channel::<(usize, &str, i32, f64, Option<String>)>();
+        loop {
+            // A ROW WHOSE DEPENDENCY FAILED NEVER STARTS, and neither does any
+            // row waiting on it: repeat until no skip uncovers another.
+            // A dependency outside this group that no earlier group recorded
+            // never will (CLOUD-2904): waiting on it would leave the row
+            // unrecorded, so it is skipped as not run.
+            while let Some((at, dependency, how)) =
+                waiting.iter().enumerate().find_map(|(at, (_, row))| {
+                    row.depends_on.iter().find_map(|dependency| {
+                        match done.get(dependency.as_str()) {
+                            Some(0) => None,
+                            Some(_) => Some((at, dependency.clone(), "failed")),
+                            None if rows.iter().any(|other| other.id == *dependency) => None,
+                            None => Some((at, dependency.clone(), "not run")),
+                        }
+                    })
+                })
+            {
+                let (_, row) = waiting.remove(at);
+                lines.push(format!("{} skipped ({dependency} {how})", row.id));
+                let reason = if how == "failed" { "red" } else { how };
+                because.insert(row.id.clone(), format!("({dependency} {reason})"));
+                done.insert(row.id.clone(), SKIPPED);
+            }
+            while running.len() < bound {
+                let Some(at) = waiting.iter().position(|(_, row)| {
+                    row.depends_on
+                        .iter()
+                        .all(|dependency| done.get(dependency.as_str()) == Some(&0))
+                }) else {
+                    break;
+                };
+                let (position, row) = waiting.remove(at);
+                running.insert(position);
+                peak = peak.max(running.len());
+                let finished = finished.clone();
+                scope.spawn(move || {
+                    let started = std::time::Instant::now();
+                    let (code, log) = run(row);
+                    let seconds = started.elapsed().as_secs_f64();
+                    let _ = finished.send((position, row.id.as_str(), code, seconds, log));
+                });
+            }
+            if running.is_empty() {
+                break;
+            }
+            let Ok((position, id, code, seconds, log)) = arrivals.recv() else {
+                break;
+            };
+            running.remove(&position);
+            emit(verdict_line(group, id, code, seconds, log.as_deref()));
+            lines.push(format!("{id} ran {code} {seconds:.3}"));
+            worst = worst.max(code);
+            done.insert(id.to_owned(), code);
+        }
+    });
+    Scheduled {
+        lines,
+        because,
+        peak,
+        worst,
+    }
+}
+
+/// The run time a receipt recorded: the `<n>ms` field of its first line, or
+/// `None` for a receipt written before it carried one.
+fn recorded_millis(body: &str) -> Option<u64> {
+    body.lines()
+        .next()?
+        .split_whitespace()
+        .find_map(|field| field.strip_suffix("ms")?.parse().ok())
+}
+
+/// `stage <step> <hit|ran> <seconds>`: one line per step, a count and never a
+/// payload (rule 4), so a lap's log answers what each stage cost (CLOUD-2776).
+/// A receipt too old to say is `-`.
+fn stage_line(step: &str, how: &str, millis: Option<u64>) -> String {
+    let seconds = millis.map_or_else(
+        || String::from("-"),
+        |millis| format!("{}.{:03}", millis / 1000, millis % 1000),
+    );
+    format!("stage {step} {how} {seconds}")
+}
+
+/// The digest `enforce --half tree --inputs-digest` prints when run in `dir`,
+/// taken in-process: what the `[[step]]` cache keys that tool line on without
+/// spawning a build and a policy load for it (step 17, this module).
+///
+/// # Errors
+///
+/// As [`tree_inputs_digest`].
+pub fn tree_inputs_digest_in(dir: &Path) -> Result<String> {
+    tree_inputs_digest(&crate::config::anchor_at(dir))
+}
+
+/// The digest `run_inputs_digest` prints.
+///
+/// # Errors
+///
+/// When the baseline's path does not resolve under `root`.
+pub fn tree_inputs_digest(root: &Path) -> Result<String> {
+    fn frame(hasher: &mut blake3::Hasher, label: &str, bytes: Option<&[u8]>) {
+        hasher.update(label.as_bytes());
+        hasher.update(b"\0");
+        match bytes {
+            Some(bytes) => {
+                hasher.update(&(bytes.len() as u64).to_le_bytes());
+                hasher.update(bytes);
+            }
+            None => {
+                hasher.update(b"none");
+            }
+        }
+        hasher.update(b"\n");
+    }
+    let read =
+        |path: Option<std::path::PathBuf>| path.and_then(|path| crate::fsio::read(path).ok());
+    let mut hasher = blake3::Hasher::new();
+    frame(
+        &mut hasher,
+        "baseline",
+        read(crate::baseline::path(root)?).as_deref(),
+    );
+    let mut records: Vec<(String, Vec<u8>)> = crate::admission::store_dir(root)
+        .ok()
+        .and_then(|dir| std::fs::read_dir(dir).ok())
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "json"))
+        .filter_map(|entry| {
+            let name = entry.file_name().into_string().ok()?;
+            Some((name, crate::fsio::read(entry.path()).ok()?))
+        })
+        .collect();
+    records.sort();
+    frame(
+        &mut hasher,
+        "admissions",
+        Some(&(records.len() as u64).to_le_bytes()),
+    );
+    for (name, bytes) in &records {
+        frame(&mut hasher, &format!("admission {name}"), Some(bytes));
+    }
+    for rev in ["HEAD", "HEAD^2"] {
+        let blocks = crate::git::commit_record(root, rev).ok().map(|record| {
+            let mut text = String::new();
+            for block in crate::admission::blocks(&record.body) {
+                text.push_str(&block.claimed);
+                text.push('\t');
+                text.push_str(&crate::admission::canonical(&block.binding));
+                text.push('\n');
+            }
+            text
+        });
+        frame(
+            &mut hasher,
+            &format!("blocks {rev}"),
+            blocks.as_deref().map(str::as_bytes),
+        );
+    }
+    // The recorder stores the tree half reads (CLOUD-2329): exactly what the
+    // run is handed, so a moved record re-keys the half.
+    frame(
+        &mut hasher,
+        "records",
+        crate::recorder::recorded_for_digest(root)
+            .as_deref()
+            .map(str::as_bytes),
+    );
+    frame(
+        &mut hasher,
+        "secret-key",
+        read(crate::secrets::key_path(root).ok()).as_deref(),
+    );
+    frame(
+        &mut hasher,
+        crate::resolve::LOCAL_CONFIG_FILE,
+        read(Some(root.join(crate::resolve::LOCAL_CONFIG_FILE))).as_deref(),
+    );
+    for name in crate::resolve::SETTINGS
+        .iter()
+        .filter_map(|setting| setting.env)
+    {
+        let value = std::env::var_os(name);
+        frame(
+            &mut hasher,
+            name,
+            value.as_ref().map(|value| value.as_encoded_bytes()),
+        );
+    }
+    Ok(hasher.finalize().to_hex().to_string())
 }
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+
+    /// A scratch worktree declaring `src/a.rs`, and the trace file a lint of
+    /// it writes its listings beside (CLOUD-2789).
+    fn lint_fixture(name: &str) -> (std::path::PathBuf, std::path::PathBuf) {
+        let dir = crate::scratch::scratch(name);
+        let root = dir.join("root");
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        (root, dir.join("trace"))
+    }
+
+    /// [`lint_accessed`] over `accessed`, for a row declaring `src/a.rs` in
+    /// `root`, with nothing ignored.
+    fn lint(
+        root: &Path,
+        file: &Path,
+        accessed: &[(std::path::PathBuf, crate::mutate::trace::Access)],
+    ) -> Linted {
+        let declaration = Declaration {
+            root,
+            inputs: &[String::from("src/a.rs")],
+            exists: &[],
+            config: false,
+        };
+        lint_accessed(&declaration, accessed, file, &mut |_| false)
+    }
+
+    // Fails by: a `step record` line without its leading `--` keying its
+    // words as families, or a `--` line naming a family that is not one path
+    // component keying it anyway — either conjunction widened to a disjunction
+    // (CLOUD-2789).
+    #[test]
+    fn a_record_ask_keys_only_dash_dash_and_single_components() {
+        let words = |list: &[&str]| list.iter().map(|w| (*w).to_owned()).collect::<Vec<_>>();
+        let asked = words(&["--", "claims", "verdicts"]);
+        assert_eq!(record_ask(&asked), Some(&asked[1..]));
+        assert_eq!(record_ask(&words(&["-x", "claims"])), None);
+        assert_eq!(record_ask(&words(&["--", "claims/inner"])), None);
+        assert_eq!(record_ask(&words(&["--", "claims", ".hidden"])), None);
+        assert_eq!(record_ask(&words(&["--"])), None);
+    }
+
+    // Fails by: a run that only READ its declared input read as one that
+    // wrote it (the write filter inverted), or an empty write list read as a
+    // write hazard. A synthetic trace, so it judges on every host, under a
+    // tracer or with no `strace` (CLOUD-2789).
+    #[test]
+    fn a_read_of_a_declared_input_is_declared() {
+        use crate::mutate::trace::Access;
+        let (root, file) = lint_fixture("step-lint-read");
+        let accessed = [(root.join("src/a.rs"), Access::Read)];
+        assert_eq!(lint(&root, &file, &accessed), Linted::Declared);
+    }
+
+    // Fails by: a run that wrote its declared input judged on its reads alone,
+    // or its listing not naming the input written.
+    #[test]
+    fn a_write_to_a_declared_input_is_the_write_hazard() {
+        use crate::mutate::trace::Access;
+        let (root, file) = lint_fixture("step-lint-wrote");
+        let accessed = [
+            (root.join("src/a.rs"), Access::Write),
+            (root.join("other"), Access::Read),
+        ];
+        let listing = file.with_extension("wrote");
+        assert_eq!(
+            lint(&root, &file, &accessed),
+            Linted::Wrote(1, listing.clone())
+        );
+        assert_eq!(crate::fsio::read_to_string(&listing).unwrap(), "src/a.rs\n");
+    }
+
+    // Fails by: a worktree read outside the declaration passed as declared,
+    // or its listing not naming it.
+    #[test]
+    fn a_read_outside_the_declaration_is_undeclared() {
+        use crate::mutate::trace::Access;
+        let (root, file) = lint_fixture("step-lint-undeclared");
+        let accessed = [
+            (root.join("src/a.rs"), Access::Read),
+            (root.join("other"), Access::Read),
+        ];
+        let listing = file.with_extension("undeclared");
+        assert_eq!(
+            lint(&root, &file, &accessed),
+            Linted::Undeclared(1, listing.clone())
+        );
+        assert_eq!(crate::fsio::read_to_string(&listing).unwrap(), "other\n");
+    }
+
+    // Fails by: a hazard or an undeclared read letting the step record, a
+    // trace that cannot be read whole recorded or failed, a clean lint
+    // stopping the step, or a stop not saying why.
+    #[test]
+    fn each_lint_ends_the_step_as_its_kind_requires() {
+        let stop = |linted: Linted| {
+            let mut err = Vec::new();
+            let stop = lint_stop("s", linted, &mut err);
+            (stop, String::from_utf8(err).unwrap())
+        };
+        let listing = std::path::PathBuf::from("l");
+        assert_eq!(
+            stop(Linted::Wrote(2, listing.clone())),
+            (
+                LintStop::Fail,
+                String::from("step run: s wrote 2 declared input(s); read l\n")
+            )
+        );
+        assert_eq!(
+            stop(Linted::Undeclared(3, listing)),
+            (
+                LintStop::Fail,
+                String::from("step run: s read 3 path(s) outside its inputs; read l\n")
+            )
+        );
+        assert_eq!(stop(Linted::Declared), (LintStop::Go, String::new()));
+        assert_eq!(stop(Linted::RowUnread), (LintStop::Go, String::new()));
+        assert_eq!(
+            stop(Linted::Unread),
+            (
+                LintStop::Unrecorded,
+                String::from("step run: s — its trace could not be read whole; not recording\n")
+            )
+        );
+    }
+
+    /// Fails by: a cleared red left standing, so a gate started under the
+    /// same task reads the last one's failure as its own.
+    #[test]
+    fn a_cleared_red_is_no_longer_read() {
+        let git_dir = crate::scratch::scratch("step-red-clear");
+        crate::record::keyed_write(&git_dir, RED, "42", "lint:clippy\n").unwrap();
+        assert_eq!(red_under(&git_dir, 42).as_deref(), Some("lint:clippy"));
+        clear_red(&git_dir, 42);
+        assert_eq!(red_under(&git_dir, 42), None);
+    }
+
+    /// Fails by: the code read at a fixed offset from the line's start rather
+    /// than two past the key, so a pass line of any other shape loses the
+    /// failure written after it.
+    #[test]
+    fn a_failure_is_read_back_wherever_its_key_sits() {
+        let failure = Failure {
+            code: 3,
+            log: None,
+            cases: None,
+        };
+        for pass in ["45ms key", "stamp 45ms key", "a stamp 45ms key"] {
+            let body = failure_body(pass, &failure, true);
+            let (read, flaky) = failure_of(&body, "key").expect(pass);
+            assert_eq!((read.code, flaky), (3, true), "{pass}");
+        }
+    }
+
+    #[cfg(test)]
+    /// Fails by: a miss or a suspect recording under any key but its own, or
+    /// a hit recording at all.
+    #[test]
+    fn an_answer_records_under_its_own_key() {
+        assert_eq!(Answer::Miss(String::from("k1")).recording(), Some("k1"));
+        assert_eq!(Answer::Suspect(String::from("k2")).recording(), Some("k2"));
+        assert_eq!(Answer::Hit(String::from("k3")).recording(), None);
+        assert_eq!(Answer::NoKey.recording(), None);
+    }
+
+    /// Fails by: a field taken as a capture handle when only one of its two
+    /// halves holds — a stream with no handle, or a handle under another
+    /// name — so `stderr:` or a held pipe's `held:open` reaches the pointer.
+    #[test]
+    fn a_verdict_line_points_only_at_named_stream_handles() {
+        assert_eq!(
+            super::verdict_line("g", "a", 0, 1.0, Some("exec: stdout:h1 held:open stderr:")),
+            "ok g a 0 1.000 stdout:h1"
+        );
+    }
+
+    /// Fails by: a pass, a signal (`128 + N`) or a shell that could not run
+    /// the child recorded as a verdict over the inputs.
+    #[test]
+    fn only_a_childs_own_failure_code_is_recordable() {
+        for code in [1, 2, 125] {
+            assert!(recordable_failure(code), "{code}");
+        }
+        for code in [0, 126, 127, 130, -1] {
+            assert!(!recordable_failure(code), "{code}");
+        }
+    }
+
+    /// Fails by: a run with no failed case listing its suspects.
+    #[test]
+    fn suspects_are_listed_only_where_a_case_failed() {
+        let trace = || Some(std::path::PathBuf::from("/g/step.trace"));
+        assert_eq!(flaky_listing(trace(), 0), None);
+        assert_eq!(
+            flaky_listing(trace(), 1),
+            Some(std::path::PathBuf::from("/g/step.flaky"))
+        );
+        assert_eq!(flaky_listing(None, 1), None);
+    }
+
+    #[test]
+    fn a_held_step_lock_excludes_its_own_step_and_no_other() {
+        // Fails by: the lock not exclusive (two runners of one step both run),
+        // or keyed by something coarser than the step (two steps serialise).
+        let dir = crate::scratch::scratch("step-lock");
+        let held = step_lock_at(&dir, "lint:clippy").expect("the first runner locks");
+        let path =
+            |step: &str| dir.join(format!("{LOCKS}-{}", crate::tools::digest(step.as_bytes())));
+        let same = std::fs::File::open(path("lint:clippy")).unwrap();
+        assert!(
+            matches!(same.try_lock(), Err(std::fs::TryLockError::WouldBlock)),
+            "a second runner of the same step waits"
+        );
+        assert!(
+            step_lock_at(&dir, "cross-check").is_some(),
+            "another step is not held up"
+        );
+        drop(held);
+        assert!(same.try_lock().is_ok(), "and the lock is released on drop");
+    }
+
+    #[test]
+    fn only_a_trace_no_runner_holds_is_swept() {
+        // Fails by: a live runner's trace removed from under it, or a killed
+        // runner's trace kept for ever (the 15 GB that blocked lap 34).
+        let dir = crate::scratch::scratch("step-trace-sweep");
+        let trace = |step: &str| {
+            dir.join(format!(
+                "{TRACES}-{}.trace",
+                crate::tools::digest(step.as_bytes())
+            ))
+        };
+        // A RUNNER WRITES ITS TRACE AFTER TAKING ITS LOCK: taking it removes
+        // every trace an earlier run of that step left (CLOUD-2955).
+        let held = step_lock_at(&dir, "running").expect("the live runner locks");
+        std::fs::write(trace("running"), "live").unwrap();
+        std::fs::write(trace("killed"), "orphaned").unwrap();
+        assert_eq!(sweep_orphaned_traces(&dir), (1, 8));
+        assert!(trace("running").exists(), "a held step's trace stays");
+        assert!(!trace("killed").exists(), "an unheld one is gone");
+        drop(held);
+    }
+
+    /// Fails by: a cleared red left behind, so a gate starting under a reused
+    /// pid reads the last gate's failed step as its own.
+    #[test]
+    fn clearing_a_red_step_leaves_nothing_under_its_pid() {
+        let dir = crate::scratch::scratch("step-red-clear");
+        crate::record::keyed_write(&dir, RED, "41", "lint\n").unwrap();
+        crate::record::keyed_write(&dir, RED, "42", "test\n").unwrap();
+        assert_eq!(red_under(&dir, 41).as_deref(), Some("lint"));
+        clear_red(&dir, 41);
+        assert_eq!(red_under(&dir, 41), None);
+        assert_eq!(
+            red_under(&dir, 42).as_deref(),
+            Some("test"),
+            "only that pid"
+        );
+    }
 
     #[test]
     fn the_stored_key_is_the_last_field_of_the_first_line() {
@@ -534,6 +3659,397 @@ mod tests {
         );
     }
 
+    /// Fails by: a receipt's `<n>ms` field misread, a receipt written before it
+    /// carried one read as a time, or a stage line's seconds mis-rendered.
+    /// Fails by: a prefix exemption matched only exactly, an exact one as a
+    /// prefix, a pass at another tree or of another step counted, or a mapped
+    /// check outside the roster dropped instead of reported.
+    #[test]
+    fn cover_counts_a_pass_at_this_tree_or_an_exemption() {
+        assert!(super::exempts("windows", "windows"));
+        assert!(!super::exempts("windows", "windows-arm"));
+        assert!(super::exempts("dist (*", "dist (x86_64)"));
+        assert!(!super::exempts("dist (*", "dist"));
+        let roster = ["a", "b", "c", "win"];
+        let proof = [("a", "sa"), ("b", "sb"), ("z", "sz")];
+        let passed = |step: &str| match step {
+            "sa" => Some(String::from("t1\n")),
+            "sb" => Some(String::from("t0\n")),
+            _ => None,
+        };
+        let (uncovered, stale) = super::cover_gaps(&roster, &proof, &["win"], "t1", &passed);
+        assert_eq!(
+            uncovered,
+            ["b", "c"],
+            "b passed at another tree, c is unmapped"
+        );
+        assert_eq!(stale, ["z"]);
+    }
+
+    #[test]
+    fn a_stage_line_reads_the_recorded_run_and_renders_seconds() {
+        assert_eq!(
+            recorded_millis("2026-11-16T00:00:00Z 1250ms abc\n"),
+            Some(1250)
+        );
+        assert_eq!(recorded_millis("2026-11-16T00:00:00Z abc\n"), None);
+        assert_eq!(stage_line("s", "ran", Some(1250)), "stage s ran 1.250");
+        assert_eq!(stage_line("s", "ran", Some(7)), "stage s ran 0.007");
+        assert_eq!(stage_line("s", "hit", None), "stage s hit -");
+    }
+
+    // FIRST IN, FIRST OUT, AND EXACTLY THE EXCESS (CLOUD-2784): an off-by-one
+    // keeps 33 or drops 2, newest-first drops the receipt just written, and an
+    // unstable tie drops whichever the directory listed first.
+    #[test]
+    fn evict_drops_only_the_oldest_past_the_cap() {
+        let stamp = |n: usize| format!("2026-11-18T10:{:02}:{:02}Z", n / 60, n % 60);
+        let entries: Vec<(String, String)> = (0..33)
+            .rev()
+            .map(|n| (format!("r{n:02}"), stamp(n)))
+            .collect();
+        assert_eq!(super::evict(&entries, 32), vec!["r00".to_owned()]);
+        assert!(
+            super::evict(&entries[..32], 32).is_empty(),
+            "at the cap, none"
+        );
+
+        let tied = vec![
+            ("b".to_owned(), stamp(0)),
+            ("a".to_owned(), stamp(0)),
+            ("c".to_owned(), stamp(5)),
+        ];
+        assert_eq!(super::evict(&tied, 2), vec!["a".to_owned()]);
+        assert_eq!(super::evict(&tied, 1), vec!["a".to_owned(), "b".to_owned()]);
+    }
+
+    // EACH RULE OF THE TRACE LINT, ONE PATH APIECE (CLOUD-2784): dropping any
+    // clause turns its path undeclared, or declares the one that is not.
+    #[test]
+    fn only_an_undeclared_unignored_worktree_read_is_undeclared() {
+        let root = std::path::Path::new("/repo");
+        let touched: Vec<std::path::PathBuf> = [
+            "/repo/a/x.rs",         // under a declared pathspec
+            "/repo",                // the root
+            "/repo/deep",           // an ancestor of a declared pathspec
+            "/repo/.git/HEAD",      // the git dir
+            "/usr/lib/libc.so",     // outside the worktree
+            "/repo/target/debug/t", // ignored, by its ancestor
+            "/repo/b",              // undeclared
+            "/repo/c/missing",      // undeclared, a probe that found nothing
+            "/repo/b",              // repeated
+        ]
+        .map(std::path::PathBuf::from)
+        .to_vec();
+        let touched: Vec<(std::path::PathBuf, crate::mutate::trace::Access)> = touched
+            .into_iter()
+            .map(|path| (path, crate::mutate::trace::Access::Read))
+            .collect();
+        let inputs = vec!["a".to_owned(), "deep/er/file".to_owned()];
+        let mut asked = Vec::new();
+        let mut ignored = |path: &str| {
+            asked.push(path.to_owned());
+            path == "target"
+        };
+        let found = super::undeclared(root, &inputs, &[], false, &touched, &mut ignored);
+        assert_eq!(found, vec!["b".to_owned(), "c/missing".to_owned()]);
+        assert!(
+            !asked.iter().any(|path| path == "target/debug/t"),
+            "an ignored ancestor answers for everything beneath it: {asked:?}"
+        );
+    }
+
+    // AN EXISTENCE INPUT ADMITS A PROBE AND NEVER A BYTE READ (CLOUD-2835):
+    // cargo asks whether a sibling's `src/lib.rs` is there and reads none of
+    // it, so a probe is declared, and a read of the same path is not.
+    #[test]
+    fn an_existence_input_admits_a_probe_and_never_a_byte_read() {
+        use crate::mutate::trace::Access::{Probe, Read};
+        let root = std::path::Path::new("/repo");
+        let touched: Vec<(std::path::PathBuf, crate::mutate::trace::Access)> = [
+            ("/repo/sib/src/lib.rs", Probe),  // probed: declared
+            ("/repo/sib/build.rs", Probe),    // probed, absent: declared
+            ("/repo/sib/src/main.rs", Probe), // probed, then read below
+            ("/repo/sib/src/main.rs", Read),  // a byte read of it
+            ("/repo/sib/README.md", Read),    // read, never probed
+            ("/repo/input", Read),            // a content input: any access
+            ("/repo/other/build.rs", Probe),  // a probe nothing declares
+        ]
+        .map(|(path, access)| (std::path::PathBuf::from(path), access))
+        .to_vec();
+        let inputs = vec!["input".to_owned()];
+        let exists = [
+            "sib/src/lib.rs",
+            "sib/src/main.rs",
+            "sib/build.rs",
+            "sib/README.md",
+        ]
+        .map(str::to_owned)
+        .to_vec();
+        let found = super::undeclared(root, &inputs, &exists, false, &touched, &mut |_| false);
+        assert_eq!(
+            found,
+            ["other/build.rs", "sib/README.md", "sib/src/main.rs"].map(str::to_owned)
+        );
+    }
+
+    /// A LIBRARY LOOKUP NEVER REFUSES A RECEIPT, A TREE READ STILL DOES
+    /// (CLOUD-2870): the linker's bare `libgcc_s.so.1` probe that refused
+    /// `lint:clippy`, and the loader's bare open, read end to end, name no
+    /// undeclared path, and a real read of an undeclared repo file beside them
+    /// is still named.
+    ///
+    /// Fails by: the trace walk keeping the bare soname (it is listed, the
+    /// exit-2 refusal), or the lint dropping a relative read it should keep
+    /// (`build.rs` vanishes, a receipt over an input nobody declared).
+    #[test]
+    fn a_library_lookup_is_never_undeclared_and_a_tree_read_still_is() {
+        let trace = "7     execve(\"/bin/sh\", [\"sh\"], 0x0 /* 0 vars */) = 0\n\
+             7     access(\"libgcc_s.so.1\", F_OK)     = -1 ENOENT (No such file or directory)\n\
+             7     openat(AT_FDCWD</repo>, \"libgcc_s.so.1\", O_RDONLY|O_CLOEXEC) = -1 ENOENT \
+             (No such file or directory)\n\
+             7     openat(AT_FDCWD</repo>, \"src/x.rs\", O_RDONLY|O_CLOEXEC) = 3</repo/src/x.rs>\n\
+             7     openat(AT_FDCWD</repo>, \"build.rs\", O_RDONLY|O_CLOEXEC) = 3</repo/build.rs>\n\
+             7     +++ exited with 0 +++\n";
+        let root = Path::new("/repo");
+        let accessed = crate::mutate::trace::accesses(trace, Some(root)).expect("a whole trace");
+        let inputs = vec!["src".to_owned()];
+        let found = super::undeclared(root, &inputs, &[], false, &accessed, &mut |_| false);
+        assert_eq!(found, vec!["build.rs".to_owned()]);
+    }
+
+    /// Fails by: an edit to an existence path's bytes moving the key (every
+    /// sibling-crate edit re-running the row), or adding or removing one
+    /// leaving it unmoved (a receipt over a target cargo no longer builds).
+    #[test]
+    fn an_existence_input_keys_on_presence_and_never_on_bytes() {
+        let tree = |name: &str, lib: &str, build: Option<&str>| {
+            let root = crate::scratch::scratch(name);
+            crate::gitwrite::init_on_main(&root).unwrap();
+            std::fs::create_dir_all(root.join("sib/src")).unwrap();
+            std::fs::write(root.join("input"), "x\n").unwrap();
+            std::fs::write(root.join("sib/src/lib.rs"), lib).unwrap();
+            let mut paths = vec![String::from("input"), String::from("sib/src/lib.rs")];
+            if let Some(build) = build {
+                std::fs::write(root.join("sib/build.rs"), build).unwrap();
+                paths.push(String::from("sib/build.rs"));
+            }
+            crate::gitwrite::commit_paths(&root, &paths, "tree").unwrap();
+            root
+        };
+        let row: Step = toml::from_str(
+            "id = \"s\"\ninputs = [\"input\"]\ntools = [[\"echo\", \"v1\"], \
+             [\"batten\", \"step\", \"exists\", \"--\", \"sib/src/lib.rs\", \"sib/build.rs\"]]\n",
+        )
+        .unwrap();
+        assert_eq!(
+            super::exists_specs(&row),
+            ["sib/src/lib.rs", "sib/build.rs"].map(str::to_owned),
+            "the lint reads the line's pathspecs"
+        );
+        let key = |root: &Path| material(root, &row, &[], None).expect("the row keys");
+        let held = key(&tree("step-exists-one", "pub fn a() {}\n", None));
+        assert_eq!(
+            key(&tree("step-exists-edited", "pub fn b() {}\n", None)),
+            held,
+            "an edit to an existence path's bytes keeps the key"
+        );
+        let built = tree(
+            "step-exists-added",
+            "pub fn a() {}\n",
+            Some("fn main() {}\n"),
+        );
+        assert_ne!(key(&built), held, "adding a target file moves the key");
+        assert_eq!(
+            key(&tree("step-exists-again", "pub fn a() {}\n", None)),
+            held,
+            "and without it the key is the one it was"
+        );
+        // THE WORKTREE MUST AGREE: an untracked target cargo would probe is
+        // no key at all, never a receipt that cannot see it.
+        let untracked = tree("step-exists-untracked", "pub fn a() {}\n", None);
+        std::fs::write(untracked.join("sib/build.rs"), "fn main() {}\n").unwrap();
+        assert_eq!(material(&untracked, &row, &[], None), None);
+        // A LINE THAT DECLARES NOTHING KEYS NOTHING: no pathspec, or a magic
+        // one this build reads as selecting nothing.
+        for words in [&["--"][..], &["--", ":(exclude)sib"], &["sib/src/lib.rs"]] {
+            let words: Vec<String> = words.iter().map(|word| (*word).to_owned()).collect();
+            assert_eq!(super::exists_ask(&words), None, "{words:?}");
+        }
+    }
+
+    /// Fails by: the verb and the cache answering the line differently, which
+    /// would make the printed answer a second, unchecked authority.
+    #[test]
+    fn the_exists_line_is_answered_in_process_as_the_verb_prints_it() {
+        let root = crate::scratch::scratch("step-exists-line");
+        crate::gitwrite::init_on_main(&root).unwrap();
+        std::fs::create_dir_all(root.join("sib/src")).unwrap();
+        std::fs::write(root.join("sib/src/lib.rs"), "x\n").unwrap();
+        crate::gitwrite::commit_paths(&root, &[String::from("sib/src/lib.rs")], "lib").unwrap();
+        let line: Vec<String> = [
+            "batten",
+            "step",
+            "exists",
+            "--",
+            "sib/src/lib.rs",
+            "sib/build.rs",
+        ]
+        .map(str::to_owned)
+        .to_vec();
+        assert_eq!(
+            tool_said(&root, &line),
+            Some((0, String::from("exists \"sib/src/lib.rs\"")))
+        );
+        let absent: Vec<String> = ["batten", "step", "exists", "--", "sib/build.rs"]
+            .map(str::to_owned)
+            .to_vec();
+        assert_eq!(
+            tool_said(&root, &absent),
+            Some((0, String::from("exists none"))),
+            "nothing present still says something, so the step keys"
+        );
+    }
+
+    fn suite(cases: &[&str]) -> std::collections::BTreeSet<super::SuiteCase> {
+        cases
+            .iter()
+            .map(|case| ((*case).to_owned(), String::from("batten")))
+            .collect()
+    }
+
+    // A SHARDED PASS IS A RECEIPT ONLY OVER THE WHOLE LIST (CLOUD-2843): the
+    // shards' cases together are the archive's, and none ran nothing.
+    #[test]
+    fn shards_record_only_when_their_union_is_the_list_and_none_is_empty() {
+        let listed = suite(&["a", "b", "c", "d"]);
+        let four = [suite(&["a"]), suite(&["b"]), suite(&["c"]), suite(&["d"])];
+        assert_eq!(super::shard_coverage(&listed, &four), Ok(()));
+        // ONE SHARD'S MARKERS DROPPED: its cases are in no shard.
+        let dropped = [suite(&["a"]), suite(&["b"]), suite(&["c"])];
+        let refused = super::shard_coverage(&listed, &dropped).unwrap_err();
+        assert!(refused.contains("3 of 4"), "{refused}");
+        let empty = [suite(&["a", "b"]), suite(&[]), suite(&["c", "d"])];
+        let refused = super::shard_coverage(&listed, &empty).unwrap_err();
+        assert!(refused.contains("shard 2/3 ran no case"), "{refused}");
+        let extra = [suite(&["a", "b"]), suite(&["c", "d", "e"])];
+        let refused = super::shard_coverage(&listed, &extra).unwrap_err();
+        assert!(refused.contains("1 unlisted"), "{refused}");
+        let refused = super::shard_coverage(&std::collections::BTreeSet::new(), &four).unwrap_err();
+        assert!(refused.contains("lists no case"), "{refused}");
+    }
+
+    // THE ARCHIVE TAKES THE BUILD SCOPE ONCE, and each shard runs the journaled
+    // command over the archive with its partition, never the scope again.
+    #[test]
+    fn a_shard_runs_the_journaled_command_over_the_archive_with_its_partition() {
+        let words = |text: &str| -> Vec<String> { text.split(' ').map(str::to_owned).collect() };
+        let command = words("cargo nextest run --workspace -p x --no-fail-fast -- --nocapture");
+        let archive = std::path::Path::new("/s/suite.tar.zst");
+        assert_eq!(
+            super::archive_argv(&command, archive),
+            Some(words(
+                "cargo nextest archive --archive-file /s/suite.tar.zst --workspace -p x"
+            ))
+        );
+        let journaled = words(
+            "cargo nextest run --workspace -p x --no-fail-fast --config-file /s/n.toml -- --nocapture",
+        );
+        assert_eq!(
+            super::shard_argv(&journaled, archive, 2, 4),
+            words(
+                "cargo nextest run --no-fail-fast --config-file /s/n.toml --archive-file \
+                 /s/suite.tar.zst --partition hash:2/4 -- --nocapture"
+            )
+        );
+        assert_eq!(
+            super::archive_argv(&words("cargo test --workspace"), archive),
+            None,
+            "only a nextest run shards"
+        );
+    }
+
+    #[test]
+    fn the_listed_and_passed_cases_are_read_as_nextest_writes_them() {
+        let listed = r#"{"rust-suites":{"batten":{"testcases":{
+            "a":{"ignored":false,"filter-match":{"status":"matches"}},
+            "b":{"ignored":true,"filter-match":{"status":"mismatch","reason":"ignored"}}}}}}"#;
+        assert_eq!(super::listed_cases(listed), Some(suite(&["a"])));
+        let junit = r#"<testsuites><testsuite name="batten">
+            <testcase name="a" classname="batten"/>
+            <testcase name="f" classname="batten"><failure message="x"/></testcase>
+            <testcase name="s" classname="batten"><skipped/></testcase>
+            </testsuite></testsuites>"#;
+        assert_eq!(super::passed_cases(junit), Some(suite(&["a"])));
+        assert_eq!(super::passed_cases("<not"), None);
+    }
+
+    #[test]
+    fn the_whole_tree_declared_leaves_nothing_undeclared() {
+        let touched = vec![(
+            std::path::PathBuf::from("/repo/anything"),
+            crate::mutate::trace::Access::Read,
+        )];
+        let found = super::undeclared(
+            std::path::Path::new("/repo"),
+            &[".".to_owned()],
+            &[],
+            false,
+            &touched,
+            &mut |_| false,
+        );
+        assert!(found.is_empty(), "{found:?}");
+    }
+
+    #[test]
+    fn an_ancestor_is_the_literal_part_of_a_spec_beneath_it() {
+        assert!(super::ancestor_of("crates", "crates/batten/src"));
+        assert!(super::ancestor_of("crates", "crates/*/src"));
+        assert!(!super::ancestor_of("crate", "crates/batten"));
+        assert!(!super::ancestor_of("crates/batten", "crates"));
+    }
+
+    // TODAY'S BYTES, LITERALLY (CLOUD-2785): before rows could schedule, the
+    // key's row line was the whole row serialized, and this is that string for
+    // this row. A field added to the projection, or one leaking from `Step`,
+    // changes it and re-runs every step on its next lap.
+    #[test]
+    fn only_id_inputs_and_tools_are_key_material() {
+        let keyed = |run: Option<&str>, group: Option<&str>| crate::step_table::Step {
+            id: String::from("s"),
+            inputs: Some(vec![String::from("a")]),
+            tools: Some(vec![vec![String::from("t"), String::from("--version")]]),
+            run: run.map(|word| vec![word.to_owned()]),
+            group: group.map(str::to_owned),
+            depends_on: group.map_or_else(Vec::new, |_| vec![String::from("x")]),
+            verdict: group.map(|_| crate::step_table::Verdict::Exit),
+            journal: group.map(|_| crate::step_table::Journal::Nextest),
+        };
+        let today = r#"row {"id":"s","inputs":["a"],"tools":[["t","--version"]]}"#;
+        assert_eq!(super::row_line(&keyed(None, None)).as_deref(), Some(today));
+        assert_eq!(
+            super::row_line(&keyed(Some("go"), Some("g"))).as_deref(),
+            Some(today)
+        );
+        let mut node = keyed(Some("go"), Some("g"));
+        node.inputs = None;
+        node.tools = None;
+        assert_eq!(
+            super::row_line(&node),
+            None,
+            "a schedule-only node keys nothing"
+        );
+    }
+
+    #[test]
+    fn a_receipts_stamp_is_its_first_field() {
+        assert_eq!(
+            super::receipt_stamp("2026-11-18T10:00:00Z 12ms abc\n"),
+            "2026-11-18T10:00:00Z"
+        );
+        assert_eq!(super::receipt_stamp(""), "");
+    }
+
     #[test]
     fn every_miss_says_miss_first_and_only_a_hit_says_hit() {
         for answer in [Answer::Off, Answer::NoKey, Answer::Miss(key_of("x"))] {
@@ -553,8 +4069,13 @@ mod tests {
         crate::gitwrite::commit_paths(&root, &[String::from("input")], "input").unwrap();
         let row = |tool: &[&str]| Step {
             id: String::from("s"),
-            inputs: vec![String::from("input")],
-            tools: vec![tool.iter().map(|word| (*word).to_owned()).collect()],
+            inputs: Some(vec![String::from("input")]),
+            tools: Some(vec![tool.iter().map(|word| (*word).to_owned()).collect()]),
+            run: None,
+            group: None,
+            depends_on: Vec::new(),
+            verdict: None,
+            journal: None,
         };
         // The platform's own shell spells each tool: one that answers, one
         // that exits zero saying nothing, and one that answers and fails.
@@ -573,5 +4094,692 @@ mod tests {
         );
         assert_eq!(material(&root, &row(silent), &[], None), None);
         assert_eq!(material(&root, &row(fails), &[], None), None);
+    }
+
+    /// A row read as the committed table would read it, so a field added to
+    /// [`Step`] cannot break the env cases below.
+    fn env_row(id: &str) -> Step {
+        toml::from_str(&format!(
+            "id = \"{id}\"\ninputs = [\"input\"]\ntools = [[\"echo\", \"v1\"]]\n"
+        ))
+        .unwrap()
+    }
+
+    /// Fails by: more rows at once than the bound, a row started past a failed
+    /// dependency or before a passing one, a row's verdict line dropped, or a
+    /// run that never returns once every row has answered.
+    #[test]
+    fn a_graph_runs_within_its_bound_and_skips_past_a_failure() {
+        let row = |id: &str, after: &[&str]| -> Step {
+            let after: Vec<String> = after.iter().map(|id| format!("\"{id}\"")).collect();
+            toml::from_str(&format!(
+                "id = \"{id}\"\ninputs = [\"input\"]\ntools = [[\"echo\", \"v1\"]]\n\
+                 depends_on = [{}]\n",
+                after.join(", ")
+            ))
+            .unwrap()
+        };
+        let rows = [
+            row("a", &[]),
+            row("b", &[]),
+            row("c", &["a"]),
+            row("d", &["b"]),
+            row("e", &["d"]),
+        ];
+        let rows: Vec<&Step> = rows.iter().collect();
+        let run = |step: &Step| (if step.id == "b" { 5 } else { 0 }, None);
+        for bound in [1, 2] {
+            let mut done = BTreeMap::new();
+            let mut emitted = Vec::new();
+            let scheduled = schedule("g", &rows, bound, &mut done, &run, &mut |line| {
+                emitted.push(line);
+            });
+            assert_eq!(scheduled.peak, bound, "a and b may start together");
+            assert_eq!(scheduled.worst, 5);
+            let codes: Vec<(&str, i32)> =
+                done.iter().map(|(id, code)| (id.as_str(), *code)).collect();
+            assert_eq!(
+                codes,
+                [("a", 0), ("b", 5), ("c", 0), ("d", SKIPPED), ("e", SKIPPED)]
+            );
+            assert_eq!(
+                emitted.len(),
+                3,
+                "one verdict line per row run: {emitted:?}"
+            );
+            assert_eq!(scheduled.lines.len(), 5, "{:?}", scheduled.lines);
+        }
+    }
+
+    /// `vars` as the process environment iterator [`env_lines`] reads.
+    fn env_vars(
+        pairs: &[(&str, &str)],
+    ) -> impl Iterator<Item = (std::ffi::OsString, std::ffi::OsString)> {
+        pairs
+            .iter()
+            .map(|(k, v)| (std::ffi::OsString::from(k), std::ffi::OsString::from(v)))
+            .collect::<Vec<_>>()
+            .into_iter()
+    }
+
+    // TODAY'S KEY, LITERALLY (CLOUD-2786): captured before the env lines
+    // existed. A row whose `tools` carry no `batten step env` entry keys
+    // exactly as it did, so no receipt is lost to the declaration's arrival.
+    // The literal was captured on unix, where the index mode it hashes is
+    // `100644`; elsewhere the absence of env lines is the whole assertion.
+    #[test]
+    fn a_row_without_env_keys_as_before() {
+        let root = crate::scratch::scratch("step-env-pin");
+        crate::gitwrite::init_on_main(&root).unwrap();
+        std::fs::write(root.join("input"), "x\n").unwrap();
+        crate::gitwrite::commit_paths(&root, &[String::from("input")], "input").unwrap();
+        let row = env_row("cloud-2786-pin");
+        let material = material(&root, &row, &[], None).unwrap();
+        assert!(!material.contains("\nenv "), "{material}");
+        if cfg!(unix) {
+            assert_eq!(
+                key_of(&material),
+                "aedfe39d1eaff13ff2e4b62d52458580c648174bf67fc2b392c9d30f3901c162",
+                "{material}"
+            );
+        }
+    }
+
+    /// Fails by: a declared variable's value, a newly set declared variable,
+    /// or a declaration matching nothing leaving the key unmoved.
+    #[test]
+    fn a_declared_env_value_moves_the_key() {
+        let declared = crate::mutate::resume::declare(
+            vec![
+                String::from("DATABASE_URL"),
+                String::from("APP_*"),
+                String::from("ABSENT"),
+            ],
+            Vec::new(),
+        )
+        .unwrap();
+        let lines = |pairs: &[(&str, &str)]| env_lines(&declared, env_vars(pairs)).unwrap();
+        let base = lines(&[("DATABASE_URL", "a"), ("APP_MODE", "x")]);
+        assert_eq!(
+            base,
+            vec![
+                String::from(r#"env "ABSENT" none"#),
+                String::from(r#"env "APP_MODE=x""#),
+                String::from(r#"env "DATABASE_URL=a""#),
+            ]
+        );
+        assert_ne!(base, lines(&[("DATABASE_URL", "b"), ("APP_MODE", "x")]));
+        assert_ne!(base, lines(&[("DATABASE_URL", "a"), ("APP_MODE", "y")]));
+        assert_ne!(
+            base,
+            lines(&[("DATABASE_URL", "a"), ("APP_MODE", "x"), ("APP_NEW", "1")])
+        );
+        assert_ne!(
+            base,
+            lines(&[("DATABASE_URL", "a"), ("APP_MODE", "x"), ("ABSENT", "")]),
+            "a declaration that starts matching moves the key"
+        );
+    }
+
+    /// Fails by: an excluded per-run variable, or an undeclared one, moving
+    /// the key (every run a miss), or an exclusion read as a prefix.
+    #[test]
+    fn an_excluded_variable_does_not_move_the_key() {
+        let declared = crate::mutate::resume::declare(
+            vec![String::from("APP_*")],
+            vec![String::from("APP_PID")],
+        )
+        .unwrap();
+        let lines = |pairs: &[(&str, &str)]| env_lines(&declared, env_vars(pairs)).unwrap();
+        let base = lines(&[("APP_MODE", "x"), ("APP_PID", "1"), ("TERM", "a")]);
+        assert_eq!(
+            base,
+            lines(&[("APP_MODE", "x"), ("APP_PID", "2"), ("TERM", "b")])
+        );
+        assert_eq!(base, lines(&[("APP_MODE", "x")]));
+        assert_ne!(
+            base,
+            lines(&[("APP_MODE", "x"), ("APP_PID2", "1")]),
+            "an exclusion names one variable, never a prefix"
+        );
+    }
+
+    /// Fails by: a `batten step env` tool line spawned (a process per lap, and
+    /// the released engine answering a verb it lacks with no key), answered
+    /// with anything but [`env_lines`]' own lines, or a malformed line keyed
+    /// rather than refused. `step env` and the cache share the lines, so the
+    /// verb prints exactly what the key hashes.
+    #[test]
+    fn the_env_line_is_answered_in_process() {
+        let root = crate::scratch::scratch("step-env-in-process");
+        let line = |words: &[&str]| -> Vec<String> {
+            crate::mutate::resume::ENV
+                .iter()
+                .chain(words)
+                .map(|word| (*word).to_owned())
+                .collect()
+        };
+        // A name no environment sets: its line is `none`, whatever runs this.
+        let absent = "BATTEN_CLOUD_2786_NEVER_SET";
+        assert_eq!(
+            tool_said(&root, &line(&["--", absent])),
+            Some((0, format!(r#"env "{absent}" none"#)))
+        );
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let code = run_env(&[], &[absent.to_owned()], &mut out, &mut err).unwrap();
+        assert_eq!(code, ExitCode::Success);
+        assert_eq!(
+            String::from_utf8(out).unwrap(),
+            format!("env \"{absent}\" none\n")
+        );
+        for malformed in [
+            &["--", "lower"][..],
+            &[absent][..],
+            &["--"][..],
+            &["--bogus", "--", absent][..],
+        ] {
+            assert_eq!(
+                tool_said(&root, &line(malformed)),
+                Some((1, String::new())),
+                "{malformed:?}"
+            );
+        }
+        let mut out = Vec::new();
+        let code = run_env(
+            &[String::from("A*")],
+            &[absent.to_owned()],
+            &mut out,
+            &mut err,
+        )
+        .unwrap();
+        assert_eq!(
+            code,
+            ExitCode::Usage,
+            "an exclusion is a name, never a pattern"
+        );
+        assert!(out.is_empty());
+    }
+
+    /// Fails by: the engine's own digest line spawned rather than answered
+    /// in-process (a build and a policy load per lap), answered with anything
+    /// but `--inputs-digest`'s own digest, or a key that holds when the
+    /// out-of-tree state it digests moves.
+    #[test]
+    fn the_inputs_digest_line_is_answered_in_process() {
+        let root = crate::scratch::scratch("step-inputs-digest");
+        crate::gitwrite::init_on_main(&root).unwrap();
+        std::fs::write(root.join("input"), "x\n").unwrap();
+        crate::gitwrite::commit_paths(&root, &[String::from("input")], "input").unwrap();
+        let native: Vec<String> = INPUTS_DIGEST
+            .iter()
+            .map(|word| (*word).to_owned())
+            .collect();
+        let digest = tree_inputs_digest_in(&root).unwrap();
+        assert_eq!(tool_said(&root, &native), Some((0, digest.clone())));
+        let row = Step {
+            id: String::from("s"),
+            inputs: Some(vec![String::from("input")]),
+            tools: Some(vec![native]),
+            run: None,
+            group: None,
+            depends_on: Vec::new(),
+            verdict: None,
+            journal: None,
+        };
+        let held = material(&root, &row, &[], None).expect("the line keys the step");
+        assert!(held.contains(&digest), "keyed on the in-process digest");
+        std::fs::write(
+            root.join(crate::resolve::LOCAL_CONFIG_FILE),
+            "version = 1\n",
+        )
+        .unwrap();
+        assert_ne!(
+            material(&root, &row, &[], None),
+            Some(held),
+            "a moved local config moves the key"
+        );
+    }
+
+    /// Fails by: a record under the git directory changing with no tracked
+    /// change and the tree half's key holding, which would let a receipt answer
+    /// a `records`-reading rule over lines it never judged (CLOUD-2329).
+    #[test]
+    fn a_moved_record_moves_the_inputs_digest() {
+        let root = crate::scratch::scratch("step-inputs-digest-record");
+        crate::gitwrite::init_on_main(&root).unwrap();
+        std::fs::write(root.join("input"), "x\n").unwrap();
+        crate::gitwrite::commit_paths(&root, &[String::from("input")], "input").unwrap();
+        let before = tree_inputs_digest_in(&root).unwrap();
+        let git_dir = crate::git::git_dir(&root).unwrap();
+        let branch = crate::git::record_key(&root).unwrap();
+        let path = crate::recorder::record_path(&git_dir, "plan", &branch, None);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, "CLOUD-1 planned\n").unwrap();
+        let recorded = tree_inputs_digest_in(&root).unwrap();
+        assert_ne!(before, recorded, "a new record moves the key");
+        std::fs::write(&path, "CLOUD-2 planned\n").unwrap();
+        assert_ne!(
+            recorded,
+            tree_inputs_digest_in(&root).unwrap(),
+            "an edited record moves the key"
+        );
+    }
+
+    /// Fails by: the `dated` answer moving with the calendar day where no
+    /// declared date is crossed (what `date -u +%F` did, CLOUD-2329), or
+    /// holding when one is — including the day ON the date, which a `>=`
+    /// waiver lapse and a `>` comparison tell apart.
+    #[test]
+    fn the_dated_line_moves_only_when_a_declared_date_is_crossed() {
+        let day = |text: &str| crate::waiver::Date::parse(text).unwrap();
+        let config = "[[waiver]]\nexpires = \"2026-12-01\"\n# measured 2026-10-07\n";
+        let lines = |today: &str| dated_lines([config], day(today));
+        assert_eq!(
+            lines("2026-11-28"),
+            lines("2026-11-29"),
+            "an uncrossed day keys alike"
+        );
+        assert_ne!(
+            lines("2026-11-30"),
+            lines("2026-12-01"),
+            "the day on it moves"
+        );
+        assert_ne!(
+            lines("2026-12-01"),
+            lines("2026-12-02"),
+            "the day past it moves"
+        );
+        assert_eq!(
+            lines("2026-11-28"),
+            "dated 2026-10-07 past\ndated 2026-12-01 ahead"
+        );
+        assert_eq!(dated_lines(["no dates"], day("2026-11-28")), "dated none");
+        assert_eq!(
+            dated_lines(["2026-13-45 is no date"], day("2026-11-28")),
+            "dated none",
+            "a shape that does not parse is no date"
+        );
+    }
+
+    /// A linear history and the ids of its first three commits: `r[0]` (src
+    /// x, docs 1), `r[1]` (docs 2 only), `r[2]` (src y), then a HEAD commit on
+    /// top, so each one's merge base with HEAD is that commit itself.
+    fn based(name: &str) -> (std::path::PathBuf, Vec<String>) {
+        let root = crate::scratch::scratch(name);
+        crate::gitwrite::init_on_main(&root).unwrap();
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::create_dir_all(root.join("docs")).unwrap();
+        let paths = [String::from("src/lib.rs"), String::from("docs/a.md")];
+        let mark = |file: &str, text: &str| {
+            std::fs::write(root.join(file), text).unwrap();
+            crate::gitwrite::commit_paths(&root, &paths, file).unwrap();
+            crate::git::head_commit(&root).unwrap()
+        };
+        std::fs::write(root.join("docs/a.md"), "1\n").unwrap();
+        let marked = vec![
+            mark("src/lib.rs", "x\n"),
+            mark("docs/a.md", "2\n"),
+            mark("src/lib.rs", "y\n"),
+        ];
+        mark("docs/a.md", "3\n");
+        (root, marked)
+    }
+
+    fn ask(reference: &str, ref_env: Option<&str>, paths: &[&str]) -> BaseAsk {
+        BaseAsk {
+            reference: reference.to_owned(),
+            ref_env: ref_env.map(str::to_owned),
+            paths: paths.iter().map(|path| (*path).to_owned()).collect(),
+        }
+    }
+
+    const NO_VAR: &dyn Fn(&str) -> Option<String> = &|_| None;
+
+    /// Fails by: a base half keyed on the merge base's COMMIT id, which moves
+    /// with a trunk commit touching none of the declared paths (CLOUD-2787).
+    #[test]
+    fn a_base_commit_moving_with_the_same_trees_keeps_the_key() {
+        let (root, r) = based("step-base-same-trees");
+        let one = base_said(&root, &ask(r[0].as_str(), None, &["src"]), NO_VAR).unwrap();
+        assert_eq!(
+            base_said(&root, &ask(r[1].as_str(), None, &["src"]), NO_VAR),
+            Some(one.clone()),
+            "r2 moved only docs"
+        );
+        assert!(one.starts_with("base src "), "{one}");
+        assert!(!one.contains(r[0].as_str()), "no commit id in the lines");
+    }
+
+    /// Fails by: a base half blind to a declared path's content, or one that
+    /// drops a missing path rather than keying it `absent`.
+    #[test]
+    fn a_base_path_changing_moves_the_key() {
+        let (root, r) = based("step-base-path-moves");
+        let one = base_said(&root, &ask(r[0].as_str(), None, &["src"]), NO_VAR).unwrap();
+        assert_ne!(
+            base_said(&root, &ask(r[2].as_str(), None, &["src"]), NO_VAR),
+            Some(one)
+        );
+        assert_eq!(
+            base_said(&root, &ask(r[0].as_str(), None, &["nowhere"]), NO_VAR).as_deref(),
+            Some("base nowhere absent")
+        );
+        assert_eq!(
+            base_said(&root, &ask("no-such-ref", None, &["src"]), NO_VAR),
+            None,
+            "an unresolvable ref is no key"
+        );
+    }
+
+    /// Fails by: `ref_env` ignored, read when set but empty, or read when the
+    /// row names no variable.
+    #[test]
+    fn a_set_ref_env_replaces_the_ref() {
+        let (root, r) = based("step-base-ref-env");
+        let set = |name: &str| (name == "BASE_VAR").then(|| r[2].clone());
+        let empty = |_: &str| Some(String::new());
+        let at_r3 = base_said(&root, &ask(r[2].as_str(), None, &["src"]), NO_VAR);
+        let at_r1 = base_said(&root, &ask(r[0].as_str(), None, &["src"]), NO_VAR);
+        assert_ne!(at_r1, at_r3, "the premise");
+        assert_eq!(
+            base_said(&root, &ask(r[0].as_str(), Some("BASE_VAR"), &["src"]), &set),
+            at_r3
+        );
+        assert_eq!(
+            base_said(
+                &root,
+                &ask(r[0].as_str(), Some("BASE_VAR"), &["src"]),
+                &empty
+            ),
+            at_r1
+        );
+        assert_eq!(
+            base_said(&root, &ask(r[0].as_str(), None, &["src"]), &set),
+            at_r1
+        );
+    }
+
+    /// Fails by: the tool line spawned (a process per lap) or answered by a
+    /// parse other than the canonical spelling.
+    #[test]
+    fn the_base_line_is_answered_in_process() {
+        let (root, r) = based("step-base-in-process");
+        let line = |words: &[&str]| -> Vec<String> {
+            BASE.iter()
+                .chain(words)
+                .map(|word| (*word).to_owned())
+                .collect()
+        };
+        let said = base_said(&root, &ask(r[0].as_str(), None, &["src", "docs"]), NO_VAR).unwrap();
+        assert_eq!(
+            tool_said(&root, &line(&["--ref", r[0].as_str(), "--", "src", "docs"])),
+            Some((0, said))
+        );
+        assert_eq!(
+            tool_said(&root, &line(&["--ref", r[0].as_str()])),
+            Some((1, String::new()))
+        );
+        assert_eq!(
+            tool_said(&root, &line(&["--bogus", "--", "src"])),
+            Some((1, String::new()))
+        );
+    }
+
+    /// The words of a `step base` line after [`BASE`].
+    fn base_words(words: &[&str]) -> Vec<String> {
+        words.iter().map(|word| (*word).to_owned()).collect()
+    }
+
+    /// CLOUD-2787's `a_base_without_inputs_is_refused`, under the tool-line
+    /// design: a `step base` line naming no path is no declaration, so the row
+    /// keys nothing and runs, and the verb refuses it as a usage error.
+    ///
+    /// Fails by: a base of no paths read as a declaration, which keys an empty
+    /// base and hits across every trunk move.
+    #[test]
+    fn a_base_without_inputs_is_refused() {
+        assert_eq!(base_ask(&base_words(&["--ref", "origin/main", "--"])), None);
+        assert!(base_ask(&base_words(&["--ref", "origin/main", "--", "src"])).is_some());
+        let (mut out, mut err) = (Vec::new(), Vec::new());
+        assert_eq!(
+            run_base("origin/main", None, &[], &mut out, &mut err).unwrap(),
+            ExitCode::Usage
+        );
+    }
+
+    /// CLOUD-2787's `a_base_with_an_empty_ref_is_refused`, under the tool-line
+    /// design.
+    ///
+    /// Fails by: an empty ref read as a declaration, which resolves nothing and
+    /// would key whatever an empty revision happens to answer.
+    #[test]
+    fn a_base_with_an_empty_ref_is_refused() {
+        assert_eq!(base_ask(&base_words(&["--ref", "", "--", "src"])), None);
+        let (mut out, mut err) = (Vec::new(), Vec::new());
+        assert_eq!(
+            run_base("", None, &[String::from("src")], &mut out, &mut err).unwrap(),
+            ExitCode::Usage
+        );
+    }
+
+    /// Fails by: `--ref-env` read as an unknown word, so a line naming the
+    /// variable a CI run overrides the ref through keys nothing.
+    #[test]
+    fn a_base_line_reads_its_ref_env() {
+        assert_eq!(
+            base_ask(&base_words(&[
+                "--ref-env",
+                "BASE_REF",
+                "--ref",
+                "origin/main",
+                "--",
+                "src"
+            ])),
+            Some(BaseAsk {
+                reference: String::from("origin/main"),
+                ref_env: Some(String::from("BASE_REF")),
+                paths: vec![String::from("src")],
+            })
+        );
+    }
+
+    /// Fails by: every exit code recorded as a verdict over the inputs,
+    /// including a clean exit, a signal (`128 + N`) and a shell that could not
+    /// run the command (`126`, `127`).
+    #[test]
+    fn only_a_childs_own_failing_code_is_recordable() {
+        for code in [1, 2, 125] {
+            assert!(recordable_failure(code), "{code}");
+        }
+        for code in [0, 126, 127, 130, 137, -1] {
+            assert!(!recordable_failure(code), "{code}");
+        }
+    }
+
+    /// Fails by: the capture-handle filter joined with `||`, so any `exec:`
+    /// line, or any line mentioning `byte(s)`, contributes its last word.
+    #[test]
+    fn only_an_exec_capture_line_names_a_handle() {
+        let report = b"exec: stdout 12 byte(s) h1\n\
+                       exec: did not reach EOF in time\n\
+                       other 3 byte(s) h2\n\
+                       exec: stderr 4 byte(s) h3\n";
+        assert_eq!(logged(report).as_deref(), Some("h1 h3"));
+        assert_eq!(logged(b"exec: no capture here\n"), None);
+    }
+
+    /// Fails by: the git-dir exclusion joined with `&&`, so `.git` itself or a
+    /// path beneath it counts as a written declared input.
+    #[test]
+    fn a_write_under_the_git_dir_is_never_a_written_input() {
+        let root = std::path::Path::new("/r");
+        let written = [".git", ".git/index", "src/a.rs"].map(|path| root.join(path));
+        let inputs = [String::from("."), String::from(".git")];
+        assert_eq!(
+            written_inputs(root, &inputs, &written, &mut |_| false),
+            ["src/a.rs"]
+        );
+    }
+
+    /// Fails by: an answer that may not record naming a key to record under.
+    #[test]
+    fn only_a_run_that_may_record_names_its_key() {
+        assert_eq!(Answer::Miss("k".to_owned()).recording(), Some("k"));
+        assert_eq!(Answer::Suspect("k".to_owned()).recording(), Some("k"));
+        assert_eq!(Answer::Hit("k".to_owned()).recording(), None);
+        assert_eq!(Answer::Off.recording(), None);
+        assert_eq!(Answer::NoKey.recording(), None);
+    }
+
+    /// Fails by: a failure receipt marked flaky read as malformed (so run
+    /// rather than run as a suspect), or another trailing word read as flaky.
+    #[test]
+    fn a_failure_receipt_reads_its_flaky_mark() {
+        let (failure, flaky) = failure_of("1 2ms k exit 3 flaky", "k").unwrap();
+        assert_eq!(failure.code, 3);
+        assert!(flaky);
+        assert_eq!(
+            failure_of("1 2ms k exit 3", "k").map(|(_, f)| f),
+            Some(false)
+        );
+        assert!(failure_of("1 2ms k exit 3 other", "k").is_none());
+    }
+
+    /// Fails by: the repository root, spelled `.`, `./`, `/` or empty, looked
+    /// up as a path inside the commit rather than as its tree.
+    #[test]
+    fn the_root_spellings_name_the_commits_tree() {
+        let dir = crate::scratch::scratch("step-base-root");
+        crate::gitwrite::init_on_main(&dir).unwrap();
+        std::fs::write(dir.join("a"), "a\n").unwrap();
+        crate::gitwrite::commit_paths(&dir, &["a".to_owned()], "one").unwrap();
+        let tree = crate::git::resolve_ref(&dir, "HEAD^{tree}")
+            .unwrap()
+            .unwrap();
+        for path in [".", "./", "/", ""] {
+            assert_eq!(
+                base_lines_at(&dir, "HEAD", &[path.to_owned()]),
+                Some(format!("base {path} {tree}")),
+                "{path:?}"
+            );
+        }
+    }
+}
+
+/// CLOUD-2904: one tree, two laps, one key, whichever launcher and base
+/// spelling each lap used.
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod keyed_command_tests {
+    use super::*;
+
+    fn words(line: &str) -> Vec<String> {
+        line.split_whitespace().map(String::from).collect()
+    }
+
+    /// `test-replay`'s base tool: `origin/main`, or `$BATTEN_SPEC_BASE`.
+    fn tools() -> Vec<Vec<String>> {
+        vec![words(
+            "batten step base --ref origin/main --ref-env BATTEN_SPEC_BASE -- crates",
+        )]
+    }
+
+    const DIGEST: &str = "d1g35t";
+    const BIN: &str = "/repo/target/debug/batten";
+
+    /// The key's command for `command` under `spec` as `$BATTEN_SPEC_BASE`,
+    /// with `BIN` stamped `stamp`.
+    fn key(command: &str, spec: Option<&str>, stamp: Option<&str>) -> Vec<String> {
+        let engine = || Some(String::from(DIGEST));
+        let stamped = |path: &Path| {
+            (path == Path::new(BIN))
+                .then(|| stamp.map(String::from))
+                .flatten()
+        };
+        let var = |name: &str| {
+            (name == "BATTEN_SPEC_BASE")
+                .then(|| spec.map(String::from))
+                .flatten()
+        };
+        keyed_command(&words(command), &tools(), &engine, &stamped, &var)
+    }
+
+    #[test]
+    fn two_laps_over_one_tree_key_one_command_under_either_launcher_and_base() {
+        let cargo = key(
+            "cargo run --quiet -p batten -- test replay --base origin/main",
+            None,
+            None,
+        );
+        let built = key(
+            &format!("{BIN} test replay --base 0123abcd"),
+            Some("0123abcd"),
+            Some(DIGEST),
+        );
+        assert_eq!(cargo, built);
+        let expected: Vec<String> = ["engine d1g35t", "test", "replay", "--base", "<base>"]
+            .map(String::from)
+            .into();
+        assert_eq!(cargo, expected);
+    }
+
+    #[test]
+    fn a_binary_the_tree_did_not_build_keys_literally() {
+        let line = format!("{BIN} test replay --base origin/main");
+        assert_eq!(key(&line, None, Some("0ther"))[0], BIN);
+        assert_eq!(key(&line, None, None)[0], BIN);
+        assert_ne!(
+            key(&line, None, Some("0ther")),
+            key(
+                "cargo run -p batten -- test replay --base origin/main",
+                None,
+                None
+            )
+        );
+    }
+
+    #[test]
+    fn cargo_building_anything_else_keys_literally() {
+        for line in [
+            "cargo run -p other -- test replay",
+            "cargo run --release -p batten -- test replay",
+            "cargo run -p batten --features x -- test replay",
+            "cargo run -- test replay",
+        ] {
+            assert_eq!(key(line, None, None)[0], "cargo", "{line}");
+        }
+    }
+
+    #[test]
+    fn a_base_spelled_differently_from_the_tools_ref_is_kept() {
+        assert_eq!(
+            key(
+                "cargo run -p batten -- test replay --base other/ref",
+                None,
+                None
+            )
+            .last()
+            .unwrap(),
+            "other/ref"
+        );
+    }
+
+    #[test]
+    fn a_stamp_older_than_its_binary_is_no_stamp() {
+        let dir = crate::scratch::scratch("keyed-command-stamp");
+        std::fs::create_dir_all(&dir).unwrap();
+        let binary = dir.join("batten");
+        std::fs::write(&binary, b"bin").unwrap();
+        crate::engine::stamp(&binary, DIGEST).unwrap();
+        assert_eq!(trusted_stamp(&binary).as_deref(), Some(DIGEST));
+        let later = std::time::SystemTime::now() + std::time::Duration::from_secs(60);
+        std::fs::File::options()
+            .write(true)
+            .open(&binary)
+            .unwrap()
+            .set_modified(later)
+            .unwrap();
+        assert_eq!(trusted_stamp(&binary), None);
     }
 }

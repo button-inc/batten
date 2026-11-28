@@ -38,7 +38,8 @@ use crate::common;
 
 use std::path::{Path, PathBuf};
 
-use batten::rules::{self, Rule};
+use batten::config_model::Rule;
+use batten::rules;
 
 /// The row as `batten.toml` declares it, deserialized rather than
 /// struct-literalled: `Rule` carries `deny_unknown_fields`, so this goes through
@@ -68,7 +69,7 @@ fn row() -> Rule {
 /// in-repo module there is nothing to copy into the fixture. That is also what
 /// makes this tier the only place the vendored bytes are exercised at all.
 fn tree(name: &str, workflow: &str) -> PathBuf {
-    let root = common::scratch(&format!("ci-hygiene-{name}"));
+    let root = common::scratch_repo(&format!("ci-hygiene-{name}"));
     common::write(&root, ".github/workflows/ci.yml", workflow);
     root
 }
@@ -143,6 +144,9 @@ jobs:
 
 #[test]
 fn this_repository_is_clean_today() {
+    // ITS OWN STATE ROOT (CLOUD-2936): the policy load writes its cache, and
+    // against the developer's store one recording wrote it and the next read it.
+    common::scratch_state_root();
     let root = common::at_root(".")
         .canonicalize()
         .expect("this checkout is where the manifest says it is");
@@ -224,6 +228,91 @@ fn a_job_that_runs_on_a_draft_is_refused_and_named() {
             .iter()
             .any(|(path, _)| path == ".github/workflows/ci.yml"),
         "the workflow should be named as the place to fix it: {found:?}"
+    );
+}
+
+/// A workflow whose own text declares its spend (`CI_SPEND_AUTHORISED`) runs
+/// on drafts and finishes its runs: rules 1 and 2 hold everywhere else
+/// (CLOUD-2903, the owner's ruling that any pull request cuts a pre-release).
+fn authorised(reason: &str) -> String {
+    SOUND
+        .replace(
+            "    if: ${{ github.event.pull_request.draft == false }}\n",
+            "",
+        )
+        .replace("cancel-in-progress: true", "cancel-in-progress: false")
+        .replace(
+            "concurrency:",
+            &format!("env:\n  CI_SPEND_AUTHORISED: \"{reason}\"\nconcurrency:"),
+        )
+}
+
+#[test]
+fn a_workflow_that_declares_its_spend_runs_on_drafts_and_finishes() {
+    let root = tree(
+        "spend-declared",
+        &authorised("publishes each head's own build"),
+    );
+    let found = findings(&root);
+    assert!(
+        found.is_empty(),
+        "a declared spend is authorised: {found:?}"
+    );
+}
+
+#[test]
+fn a_blank_spend_declaration_authorises_nothing() {
+    let root = tree("spend-blank", &authorised("  "));
+    let found = findings(&root);
+    assert!(
+        found
+            .iter()
+            .filter(|(path, _)| path == ".github/workflows/ci.yml")
+            .count()
+            >= 2,
+        "a blank reason leaves both rules standing: {found:?}"
+    );
+}
+
+/// `ci.yml`'s `final`, reduced: a fan-in that only reads its dependencies'
+/// results and exits, under `always()` and deliberately not draft-gated
+/// (CLOUD-2317).
+const AGGREGATOR: &str = "  final:
+    name: final
+    if: ${{ always() }}
+    needs: [build]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Assert all required jobs passed
+        if: ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'skipped') }}
+        run: exit 1
+";
+
+/// A pure aggregator spends nothing, so it is not refused for running on a
+/// draft (#1276). Fails by: the exemption dropped, so `final` is refused —
+/// which no remedy satisfies, since `ci-parity` refuses a draft guard there.
+#[test]
+fn a_pure_aggregator_under_always_is_not_a_spend() {
+    let root = tree("aggregator", &format!("{SOUND}{AGGREGATOR}"));
+    let found = findings(&root);
+    assert!(found.is_empty(), "a pure aggregator is clean: {found:?}");
+}
+
+/// One checkout makes an aggregator a spend again. Fails by: `uses:` unread,
+/// so a fan-in that checks out runs on every draft unrefused.
+#[test]
+fn an_aggregator_that_checks_out_is_still_refused() {
+    let checks_out = AGGREGATOR.replace(
+        "    steps:\n",
+        "    steps:\n      - uses: actions/checkout@v4\n",
+    );
+    let root = tree("aggregator-checkout", &format!("{SOUND}{checks_out}"));
+    let found = findings(&root);
+    assert!(
+        found
+            .iter()
+            .any(|(path, _)| path == ".github/workflows/ci.yml"),
+        "an aggregator that checks out is refused: {found:?}"
     );
 }
 
@@ -428,7 +517,7 @@ fn two_workflows_sharing_a_cron_are_refused() {
     // A cron SEQUENCE under `schedule:`, across TWO documents — the only case
     // here whose predicate spans files, so it also says the engine hands the
     // module every declared document at once rather than one at a time.
-    let root = common::scratch("ci-hygiene-cron");
+    let root = common::scratch_repo("ci-hygiene-cron");
     for (name, group) in [("a", "alpha"), ("b", "beta")] {
         common::write(
             &root,
@@ -459,7 +548,7 @@ jobs:
 fn a_staggered_pair_is_clean() {
     // The discriminating half: without it, a rule that flagged every schedule
     // would pass the case above and look identical to one that compares.
-    let root = common::scratch("ci-hygiene-cron-ok");
+    let root = common::scratch_repo("ci-hygiene-cron-ok");
     for (name, group, cron) in [("a", "alpha", "0 3 * * *"), ("b", "beta", "30 3 * * *")] {
         common::write(
             &root,
@@ -635,10 +724,98 @@ jobs:
 
 #[test]
 fn a_tree_with_no_workflow_is_not_this_presets_business() {
-    let root = common::scratch("ci-hygiene-absent");
+    let root = common::scratch_repo("ci-hygiene-absent");
     assert!(
         findings(&root).is_empty(),
         "absent is not-applicable, never a finding: {:?}",
         findings(&root)
+    );
+}
+
+/// Every `path` a step of `steps` caches, as written.
+fn cached_paths(node: &yaml_rust2::Yaml, out: &mut Vec<String>) {
+    match node {
+        yaml_rust2::Yaml::Hash(map) => {
+            for (key, value) in map {
+                if key.as_str() == Some("path")
+                    && let Some(text) = value.as_str()
+                {
+                    out.push(text.to_owned());
+                }
+                cached_paths(value, out);
+            }
+        }
+        yaml_rust2::Yaml::Array(items) => {
+            for item in items {
+                cached_paths(item, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// CI confirms independently (CLOUD-2850): no step of `ci.yml` carries the
+/// schema sweep's verdict journal from one run, or one job, to another, so no
+/// mutant's verdict on a runner is answered from a journal.
+///
+/// Fails by: a restore, save or mirror of `mutate/schema/verdicts` in any job.
+#[test]
+fn no_ci_step_carries_the_mutant_verdict_journal() {
+    let text = std::fs::read_to_string(common::at_root(".github/workflows/ci.yml"))
+        .expect("ci.yml is committed");
+    let docs = yaml_rust2::YamlLoader::load_from_str(&text).expect("ci.yml parses");
+    let mut paths = Vec::new();
+    for doc in &docs {
+        cached_paths(doc, &mut paths);
+    }
+    assert!(
+        paths
+            .iter()
+            .any(|path| path.contains("mutate/schema/reach")),
+        "the walk reads the mirror's paths, so an absence below is real: {paths:?}"
+    );
+    let carried: Vec<&String> = paths
+        .iter()
+        .filter(|path| path.contains("mutate/schema/verdicts"))
+        .collect();
+    assert!(carried.is_empty(), "{carried:?}");
+}
+
+/// CLOUD-2851, over the committed `ci.yml`: `mutants (reach)` is a saving, never
+/// a verdict, so the shards run whatever it answered — a cancelled (timed-out)
+/// or skipped reach no longer skips all four and turns `final` red — and the
+/// release-path step grades unconditionally, with no path guard that a module
+/// move can turn into a silent skip.
+#[test]
+fn the_shards_survive_any_reach_result_and_the_release_path_step_always_grades() {
+    use yaml_rust2::YamlLoader;
+    let text = std::fs::read_to_string(common::at_root(".github/workflows/ci.yml"))
+        .expect("the ci workflow");
+    let docs = YamlLoader::load_from_str(&text).expect("the workflow parses as YAML");
+    let jobs = &docs[0]["jobs"];
+    let shards = jobs["mutants"]["if"]
+        .as_str()
+        .expect("the shards carry an `if:`");
+    for result in ["success", "failure", "cancelled", "skipped"] {
+        assert!(
+            shards.contains(&format!("needs.mutants-reach.result == '{result}'")),
+            "the shards must run on a `{result}` reach: {shards}"
+        );
+    }
+    let grade = jobs["batten-check"]["steps"]
+        .as_vec()
+        .expect("batten-check has steps")
+        .iter()
+        .find(|step| {
+            step["name"].as_str()
+                == Some(
+                    "Grade the head with the trunk's predicate, post release-path, and seal final",
+                )
+        })
+        .expect("the release-path grading step");
+    assert!(
+        grade["if"].is_badvalue(),
+        "the release-path step must carry no `if:`: {:?}",
+        grade["if"]
     );
 }

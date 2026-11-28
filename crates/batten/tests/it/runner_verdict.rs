@@ -30,7 +30,7 @@
 //!
 //! The bound, so nothing is read as stronger than it is: this proves the body
 //! propagates rather than replaces. It does not prove the engine returns `2` for a
-//! denial — `crates/batten/src/exit.rs`'s own table test owns that — and it cannot
+//! denial — `crates/batten-base/src/exit.rs`'s own table test owns that — and it cannot
 //! prove the two compose without a denying ruleset to run.
 
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
@@ -128,12 +128,18 @@ fn the_engine_invocation_is_not_wrapped_in_a_replacing_guard() {
 /// "$verdict"`) existed only so a receipt could be written after a zero exit.
 /// With no receipt, the engine is the chain's TERMINATING entry, so its code is
 /// the task's with nothing after it to replace one.
+///
+/// CHANGED WITH 0c026130: the tree half is receipted behind `step run
+/// enforce-tree` and the live half is unreceipted, so the terminating entry is
+/// `enforce --half live` — still the bare engine, still last. The assertion is
+/// that the LAST entry is an unwrapped `enforce`, which is the property; the
+/// exact argv was incidental and is what moved.
 #[test]
 fn the_engine_status_is_the_chains_last_entry_so_it_passes_through_unchanged() {
     let entries = batten_check_entries();
     assert_eq!(
         entries.last().map(String::as_str),
-        Some("cargo run --quiet -p batten -- enforce"),
+        Some("cargo run --quiet -p batten -- enforce --half live --keyed-base origin/main"),
         "`enforce` must be the last entry, bare, so its code is the task's: {entries:?}"
     );
     let body = batten_check_body();

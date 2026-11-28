@@ -18,13 +18,14 @@ use crate::common;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use batten::rules::{self, Rule};
+use batten::config_model::Rule;
+use batten::rules;
 
 /// The module's own rule id, which is what a finding carries.
 const LOOSE: &str = "spawn bind loose";
 
 fn repo(name: &str, path: &str, source: &[&str]) -> PathBuf {
-    let root = common::scratch(name);
+    let root = common::scratch_repo(name);
     let subject = root.join(path);
     fs::create_dir_all(subject.parent().expect("a parent")).expect("scratch parent");
     let mut text = source.join("\n");

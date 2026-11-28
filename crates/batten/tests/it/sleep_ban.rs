@@ -37,6 +37,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
+use batten::capture::Streamed as _;
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -291,10 +292,214 @@ fn the_inventory_is_not_empty() {
             annotations_naming(&source, LINT).len()
         })
         .sum();
+    // FIVE, NOT EIGHT (CLOUD-2789): test code carries no delay verdict any
+    // more — every test wait is on its event — so what is left is production's
+    // own rows, seven today. The floor still says what it said: a sweep that
+    // reads nothing finds none.
     assert!(
-        annotated >= 8,
+        annotated >= 5,
         "only {annotated} delay verdicts found — the sweep is not reaching the crate"
     );
+}
+
+/// The 1-based line of every attribute in `source` standing in `#[cfg(test)]`
+/// code: on, or inside, an item that carries it. Read off the parsed tree by the
+/// module graph's own `cfg_test`, so a test module is never told from the
+/// library by a text scan for the marker.
+fn test_code_lines(source: &str) -> std::collections::BTreeSet<usize> {
+    use ra_ap_syntax::AstNode as _;
+    let file = ra_ap_syntax::SourceFile::parse(source, ra_ap_syntax::Edition::Edition2024).tree();
+    file.syntax()
+        .descendants()
+        .filter_map(ra_ap_syntax::ast::Attr::cast)
+        .filter(|attr| batten_base::module_graph::cfg_test(attr.syntax()))
+        .map(|attr| {
+            source[..usize::from(attr.syntax().text_range().start())]
+                .matches('\n')
+                .count()
+                + 1
+        })
+        .collect()
+}
+
+/// Whether `path` is a test target's source: under a member's `tests/`.
+fn under_tests(path: &Path) -> bool {
+    path.strip_prefix(at_root("crates"))
+        .ok()
+        .and_then(|rest| rest.components().nth(1))
+        .is_some_and(|dir| dir.as_os_str() == "tests")
+}
+
+#[test]
+fn test_code_carries_no_time_wait_verdict() {
+    // THE OWNER'S RULE, AS A GATE (CLOUD-2789): a test waits for the EVENT it is
+    // about — a child's exit, a pipe's EOF, a channel or condvar the code under
+    // test signals — and never on a clock. A mutant that suppresses the event
+    // then hangs the case, and the mutation judge's per-case cut files that
+    // honestly as a timeout; a clock in the case only races that cut, or passes
+    // a late arrival as an on-time one.
+    //
+    // So in test code the annotation is not a verdict to be judged on its bound,
+    // as it is in production: there is no bound a test owns. Test code is a
+    // member's `tests/` and every `#[cfg(test)]` item, the latter read off the
+    // parsed tree ([`test_code_lines`]), never off the marker's text.
+    //
+    // EVERY `disallowed_methods` row the table carries outside the timers has a
+    // door a test uses instead (`streamed_output`, `stream::pump`), so the
+    // predicate is the whole lint rather than a guess at which row an
+    // annotation was written for: a reason cannot be trusted to say.
+    let mut problems: Vec<String> = Vec::new();
+    for path in rust_sources() {
+        let source = fs::read_to_string(&path).expect("read a crate source file");
+        let tests = under_tests(&path);
+        let in_test = test_code_lines(&source);
+        for found in
+            batten::codemod::lint_attributes(&source, batten::codemod::Edition::E2024, LINT)
+        {
+            if tests || in_test.contains(&found.line) {
+                problems.push(format!("{}:{} {}", path.display(), found.line, found.level));
+            }
+        }
+    }
+    assert!(
+        problems.is_empty(),
+        "test code waits on the event, never on a clock, so it carries no `{LINT}` verdict — \
+         rewrite the wait to block on the exit, EOF, channel or condvar it is about:\n  {}",
+        problems.join("\n  ")
+    );
+}
+
+#[test]
+fn the_test_code_reader_tells_a_test_module_from_the_library() {
+    // The anti-vacuity arm for the case above: a reader that called nothing
+    // test code would pass it over any tree. One verdict in the library, one in
+    // a `#[cfg(test)]` module, and only the second is test code.
+    let source = format!(
+        "{}\npub fn library() {{}}\n\n#[cfg(test)]\nmod tests {{\n    {}\n    \
+         fn case() {{}}\n}}\n",
+        annotated("library"),
+        annotated("test")
+    );
+    let found = batten::codemod::lint_attributes(&source, batten::codemod::Edition::E2024, LINT);
+    let in_test = test_code_lines(&source);
+    let read: Vec<bool> = found
+        .iter()
+        .map(|found| in_test.contains(&found.line))
+        .collect();
+    assert_eq!(read, vec![false, true], "{found:?}");
+}
+
+/// Every `sleep` a source spawns as a CHILD, as `path:line`: the timer
+/// clippy cannot see, because it is a program and not a method (CLOUD-2789).
+///
+/// Read off the parsed tree, so a `sleep` inside a hook fixture's command TEXT
+/// — a string the judge reads and nothing runs — is no row. Three shapes:
+/// `Command::new("sleep")`; an argument list or array holding `"--"` then
+/// `"sleep"`, the argv a wrapper runs; and one holding `"-c"` then a literal
+/// script that runs `sleep N`. A script assembled at run time is out of a
+/// syntax reader's sight, and that gap is stated rather than discovered.
+fn sleep_children(source: &str) -> Vec<usize> {
+    use ra_ap_syntax::AstNode as _;
+    use ra_ap_syntax::ast;
+
+    let file = ra_ap_syntax::SourceFile::parse(source, ra_ap_syntax::Edition::Edition2024).tree();
+    let line_of = |node: &ra_ap_syntax::SyntaxNode| {
+        source[..usize::from(node.text_range().start())]
+            .matches('\n')
+            .count()
+            + 1
+    };
+    let text_of = |expr: &ast::Expr| match expr {
+        ast::Expr::Literal(literal) => match literal.kind() {
+            ast::LiteralKind::String(text) => text.value().ok().map(std::borrow::Cow::into_owned),
+            _ => None,
+        },
+        _ => None,
+    };
+    let runs_sleep = |script: &str| {
+        let words: Vec<&str> = script
+            .split(|c: char| c.is_whitespace() || matches!(c, ';' | '&' | '|' | '(' | ')'))
+            .filter(|word| !word.is_empty())
+            .collect();
+        words
+            .windows(2)
+            .any(|pair| pair[0] == "sleep" && pair[1].starts_with(|c: char| c.is_ascii_digit()))
+    };
+    let mut found = Vec::new();
+    for node in file.syntax().descendants() {
+        let elements: Vec<ast::Expr> = if let Some(list) = ast::ArgList::cast(node.clone()) {
+            list.args().collect()
+        } else if let Some(array) = ast::ArrayExpr::cast(node.clone()) {
+            array.exprs().collect()
+        } else {
+            continue;
+        };
+        let texts: Vec<Option<String>> = elements.iter().map(text_of).collect();
+        let call_new = node
+            .parent()
+            .and_then(ast::CallExpr::cast)
+            .and_then(|call| call.expr())
+            .is_some_and(|callee| callee.syntax().text().to_string().ends_with("Command::new"));
+        let spawned = (call_new
+            && texts
+                .first()
+                .is_some_and(|first| first.as_deref() == Some("sleep")))
+            || texts.windows(2).any(|pair| match (&pair[0], &pair[1]) {
+                (Some(flag), Some(next)) => {
+                    (flag == "--" && next == "sleep") || (flag == "-c" && runs_sleep(next))
+                }
+                _ => false,
+            });
+        if spawned {
+            found.push(line_of(&node));
+        }
+    }
+    found
+}
+
+#[test]
+fn no_source_spawns_sleep_as_a_child() {
+    // The half of the delay inventory clippy is blind to: `sleep` run as a
+    // PROGRAM, directly or inside a shell script, is a timer all the same, and
+    // a fixture that needs a long-lived child has an event to hold it on
+    // instead — `cat` on a stdin pipe the case holds, a FIFO, or a builtin spin
+    // on the very condition it waits for.
+    let mut problems: Vec<String> = Vec::new();
+    for path in rust_sources() {
+        let source = fs::read_to_string(&path).expect("read a crate source file");
+        for line in sleep_children(&source) {
+            problems.push(format!("{}:{line}", path.display()));
+        }
+    }
+    assert!(
+        problems.is_empty(),
+        "a `sleep` child is a timer clippy cannot see; hold the child on an event instead:\n  {}",
+        problems.join("\n  ")
+    );
+}
+
+#[test]
+fn the_sleep_child_reader_sees_each_shape_and_no_command_text() {
+    // Anti-vacuity, both directions. Assembled from parts so this file's own
+    // source holds none of the shapes it asks about and stays clean under the
+    // sweep above.
+    let program = ["sl", "eep"].concat();
+    let spawns = [
+        format!("fn a() {{ std::process::Command::new(\"{program}\"); }}"),
+        format!("fn b() {{ run(&[\"step\", \"--\", \"{program}\", \"2\"]); }}"),
+        format!("fn c() {{ run(&[\"sh\", \"-c\", \"true; {program} 0.3\"]); }}"),
+    ];
+    for source in &spawns {
+        assert_eq!(sleep_children(source).len(), 1, "a spawn: {source}");
+    }
+    let text = [
+        format!("fn d() {{ judged(\"cd /tmp && {program} 1\"); }}"),
+        format!("fn e() {{ walked(\"while true; do {program} 1; done\", \"{program}\"); }}"),
+        format!("fn f() {{ run(&[\"sh\", \"-c\", \"echo {program}y\"]); }}"),
+    ];
+    for source in &text {
+        assert!(sleep_children(source).is_empty(), "command text: {source}");
+    }
 }
 
 /// A throwaway crate carrying the ban and `lib` source `body`.
@@ -348,7 +553,12 @@ fn toy_clippy(dir: &Path) -> (bool, String) {
         // Out of the workspace's own target dir, or every case contends on the
         // lock the gate deliberately serialises.
         .env("CARGO_TARGET_DIR", dir.join("target"))
-        .output()
+        // Nor a build directory inherited from a mutant sweep's baseline: two
+        // toy crates of one name shared its units, and the second clippy run
+        // read as fresh and said nothing (#1276).
+        .env_remove("CARGO_BUILD_BUILD_DIR")
+        .env_remove("CARGO_INCREMENTAL")
+        .streamed_output()
         .expect("run clippy over the toy crate");
     let mut said = String::from_utf8_lossy(&out.stderr).into_owned();
     said.push_str(&String::from_utf8_lossy(&out.stdout));
@@ -429,4 +639,124 @@ fn a_stale_annotation_over_a_deleted_delay_is_refused() {
         "the refusal must be `unfulfilled_lint_expectations` — that lint is warn-by-default, so \
          the workspace denies it explicitly rather than leaning on `-D warnings`: {said}"
     );
+}
+
+/// The four timed waits `clippy.toml` deliberately carries no row for, as
+/// `(line, call)`: the method calls `recv_timeout`, `shutdown_timeout` and
+/// `set_connect_timeout`, and a call or `use` of a path ending `time::timeout`.
+///
+/// Read off the parsed tree, so a comment or string naming one is no row. A
+/// `timeout` imported under another name is out of a syntax reader's sight;
+/// that gap is stated rather than discovered.
+fn bounded_waits(source: &str) -> Vec<(usize, &'static str)> {
+    use ra_ap_syntax::AstNode as _;
+    use ra_ap_syntax::ast;
+
+    const METHODS: [&str; 3] = ["recv_timeout", "shutdown_timeout", "set_connect_timeout"];
+    const TIMEOUT: &str = "time::timeout";
+    let file = ra_ap_syntax::SourceFile::parse(source, ra_ap_syntax::Edition::Edition2024).tree();
+    let line_of = |node: &ra_ap_syntax::SyntaxNode| {
+        source[..usize::from(node.text_range().start())]
+            .matches('\n')
+            .count()
+            + 1
+    };
+    let mut found = Vec::new();
+    for node in file.syntax().descendants() {
+        if let Some(call) = ast::MethodCallExpr::cast(node.clone()) {
+            let name = call.name_ref().map(|name| name.text().to_string());
+            if let Some(method) = METHODS.iter().find(|m| name.as_deref() == Some(**m)) {
+                found.push((line_of(&node), *method));
+            }
+        } else if let Some(call) = ast::CallExpr::cast(node.clone()) {
+            if call
+                .expr()
+                .is_some_and(|callee| callee.syntax().text().to_string().ends_with(TIMEOUT))
+            {
+                found.push((line_of(&node), TIMEOUT));
+            }
+        } else if let Some(used) = ast::UseTree::cast(node.clone())
+            && used.use_tree_list().is_none()
+            && used
+                .path()
+                .is_some_and(|path| path.syntax().text().to_string().ends_with(TIMEOUT))
+        {
+            found.push((line_of(&node), TIMEOUT));
+        }
+    }
+    found
+}
+
+/// Where each of [`bounded_waits`]' calls stands today, and how many times:
+/// every one is a bound that IS the design, named at its site.
+const BOUNDED_WAIT_SITES: [(&str, &str, usize); 5] = [
+    // `fetch::bound`: the connect, total and drain bounds of one HTTP fetch.
+    ("crates/batten-base/src/fetch.rs", "set_connect_timeout", 1),
+    ("crates/batten-base/src/fetch.rs", "time::timeout", 1),
+    ("crates/batten-base/src/fetch.rs", "shutdown_timeout", 1),
+    // `Pumping::finished`: the drain grace each caller names.
+    ("crates/batten-stream/src/lib.rs", "recv_timeout", 1),
+    // The forge notice's fail-open budget, `NOTICE_LOOKUP`.
+    ("crates/batten/src/lib.rs", "recv_timeout", 1),
+];
+
+#[test]
+fn a_timed_wait_without_a_row_stands_only_where_its_bound_is_the_design() {
+    // THE ROWS `clippy.toml` LEAVES OUT, HELD AS SOURCE (CLOUD-2789). Four timed
+    // waits carry no `disallowed_methods` row, because each one's production
+    // calls are a bound by design and a row would buy each a waiver the
+    // `waiver add refused` ratchet does not grant. So every call of the four is
+    // pinned to the file it stands in today, with its count: a fifth call, a call
+    // in any other file, or ANY call in test code (no test file is pinned, and a
+    // `#[cfg(test)]` call in a pinned file moves its count) is refused here, as
+    // the row would have refused it.
+    let root = fs::canonicalize(at_root("")).expect("resolve the repository root");
+    let mut seen: std::collections::BTreeMap<(String, &str), usize> =
+        std::collections::BTreeMap::new();
+    for path in rust_sources() {
+        let source = fs::read_to_string(&path).expect("read a crate source file");
+        let resolved = fs::canonicalize(&path).expect("resolve a crate source file");
+        let shown = resolved
+            .strip_prefix(&root)
+            .expect("a crate source sits under the repository root")
+            .display()
+            .to_string();
+        for (_, call) in bounded_waits(&source) {
+            *seen.entry((shown.clone(), call)).or_default() += 1;
+        }
+    }
+    let pinned: std::collections::BTreeMap<(String, &str), usize> = BOUNDED_WAIT_SITES
+        .iter()
+        .map(|(file, call, count)| (((*file).to_owned(), *call), *count))
+        .collect();
+    assert_eq!(
+        seen, pinned,
+        "a timed wait with no clippy row stands only at its pinned site: wait on the event \
+         instead, or, for a bound that is the design, pin the site here and name the bound there"
+    );
+}
+
+#[test]
+fn the_bounded_wait_reader_sees_each_call_and_no_text() {
+    // Anti-vacuity, both directions, assembled from parts so this file's own
+    // source holds none of the calls it asks about.
+    let timeout = ["time", "out"].concat();
+    let calls = [
+        format!("fn a() {{ rx.recv_{timeout}(d); }}"),
+        format!("fn b() {{ runtime.shutdown_{timeout}(d); }}"),
+        format!("fn c() {{ connector.set_connect_{timeout}(Some(d)); }}"),
+        format!("async fn d() {{ tokio::time::{timeout}(d, work).await; }}"),
+        format!("use tokio::time::{timeout};"),
+    ];
+    for source in &calls {
+        assert_eq!(bounded_waits(source).len(), 1, "a call: {source}");
+    }
+    let text = [
+        format!("// rx.recv_{timeout}(d)"),
+        format!("fn e() {{ say(\"tokio::time::{timeout}(d, work)\"); }}"),
+        format!("fn f() {{ rx.recv(); runtime.shutdown_background(); {timeout}(); }}"),
+    ];
+    for source in &text {
+        assert!(bounded_waits(source).is_empty(), "no call: {source}");
+    }
 }

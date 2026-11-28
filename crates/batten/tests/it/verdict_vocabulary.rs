@@ -9,6 +9,7 @@
 //! the commit, and the table is a fixed committed artifact, so its token counts
 //! are a property of the commit rather than of the world.
 
+use batten::verdict::DeclaredVerdictExt as _;
 /// Every word `batten.toml`'s `[vocabulary]` declares, held to one token each.
 ///
 /// **Why a mirrored list rather than a read of the table.** The other five arms
@@ -73,6 +74,7 @@ const CANDIDATES: &[&str] = &[
     "held",
     "hook",
     "input",
+    "install",
     "issue",
     "job",
     "judge",
@@ -80,6 +82,7 @@ const CANDIDATES: &[&str] = &[
     "lane",
     "last",
     "late",
+    "crate",
     "layer",
     "lease",
     "list",
@@ -101,6 +104,7 @@ const CANDIDATES: &[&str] = &[
     "own",
     "parse",
     "partial",
+    "pending",
     "patch",
     "path",
     "pattern",
@@ -337,7 +341,7 @@ fn the_space_form_is_the_cheapest_spelling_of_a_name() {
 
 /// Every live class this repository loads: the vendored registry merged with
 /// the committed `[[verdict]]` rows.
-fn live_classes() -> Vec<batten::verdict::DeclaredVerdict> {
+fn live_classes() -> Vec<batten::config_model::DeclaredVerdict> {
     let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let config = batten::config::load(&root.join("batten.toml"))
         .expect("this repository's committed config loads");
@@ -369,7 +373,7 @@ fn every_vendored_and_declared_doc_is_within_160_o200k_tokens() {
         .collect();
     over.sort();
     assert!(over.is_empty(), "first sightings over 160 tokens: {over:?}");
-    let vendored: std::collections::BTreeSet<String> = batten::verdict::vendored()
+    let vendored: std::collections::BTreeSet<String> = batten::config_check::verdict::vendored()
         .into_iter()
         .map(|class| class.id)
         .collect();

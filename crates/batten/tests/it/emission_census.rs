@@ -210,22 +210,12 @@ fn hand_spelled_labels(source: &str) -> Vec<(usize, String)> {
     found
 }
 
-/// Every `.rs` file under `dir`, recursively.
-fn sources(dir: &std::path::Path, into: &mut Vec<std::path::PathBuf>) {
-    for entry in fs::read_dir(dir).expect("the source tree is readable") {
-        let path = entry.expect("a directory entry").path();
-        if path.is_dir() {
-            sources(&path, into);
-        } else if path.extension().is_some_and(|extension| extension == "rs") {
-            into.push(path);
-        }
-    }
-}
-
 #[test]
 fn no_finding_label_is_spelled_outside_the_projection() {
-    let mut files = Vec::new();
-    sources(&at_root("crates/batten/src"), &mut files);
+    // Every crate's engine sources: a module the split (CLOUD-2789) moved into a
+    // lower package still raises and spells, and a walk of `crates/batten/src`
+    // alone stopped reading it.
+    let files = common::engine_sources();
     assert!(files.len() > 10, "the census reads the source tree");
     let mut spelled = Vec::new();
     for path in &files {
@@ -320,34 +310,46 @@ fn static_id(
 
 /// Every constructor call's first argument in `source`'s production half.
 fn constructor_arguments(source: &str) -> Vec<String> {
-    let production: String = source
-        .split("#[cfg(test)]")
-        .next()
-        .unwrap_or(source)
-        .lines()
-        .filter(|line| !line.trim_start().starts_with("//"))
-        .flat_map(|line| [line, "\n"])
+    // ON THE LOSSLESS TREE (`rules/scanning.md`): each call whose callee is one
+    // of [`CONSTRUCTORS`], unless an ancestor item carries `#[cfg(test)]`, and
+    // its FIRST argument's text. The text scan this replaced cut each file at
+    // its first `#[cfg(test)]` and split arguments by counting parentheses, so
+    // `refusal.rs`'s raisers past an early test helper read as raising nothing.
+    use ra_ap_syntax::{AstNode as _, ast, ast::HasArgList as _, ast::HasAttrs as _};
+    let batten_facts::facts::Look::Is(file) =
+        batten_facts::source::rust_tree(source, ra_ap_syntax::Edition::Edition2024)
+    else {
+        panic!("an engine source did not parse: its refusals would read as none");
+    };
+    let callees: Vec<String> = CONSTRUCTORS
+        .iter()
+        .map(|constructor| constructor.trim_end_matches('(').to_owned())
         .collect();
-    let production = production.as_str();
     let mut found = Vec::new();
-    for constructor in CONSTRUCTORS {
-        for (at, _) in production.match_indices(constructor) {
-            let rest = &production[at + constructor.len()..];
-            // Up to the first comma at depth zero, which may sit lines later.
-            let mut depth = 0_i32;
-            let end = rest
-                .char_indices()
-                .find(|&(_, c)| {
-                    match c {
-                        '(' => depth += 1,
-                        ')' | ',' if depth == 0 => return true,
-                        ')' => depth -= 1,
-                        _ => {}
-                    }
-                    false
-                })
-                .map_or(rest.len(), |(end, _)| end);
-            found.push(rest[..end].trim().to_owned());
+    for call in file.syntax().descendants().filter_map(ast::CallExpr::cast) {
+        let Some(callee) = call.expr() else { continue };
+        let spelled: String = callee
+            .syntax()
+            .text()
+            .to_string()
+            .split_whitespace()
+            .collect();
+        if !callees.iter().any(|name| spelled.ends_with(name.as_str())) {
+            continue;
+        }
+        let test_only = call
+            .syntax()
+            .ancestors()
+            .filter_map(ast::AnyHasAttrs::cast)
+            .any(|item| {
+                item.attrs()
+                    .any(|attr| attr.syntax().text() == "#[cfg(test)]")
+            });
+        if test_only {
+            continue;
+        }
+        if let Some(first) = call.arg_list().and_then(|args| args.args().next()) {
+            found.push(first.syntax().text().to_string());
         }
     }
     found
@@ -371,8 +373,10 @@ fn string_consts(source: &str) -> Vec<(String, String)> {
 
 #[test]
 fn every_refusal_id_the_engine_raises_resolves() {
-    let mut files = Vec::new();
-    sources(&at_root("crates/batten/src"), &mut files);
+    // Every crate's engine sources: a module the split (CLOUD-2789) moved into a
+    // lower package still raises and spells, and a walk of `crates/batten/src`
+    // alone stopped reading it.
+    let files = common::engine_sources();
     let texts: Vec<(String, String)> = files
         .iter()
         .map(|path| {
@@ -421,7 +425,7 @@ fn every_refusal_id_the_engine_raises_resolves() {
     }
     let mut args = vec!["policy", "explain"];
     args.extend(names.iter().map(String::as_str));
-    let explained = common::run(&at_root(""), &args);
+    let explained = common::run(common::committed_repo(), &args);
     assert!(
         explained.status.success(),
         "every engine-raised id resolves through `policy explain`: {}",
@@ -457,7 +461,7 @@ fn every_smell_id_resolves_through_policy_explain() {
     }
     let mut args = vec!["policy", "explain"];
     args.extend(ids.iter().copied());
-    let explained = common::run(&at_root(""), &args);
+    let explained = common::run(common::committed_repo(), &args);
     assert!(
         explained.status.success(),
         "every smell id resolves through `policy explain`: {}",
@@ -535,8 +539,10 @@ fn unclassed_advice(source: &str) -> Vec<(usize, String)> {
 /// The suite `capture-notice-free-text` is killed in.
 #[test]
 fn every_advisory_push_carries_a_class() {
-    let mut files = Vec::new();
-    sources(&at_root("crates/batten/src"), &mut files);
+    // Every crate's engine sources: a module the split (CLOUD-2789) moved into a
+    // lower package still raises and spells, and a walk of `crates/batten/src`
+    // alone stopped reading it.
+    let files = common::engine_sources();
     assert!(files.len() > 10, "the census reads the source tree");
     let mut found = Vec::new();
     for path in &files {

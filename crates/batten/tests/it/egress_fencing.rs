@@ -87,41 +87,6 @@ id = "task read first"
 kind = "document"
 target = "mise.toml"
 
-[[verdict]]
-id = "provision declare dropped"
-gloss = "no [[provision.env]] row carries a no-proxy key"
-class = """
-The surface that actually runs.
-"""
-
-[[verdict.route]]
-id = "provision read first"
-kind = "document"
-target = "batten.toml"
-
-[[verdict]]
-id = "provision declare partial"
-gloss = "a [[provision.env]] no-proxy row no longer prepends the resolver host"
-class = """
-A fence that does not name the host it exists for fences nothing.
-"""
-
-[[verdict.route]]
-id = "provision read first"
-kind = "document"
-target = "batten.toml"
-
-[[verdict]]
-id = "provision read unread"
-gloss = "batten.toml could not be read, so the wrapper's fence could not be judged"
-class = """
-Could-not-look, kept loud.
-"""
-
-[[verdict.route]]
-id = "provision read first"
-kind = "document"
-target = "batten.toml"
 "#;
 
 /// A `[[provision]]` row whose `[[provision.env]]` fences both spellings, as the
@@ -311,129 +276,20 @@ url = "https://example.invalid/mise"
 sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
 "#;
 
-const NARROWED: &str = r#"
-[[provision]]
-name = "mise"
-version = "1.0.0"
-unpack = "none"
-binary = "mise"
-
-[[provision.env]]
-name = "NO_PROXY"
-prepend_list = ["localhost"]
-
-[[provision.env]]
-name = "no_proxy"
-prepend_list = ["localhost"]
-
-[provision.platforms.linux-x86_64]
-url = "https://example.invalid/mise"
-sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
-"#;
-
-const UPPER_ONLY: &str = r#"
-[[provision]]
-name = "mise"
-version = "1.0.0"
-unpack = "none"
-binary = "mise"
-
-[[provision.env]]
-name = "NO_PROXY"
-prepend_list = ["api.github.com"]
-
-[[provision.env]]
-name = "no_proxy"
-prepend_list = ["localhost"]
-
-[provision.platforms.linux-x86_64]
-url = "https://example.invalid/mise"
-sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
-"#;
-
-/// A row carrying NO fence, followed by the fenced one.
-const LATER_ROW: &str = r#"
-[[provision]]
-name = "other"
-version = "1.0.0"
-unpack = "none"
-binary = "other"
-
-[provision.platforms.linux-x86_64]
-url = "https://example.invalid/other"
-sha256 = "1111111111111111111111111111111111111111111111111111111111111111"
-
-[[provision]]
-name = "mise"
-version = "1.0.0"
-unpack = "none"
-binary = "mise"
-
-[[provision.env]]
-name = "NO_PROXY"
-prepend_list = ["github.com", "api.github.com"]
-
-[[provision.env]]
-name = "no_proxy"
-prepend_list = ["github.com", "api.github.com"]
-
-[provision.platforms.linux-x86_64]
-url = "https://example.invalid/mise"
-sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
-"#;
-
 // ---------------------------------------------------------------------------
-// THE SECOND SURFACE (CLOUD-1550).
+// THE SECOND SURFACE IS RETIRED (CLOUD-2688).
 //
-// These are the cases the module's own `test_` rules cannot stand in for: they
-// prove the ENGINE parses `batten.toml` into `input.tree.documents` with its
-// `[[provision]]` array reachable as `.provision`. A `with input as` block
-// fabricates exactly that shape, so it stays green over a key the engine never
-// builds — the defect this tier exists for, and the one that let #889 replace
-// the real fence with `unset HTTPS_PROXY` unrefused.
+// The module no longer reads `batten.toml`'s `[[provision.env]]` fence: the
+// launcher it fenced and the PAT it carried are gone, and the toolchain installs
+// locked from `mise.lock`. The one case left pins the retirement over the
+// compiled engine, so a reintroduced arm is refused here as well as in review.
 // ---------------------------------------------------------------------------
 
-/// The positive arm first: without it every refusal below is satisfied by a
-/// module that refuses everything.
+/// A `batten.toml` whose provision rows carry no no-proxy fence is clean: the
+/// retired surface decides nothing.
 #[test]
-fn a_provision_fence_naming_the_host_in_both_spellings_passes() {
-    let root = fixture_p("provision-fenced", FENCED, PROVISION_FENCED);
-    clean(&root);
-}
-
-#[test]
-fn a_deleted_provision_fence_is_refused() {
-    // THE REGRESSION THIS ARM EXISTS FOR. #889 replaced this fence with
-    // `unset HTTPS_PROXY` in the generated wrapper and `batten-check` passed,
-    // because nothing read this surface. The env array stays present and
-    // non-empty so the row still parses: the case is about the no-proxy KEYS
-    // being gone, not the block.
-    let root = fixture_p("provision-dropped", FENCED, DROPPED);
-    denied_at(&root, "batten.toml");
-}
-
-#[test]
-fn a_provision_fence_that_no_longer_names_the_resolver_host_is_refused() {
-    // Gutted rather than deleted: both rows survive and fence something else, so
-    // a predicate that only asked whether the keys existed would pass this.
-    let root = fixture_p("provision-narrowed", FENCED, NARROWED);
-    denied_at(&root, "batten.toml");
-}
-
-#[test]
-fn a_provision_fence_on_only_the_upper_case_spelling_is_refused() {
-    // The lower-case half alone, for the reason the `mise.toml` pair carries:
-    // every client in this class resolves `no_proxy` first.
-    let root = fixture_p("provision-upper-only", FENCED, UPPER_ONLY);
-    denied_at(&root, "batten.toml");
-}
-
-/// THE FENCE MAY LIVE ON ANY `[[provision]]` ROW, so a second row carrying it is
-/// as good as the first. This is what stops the predicate from hard-coding an
-/// index the manifest is free to reorder.
-#[test]
-fn a_provision_fence_on_a_later_row_passes() {
-    let root = fixture_p("provision-later-row", FENCED, LATER_ROW);
+fn a_provision_row_without_a_fence_is_no_longer_judged() {
+    let root = fixture_p("provision-retired", FENCED, DROPPED);
     clean(&root);
 }
 

@@ -38,7 +38,8 @@ use crate::common;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use batten::rules::{self, Rule};
+use batten::config_model::Rule;
+use batten::rules;
 
 /// The rows as `batten.toml` declares them, deserialized rather than
 /// struct-literalled: `Rule` carries `deny_unknown_fields`, so these go through
@@ -78,7 +79,7 @@ fn install_module(root: &Path, module: &str) {
 }
 
 fn scratch_for(name: &str, module: &str) -> PathBuf {
-    let root = common::scratch(&format!("frontmatter-gates-{name}"));
+    let root = common::scratch_repo(&format!("frontmatter-gates-{name}"));
     install_module(&root, module);
     root
 }
@@ -159,6 +160,19 @@ fn a_rules_stub_without_a_paths_trigger_is_refused() {
         findings(&root, stub_row()),
         vec![".claude/rules/policy-modules.md".to_owned()],
         "a stub asserting a trigger it does not carry is refused"
+    );
+    // AND A FENCE THAT NAMES NO PATHS: a document is read, so the no-document
+    // arm abstains, and only the trigger arm can refuse it.
+    let root = scratch_for("stub-fence-no-paths", "policy/rules-paths-trigger.rego");
+    common::write(
+        &root,
+        ".claude/rules/policy-modules.md",
+        "---\ndescription: a stub\n---\n# Moved to `rules/policy-modules.md`\n",
+    );
+    assert_eq!(
+        findings(&root, stub_row()),
+        vec![".claude/rules/policy-modules.md".to_owned()],
+        "a fence with no `paths:` triggers on nothing and is refused"
     );
 }
 
@@ -308,7 +322,7 @@ fn this_repository_is_clean_today() {
         (skill_row(), "policy/skill-frontmatter-complete.rego"),
     ] {
         let id = row.id.clone();
-        let only = common::scratch(&format!("frontmatter-gates-vocabulary-{id}"));
+        let only = common::scratch_repo(&format!("frontmatter-gates-vocabulary-{id}"));
         install_module(&only, module);
         assert_eq!(
             findings_for(&root, row, &only),

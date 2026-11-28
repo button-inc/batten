@@ -83,27 +83,200 @@ fn the_collector_ran_for_this_run() {
     reading.trim().parse::<u64>().unwrap_or_else(|_| {
         panic!("{COLLECTED} should be the entry count the collector found, got {reading:?}")
     });
+}
 
-    // AND THE PARENT THIS RUN WRITES INTO IS ONE IT COVERED (CLOUD-1976). A count
-    // alone passed on the musl lane while the collector took `target/tmp` and the
-    // suite wrote into `target/<triple>/tmp`, which nothing ever collected.
-    //
-    // UNIX ONLY, and the reason is the spelling rather than the property: the
-    // windows lane runs the collector under Git Bash, whose `pwd -P` answers
-    // `/d/a/...` for a parent this process knows as `D:\a\...`, so the two could
-    // never compare equal there however correct the collection was.
-    #[cfg(unix)]
-    {
-        let roots = std::env::var(ROOTS).unwrap_or_default();
-        let parent = parent()
-            .canonicalize()
-            .expect("the scratch parent resolves");
+/// THIS RUN'S SCRATCH IS ITS OWN, AND HELD FOR ITS LIFE (CLOUD-2789).
+///
+/// A case's fixtures live in `<parent>/run-<id>`, and while any case of the run
+/// is alive no other process can take `run-<id>.lock` exclusively, which is the
+/// one thing a reaper must do before removing it. Linux only: `flock(1)` is the
+/// other process asking.
+///
+/// Fails by: the scratch root no longer per run, or the lock not held by a live
+/// case, so another run's reap could take this one's fixtures mid-case.
+///
+/// THE PARENT AS THE RUN RESOLVES IT, never the baked `CARGO_TARGET_TMPDIR`
+/// (CLOUD-2911): a mutation judge hands each run its own fixture root through
+/// the runtime override, so under the judge the baked parent named a directory
+/// this run never used and the case was red in the control run alone.
+#[test]
+fn this_runs_scratch_is_its_own_and_held_while_it_runs() {
+    let root = crate::common::target_tmp();
+    let parent = crate::common::scratch_parent();
+    let name = root
+        .file_name()
+        .and_then(|name| name.to_str())
+        .expect("a named run directory")
+        .to_owned();
+    assert!(
+        name.starts_with("run-") && root.parent() == Some(parent.as_path()),
+        "{} is not one run's directory under {}",
+        root.display(),
+        parent.display()
+    );
+    if !cfg!(target_os = "linux") {
+        return;
+    }
+    let lock = parent.join(format!("{name}{}", crate::common::RUN_LOCK));
+    assert!(
+        !free_elsewhere(&lock),
+        "{} is free while this run is alive, so another run's reap would take it",
+        lock.display()
+    );
+}
+
+/// CLOUD-2716. A case's `std::env::temp_dir()` is under a root the collector
+/// covers, so unit-case scratch is collected with the rest. Before, it was the
+/// system temp dir, which nothing collected: 29,597 entries filled the disk.
+///
+/// Fails by: the collector no longer publishing `TMPDIR`, or publishing one
+/// outside its roots.
+///
+/// Off unix the case abstains: Windows' `GetTempPath` reads `TMP`/`TEMP`,
+/// never `TMPDIR`, and Git Bash spells the roots `/d/a/...`.
+#[test]
+fn a_case_temp_dir_is_under_a_collected_root() {
+    if !cfg!(unix) {
+        return;
+    }
+    let roots = std::env::var(ROOTS).unwrap_or_default();
+    let temp = std::env::temp_dir()
+        .canonicalize()
+        .expect("the temp dir resolves");
+    assert!(
+        std::env::split_paths(&roots).any(|root| temp.starts_with(root)),
+        "{} is not under a root the collector covers ({roots:?})",
+        temp.display()
+    );
+    let tree = crate::common::at_root(".")
+        .canonicalize()
+        .expect("the checkout resolves");
+    assert!(
+        !temp.starts_with(&tree),
+        "{} is inside the checkout, where a not-a-repository fixture is one",
+        temp.display()
+    );
+}
+
+/// The collector's `TMPDIR` is `batten-suite` under the temp dir it was given,
+/// published as its last covered root and created; a lone run takes the last
+/// run's entries there, and a run beside another leaves them. The existence
+/// half is unix only: Git Bash's `/d/a/...` spelling is not a path this
+/// process can open.
+///
+/// Fails by: `TMPDIR` unpublished, published under `target/`, left out of the
+/// roots, or collected under a live run.
+#[test]
+fn the_collector_publishes_a_temp_dir_it_owns() {
+    for (others, kept) in [("", false), ("4242", true)] {
+        let (survived, published) = collect_seeded(
+            &format!("temp-dir-{}", others.len()),
+            others,
+            &["tmp", "../tmpdir/batten-suite"],
+        );
+        assert_eq!(survived[1], kept, "others={others:?}: {published}");
+        let line = line_of(&published, "TMPDIR");
+        let temp = line.trim_start_matches("TMPDIR=");
         assert!(
-            std::env::split_paths(&roots).any(|root| root == parent),
-            "{} is not among the roots the collector covered ({roots:?})",
-            parent.display()
+            line.starts_with("TMPDIR=") && temp.ends_with("/tmpdir/batten-suite"),
+            "{published}"
+        );
+        let line = line_of(&published, ROOTS);
+        let roots = line.trim_start_matches(&format!("{ROOTS}="));
+        assert_eq!(roots.rsplit(':').next(), Some(temp), "{published}");
+        assert!(
+            !cfg!(unix) || PathBuf::from(temp).is_dir(),
+            "the published TMPDIR exists: {published}"
         );
     }
+}
+
+/// A nextest running in ANOTHER checkout defers the shared temp root, and
+/// leaves this checkout's `target/tmp` as every run does since CLOUD-2789: a
+/// target dir's scratch is its own run's, reaped under that run's lock
+/// (`common::target_tmp`), so one checkout's collector no longer decides it.
+/// Two cargo-mutants jobs each deferred the other's collection, and a copy
+/// grew 3 GB of fixtures until the disk filled under a build (CLOUD-2716);
+/// that growth is now `a_target_triples_scratch_is_collected_too`'s reaper's.
+///
+/// Linux only, inside the case: the other run's directory is read from
+/// `/proc`, and where it cannot be read the run counts as this checkout's.
+///
+/// Fails by: the collector taking `target/tmp` again, or the shared root
+/// guarded by this checkout's runs alone.
+#[test]
+#[expect(
+    clippy::disallowed_types,
+    reason = "stays, and test-only: the other run is a real process whose directory `/proc` reports"
+)]
+fn a_run_in_another_checkout_defers_only_the_shared_root() {
+    if !cfg!(target_os = "linux") {
+        return;
+    }
+    let elsewhere = crate::common::scratch("clear-scratch-elsewhere");
+    // `cat` on a stdin pipe this case holds: alive exactly until the case
+    // closes that pipe, which ends it on the EOF rather than on a clock or a
+    // kill (CLOUD-2789).
+    let mut other = std::process::Command::new("cat")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .current_dir(&elsewhere)
+        .spawn()
+        .expect("start the other run");
+    let (survived, published) = collect_seeded(
+        "clear-scratch-other-checkout",
+        &other.id().to_string(),
+        &["tmp", "../tmpdir/batten-suite"],
+    );
+    drop(other.stdin.take());
+    let _ = other.wait();
+    assert_eq!(
+        survived,
+        vec![true, true],
+        "neither this checkout's scratch nor the shared root is taken: {published}"
+    );
+}
+
+/// A RUN IN ANOTHER CHECKOUT SHARING THIS TARGET DIR IS A RUN HERE (#1276).
+///
+/// Measured on #1276: two agents' clones shared one absolute `CARGO_TARGET_DIR`,
+/// and each one's collector judged "here" by the other run's working directory
+/// alone, so it deleted `target/tmp` under the other's live cases, which then
+/// read their scratch as empty. The owner of `target/tmp` is the target dir, so
+/// a run whose `CARGO_TARGET_DIR` resolves to this one defers it.
+///
+/// Fails by: the collector comparing working directories only, so the sentinel
+/// is taken while the sharing run is alive.
+#[test]
+#[expect(
+    clippy::disallowed_types,
+    reason = "stays, and test-only: the other run is a real process whose environment `/proc` reports"
+)]
+fn a_run_sharing_this_target_dir_from_another_checkout_defers_it() {
+    if !cfg!(target_os = "linux") {
+        return;
+    }
+    let root = crate::common::scratch("clear-scratch-shared-target");
+    let elsewhere = root.join("elsewhere");
+    std::fs::create_dir_all(&elsewhere).unwrap();
+    // `cat` on a stdin pipe this case holds: alive exactly until the case
+    // closes that pipe, which ends it on the EOF rather than on a clock or a
+    // kill (CLOUD-2789).
+    let mut other = std::process::Command::new("cat")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .current_dir(&elsewhere)
+        .env("CARGO_TARGET_DIR", root.join("target"))
+        .spawn()
+        .expect("start the sharing run");
+    let (survived, published) = collect_seeded_at(&root, &other.id().to_string(), &["tmp"]);
+    drop(other.stdin.take());
+    let _ = other.wait();
+    assert_eq!(
+        survived,
+        vec![true],
+        "a live run on this target dir keeps its scratch: {published}"
+    );
 }
 
 /// The committed `clear-scratch` command, exactly as nextest runs it.
@@ -122,7 +295,7 @@ fn collector_command() -> String {
 /// `cargo-nextest` pids. Returns whether the sentinel survived and the count line
 /// the collector published.
 fn collect_beside(name: &str, others: &str) -> (bool, String) {
-    let (survived, published) = collect_seeded(name, others, &["tmp"]);
+    let (survived, published) = collect_seeded(name, others, &["../tmpdir/batten-suite"]);
     (survived[0], line_of(&published, COLLECTED))
 }
 
@@ -143,12 +316,18 @@ fn line_of(published: &str, key: &str) -> String {
 /// The collector, run over a fixture target dir holding one sentinel under each
 /// of `seeds` (paths relative to that target dir). Returns whether each sentinel
 /// survived, in order, and everything the collector published.
+fn collect_seeded(name: &str, others: &str, seeds: &[&str]) -> (Vec<bool>, String) {
+    collect_seeded_at(&crate::common::scratch(name), others, seeds)
+}
+
+/// [`collect_seeded`] over a fixture root the caller already made, so a case can
+/// point another process at its target dir before the collector runs.
 #[expect(
     clippy::disallowed_types,
     reason = "stays, and test-only: the subject is the shell command nextest runs, so asserting it means running `sh`"
 )]
-fn collect_seeded(name: &str, others: &str, seeds: &[&str]) -> (Vec<bool>, String) {
-    let root = crate::common::scratch(name);
+fn collect_seeded_at(root: &std::path::Path, others: &str, seeds: &[&str]) -> (Vec<bool>, String) {
+    let root = root.to_path_buf();
     let bin = root.join("bin");
     std::fs::create_dir_all(&bin).unwrap();
     let stub = bin.join("pgrep");
@@ -175,6 +354,13 @@ fn collect_seeded(name: &str, others: &str, seeds: &[&str]) -> (Vec<bool>, Strin
         .arg("-c")
         .arg(collector_command())
         .env("CARGO_TARGET_DIR", root.join("target"))
+        // NOR THE RUNNING SUITE'S BUILD DIRECTORY: under a mutant sweep's
+        // baseline it is set, and a fixture's lone-run collector then wiped the
+        // real build directory's `tmp` under every other running case (#1276).
+        .env_remove("CARGO_BUILD_BUILD_DIR")
+        // ITS OWN TEMP DIR: a lone-run collector inheriting this suite's
+        // `TMPDIR` would take the running suite's temp root.
+        .env("TMPDIR", root.join("tmpdir"))
         .env("NEXTEST_ENV", &published)
         .env("PATH", path)
         .status()
@@ -190,35 +376,67 @@ fn collect_seeded(name: &str, others: &str, seeds: &[&str]) -> (Vec<bool>, Strin
 /// CLOUD-1976. A `--target <triple>` run's scratch parent is
 /// `target/<triple>/tmp`, and the collector used to take `target/tmp` alone, so
 /// the musl lane's parent grew across runs and rode the cache into the next job.
-/// Alone, the collector takes both — and publishes both as covered roots.
-//
-// The declared mutation, in a plain comment because it is shell rather than
-// prose. `.config/nextest.toml` has no `batten mutate` sweep route, so the row is
-// inert under the sweep and its kill was shown by hand (CLOUD-1976):
-// MUTANT collector-skips-triple-roots|s@ "$base"/\*/tmp; do@; do@|a_target_triples_scratch_is_collected_too
+///
+/// SINCE CLOUD-2789 THE REAPER IS THE RUN'S OWN, so the triple's parent is
+/// collected by the triple run's first case, over the parent it writes into:
+/// a run whose lock is free (here, one from before the lock) is taken, and one
+/// whose lock a live case holds is left. No glob of `target/*/tmp` is needed to
+/// reach it, and none reaches a parent another run owns.
+///
+/// Fails by: a triple's finished run left behind, or a live one taken.
 #[test]
 fn a_target_triples_scratch_is_collected_too() {
+    let triple = crate::common::scratch("clear-scratch-triple")
+        .join("target")
+        .join("x86_64-unknown-linux-musl")
+        .join("tmp");
+    let finished = triple.join("run-finished").join("sentinel");
+    let live = triple.join("run-live").join("sentinel");
+    for sentinel in [&finished, &live] {
+        std::fs::create_dir_all(sentinel.parent().unwrap()).unwrap();
+        std::fs::write(sentinel, "").unwrap();
+    }
+    let holder = cfg!(target_os = "linux")
+        .then(|| hold_shared(&triple.join(format!("run-live{}", crate::common::RUN_LOCK))));
+    crate::common::reap_finished(&triple, "run-mine");
+    assert!(
+        !finished.exists(),
+        "a triple's finished run was left behind"
+    );
+    if let Some(mut holder) = holder {
+        assert!(live.exists(), "a triple's live run was taken");
+        drop(holder.stdin.take());
+        let _ = holder.wait();
+    }
+}
+
+/// NO TARGET DIR'S SCRATCH IS THE COLLECTOR'S (CLOUD-2789).
+///
+/// The collector took `target/tmp` and every `target/*/tmp`, so a suite started
+/// in a checkout wiped `target/replay/tmp` under a live `batten test replay`,
+/// whose nextest runs from a tree outside the checkout with that nested target
+/// dir. Each run's scratch is now removed by its own suite's reaper, under the
+/// run's lock, so the setup script leaves every one of them, even alone.
+///
+/// Fails by: the collector globbing a target dir's `tmp` again, which takes all
+/// three sentinels.
+#[test]
+fn no_target_dirs_scratch_is_the_collectors() {
     let (survived, published) = collect_seeded(
-        "clear-scratch-triple",
+        "clear-scratch-target-dirs",
         "",
-        &["tmp", "x86_64-unknown-linux-musl/tmp"],
+        &["tmp", "replay/tmp", "x86_64-unknown-linux-musl/tmp"],
     );
     assert_eq!(
         survived,
-        vec![false, false],
-        "a lone run takes the native parent and the triple's alike"
-    );
-    assert_eq!(line_of(&published, COLLECTED), format!("{COLLECTED}=2"));
-    let roots = line_of(&published, ROOTS);
-    assert!(
-        roots.contains("/target/tmp") && roots.contains("/target/x86_64-unknown-linux-musl/tmp"),
-        "both roots are published as covered: {roots}"
+        vec![true, true, true],
+        "a lone collector left every target dir's scratch to its own run: {published}"
     );
 }
 
 /// CLOUD-1912: `verify` runs several nextest invocations at once, and a later
-/// run's wipe deleted a live case's `current_dir` in an earlier one. With another
-/// run alive the collector must leave the parent alone.
+/// run's wipe deleted a live case's scratch in an earlier one. With another run
+/// alive the collector must leave the shared temp root alone.
 ///
 /// MUTANT: dropping the `others -eq 0` guard (collect unconditionally) deletes
 /// the sentinel here and this case goes red.
@@ -241,6 +459,103 @@ fn the_collector_collects_when_it_is_alone() {
     assert_eq!(reading, format!("{COLLECTED}=1"));
 }
 
+/// A RUN'S SCRATCH OUTLIVES ANOTHER RUN'S REAP FOR AS LONG AS ITS CASES DO, AND
+/// NOT ONE MOMENT LONGER (CLOUD-2789).
+///
+/// A second process holds `run-other.lock` shared, as a live case of that run
+/// does, and a reap from `run-mine` must leave `run-other` whole; once the
+/// holder exits, the next reap takes the directory and its lock file. The
+/// holder is waited on by its own line and ended by closing its stdin, never by
+/// a clock. Linux only: `flock(1)` is the other process.
+///
+/// Fails by: the reap removing an entry whose lock it did not take (the first
+/// assertion), or never removing a finished run's (the second).
+#[test]
+fn a_live_runs_scratch_survives_another_runs_reap() {
+    if !cfg!(target_os = "linux") {
+        return;
+    }
+    let parent = crate::common::scratch("reap-live-run");
+    let sentinel = parent.join("run-other").join("sentinel");
+    std::fs::create_dir_all(sentinel.parent().unwrap()).unwrap();
+    std::fs::write(&sentinel, "").unwrap();
+    let lock = parent.join(format!("run-other{}", crate::common::RUN_LOCK));
+    let mut holder = hold_shared(&lock);
+
+    crate::common::reap_finished(&parent, "run-mine");
+    let alive = sentinel.exists();
+
+    drop(holder.stdin.take());
+    let _ = holder.wait();
+    crate::common::reap_finished(&parent, "run-mine");
+
+    assert!(alive, "a live run's scratch was reaped under it");
+    assert!(
+        !sentinel.exists() && !lock.exists(),
+        "a finished run's scratch and lock were left behind"
+    );
+}
+
+/// An entry with no lock beside it predates the lock or is a stray, and is
+/// reaped; the reaping run's own directory never is.
+///
+/// Fails by: a lockless entry kept forever, which is the CLOUD-1879 growth, or
+/// a run reaping itself.
+#[test]
+fn a_lockless_entry_is_reaped_and_the_reapers_own_run_is_not() {
+    let parent = crate::common::scratch("reap-lockless");
+    let stray = parent.join("from-before-the-lock").join("sentinel");
+    let own = parent.join("run-mine").join("sentinel");
+    for path in [&stray, &own] {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, "").unwrap();
+    }
+    crate::common::reap_finished(&parent, "run-mine");
+    assert!(!stray.exists(), "a lockless entry was left behind");
+    assert!(own.exists(), "the reaping run took its own scratch");
+}
+
+/// A live run's case, as another process: `flock(1)` holding `lock` shared
+/// until its stdin closes. Returned once it says it holds the lock, so a case
+/// waits on that line rather than on a clock.
+#[expect(
+    clippy::disallowed_types,
+    reason = "stays, and test-only: the live run is a real process holding a real advisory lock"
+)]
+fn hold_shared(lock: &std::path::Path) -> std::process::Child {
+    let mut holder = std::process::Command::new("flock")
+        .arg("-s")
+        .arg(lock)
+        .args(["sh", "-c", "echo held; exec cat"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .expect("start the live run's holder");
+    let mut line = String::new();
+    std::io::BufRead::read_line(
+        &mut std::io::BufReader::new(holder.stdout.take().expect("piped")),
+        &mut line,
+    )
+    .expect("read the holder's line");
+    assert_eq!(line.trim(), "held", "the holder took its lock");
+    holder
+}
+
+/// Whether another process can take `lock` exclusively right now.
+#[expect(
+    clippy::disallowed_types,
+    reason = "stays, and test-only: the question is whether ANOTHER process can take the lock, so another process asks"
+)]
+fn free_elsewhere(lock: &std::path::Path) -> bool {
+    std::process::Command::new("flock")
+        .args(["-x", "-n"])
+        .arg(lock)
+        .arg("true")
+        .status()
+        .expect("run flock")
+        .success()
+}
+
 /// Every nextest run reports every failure, whichever caller forgot the flag.
 ///
 /// The windows, macos and musl legs call `cargo nextest run --workspace` bare,
@@ -261,6 +576,43 @@ fn the_default_profile_never_fails_fast() {
     );
 }
 
+/// NO PROFILE RETRIES A FAILURE (CLOUD-2789).
+///
+/// A retry passes a case whose result depends on load, timing or another run's
+/// files on its second draw, so the flake is never seen and the gate built on
+/// the suite decides by luck. `default` must say `retries = 0` itself, since
+/// nextest's own default could change under it, and every other profile must
+/// say 0 or inherit `default`'s. The tasks and CI must not raise it either.
+///
+/// Fails by: a profile, `NEXTEST_RETRIES` or a `--retries` flag naming any
+/// retry count above 0.
+#[test]
+fn no_profile_retries_a_failure() {
+    let text = std::fs::read_to_string(crate::common::at_root(".config/nextest.toml"))
+        .expect("nextest.toml");
+    let config: toml::Table = text.parse().expect("nextest.toml parses");
+    let profiles = config["profile"].as_table().expect("a profile table");
+    assert_eq!(
+        profiles["default"].get("retries"),
+        Some(&toml::Value::Integer(0)),
+        "`[profile.default] retries = 0` is stated, not left to nextest's default"
+    );
+    for (name, profile) in profiles {
+        let retries = profile.get("retries");
+        assert!(
+            retries.is_none() || retries == Some(&toml::Value::Integer(0)),
+            "[profile.{name}] retries = {retries:?}"
+        );
+    }
+    for file in ["mise.toml", ".github/workflows/ci.yml"] {
+        let text = std::fs::read_to_string(crate::common::at_root(file)).expect(file);
+        assert!(
+            !text.contains("NEXTEST_RETRIES") && !text.contains("--retries"),
+            "{file} raises nextest's retry count"
+        );
+    }
+}
+
 #[test]
 fn the_parent_survives_its_own_collection() {
     // The collector removes the parent and recreates it. Recreating is not
@@ -274,4 +626,57 @@ fn the_parent_survives_its_own_collection() {
         "the scratch parent {} must exist after collection — `common::scratch` joins onto it",
         parent.display()
     );
+}
+
+/// EVERY FIXTURE UNDER `target/` IS IN ITS RUN'S OWN SCRATCH (CLOUD-2789).
+///
+/// A run's scratch is safe from every other run only because it lives in
+/// `run-<id>` under a lock its live cases hold (`common::target_tmp`). A case
+/// that joined onto `CARGO_TARGET_TMPDIR` itself would write beside every run,
+/// where no lock guards it and a reaper takes it as a stray mid-case: the
+/// flake this design removed, regrown one call site at a time. So the variable
+/// is read in exactly two places: the door, and the case asserting the parent.
+///
+/// Fails by: any other source naming the variable as a string literal, the
+/// spelling `env!`, `var` and `var_os` all need.
+#[test]
+fn only_the_door_reads_the_target_tmpdir() {
+    let allowed = ["tests/it/common/mod.rs", "tests/it/scratch_hygiene.rs"];
+    let readers: Vec<String> = crate::common::rust_sources()
+        .into_iter()
+        .filter(|path| !allowed.iter().any(|door| path.ends_with(door)))
+        .filter(|path| {
+            std::fs::read_to_string(path).is_ok_and(|text| reads_the_target_tmpdir(&text))
+        })
+        .map(|path| path.display().to_string())
+        .collect();
+    assert!(
+        readers.is_empty(),
+        "these read CARGO_TARGET_TMPDIR around `common::target_tmp`, so their \
+         fixtures sit outside any run's lock: {readers:?}"
+    );
+}
+
+/// Whether `source` reads cargo's target tmpdir variable: names it quoted.
+fn reads_the_target_tmpdir(source: &str) -> bool {
+    source.contains(concat!("\"CARGO_TARGET_", "TMPDIR\""))
+}
+
+/// The reader the gate above stands on: a quoted read is caught in each
+/// spelling, and prose naming the variable in backticks is not.
+///
+/// Fails by: the reader matching nothing (every gate above passes vacuously)
+/// or matching prose (every doc mention becomes a finding).
+#[test]
+fn the_tmpdir_reader_tells_a_read_from_a_mention() {
+    for read in [
+        concat!("env!(\"CARGO_TARGET_", "TMPDIR\")"),
+        concat!("std::env::var(\"CARGO_TARGET_", "TMPDIR\")"),
+        concat!("std::env::var_os(\"CARGO_TARGET_", "TMPDIR\")"),
+    ] {
+        assert!(reads_the_target_tmpdir(read), "{read}");
+    }
+    assert!(!reads_the_target_tmpdir(
+        "/// cargo's `CARGO_TARGET_TMPDIR` is integration-only"
+    ));
 }

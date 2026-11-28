@@ -34,7 +34,8 @@ use crate::common;
 
 use std::path::{Path, PathBuf};
 
-use batten::rules::{self, Rule};
+use batten::config_model::Rule;
+use batten::rules;
 
 /// `pin add unsafe` as `batten.toml` declares it.
 fn no_source_built_tool() -> Rule {
@@ -96,7 +97,7 @@ fn findings(root: &Path) -> Vec<String> {
 
 /// A scratch tree holding a `[tools]` table with `line` appended.
 fn tools_with(name: &str, line: &str) -> PathBuf {
-    let root = common::scratch(&format!("prebuilt-lint-{name}"));
+    let root = common::scratch_repo(&format!("prebuilt-lint-{name}"));
     common::write(
         &root,
         "mise.toml",

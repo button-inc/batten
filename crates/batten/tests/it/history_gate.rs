@@ -24,9 +24,13 @@ const ROW_LINE: &str = "id = \"tool select other\"";
 /// modules: without the modules the config does not load, and the landed floor
 /// admits any edit of the authority — which would pass every case vacuously.
 fn fixture(name: &str) -> PathBuf {
-    let staged = Fixture::new(name).config(&without_session_handlers(include_str!(
-        "../../../../batten.toml"
-    )));
+    // Plus the retired substitution row (CLOUD-2698), the row every case edits.
+    let config = format!(
+        "{}{}",
+        without_session_handlers(&common::committed_config()),
+        common::SUBSTITUTION_ROW
+    );
+    let staged = Fixture::new(name).config(&config);
     let modules = staged.path().join("policy");
     std::fs::create_dir_all(&modules).expect("the fixture's policy directory is creatable");
     let committed = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../policy");
@@ -48,7 +52,7 @@ fn fixture(name: &str) -> PathBuf {
 fn edit(repo: &Path, session: &str, old: &str, new: &str) -> String {
     let payload = serde_json::json!({
         "hook_event_name": "PreToolUse",
-        "session_id": session,
+        "session_id": common::session_id(session),
         "tool_name": "Edit",
         "tool_input": {
             "file_path": repo.join("batten.toml").display().to_string(),
@@ -75,7 +79,7 @@ fn edit_row(repo: &Path, session: &str) -> String {
 fn read_history(repo: &Path, session: &str) {
     let payload = serde_json::json!({
         "hook_event_name": "PostToolUse",
-        "session_id": session,
+        "session_id": common::session_id(session),
         "tool_name": "Bash",
         "tool_input": { "command": format!("batten policy explain '{ROW}' --history") },
         "tool_response": { "stdout": "the history", "stderr": "", "interrupted": false },
@@ -167,6 +171,35 @@ fn an_edit_to_a_rule_row_without_its_history_read_is_refused() {
     assert!(!refused(&line), "the same edit after the read: {line}");
 }
 
+/// Fails by: a `PostToolUse` that carries no result minting the read, as if
+/// the call had answered (CLOUD-2789).
+#[test]
+fn a_history_read_with_no_result_does_not_admit() {
+    let repo = fixture("history-no-result");
+    let payload = serde_json::json!({
+        "hook_event_name": "PostToolUse",
+        "session_id": common::session_id("s1"),
+        "tool_name": "Bash",
+        "tool_input": { "command": format!("batten policy explain '{ROW}' --history") },
+    });
+    let _ = run_with_stdin(
+        &repo,
+        &["adjudicate", "--harness", "claude-code"],
+        &payload.to_string(),
+    );
+    let line = edit_row(&repo, "s1");
+    assert!(
+        refused(&line),
+        "a read that never answered admits nothing: {line}"
+    );
+    read_history(&repo, "s1");
+    let line = edit_row(&repo, "s1");
+    assert!(
+        !refused(&line),
+        "the same read with its result admits: {line}"
+    );
+}
+
 #[test]
 fn another_contexts_receipt_does_not_admit() {
     let repo = fixture("history-other-context");
@@ -201,7 +234,7 @@ fn a_compaction_drops_the_history_receipt() {
     assert!(!refused(&edit_row(&repo, "s1")), "read, so admitted");
     let start = serde_json::json!({
         "hook_event_name": "SessionStart",
-        "session_id": "s1",
+        "session_id": common::session_id("s1"),
         "source": "compact",
     });
     let _ = run_with_stdin(
@@ -215,7 +248,7 @@ fn a_compaction_drops_the_history_receipt() {
     read_history(&repo, "s1");
     let resume = serde_json::json!({
         "hook_event_name": "SessionStart",
-        "session_id": "s1",
+        "session_id": common::session_id("s1"),
         "source": "resume",
     });
     let _ = run_with_stdin(

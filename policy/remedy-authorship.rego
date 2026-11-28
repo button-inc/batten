@@ -55,7 +55,7 @@
 #
 #MUTANT remedy-prefix-unchecked|s@not startswith(emitted(line), "::error::")@false@|an_unprefixed_remedy_line_in_a_stderr_block_is_a_finding
 #MUTANT remedy-judges-the-source-line|s@text := trim_left(trim_space(substring(trimmed, count(verb), -1)), "\\"'")@text := trimmed@|the_same_block_fully_prefixed_is_clean_and_was_evaluated
-#MUTANT remedy-block-unbounded|s@stderr_block\[path\]\[i\]@lines_of[path][i]@|a_block_that_does_not_redirect_to_stderr_is_not_judged
+#MUTANT remedy-block-unbounded|s@^\t\tcloses_to_stderr(path, j, i)$@\t\ttrue@|a_block_that_does_not_redirect_to_stderr_is_not_judged
 #MUTANT bypass-author-unchecked|s@not implements_bypass(name, var)@false@|a_caller_naming_a_bypass_it_does_not_implement_is_a_finding
 #MUTANT-OWNER CLOUD-989|the mutation applies and alters reachable code, and the case it names cannot observe the change — a downstream guard or a second arm masks it. That is a defect in the DECLARATION, which `SURVIVED` mis-attributes to the suite; CLOUD-989's fork is what reports it correctly, and these are the live instances its own acceptance says it lacked
 #MUTANT bypass-implementer-ignored|s@some l in task_program_lines(name)@some l in []@|the_task_whose_program_reads_the_bypass_may_name_it
@@ -118,13 +118,21 @@ lines_of[path] := ls if {
 # inside a block when some `{` opener above it has not yet met its `} >&2`
 # closer. Same shape as `run-shape.rego`'s heredoc scan, and chosen for the same
 # reason — it keeps this a comprehension.
-stderr_block[path][i] := line if {
+#
+# ONE KEY PER PATH, THE LINES AS ITS OBJECT (#1276): the bytecode compiler
+# refuses a partial object with nested keys (`stderr_block[path][i]`), and this
+# is the same object per path — a path with no block line stays absent, as it
+# was.
+stderr_block[path] := block if {
 	some path, ls in lines_of
 	endswith(path, ".sh")
-	some i, line in ls
-	some j in openers_for[path]
-	j < i
-	closes_to_stderr(path, j, i)
+	block := {i: line |
+		some i, line in ls
+		some j in openers_for[path]
+		j < i
+		closes_to_stderr(path, j, i)
+	}
+	count(block) > 0
 }
 
 # Every bare `{` on its own line: a brace group opener. A `{` in any other
@@ -180,7 +188,7 @@ emitted(line) := text if {
 # carries no prose this gate can judge — the prose is wherever the variable was
 # assigned, which is not this line's fact — and a bare `echo` is a blank line.
 emits_a_literal(line) if {
-	text := emitted(line)
+	text = emitted(line)
 	text != ""
 	not startswith(text, "$")
 }
@@ -201,7 +209,7 @@ violation contains {
 
 task_bodies[name] := body if {
 	some name, task in input.tree.documents["mise.toml"].tasks
-	body := task_run(task)
+	body = task_run(task)
 }
 
 # A task's body is `run`, which is a string or a list of strings.

@@ -99,9 +99,9 @@ settings_field(key) := input.tree.documents[".claude/settings.json"][key]
 # answered. Where the file itself is absent the set is empty too, and the
 # `missing` clause below is what keeps an unreadable file from reading as clean.
 permission_list(arm) := {rule |
-	permissions := settings_field("permissions")
+	permissions = settings_field("permissions")
 	is_object(permissions)
-	list := permissions[arm]
+	list = permissions[arm]
 	is_array(list)
 	some rule in list
 	is_string(rule)
@@ -118,7 +118,7 @@ server_of(rule) := parts[1] if {
 # The servers `enabledMcpjsonServers` turns on. A value that is not a list —
 # `true` is one the host accepts — enumerates nothing, so it has nothing to say.
 enabled := {server |
-	list := settings_field("enabledMcpjsonServers")
+	list = settings_field("enabledMcpjsonServers")
 	is_array(list)
 	some server in list
 	is_string(server)
@@ -127,14 +127,14 @@ enabled := {server |
 
 granted_servers := {server |
 	some rule in permission_list("allow")
-	server := server_of(rule)
+	server = server_of(rule)
 }
 
 # The servers this repository DECLARES: the enabled ones, plus every key of its
 # own project file. A deny on a server the repository names itself is spelled
 # with a name the repository controls, so the host cannot rename it away.
 project_servers := {key |
-	servers := input.tree.documents[project_path].mcpServers
+	servers = input.tree.documents[project_path].mcpServers
 	is_object(servers)
 	some key, _ in servers
 }
@@ -148,7 +148,7 @@ covered := {tool |
 	some doc in authorities
 	some row in doc.rule
 	row.scope == "mediated_call"
-	tool := row.tool
+	tool = row.tool
 	is_string(tool)
 }
 
@@ -194,8 +194,8 @@ violation contains {
 	some rule in permission_list("deny")
 	parts := split(rule, "__")
 	startswith(rule, "mcp__")
-	server := parts[1]
-	suffix := parts[count(parts) - 1]
+	server = parts[1]
+	suffix = parts[count(parts) - 1]
 	not contains(concat("", [server, suffix]), "*")
 	not declared[server]
 	not covered[suffix]

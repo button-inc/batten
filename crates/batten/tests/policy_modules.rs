@@ -19,6 +19,7 @@
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+use batten::rules::RuleExt as _;
 // THE ONE TARGET THAT STAYS SEPARATE (CLOUD-1210). `evaluator-io-check`
 // probes this file with `cargo test --test policy_modules`, and that task is
 // a governed `mise-tasks/*.sh`: `shell retire partial` gives it exactly two
@@ -34,9 +35,9 @@ mod common;
 use std::fs;
 use std::path::Path;
 
+use batten::config_model::Rule;
 use batten::facts::Look;
 use batten::policy::{self, Violation};
-use batten::rules::Rule;
 use batten::severity::RuleSeverity;
 
 /// A policy row registering `module`, built the way a real config builds one.
@@ -94,7 +95,7 @@ fn attributed(rule: &str, verdict: &str) -> Violation {
 /// naming a `Vec` at every one of this file's twenty load sites. A test binary
 /// is a short-lived process and the table is tens of entries.
 fn fixtures(root: &Path) -> policy::Vocabulary<'static> {
-    let table: &'static [batten::verdict::DeclaredVerdict] =
+    let table: &'static [batten::config_model::DeclaredVerdict] =
         Box::leak(common::verdicts_in(root).into_boxed_slice());
     policy::Vocabulary {
         patterns: &[],
@@ -946,7 +947,7 @@ fn a_predicate_severity_naming_an_unpublished_id_is_refused_at_load() {
     let path = module_file(&root, "two.rego", TWO_PREDICATES);
     let mut rule = row("policy-two", &path);
     rule.predicate_severity = Some(
-        [("no-such-predicate".to_owned(), RuleSeverity::Warn)]
+        [("no-such-predicate".to_owned(), RuleSeverity::Advise)]
             .into_iter()
             .collect(),
     );
@@ -976,7 +977,7 @@ fn severity_resolves_per_predicate_and_falls_back_to_the_row() {
     let path = module_file(&root, "two.rego", TWO_PREDICATES);
     let mut rule = row("policy-two", &path);
     rule.predicate_severity = Some(
-        [("no-stray-artifact".to_owned(), RuleSeverity::Warn)]
+        [("no-stray-artifact".to_owned(), RuleSeverity::Advise)]
             .into_iter()
             .collect(),
     );
@@ -991,7 +992,7 @@ fn severity_resolves_per_predicate_and_falls_back_to_the_row() {
 
     assert_eq!(
         rule.severity_for(Some("no-stray-artifact")),
-        RuleSeverity::Warn,
+        RuleSeverity::Advise,
         "the predicate the table names carries its own severity"
     );
     assert_eq!(

@@ -5,16 +5,20 @@ One line per module: WHERE a responsibility lives. The WHY is each module's own
 `policy/module-map.rego` (`memory cover partial`) refuses a crate module with no
 row here, so a new module lands with its line.
 
+- `config_check.rs` — each config section's rules, below the loader (CLOUD-2789): one inline module per feature (`config_check::mcp`, `config_check::rules`, ...) holding the validator and the helpers and inherent methods it calls, so `config` names this module and no feature; CLOUD-2794 folds it into each section's `serde(try_from)` parse.
+- `digest.rs` (crate `batten-facts`) — lowercase hex and the SHA-256 of a byte string in it (CLOUD-2789): the one spelling a receipt key, a provisioned artifact's checksum, a cache stamp and a git object id share, where five modules once carried their own loop.
 - `main.rs` — binary boundary: parse → `lib::run` → exit status.
 - `install.rs` — whether a published release is actually installable (CLOUD-1753), retired out of `mise-tasks/install-check.sh`.
 - `lib.rs` — library entry point, declares the module tree.
-- `suites.rs` — the per-suite cost corpus (CLOUD-352), derived from the report the bats runner already wrote.
+- `preset_catalog.rs` — the vendored preset manifests as data (CLOUD-2789), with the vocabulary they are written in (`RuleScope`, `RouteKind`, `Applicability`, `VendoredVerdict`, the `run`/`read`/`admit` route constructors): a leaf below the config model, which reads it for the presets a row may enable.
+- `suites.rs` (crate `batten-base`) — the per-suite cost corpus (CLOUD-352), derived from the report the bats runner already wrote.
 - `surface.rs` — house-style §11, CLOUD-27: the command tree declared once, as data (`ROOT` + `SURFACE`) — path, summary, effect, and flags (with each flag's env equivalent, so §8 precedence is inspectable data).
-- `board.rs` — the board's COLUMN VOCABULARY, resolved from the `[board]` table rather than held as engine constants (CLOUD-1623, non-negotiable rule 1).
+- `board.rs` (crate `batten-base`) — the board's COLUMN VOCABULARY, resolved from the `[board]` table rather than held as engine constants (CLOUD-1623, non-negotiable rule 1).
 - `bot.rs` — the bot lane, retired off `mise-tasks/bot-issue.sh` (CLOUD-1295).
-- `carry.rs` — whether a licence-carry branch's diff is DERIVABLE, and the receipt that records it (CLOUD-1295).
+- `carry.rs` (crate `batten-base`) — whether a licence-carry branch's diff is DERIVABLE, and the receipt that records it (CLOUD-1295).
 - `claim.rs` — whether an issue is pullable, and the receipt that records the pull (CLOUD-272, CLOUD-431; ported off `mise-tasks/claim-check.sh` by CLOUD-1121).
 - `cli.rs` — the other half of the surface: turns parsed `ArgMatches` into the typed `Cli`/`Command` enums `lib::run` dispatches on, so dispatch stays an exhaustive `match` rather than a lookup on strings.
+- `clock.rs` (crate `batten-base`) — the boundary's wall clock in epoch seconds: a leaf, so a module that only needs the time does not reach up into the crate root for it (CLOUD-2789).
 - `output.rs` — house-style §3/§4 (CLOUD-42): the `Verbosity` ladder (`silent…trace`, a derived `Ord`, so `admits` is a comparison), and the §4 attended/unattended resolution.
 - `outputs.rs` — `exec` output predicates (CLOUD-117): declared literals that, found in a wrapped command's captured stream, promote a lying exit `0` to a failure.
 - `admission.rs` — issued admissions (CLOUD-1051): an override stops being knowledge and becomes a record.
@@ -22,137 +26,170 @@ row here, so a new module lands with its line.
 - `advisory.rs` — the advisory CHANNEL and what it may cost (CLOUD-896).
 - `action.rs` — the `[[hook.action]]` plugin surface (CLOUD-91), house-style §9's "repo-specific cleanup or keepalive is reconstructed here, not hardcoded".
 - `hk.rs` — the adopted gate runner's surface contract, as a committed projection (CLOUD-947).
-- `outcome.rs` — the post-tool outcome, normalized (CLOUD-945).
+- `outcome.rs` (crate `batten-base`) — the post-tool outcome, normalized (CLOUD-945).
 - `handler.rs` — the `[[hook.handler]]` dispatch surface (CLOUD-898), the door that lets `batten hook` be the ONLY registration on every surface while a repository still runs whatever it likes behind it.
 - `baseline.rs` — the adoption path for an already-dirty repository (CLOUD-67), surfaced as `baseline [--prune]`: the persisted set of finding identities that already existed, so `check` stops failing on them and still fails on anything new.
+- `build_identity.rs` — the build's identity (CLOUD-2903): a release build reports its version, any other a dev pre-release; `build.rs` stamps `BATTEN_BUILD_VERSION` from it.
 - `budget.rs` — declared file-set budgets (CLOUD-50), surfaced as `policy budget` and enforced on `check`; a set total in tokens, and a per-file byte ceiling for files read on demand (CLOUD-1934).
-- `arm.rs` — the declared-arm harness (CLOUD-1714): run N declared things, reduce each to a named `Observable`, hand back one `Outcome` per arm.
+- `arm.rs` (crate `batten-base`) — the declared-arm harness (CLOUD-1714): run N declared things, reduce each to a named `Observable`, hand back one `Outcome` per arm.
 - `attribution.rs` — what produced commits may carry about the tooling that made them (CLOUD-274), the mechanism for the attribution decision record (CLOUD-268).
 - `commit.rs` — the commit-subject convention (CLOUD-701): one configured regex over `%s`, judged across a range or over one pending message file.
-- `checks_green.rs` — is this SHA green over the required check set (CLOUD-1143, ported off `mise-tasks/checks-green.sh`).
-- `pr_watch.rs` — the poll around that verdict (CLOUD-1143, ported off `mise-tasks/ci-wait.sh`; renamed onto §2's declared `pr watch` by CLOUD-1214).
+- `checks_green.rs` (crate `batten-base`) — is this SHA green over the required check set (CLOUD-1143, ported off `mise-tasks/checks-green.sh`).
+- `pr_watch.rs` (crate `batten-core`) — the poll around that verdict (CLOUD-1143, ported off `mise-tasks/ci-wait.sh`; renamed onto §2's declared `pr watch` by CLOUD-1214).
 - `speculation.rs` — betting on the base that is about to exist (CLOUD-748, CLOUD-862, CLOUD-369).
-- `main_watch.rs` — the STALENESS half of a lap's wait: has the trunk moved past the base this branch was replayed onto (CLOUD-390, ported off `mise-tasks/main-watch.sh`)?
-- `fast_forward.rs` — asking the bot to land a head, and reading the answer keyed to THAT request (CLOUD-1338).
-- `ci.rs` — the merge contract derived from the host ruleset (CLOUD-54).
+- `main_watch.rs` (crate `batten-core`) — the STALENESS half of a lap's wait: has the trunk moved past the base this branch was replayed onto (CLOUD-390, ported off `mise-tasks/main-watch.sh`)?
+- `fast_forward.rs` (crate `batten-base`) — asking the bot to land a head, and reading the answer keyed to THAT request (CLOUD-1338).
+- `ci.rs` (crate `batten-base`) — the merge contract derived from the host ruleset (CLOUD-54).
 - `capture.rs` — captured child output, content-addressed in out-of-tree state (CLOUD-162): the shared substrate CLOUD-117's output predicate and CLOUD-121's handles both read, built once so neither grows its own copy.
 - `exec.rs` — `batten exec -- <cmd>` (CLOUD-285): the transparent passthrough two Phase 2 issues were waiting on.
-- `effect.rs` — the house-style §5 effect _vocabulary_ (`read`/`write`/`destructive`/`unclassified`/`ask`) and its stable tokens.
+- `effect.rs` (crate `batten-base`) — the house-style §5 effect _vocabulary_ (`read`/`write`/`destructive`/`unclassified`/`ask`) and its stable tokens.
 - `spec.rs` — house-style §11: introspects the live `clap::Command` tree plus the `surface.rs` effect rows into byte-stable JSON (`batten spec`), and derives the read-only allowlist from the same walk.
 - `render.rs` — the two _human_ renderings of the same tree (CLOUD-69): `man` builds one roff page per command via `clap_mangen`, `markdown` walks `spec.rs`'s `CommandSpec` into the whole-surface document.
-- `exit.rs` — the `ExitCode` contract (stable numeric values); branch on named variants, never integer literals.
-- `facts.rs` — the fact model (CLOUD-757): what a fact costs and where it may be resolved, as two independent axes rather than one ladder.
+- `exit.rs` (crate `batten-base`) — the `ExitCode` contract (stable numeric values); branch on named variants, never integer literals.
+- `facts.rs` (crate `batten-facts`) — the fact model (CLOUD-757): what a fact costs and where it may be resolved, as two independent axes rather than one ladder.
 - `doctor.rs` — `batten doctor` (CLOUD-66), house-style §12's post-install self-check: can Batten do its job in this repository?
-- `environment.rs` — what KIND of machine this is (CLOUD-1383), read from the environment because it is the one fact a committed file cannot hold.
+- `environment.rs` (crate `batten-base`) — what KIND of machine this is (CLOUD-1383), read from the environment because it is the one fact a committed file cannot hold.
 - `epoch.rs` — `config_epoch` (CLOUD-32): a SHA-256 over the governing config surface, so two records carrying the same epoch were produced under provably the same rules.
-- `error.rs` — two typed carriers the binary boundary downcasts on: `UsageError` → `ExitCode::Usage` (1), and `Denial` → `ExitCode::Violation` (2).
-- `codemod.rs` — lossless Rust rewrites through `ra_ap_syntax`'s CST, the substrate a Rust `fix` writes through (CLOUD-1580): output differs from input only at the edited tokens, parser errors are could-not-look and never a silent no-op, and the edition is a required input with no default. A leaf.
+- `error.rs` (crate `batten-facts`) — two typed carriers the binary boundary downcasts on: `UsageError` → `ExitCode::Usage` (1), and `Denial` → `ExitCode::Violation` (2). `batten`'s own `error.rs` re-exports it and keeps the test-only `Denial` alias (CLOUD-2789).
+- `codemod.rs` (crate `batten-base`) — lossless Rust rewrites through `ra_ap_syntax`'s CST, the substrate a Rust `fix` writes through (CLOUD-1580): output differs from input only at the edited tokens, parser errors are could-not-look and never a silent no-op, and the edition is a required input with no default. A leaf.
+- `fix.rs` (crate `batten-codemods`) — applies rustc's own `MachineApplicable` suggestions through `rustfix`, deciding each unused import across TWO builds (CLOUD-2803): unused only in the non-test build is gated `#[cfg(test)]`, unused in the test build is deleted, and a partial group removal used only by tests is counted and left, never guessed.
 - `config.rs` — loads/validates one `batten.toml` (typed, no unknown keys, required `version`).
-- `config_edit.rs` — format-preserving edits to a committed config file, the substrate a rule's `fix` writes through (CLOUD-1575): one backend per `Format` (TOML via `toml_edit`), output differs from input only at the edited key, and it reaches `durable` for the crash-safe write.
+- `config_model.rs` — the config MODEL: `Config`, its sections and the file constants; `config` keeps the load, cache and validators and re-exports every name here, so a module reading only the model does not depend on the load (CLOUD-2789).
+- `config_edit.rs` (crate `batten-base`) — format-preserving edits to a committed config file, the substrate a rule's `fix` writes through (CLOUD-1575): one backend per `Format` (TOML via `toml_edit`), output differs from input only at the edited key, and it reaches `durable` for the crash-safe write.
 - `contract.rs` — the contract-drift predicate (CLOUD-461, CLOUD-525): hash the `[contract] tracked` surface, compare against this session's snapshot, and report the change-set once on the advisory channel.
 - `defects.rs` — the in-tree append-only defect ledger (CLOUD-52): `[defects]`, one `deny_unknown_fields` `Record`, `defects add [-n]` / `defects query`, and the built-in gate `check` runs.
-- `deferral.rs` — a deferred decision's REVERSAL CONDITION as data (CLOUD-759): `[[deferral]]` carries the owning `issue`, the `fact` the condition compares, the value it `reaches`, and a `reason` the gate does not compare.
-- `source.rs` — the ONE `syn::parse_file` in the crate (CLOUD-1008).
+- `deferral.rs` (crate `batten-base`) — a deferred decision's REVERSAL CONDITION as data (CLOUD-759): `[[deferral]]` carries the owning `issue`, the `fact` the condition compares, the value it `reaches`, and a `reason` the gate does not compare.
+- `source.rs` (crate `batten-facts`) — the ONE call site of each Rust parser (CLOUD-1008): `syn::parse_file` until its consumers move, and the lossless `rust_parse` / `rust_tree` on `ra_ap_syntax` (could-not-look on any parse error).
+- `units.rs` (crate `batten-facts`) — the `units` fact's Rust arm (CLOUD-1008 D4, as amended): one node per function, comment, doc comment and string, each `{kind, position, line, counts}` off the one lossless tree; numbers only, no judgement.
+- `rego_units.rs` — the `units` fact's Rego arm: function and `:=`-binding nodes read off the regorus AST, so a preset can refuse a partial helper bound with `:=` (CLOUD-2777).
 - `lint.rs` — `batten config lint` (CLOUD-87): the policy smells a _valid_ config can still carry.
-- `brief.rs` — the delegation-brief handoff schema (CLOUD-84), surfaced as `lint brief`.
-- `trust.rs` — house-style §8 config trust (CLOUD-31): `load_base` reads the committed authority from a git ref, so `--config-from` loads policy out of band of the change under review and a branch cannot lower its own bar.
+- `brief.rs` (crate `batten-base`) — the delegation-brief handoff schema (CLOUD-84), surfaced as `lint brief`.
+- `surface_table.rs` — the command surface as data (house style §11, CLOUD-2789): `SURFACE`, the declaration types and their constructors, the value parsers and the value enums they parse into; `surface` interprets it, and a config check that a row names a real command reads it without naming the command layer.
+- `trust.rs` — house-style §8 config trust (CLOUD-31): names what a working tree WEAKENED against its base-ref config (`weakenings`), so a branch cannot lower its own bar unseen.
+- `trust_pin.rs` — the base-ref read beneath `trust`: `load_base`/`load` read the committed authority from a git ref, so `--config-from` loads policy out of band of the change under review, and the last-known-good pin (CLOUD-720) answers an unreachable ref only where call and pinned config both permit. Below `resolve`, which loads layer 1 through it.
 - `resolve.rs` — house-style §8 precedence resolver: `flag > env > local file > repo config > default`, declared as data in `SETTINGS`, not hard-coded per field.
-- `git.rs` — the one repo-root primitive (CLOUD-34) and the one merged-ness answer (CLOUD-36).
-- `state.rs` — out-of-tree state dir (`<data-dir>/<app>/<segment>/`, CLOUD-23), via `etcetera`; the segment derived at runtime, never baked in (rule 1).
+- `git.rs` (crate `batten-core`) — the one repo-root primitive (CLOUD-34) and the one merged-ness answer (CLOUD-36).
+- `state.rs` (crate `batten-core`) — out-of-tree state dir (`<data-dir>/<app>/<segment>/`, CLOUD-23), via `etcetera`; the segment derived at runtime, never baked in (rule 1).
 - `stop.rs` — the end-of-turn gate (CLOUD-85), house-style §10's "the stop hook is the reconciliation point".
 - `store.rs` — _which_ store belongs to this checkout (CLOUD-164); it holds nothing, and CLOUD-78 extends the contents without touching identity.
 - `pipeline.rs` — the landing composition as a DECLARED list, with a compensation per step (CLOUD-1338, PR #848's review).
-- `rest.rs` — the forge's REST tier, IN PROCESS, over `fetch.rs` (CLOUD-1338).
-- `fetch.rs` — one HTTPS request, in process (CLOUD-745).
-- `graph.rs` — the bounded, call-by-need walk (CLOUD-1866).
-- `traversal.rs` — the `[[traversal]]` table (CLOUD-1866): a walk DECLARED in `batten.toml` rather than written into a module, because which field carries an edge is a consumer's vocabulary (rule 1) and declaring it bounds it.
-- `register.rs` — the `[[register]]` table (CLOUD-2005): a declared key set, the ONE GFM row grammar, and the `resolve()` join a `reference` rule runs; pure, so the caller acquires and this module only joins. `traversal.rs` (CLOUD-1868) also walks to a register terminal through it.
-- `propose.rs` — candidate resolutions for a conflicted replay, never applied (CLOUD-1956): a pure diff3 merge per path, returned only when every region matches a built-in shape (`comment-only`, `list-union`, `json-array-union`); `gitwrite` writes the candidate and `--resolve` stays the only act that applies one.
-- `gitwrite.rs` — the LOCAL git writes: a loose object into the odb, and a ref moved (CLOUD-1274's D2).
+- `rest.rs` (crate `batten-base`) — the forge's REST tier, IN PROCESS, over `fetch.rs` (CLOUD-1338).
+- `fetch.rs` (crate `batten-base`) — one HTTPS request, in process (CLOUD-745).
+- `graph.rs` (crate `batten-base`) — the bounded, call-by-need walk (CLOUD-1866).
+- `module_graph.rs` (crate `batten-base`) — the crate's own module graph read off the syntax tree, and its measures (largest component, propagation cost, impl and shim censuses), which `modules metrics` prints and `modules ratchet` holds to `modules.lock` until the `rust-quality` preset's Decoupling Level gate replaces it (CLOUD-2789, CLOUD-2821).
+- `crate_cut.rs` (crate `batten-base`) — `batten modules cut`: moves a closed set of crate-root modules into a new sibling package, respelling every path on the lossless token stream and leaving no re-export shim; an open set is refused site by site. The `rust` preset's remedy (CLOUD-2812).
+- `traversal.rs` (crate `batten-base`) — the `[[traversal]]` table (CLOUD-1866): a walk DECLARED in `batten.toml` rather than written into a module, because which field carries an edge is a consumer's vocabulary (rule 1) and declaring it bounds it.
+- `coupling.rs` (crate `batten-facts`) — the `coupling` fact: M-score, Decoupling Level, propagation cost and largest cycle over a file-level `uses` graph, head and base, which the `rust-quality` preset gates (M-score and cycle only; CLOUD-2821).
+- `register.rs` (crate `batten-facts`) — the `[[register]]` table (CLOUD-2005): a declared key set, the ONE GFM row grammar, and the `resolve()` join a `reference` rule runs; pure, so the caller acquires and this module only joins. `traversal.rs` (CLOUD-1868) also walks to a register terminal through it.
+- `propose.rs` (crate `batten-base`) — candidate resolutions for a conflicted replay, never applied (CLOUD-1956): a pure diff3 merge per path, returned only when every region matches a built-in shape (`comment-only`, `list-union`, `json-array-union`); `gitwrite` writes the candidate and `--resolve` stays the only act that applies one.
+- `forge_event.rs` — the forge's event vocabulary (CLOUD-2689): GitHub's 73 webhook events as a catalog, the webhook and Events API normalizers onto `Event::Forge`, and the content-derived dedupe key. Reads no source; `forge intake` is its door.
+- `githook.rs` — batten AS every git hook (CLOUD-2339): argv[0] dispatch through `[hook.git]`, the `BATTEN_GATE_PID` re-entry guard, and the table's load-time validation; `wiring::link_git_hooks` writes the links.
+- `gitwrite.rs` (crate `batten-core`) — the LOCAL git writes: a loose object into the odb, and a ref moved (CLOUD-1274's D2).
+- `interpreter.rs` (crate `batten-core`) — how an interpreter's argv names its program (CLOUD-2304): each family's option `Grammar`, `script_operand`, `inline_values`, `declares`/`family`, and `program_token`'s group stripping; moved down out of `hook` so the shell detector ported from #1278 reads it from below (plan item 4d).
+- `grammar.rs` (crate `batten-core`) — the finding line's grammar: `PROVENANCE`, the line `Severity`, `head` and `is_headed`, in a leaf so the modules below `refusal` spell a head without reaching up (CLOUD-2789).
 - `land.rs` — the landing lap's REPLAY half, and the first consumer of `gitwrite.rs` and `lease.rs` (CLOUD-1335).
-- `lease.rs` — the landing lease's compare-and-swap, spoken as git smart-HTTP over `fetch.rs` (CLOUD-1274).
-- `forge.rs` — the forge's verdict for a commit, read back from a record something else wrote (CLOUD-1154).
-- `tools.rs` — a third-party tool's verdict, read back from a record keyed to (tool, pinned version, input digest) (CLOUD-1171).
+- `receipts.rs` (under `land/`) — published receipts (CLOUD-1544): `publish` carries every proof a gate minted (verify, step, claim, spent override, the mutate state) to `refs/heads/batten/receipts/<branch>` in the private state repository, never origin, and `pull` brings them back into a fresh checkout. Its `Stores` are built at the crate root (`receipt_stores`), so it reaches neither `record` nor `step` for their store names (CLOUD-2789).
+- `lease.rs` (crate `batten-core`) — the landing lease's compare-and-swap, spoken as git smart-HTTP over `fetch.rs` (CLOUD-1274).
+- `low_water.rs` (crate `batten-base`) — the lowest free space any disk watcher in this process read since the window opened: a leaf, so `land` judges a disk-full gate without depending on `disk_watch` (CLOUD-2789).
+- `forge.rs` (crate `batten-base`) — the forge's verdict for a commit, read back from a record something else wrote (CLOUD-1154).
+- `tools.rs` (crate `batten-base`) — a third-party tool's verdict, read back from a record keyed to (tool, pinned version, input digest) (CLOUD-1171).
 - `captured.rs` — declared REDUCTIONS over responses the agent already captured (CLOUD-1188).
-- `task.rs` — CLOUD-425's READER: which long-running tasks are running right now, and what phase each is in, ported off `mise-tasks/alive.sh` (CLOUD-843).
+- `task.rs` (crate `batten-base`) — CLOUD-425's READER: which long-running tasks are running right now, and what phase each is in, ported off `mise-tasks/alive.sh` (CLOUD-843).
 - `taskset.rs` — the task runner's own argv, from a receipt minted OUTSIDE the mediated call (CLOUD-856).
 - `findings.rs` — what the store HOLDS (CLOUD-164), split from `store.rs`'s _which store_: identity is stable for a repo's life, contents change per scan.
 - `rules.rs` — the rule/check engine (CLOUD-12): glob-selected, `kind`-typed predicates over the repo.
-- `invocation.rs` — Rust call sites, parsed (CLOUD-914).
-- `uses.rs` — the `use` graph (CLOUD-762).
+- `invocation.rs` (crate `batten-facts`) — Rust call sites, parsed (CLOUD-914).
+- `uses.rs` (crate `batten-facts`) — the `use` graph (CLOUD-762).
 - `hook.rs` — the `hook` adjudicator (CLOUD-202): the normalized envelope, the wrapper-lookthrough command parser, the matcher, and the per-host shims (CLOUD-44).
 - `recorder.rs` — a post-tool record whose SHAPE is the consumer's and whose columns may carry a value another gate decided (CLOUD-1051).
 - `redirect.rs` — the per-path-class redirect table (CLOUD-280): what to run instead, keyed by what is protected rather than by the verb reaching for it.
-- `ripcord.rs` — the break-glass a locked-out container can reach (CLOUD-1847).
+- `ripcord.rs` (crate `batten-base`) — the break-glass a locked-out container can reach (CLOUD-1847).
 - `review.rs` — the vendored-prompt dispatch tier (CLOUD-472): the SECOND occupant of `Cost::Effect` and the third adopter of `secrets.rs`' delegated-analyser shape, after `symbols.rs`.
 - `repair.rs` — running a row's declared `fix` at the mediated boundary (CLOUD-1639), for rows whose raised class declares `applicability = retry|silent`.
-- `remedy.rs` — whether a rule row declares its remedy (CLOUD-1576): `malformed` (both keys, or a blank reason) is a load error, and `classified` checks the `class N (<substrate>): <why>` grammar that `config lint` holds every `no_fix_reason` to. A leaf.
+- `remedy.rs` (crate `batten-base`) — whether a rule row declares its remedy (CLOUD-1576): `malformed` (both keys, or a blank reason) is a load error, and `classified` checks the `class N (<substrate>): <why>` grammar that `config lint` holds every `no_fix_reason` to. A leaf.
 - `refusal.rs` — the refusal contract (CLOUD-122): ONE `Refusal` value — `{rule, reason, fix}` — constructed at every deny site and projected onto whatever channel a host reads.
 - `hookcost.rs` — what this repository's own hooks cost the session that runs them (CLOUD-417).
-- `doc.rs` — a class's interaction doc (CLOUD-2143): the `why`/`do`/`dont` sections a first sighting carries beside the gloss, their load-time budget (640 bytes, section limits, no issue keys), and the vendored docs keyed by class id.
+- `doc.rs` (crate `batten-base`) — a class's interaction doc (CLOUD-2143): the `why`/`do`/`dont` sections a first sighting carries beside the gloss, their load-time budget (640 bytes, section limits, no issue keys), and the vendored docs keyed by class id.
 - `history.rs` — a config row's history and the gate on changing it (CLOUD-2144): the row/owner map over the committed authority, the owned text digested at HEAD, the per-context `history-read` receipts, and what `policy explain --history` prints.
 - `markers.rs` — counted suppression markers (CLOUD-36): how many times policy was waved through, and where.
-- `mcp.rs` — Batten as an MCP client (CLOUD-1260): the `[mcp]` table, wiring resolution over `[[mcp.source]]` rows, the JSON-RPC session, and the `[[mcp.result]]` reductions.
-- `minted.rs` — one declared FIELD of a receipt `mint.rs` already wrote, read on the TREE surface and bounded by age (CLOUD-1310).
+- `mcp.rs` — Batten as an MCP client (CLOUD-1260): the `[mcp]` table, wiring resolution over `[[mcp.source]]` rows, the JSON-RPC session, and the verb's whole-response report (CLOUD-2956).
+- `minted.rs` (crate `batten-facts`) — one declared FIELD of a receipt `mint.rs` already wrote, read on the TREE surface and bounded by age (CLOUD-1310).
 - `mint.rs` — receipts minted from the tool result that earned them (CLOUD-1024): the `[[mint]]` table, the closed six-form body template, and the dotted path selector.
 - `mutate.rs` — mutation coverage over the declared gate set (CLOUD-418), retired out of `mise-tasks/mutant.sh` and `mise-tasks/mutant-census.sh` under CLOUD-1267.
-- `token_enum.rs` — `token_enum!`, one declaration per tokened enum: the variants, `ALL` and the token from one `Variant => "token"` list, with duplicate tokens refused at compile time (CLOUD-2442).
-- `verbs.rs` — the mutating-verb table (CLOUD-36): which programs change the world, config-driven (rule 1) and typed by `effect.rs`'s one §5 vocabulary.
+- `cover.rs` (under `mutate/`) — what the schema sweep shares for running cases under nextest (CLOUD-2253): exact-case filtersets, target flags, a wrapped case's binary and name, the reach-recorder nextest config, the pristine source snapshot. The LLVM coverage map and the `$CARGO` stand-in it fed are retired (#1276).
+- `resume.rs` (under `mutate/`) — a step's `cargo nextest run` kept case by case (CLOUD-2772): on a miss `step run` names a generated config whose run-wrapper is this binary, which writes each case's pass the moment it passes, keyed on the build's inputs (every Rust file by content id, the manifests, lockfile, build scripts, toolchain and build flags), the tree's non-Rust inputs, the case's test target and its argv — never the binary's bytes, which a relink moves — and reports a held key as a pass without running; `test replay`'s union run goes under the same wrapper (`wrap`). A step runs under it when its `[[step]]` row declares `journal = "nextest"` (CLOUD-2785), never by sniffing the command's argv.
+- `schema.rs` (under `mutate/`) — mutant schemata (CLOUD-2253), what `batten mutate cargo` judges Rust by: renders every listed cargo-mutants mutant into one build, each behind `crate::__batten_mutant(N)` (`BATTEN_MUTANT`), records per-case reach in one suite run (`BATTEN_MUTANT_RECORD`), and judges each mutant by its reaching cases, journaling every verdict as decided (crash-only, reused under a content key). Every unit is durable as it finishes: each build round's unviable, handed-back and unprobed findings; each case's reach record, sealed by its dependency digest (a failed baseline seals the cases that passed; a killed run's records are sealed by the next sweep against the snapshot they ran over). What it cannot switch goes back to cargo-mutants by name.
+- `shown.rs` (under `mutate/`) — the copy's sources read as the checkout's while its cases run (CLOUD-2911): `Shown::originals` puts each rendered file's original text back for one suite run (reach, control, judging) at the rendered file's own modification time, so cargo keeps the built binaries, and its drop writes each rendering back at that time. A case reading the tree (a census, a dirty-tree step key) otherwise read the rendering and went red in the baseline alone.
+- `stable.rs` (under `mutate/`) — a case's reach is a function of its inputs (CLOUD-2904): a case recorded twice over identical inputs (every function it ran still there by digest, its dependency digest unchanged) must execute the same functions both times, or the sweep refuses `reach unstable` naming it. Witnesses are the records a carry would trust but clears anyway (all of them under CI); `MUTANT_REACH_TWICE` records the whole suite twice.
+- `trace.rs` (under `mutate/`) — the ONE syscall tracer (CLOUD-2784): `strace` on Linux (`tracer`, `trace_args`, the whole-trace wait `await_trace`) and `touched`, every path a whole trace shows, shared by the reach recorder and `step run`'s trace lint, which each keep their own rule over it.
+- `mutation_markers.rs` — the scanner `build.rs` includes to refuse a hand-rolled Rust mutation marker, or a cargo-mutants argv built outside its one site; compiled into the library only for its own tests.
+- `token_enum.rs` (crate `batten-facts`) — `token_enum!`, one declaration per tokened enum: the variants, `ALL` and the token from one `Variant => "token"` list, with duplicate tokens refused at compile time (CLOUD-2442).
+- `verbs.rs` (crate `batten-base`) — the mutating-verb table (CLOUD-36): which programs change the world, config-driven (rule 1) and typed by `effect.rs`'s one §5 vocabulary.
 - `verdict.rs` — the refusal vocabulary (CLOUD-1050): the `[[verdict]]` table, its `Subject` pointers and its closed `Route` list.
 - `waiver.rs` — the designed escape hatch (CLOUD-208): a `[[waiver]]` names a rule, a required reason and a required expiry, and `apply` filters findings in the one funnel both `check` and `enforce` pass through.
 - `wiring.rs` — the one WRITE path over a host's hook registrations (CLOUD-893), surfaced as `wiring reclaim`: `destructive`, `-y` required, never the committed file.
 - `worktree.rs` — at-risk work detection (CLOUD-51), surfaced as `worktree status`.
-- `patch.rs` — the in-process patch identity (CLOUD-739), and `git::landing`'s sole supplier of one.
+- `patch.rs` (crate `batten-base`) — the in-process patch identity (CLOUD-739), and `git::landing`'s sole supplier of one.
+- `item_index.rs` — which item a path names, across the tree's crates (CLOUD-2790): crate roots read from the tree's own `Cargo.toml` files, each path from `crate::` or a crate's name resolved through `use`/`pub use` to the file and name defining it; `moved_items` pairs an item that moved only when its name is unique on both sides AND its declaration is unchanged; `canonical` rewrites a body's paths to those sites so `test replay` judges a test by what it names, not how it spells it.
 - `journal.rs` — the store's durable plumbing (CLOUD-78): append shards, a merged log with `(generation, seqno)` cursors, and the store-format version.
+- `lock_wait.rs` (crate `batten-facts`) — the workspace's one way to wait for a file lock (CLOUD-2789): `try_lock`, then a wait on the holder's release (an inotify close of the lock file) or a raised `Stop`, refusing a lock this thread already holds; `clippy.toml` bans every blocking lock in its favour.
 - `decision.rs` — the guard-decision telemetry record (CLOUD-133): what a gate or hook decision emits, and its append-only home in out-of-tree state.
 - `drain.rs` — the advisory drain (CLOUD-79): the first thing that reads the store back TO the agent.
 - `emission.rs` — the emission policy (CLOUD-165): hysteresis and a re-emit cap on the notification channel, and NOTHING on the state plane.
 - `judge.rs` — the judge's payload-privacy boundary (CLOUD-135): what may be sent to a model.
-- `dispatch.rs` — parallel-session dispatch cleared by receipt (CLOUD-1978): a passing `batten lint brief` and the owner's `Approve dispatch` answer each write a digest-keyed receipt, and `cleared` answers the `dispatch-cleared` fact the `claude-code-cloud` preset grants `create_session`/`send_message` on. Digests and a boolean only, never a byte of a prompt.
+- `dispatch.rs` (crate `batten-facts`) — parallel-session dispatch cleared by receipt (CLOUD-1978): a passing `batten lint brief` and the owner's `Approve dispatch` answer each write a digest-keyed receipt, and `cleared` answers the `dispatch-cleared` fact the `claude-code-cloud` preset grants `create_session`/`send_message` on. Digests and a boolean only, never a byte of a prompt.
 - `design.rs` — design-evidence integrity gates (CLOUD-53): is the RECORD behind a decision sound, whatever the decision was?
 - `transcript.rs` — completed-session transcripts as an optional `check` input (CLOUD-95): a serde parse from a host-provided path to a typed event stream.
 - `selfwrite.rs` — unprompted agent self-persistence (CLOUD-267): a memory write in a turn no genuine user message opened, over `transcript.rs`'s stream.
 - `bypass.rs` — guardrail bypass (CLOUD-98): a refused operation retried with enforcement off, the THIRD detector over `transcript.rs`'s stream.
 - `completion.rs` — declared done with work not landed (CLOUD-97), the second detector over `transcript.rs`'s stream and the FIRST occupant of the `FindingKind::Sequence` seam.
 - `session.rs` — session lineage and the durable resume point (CLOUD-83): who is reading, and how far have they got.
+- `shell.rs` (crate `batten-core`) — the shell parse every hook judges a command by: segments, words with quotes resolved, here-doc stdin, through `rable`; a leaf below `hook` (CLOUD-2789).
 - `init.rs` — `batten init` (CLOUD-206), house style §12's scaffolding half: the starter `batten.toml` embedded as `src/starter.toml` plus the three-valued `apply`.
-- `identity.rs` — finding-identity fingerprints (CLOUD-123): SHA-256 over a normalized, kind-discriminated tuple — never raw `file:line` — so line insertion doesn't re-mint a finding.
-- `scratch.rs` — out-of-tree TEST scratch, owned in one place and reaped by liveness (CLOUD-1148).
-- `testing.rs` — the TEST harness's spawn decisions (state pins, fall-through to the checkout), swept by `engine-testing` (CLOUD-2059).
-- `secret.rs` — the credential type, and the PUREST LEAF in the layer table: it reaches nothing in this crate, not even `error`.
+- `identity.rs` (crate `batten-facts`) — finding-identity fingerprints (CLOUD-123): SHA-256 over a normalized, kind-discriminated tuple — never raw `file:line` — so line insertion doesn't re-mint a finding.
+- `scratch.rs` (crate `batten-facts`) — out-of-tree TEST scratch, owned in one place and reaped by liveness (CLOUD-1148).
+- `fixture_root.rs` (crate `batten`) — each lib TEST case's own empty root outside the checkout, so a case never answers about the repository the test process stands in (CLOUD-2904).
+- `testing.rs` (crate `batten-core`) — the TEST harness's spawn decisions (state pins, fall-through to the checkout), swept by `engine-testing` (CLOUD-2059).
+- `secret.rs` (crate `batten-base`) — the credential type, and the PUREST LEAF in the layer table: it reaches nothing in this crate, not even `error`.
 - `secrets.rs` — secret-class scanning: key custody and the scanner adapter (CLOUD-59).
-- `sink.rs` — production, the boundary half (CLOUD-851): a `[[rule]]` may declare what it PRODUCES, and this is what writes it.
+- `selector.rs` (crate `batten-core`) — one compiled glob over repo-relative paths, the selector every rule and the tree walk match through: a leaf (CLOUD-2789).
+- `path_set.rs` (crate `batten-core`) — an ordered include/exclude list of selectors where an exclude beats an include, the set `scope`, `protected` and a rule's `glob` resolve to; moved below `rules` so `mutate` can build one without reaching the module that adjudicates (CLOUD-2789).
+- `shell_logic.rs` (crate `batten-core`) — the one shell detector on the `rable` AST: whether a file, argv or carried string is shell, the interpreter and carrier tables, cmd/PowerShell switches, and `spawns_shell` for the engine-spawn census (CLOUD-2625, CLOUD-2770; the #1278 port).
+- `sink.rs` (crate `batten-core`) — production, the boundary half (CLOUD-851): a `[[rule]]` may declare what it PRODUCES, and this is what writes it.
 - `semver.rs` — the API-compatibility gate as a delegated-analyser adapter (CLOUD-1050), ported off `mise-tasks/semver.sh`.
 - `symbols.rs` — the first `Cost::Effect` fact's acquisition (CLOUD-760).
 - `preset.rs` — one manifest per vendored preset (CLOUD-1181): identity, the `scope` its modules decide, the modules themselves, and the refusal classes they raise.
 - `policy.rs` — the policy evaluator (CLOUD-647, CLOUD-689): a `[[rule]]` of kind `policy` names a registered Rego module, and the module decides over the resolved fact set; rule members are read only at the packages the modules declared (CLOUD-1969).
 - `perf.rs` — the paired latency measurement (CLOUD-875), retired out of `mise-tasks/perf-pair.sh` under CLOUD-1059.
 - `tokens.rs` — the token-economics benchmark (CLOUD-119), retired out of `mise-tasks/token-bench.sh` and `token-bench-check.sh` under CLOUD-1753.
-- `pattern.rs` — the `[[pattern]]` table (CLOUD-885): named regular expressions a policy module references by id, never writes inline.
+- `pattern.rs` (crate `batten-base`) — the `[[pattern]]` table (CLOUD-885): named regular expressions a policy module references by id, never writes inline.
 - `pinned.rs` — the programs the project's pin puts on `PATH` (CLOUD-1028), and the record that lets a mediated call read them.
-- `signer_posture.rs` — whether a git signing configuration names a key anyone can verify (CLOUD-669, CLOUD-1717).
-- `durable.rs` — the ONE place this crate mutates a file (CLOUD-1919): `append` is one `write(2)` plus `fsync`, and `replace` is temp, `fsync`, `rename`, then a directory `fsync`; `create_empty` makes a zero-byte mark, and `open_handle` opens a file or directory for its lock or its times on every platform (CLOUD-2361).
-- `cache.rs` — the ONE cross-process cache mechanism (CLOUD-2315): content keys through `identity::cache_key`, the running binary named by its linker build ID, self-validating entries written unsynced, and a `cache/` directory tagged `CACHEDIR.TAG` and partitioned per binary so two binaries never evict each other. The policy bytecode, the config parse, the transcript tally and the epoch all store through it.
-- `cargo_graph.rs` — the ACTIVATED dependency graph, read from a `cargo metadata` document (CLOUD-1717).
-- `probe_verdict.rs` — which of three things a probe build did, from its exit status and its log (CLOUD-418, CLOUD-1717).
+- `signer_posture.rs` (crate `batten-core`) — whether a git signing configuration names a key anyone can verify (CLOUD-669, CLOUD-1717).
+- `durable.rs` (crate `batten-facts`) — the ONE place this crate mutates a file (CLOUD-1919): `append` is one `write(2)` plus `fsync`, and `replace` is temp, `fsync`, `rename`, then a directory `fsync`; `create_empty` makes a zero-byte mark, and `open_handle` opens a file or directory for its lock or its times on every platform (CLOUD-2361).
+- `cache.rs` (crate `batten-facts`) — the ONE cross-process cache mechanism (CLOUD-2315): content keys through `identity::cache_key`, the running binary named by its linker build ID, self-validating entries written unsynced, and a `cache/` directory tagged `CACHEDIR.TAG` and partitioned per binary so two binaries never evict each other. The policy bytecode, the config parse, the transcript tally and the epoch all store through it.
+- `cargo_graph.rs` (crate `batten-base`) — the ACTIVATED dependency graph, read from a `cargo metadata` document (CLOUD-1717).
+- `probe_verdict.rs` (crate `batten-base`) — which of three things a probe build did, from its exit status and its log (CLOUD-418, CLOUD-1717).
 - `prune.rs` — the `[prune]` table (root, keep, the `min_free_mb`/`max_free_mb` band), the superseded pass, the build-lock claim and the free-space sampler (CLOUD-766/1030); the floor model retired under CLOUD-2198.
 - `disk_watch.rs` — the watcher a long-running batten process hosts (CLOUD-2197): `land` around every lap and `mutate sweep` around its builds; samples each tick and runs `collect` on its own thread below `min_free_mb`.
 - `collect.rs` — the disk collector (CLOUD-2197): below `[prune] min_free_mb`, superseded then least-recently-used cargo units across `target/` and linked worktrees until `max_free_mb` is free, never a held tree or the running engine. Its `/proc` parsers also answer `group_orphaned`, `land`'s reap guard (CLOUD-2366): `lib.rs` reads it there, so `exec`'s closure grows no edge.
 - `o200k.rs` — the `o200k` token counter from tables `build.rs` writes at compile time (CLOUD-2224): a sorted vocabulary and a serialized pre-tokenizer DFA, so no process builds either.
-- `background.rs` — a backgrounded call followed to its output (CLOUD-2214): a recorder-selected result naming a `backgroundTaskId` is kept, and replayed with the task's output file as `stdout` once the transcript's notification says it completed.
+- `background.rs` (crate `batten-base`) — a backgrounded call followed to its output (CLOUD-2214): a recorder-selected result naming a `backgroundTaskId` is kept, and replayed with the task's output file as `stdout` once the transcript's notification says it completed.
 - `release_verify.rs` — G1 (CLOUD-2033): whether a release is a draft or published, immutable and tagged at its target; carries every asset `release-assets.rego` demands; and has one matching `SHA256SUMS` line per asset. `batten release verify` is its verb.
-- `release_path.rs` — G2 (CLOUD-2033): the one predicate a write of `main` is graded by. Success for a pin inherited from the merge-base, or for a release head that touches only the release paths and pins a G1-verified published release whose tag commit is in its history. `batten release path <sha> [--post]` is its verb, and `--post` posts the `release-path` status.
-- `release_state.rs` — the release path's decisions (CLOUD-2033 P3, P4), each one pure function under a thin forge shell: `release discard` (a draft and its tag, never a published release, never an orphan tag), `release in-flight` (the landers' freeze, three arms), `release land-state` (`land`'s step (a) branch), `release guard` (only a draft of the built sha takes uploads), `release bump-unusable` (burned or stray-tagged version to X+1 in the four release paths, one commit made through the forge's git-data API), `release cut` (discard, draft at the head with its changelog section, dispatch the build) and `release pin`.
+- `release_path.rs` (crate `batten-base`) — G2 (CLOUD-2033): the one predicate a write of `main` is graded by. Success for a pin inherited from the merge-base, or for a release head that touches only the release paths and pins a G1-verified published release whose tag commit is in its history. `batten release path <sha> [--post]` is its verb, and `--post` posts the `release-path` status.
+- `version.rs` (crate `batten-base`) — the one reading of a version string (CLOUD-2906): `Tag::parse` (one `v`, then semver 2.0.0), `is_release` (the one "shipped" predicate), `precedence` (§11, build metadata ignored), and a consumer glob's literal prefix stripped once. Every version reader parses here.
+- `release_state.rs` — the release path's decisions (CLOUD-2033), pure functions under a forge shell: `release discard` (a draft and its tag, never a published release, never an orphan tag), `release in-flight` (the landers' freeze, three arms), `release land-state` (`land`'s step (a) branch), `release guard` (only a draft of the built sha takes uploads), `release bump-unusable` (burned or stray-tagged version to X+1 in the four release paths, one commit made through the forge's git-data API), `release cut` (discard, draft at the head with its changelog section, dispatch the build) and `release pin`.
 - `release_guard.rs` — G4 (CLOUD-2033): `release settings [--last-run <workflow>]`, whether the rulesets and release settings the release path rests on hold. No `release-path` ruleset is owed and nothing probes for one (CLOUD-2319, CLOUD-2508).
-- `stream_input.rs` — the hook's stdin read streaming (CLOUD-2224): teed to a spool, a result string leaf counted in `o200k` tokens as it arrives and spilled to a file past the bound.
+- `stream_input.rs` (crate `batten-core`) — the hook's stdin read streaming (CLOUD-2224): teed to a spool, a result string leaf counted in `o200k` tokens as it arrives and spilled to a file past the bound.
 - `startup.rs` — the `[[startup]]` table (CLOUD-1324): what a container must be and how it is repaired.
+- `session_watch.rs` — a parent's dispatched children, followed to done, dead or never started (CLOUD-2826): open tasks are launched minus notified over each child's transcript, read through the declared session toolbox; `batten session watch` exits on the first child to end, so a parent waits with one backgrounded command and no timer.
+- `session_setup.rs` — the session's setup as one task the agent dispatches (CLOUD-2840): `SessionStart` spawns nothing, spools the payload and advises `batten startup --session` as a background task; the task takes its singleton, registers itself, runs the preset install, the session-start handlers and actions, the repairs and the health report, records its verdict per session, and the next call surfaces what it recorded, once. `tool install pending` holds the session until it is dispatched and while it installs.
 - `provision.rs` — the `[[provision]]` manifest (CLOUD-90): pinned tools fetched and cached out of tree; `provision status` (read) is freshness, `provision apply [-n]` (write) is the fix.
 - `race.rs` — which OTHER open pull request already claims this branch's key (CLOUD-446's duplicate-claim half, ported off `mise-tasks/claim-race-check.sh` by CLOUD-1422).
-- `landed.rs` — whether a board column is honest about what git and the forge already did (CLOUD-186, CLOUD-1127, ported off `mise-tasks/landed-check.sh`).
+- `landed.rs` (crate `batten-base`) — whether a board column is honest about what git and the forge already did (CLOUD-186, CLOUD-1127, ported off `mise-tasks/landed-check.sh`).
 - `ready.rs` — the Definition-of-Ready grammar as a predicate over a tracker payload (CLOUD-179, ported off `mise-tasks/ready-lint.sh` by CLOUD-1121).
 - `receipt.rs` — verification receipts (CLOUD-203): SHA-keyed in-toto statements that a named check passed, stored out-of-tree, plus the grandfathered `$GIT_DIR/batten-receipts/` compat layout.
 - `record.rs` — the WRITE half of the two out-of-tree verdict stores (CLOUD-1265).
-- `severity.rs` — the severity taxonomy (CLOUD-168): one rank table plus the adapter across `RuleSeverity` (config), `AdvisoryTier` (stored) and `ReportLevel` (render).
+- `severity.rs` (crate `batten-core`) — the severity taxonomy (CLOUD-168): one rank table plus the adapter across `RuleSeverity` (config), `AdvisoryTier` (stored) and `ReportLevel` (render).
 - `asked.rs` — the asked ledger (CLOUD-1078): a weakening is admitted only by a human's recorded answer to the host's question tool.
 - `attestation.rs` — `batten record attestation`: a release's attestation posture, recorded for the `supply-chain` preset to decide (CLOUD-843).
 - `board_check.rs` — `batten board check` (CLOUD-1221): the board's columns, dependency graph and citations read into records the `tracker-hygiene` preset decides over.
@@ -164,7 +201,7 @@ row here, so a new module lands with its line.
 - `forge_query.rs` — declared forge reads, recorded for a module to decide over (CLOUD-843).
 - `mcp_grant.rs` — `batten mcp grant`: the committed MCP permissions applied to whichever server name the host exposed.
 - `mcp_posture.rs` — `batten mcp posture`: whether this session's MCP servers are granted and actually attached.
-- `preflight.rs` — `batten doctor forge`: the forge claims this repository's tasks need, probed before any GitHub result is trusted.
+- `preflight.rs` (crate `batten-base`) — `batten doctor forge`: the forge claims this repository's tasks need, probed before any GitHub result is trusted.
 - `probe.rs` — a producer's probe command, run and reduced to what a reading takes from it (CLOUD-843).
 - `reclaim.rs` — the reclaim census (CLOUD-451): whether a landing was in flight when this container was reclaimed.
 - `replay.rs` — `batten test replay` (CLOUD-2090): each `#[test]` a diff modified is run in its BASE form against HEAD, in a tree materialised under state; a failing base test or a removed one is admitted only through the `asked` ledger.
@@ -172,8 +209,8 @@ row here, so a new module lands with its line.
 - `released.rs` — `batten record derive released`: which tracker rows a release tag shipped, and the board gate's verdict on them.
 - `sbom.rs` — `batten sbom`: the SPDX and CycloneDX inventories of a tree or a built binary (CLOUD-262/263, CLOUD-843).
 - `step.rs` — the step cache (CLOUD-424), retiring `[tasks.step-receipt]` (CLOUD-843).
-- `step_table.rs` — the `[[step]]` row and its load-time validator (CLOUD-843).
+- `step_table.rs` (crate `batten-core`) — the `[[step]]` row and its load-time validator (CLOUD-843).
 - `sweep.rs` — `batten board sweep`: every board gate a consumer declares, run over one payload set.
 - `tracker_reading.rs` — the readings the `tracker-hygiene` preset decides over, one family per board question.
-- `turn.rs` — the judged turn of a session, reduced to what a module decides over (CLOUD-843).
+- `turn.rs` (crate `batten-base`) — the judged turn of a session, reduced to what a module decides over (CLOUD-843).
 - `unsubscribe.rs` — a session's webhook subscription to a pull request: dropped, attested and recorded.

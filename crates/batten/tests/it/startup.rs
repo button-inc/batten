@@ -36,7 +36,22 @@ fn fixture(name: &str, rows: &str) -> std::path::PathBuf {
     write(&dir, "batten.toml", &format!("version = 1\n\n{rows}"));
     write(&dir, "a.txt", "x\n");
     git_in(&dir, &["init", "-q", "-b", "main", "."]);
+    registered(&dir);
     dir
+}
+
+/// Register batten on `dir`'s committed surfaces and commit them, so the
+/// built-in `harness-registration` step (CLOUD-2953) passes and the row under
+/// test is the only thing that moves.
+fn registered(dir: &Path) {
+    let out = batten()
+        .current_dir(dir)
+        .args(["wiring", "register", "--all"])
+        .streamed_output()
+        .expect("the binary runs");
+    assert_eq!(out.status.code(), Some(0), "wiring register: {out:?}");
+    git_in(dir, &["add", "-A"]);
+    git_in(dir, &["commit", "-q", "-m", "registered"]);
 }
 
 fn startup(dir: &Path, args: &[&str]) -> Output {
@@ -44,7 +59,7 @@ fn startup(dir: &Path, args: &[&str]) -> Output {
         .current_dir(dir)
         .arg("startup")
         .args(args)
-        .output()
+        .streamed_output()
         .expect("the binary runs")
 }
 
@@ -62,7 +77,10 @@ fn a_provisioned_container_reports_every_row_and_exits_zero() {
     // EVERY row, not only the failing ones, and deliberately unlike `provision
     // status`: a reader running this is asking whether the container is right,
     // and silence cannot distinguish a row that passed from one never declared.
-    assert_eq!(stdout(&out), "clean ok\nstartup: 1 row(s), 0 failed\n");
+    assert_eq!(
+        stdout(&out),
+        "harness-registration ok\nclean ok\nstartup: 2 row(s), 0 failed\n"
+    );
 }
 
 #[test]
@@ -75,7 +93,7 @@ fn a_row_with_no_repair_reports_the_class_a_reader_can_act_on() {
     assert_eq!(out.status.code(), Some(1));
     assert_eq!(
         stdout(&out),
-        "bare failed not-provisioned\nstartup: 1 row(s), 1 failed\n"
+        "harness-registration ok\nbare failed not-provisioned\nstartup: 2 row(s), 1 failed\n"
     );
 }
 
@@ -108,7 +126,7 @@ fn repair_fixes_and_says_so_while_the_bare_verb_changes_nothing() {
     assert_eq!(out_code(&repaired), 0);
     assert_eq!(
         stdout(&repaired),
-        "makes-it ok repaired\nstartup: 1 row(s), 0 failed\n",
+        "harness-registration ok repaired\nmakes-it ok repaired\nstartup: 2 row(s), 0 failed\n",
         "a reader who ran --repair should see which rows it moved"
     );
     assert!(target.exists());
@@ -117,7 +135,10 @@ fn repair_fixes_and_says_so_while_the_bare_verb_changes_nothing() {
     // repair that runs every time is a repair whose check is wrong, and the two
     // renderings are what let a reader tell those apart.
     let again = startup(&dir, &["--repair"]);
-    assert_eq!(stdout(&again), "makes-it ok\nstartup: 1 row(s), 0 failed\n");
+    assert_eq!(
+        stdout(&again),
+        "harness-registration ok\nmakes-it ok\nstartup: 2 row(s), 0 failed\n"
+    );
 }
 
 /// The commit gate as a declared precondition, end to end (CLOUD-1398).
@@ -146,6 +167,7 @@ fn a_clone_with_no_commit_hooks_fails_the_row_and_repair_installs_them() {
     let dir = scratch("startup-commit-gate");
     write(&dir, "batten.toml", "version = 1\n\n");
     common::init_repo(&dir);
+    registered(&dir);
 
     // The hooks the repair will point git at. Written before the row, so the
     // repair is a redirection and never a creation — it is `session:git-hooks`'s
@@ -153,7 +175,7 @@ fn a_clone_with_no_commit_hooks_fails_the_row_and_repair_installs_them() {
     // the hook.
     let hooks = dir.join("committed-hooks");
     std::fs::create_dir_all(&hooks).unwrap();
-    for name in ["pre-commit", "commit-msg"] {
+    for name in ["pre-commit", "commit-msg", "pre-push"] {
         let at = hooks.join(name);
         std::fs::write(&at, "#!/bin/sh\nexit 0\n").unwrap();
         #[cfg(unix)]
@@ -186,7 +208,7 @@ fn a_clone_with_no_commit_hooks_fails_the_row_and_repair_installs_them() {
     assert_eq!(out_code(&bare), 1);
     assert_eq!(
         stdout(&bare),
-        "commit-gate-installed failed not-provisioned\nstartup: 1 row(s), 1 failed\n",
+        "harness-registration ok\ncommit-gate-installed failed not-provisioned\nstartup: 2 row(s), 1 failed\n",
         "a clone whose commit path does not run the gate must say so"
     );
 
@@ -194,13 +216,13 @@ fn a_clone_with_no_commit_hooks_fails_the_row_and_repair_installs_them() {
     assert_eq!(out_code(&repaired), 0);
     assert_eq!(
         stdout(&repaired),
-        "commit-gate-installed ok repaired\nstartup: 1 row(s), 0 failed\n"
+        "harness-registration ok\ncommit-gate-installed ok repaired\nstartup: 2 row(s), 0 failed\n"
     );
 
     let again = startup(&dir, &["--repair"]);
     assert_eq!(
         stdout(&again),
-        "commit-gate-installed ok\nstartup: 1 row(s), 0 failed\n",
+        "harness-registration ok\ncommit-gate-installed ok\nstartup: 2 row(s), 0 failed\n",
         "a repair that runs every time is a repair whose check is wrong"
     );
 }
@@ -221,18 +243,18 @@ fn the_commit_gate_sub_verb_answers_only_its_own_question() {
     let bare = batten()
         .current_dir(&dir)
         .args(["doctor", "gate"])
-        .output()
+        .streamed_output()
         .expect("the binary runs");
     assert_eq!(out_code(&bare), 1, "doctor never renders a policy verdict");
     assert_eq!(
         stdout(&bare),
-        "commit-gate failed commit-hook-missing commit-msg pre-commit\n",
+        "commit-gate failed commit-hook-missing commit-msg pre-commit pre-push\n",
         "the hook NAMES are the actionable subjects; the directory is a path and never emitted"
     );
 
     let hooks = dir.join(".git").join("hooks");
     std::fs::create_dir_all(&hooks).unwrap();
-    for name in ["pre-commit", "commit-msg"] {
+    for name in ["pre-commit", "commit-msg", "pre-push"] {
         let at = hooks.join(name);
         std::fs::write(&at, "#!/bin/sh\nexit 0\n").unwrap();
         #[cfg(unix)]
@@ -244,7 +266,7 @@ fn the_commit_gate_sub_verb_answers_only_its_own_question() {
     let healthy = batten()
         .current_dir(&dir)
         .args(["doctor", "gate"])
-        .output()
+        .streamed_output()
         .expect("the binary runs");
     assert_eq!(out_code(&healthy), 0);
     assert_eq!(stdout(&healthy), "commit-gate ok\n");
@@ -279,15 +301,14 @@ fn a_present_but_unrunnable_hook_reads_as_missing() {
     common::init_repo(&dir);
     let hooks = dir.join(".git").join("hooks");
     std::fs::create_dir_all(&hooks).unwrap();
-    std::fs::write(hooks.join("commit-msg"), "#!/bin/sh\nexit 0\n").unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt as _;
-        std::fs::set_permissions(
-            hooks.join("commit-msg"),
-            std::fs::Permissions::from_mode(0o755),
-        )
-        .unwrap();
+    for runnable in ["commit-msg", "pre-push"] {
+        std::fs::write(hooks.join(runnable), "#!/bin/sh\nexit 0\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            std::fs::set_permissions(hooks.join(runnable), std::fs::Permissions::from_mode(0o755))
+                .unwrap();
+        }
     }
     // Present, and mode 0644: git skips it silently.
     std::fs::write(hooks.join("pre-commit"), "#!/bin/sh\nexit 0\n").unwrap();
@@ -304,7 +325,7 @@ fn a_present_but_unrunnable_hook_reads_as_missing() {
     let out = batten()
         .current_dir(&dir)
         .args(["doctor", "gate"])
-        .output()
+        .streamed_output()
         .expect("the binary runs");
     let expected = if cfg!(unix) {
         // The mode bit is real here, so a 0644 hook is one git will skip.
@@ -373,6 +394,53 @@ fn every_remedy_the_hook_check_prints_names_something_that_resolves() {
     );
 }
 
+/// THE ENGINE ROWS REPAIR WITH THE PINNED RELEASE, NEVER A BUILD (CLOUD-2840).
+/// This repository pins a release, so a session runs the engine that pin names,
+/// as CI does: a mediator or config mismatch is fixed by installing it, and a
+/// local build is reachable only through a source pin. Fails by: either row
+/// repairing with `install:local`, a cold `cargo build --release` that ran on
+/// every session start over an empty `target/`.
+#[test]
+fn the_engine_rows_repair_with_the_pinned_release() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(Path::parent)
+        .expect("the workspace root is two levels above the crate");
+    let text = std::fs::read_to_string(root.join("batten.toml")).expect("the authority is tracked");
+    let config: toml::Table = text.parse().expect("the authority parses");
+    let rows = config["startup"].as_array().expect("[[startup]] rows");
+    let repair_of = |id: &str| -> Vec<String> {
+        rows.iter()
+            .find(|row| row["id"].as_str() == Some(id))
+            .unwrap_or_else(|| panic!("the `{id}` row is declared"))
+            .get("repair")
+            .and_then(toml::Value::as_array)
+            .unwrap_or_else(|| panic!("the `{id}` row repairs"))
+            .iter()
+            .map(|word| word.as_str().unwrap_or_default().to_owned())
+            .collect()
+    };
+    // `mediator-matches-the-tree` is withheld until step 14 (`batten.toml`).
+    let id = "engine-resolves-every-row";
+    assert_eq!(repair_of(id), ["batten", "engine", "install"], "{id}");
+    let compiling: Vec<&str> = rows
+        .iter()
+        .filter(|row| {
+            row.get("repair")
+                .and_then(toml::Value::as_array)
+                .is_some_and(|argv| {
+                    argv.iter()
+                        .any(|word| word.as_str() == Some("install:local"))
+                })
+        })
+        .filter_map(|row| row["id"].as_str())
+        .collect();
+    assert!(
+        compiling.is_empty(),
+        "rows repairing with a build: {compiling:?}"
+    );
+}
+
 /// A repository declaring nothing says so, rather than saying nothing.
 ///
 /// The count line is what makes silence legible: without it, "no rows" and
@@ -382,7 +450,10 @@ fn a_repository_with_no_rows_reports_the_count_rather_than_nothing() {
     let dir = fixture("startup-none", "");
     let out = startup(&dir, &[]);
     assert_eq!(out.status.code(), Some(0));
-    assert_eq!(stdout(&out), "startup: 0 row(s), 0 failed\n");
+    assert_eq!(
+        stdout(&out),
+        "harness-registration ok\nstartup: 1 row(s), 0 failed\n"
+    );
 }
 
 #[test]
@@ -394,13 +465,14 @@ fn the_data_channel_carries_every_row_with_its_verdict() {
     let out = startup(&dir, &["-J"]);
     let rows: serde_json::Value = serde_json::from_str(&stdout(&out)).expect("one JSON document");
     let rows = rows.as_array().expect("an array of outcomes");
-    assert_eq!(rows.len(), 2);
-    assert_eq!(rows[0]["id"], "good");
-    assert_eq!(rows[0]["ok"], true);
+    assert_eq!(rows.len(), 3);
+    assert_eq!(rows[0]["id"], "harness-registration");
+    assert_eq!(rows[1]["id"], "good");
+    assert_eq!(rows[1]["ok"], true);
     // Omitted rather than nulled on a pass — a key whose only value is null is
     // a field every reader has to learn to ignore.
-    assert!(rows[0].get("reason").is_none(), "{:?}", rows[0]);
-    assert_eq!(rows[1]["reason"], "not-provisioned");
+    assert!(rows[1].get("reason").is_none(), "{:?}", rows[1]);
+    assert_eq!(rows[2]["reason"], "not-provisioned");
 }
 
 /// A ROW THAT COULD NEVER DECIDE IS REFUSED AT LOAD, not once per session.
@@ -422,7 +494,7 @@ fn a_malformed_row_is_refused_when_the_config_loads() {
     let elsewhere = batten()
         .current_dir(&dir)
         .arg("check")
-        .output()
+        .streamed_output()
         .expect("the binary runs");
     assert_eq!(elsewhere.status.code(), Some(1));
 }
@@ -442,6 +514,173 @@ fn json(value: &str) -> String {
 
 fn out_code(output: &Output) -> i32 {
     output.status.code().unwrap_or(-1)
+}
+
+/// Run `batten wiring gate` in `dir` with `args`.
+fn wiring_gate(dir: &Path, args: &[&str]) -> Output {
+    batten()
+        .current_dir(dir)
+        .args(["wiring", "gate"])
+        .args(args)
+        .streamed_output()
+        .expect("the binary runs")
+}
+
+/// The hooks in `dir` that are symlinks to the built binary, by name.
+fn linked_to_batten(dir: &Path) -> Vec<String> {
+    let exe = Path::new(env!("CARGO_BIN_EXE_batten"))
+        .canonicalize()
+        .unwrap();
+    let mut names: Vec<String> = std::fs::read_dir(dir)
+        .unwrap()
+        .flatten()
+        .filter(|entry| {
+            std::fs::read_link(entry.path())
+                .is_ok_and(|target| target.canonicalize().is_ok_and(|target| target == exe))
+        })
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .collect();
+    names.sort();
+    names
+}
+
+/// `batten wiring gate` — the repair the committed row runs, through
+/// `session:git-hooks` — links EVERY githooks(5) name to the running binary,
+/// answered by the diagnosis it repairs (CLOUD-1991, CLOUD-2339).
+///
+/// The binary dispatches on argv[0] through `[hook.git]`, so there is no body
+/// in the tree to point at: the link IS the registration. A second run is the
+/// idempotent arm, and `--check` after it owes nothing.
+#[test]
+fn wiring_gate_links_every_git_hook_to_the_running_batten() {
+    let dir = scratch("wiring-gate-binary");
+    write(&dir, "batten.toml", "version = 1\n\n");
+    common::init_repo(&dir);
+
+    let gate = |dir: &Path| {
+        batten()
+            .current_dir(dir)
+            .args(["doctor", "gate"])
+            .streamed_output()
+            .expect("the binary runs")
+    };
+    assert_eq!(out_code(&gate(&dir)), 1, "a fresh clone bypasses the gate");
+    assert_eq!(
+        out_code(&wiring_gate(&dir, &["--check"])),
+        2,
+        "a fresh clone owes the links"
+    );
+
+    for pass in ["first", "again"] {
+        let linked = wiring_gate(&dir, &[]);
+        assert_eq!(out_code(&linked), 0, "{pass}: {}", common::stderr(&linked));
+        assert_eq!(
+            stdout(&gate(&dir)),
+            "commit-gate ok\n",
+            "{pass}: the commit path runs batten"
+        );
+    }
+    let linked = linked_to_batten(&dir.join(".git").join("hooks"));
+    assert_eq!(linked.len(), 28, "every githooks(5) name: {linked:?}");
+    for name in [
+        "pre-commit",
+        "commit-msg",
+        "pre-push",
+        "post-checkout",
+        "reference-transaction",
+    ] {
+        assert!(
+            linked.iter().any(|linked| linked == name),
+            "`{name}` is linked: {linked:?}"
+        );
+    }
+    let checked = wiring_gate(&dir, &["--check"]);
+    assert_eq!(out_code(&checked), 0, "{}", common::stderr(&checked));
+}
+
+/// A hook that is not batten's and that `[hook.git]` does not declare is KEPT,
+/// and `--check` names it: replacing a teammate's pre-push to install batten
+/// would be the tool destroying work it was never told about.
+#[test]
+fn a_foreign_pre_push_survives_wiring_gate_and_check_names_it() {
+    let dir = scratch("wiring-gate-foreign");
+    write(&dir, "batten.toml", "version = 1\n\n");
+    common::init_repo(&dir);
+    let body = "#!/bin/sh\necho theirs\n";
+    write(&dir, ".git/hooks/pre-push", body);
+
+    let linked = wiring_gate(&dir, &[]);
+    assert_eq!(out_code(&linked), 0, "{}", common::stderr(&linked));
+    assert_eq!(
+        std::fs::read_to_string(dir.join(".git/hooks/pre-push")).unwrap(),
+        body
+    );
+    let linked = linked_to_batten(&dir.join(".git").join("hooks"));
+    assert_eq!(linked.len(), 27, "every other name is linked: {linked:?}");
+
+    let checked = wiring_gate(&dir, &["--check"]);
+    assert_eq!(out_code(&checked), 2, "a violation exits 2");
+    assert_eq!(
+        common::stderr(&checked),
+        "batten: wiring gate: pre-push git-hook-foreign\n"
+    );
+}
+
+/// A foreign hook in a SHARED hooks directory is never taken over, even when
+/// `[hook.git]` declares its name — other repositories run that file too. The
+/// same file in the clone's own directory IS taken over by a declared row.
+#[test]
+fn a_foreign_hook_in_a_shared_hooks_dir_is_never_taken_over() {
+    let dir = scratch("wiring-gate-shared");
+    write(
+        &dir,
+        "batten.toml",
+        "version = 1\n\n[hook.git]\npre-commit = [\"true\"]\n",
+    );
+    common::init_repo(&dir);
+    let body = "#!/bin/sh\necho shared\n";
+
+    let shared = scratch("wiring-gate-shared-hooks");
+    write(&shared, "pre-commit", body);
+    git_in(
+        &dir,
+        &["config", "core.hooksPath", shared.to_str().unwrap()],
+    );
+    let kept = wiring_gate(&dir, &[]);
+    assert_eq!(out_code(&kept), 0, "{}", common::stderr(&kept));
+    assert_eq!(
+        std::fs::read_to_string(shared.join("pre-commit")).unwrap(),
+        body
+    );
+
+    git_in(&dir, &["config", "--unset", "core.hooksPath"]);
+    write(&dir, ".git/hooks/pre-commit", body);
+    let taken = wiring_gate(&dir, &[]);
+    assert_eq!(out_code(&taken), 0, "{}", common::stderr(&taken));
+    let linked = linked_to_batten(&dir.join(".git").join("hooks"));
+    assert!(linked.iter().any(|name| name == "pre-commit"), "{linked:?}");
+}
+
+/// A declared `[hook.git]` row whose program does not resolve is named by
+/// `--check`: git gives a hook a near-empty `PATH`, and a row that cannot run
+/// is a hook that silently does nothing.
+#[test]
+fn wiring_gate_check_names_a_declared_hook_whose_program_does_not_resolve() {
+    let dir = scratch("wiring-gate-unresolved");
+    write(
+        &dir,
+        "batten.toml",
+        "version = 1\n\n[hook.git]\npre-push = [\"no-such-program-cloud-2339\"]\n",
+    );
+    common::init_repo(&dir);
+    assert_eq!(out_code(&wiring_gate(&dir, &[])), 0);
+
+    let checked = wiring_gate(&dir, &["--check"]);
+    assert_eq!(out_code(&checked), 2, "a violation exits 2");
+    assert_eq!(
+        common::stderr(&checked),
+        "batten: wiring gate: pre-push git-hook-runner-unresolved\n"
+    );
 }
 
 /// `batten wiring gate` — the repair the committed row runs, through
@@ -473,7 +712,7 @@ fn wiring_gate_links_both_commit_hooks_to_the_checked_in_body() {
         batten()
             .current_dir(dir)
             .args(["doctor", "gate"])
-            .output()
+            .streamed_output()
             .expect("the binary runs")
     };
     assert_eq!(out_code(&gate(&dir)), 1, "a fresh clone bypasses the gate");
@@ -482,7 +721,7 @@ fn wiring_gate_links_both_commit_hooks_to_the_checked_in_body() {
         let linked = batten()
             .current_dir(&dir)
             .args(["wiring", "gate", "hooks/gate.sh"])
-            .output()
+            .streamed_output()
             .expect("the binary runs");
         assert_eq!(
             out_code(&linked),
@@ -498,7 +737,7 @@ fn wiring_gate_links_both_commit_hooks_to_the_checked_in_body() {
     }
 
     #[cfg(unix)]
-    for name in ["pre-commit", "commit-msg"] {
+    for name in ["pre-commit", "commit-msg", "pre-push"] {
         let target = std::fs::read_link(dir.join(".git").join("hooks").join(name))
             .expect("a symlink, never a copy");
         assert_eq!(
@@ -521,7 +760,7 @@ fn wiring_gate_refuses_a_body_the_repository_does_not_carry() {
     let refused = batten()
         .current_dir(&dir)
         .args(["wiring", "gate", "hooks/absent.sh"])
-        .output()
+        .streamed_output()
         .expect("the binary runs");
     assert_eq!(
         out_code(&refused),
@@ -529,7 +768,7 @@ fn wiring_gate_refuses_a_body_the_repository_does_not_carry() {
         "{}",
         String::from_utf8_lossy(&refused.stderr)
     );
-    for name in ["pre-commit", "commit-msg"] {
+    for name in ["pre-commit", "commit-msg", "pre-push"] {
         assert!(
             std::fs::symlink_metadata(dir.join(".git").join("hooks").join(name)).is_err(),
             "`{name}` was not written"

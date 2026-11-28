@@ -64,7 +64,7 @@ profile_exclude := "profile_exclude"
 # whole module silent.
 plan(id) := found if {
 	is_object(input.tree.plan)
-	found := input.tree.plan[id]
+	found = input.tree.plan[id]
 	is_object(found)
 }
 

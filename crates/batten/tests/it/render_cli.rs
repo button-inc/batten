@@ -26,6 +26,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
+use batten::capture::Streamed as _;
 
 use common::{at_root, task_body, task_env};
 
@@ -85,7 +86,7 @@ fn the_render_is_the_writer_verb_at_the_same_path() {
 fn the_default_reference_path_is_git_ignored() {
     let path = format!("reference/{}", task_env("BATTEN_CLI_REFERENCE"));
     let out = common::git_command(&at_root("."), &["check-ignore", "-q", &path])
-        .output()
+        .streamed_output()
         .expect("git check-ignore");
     assert!(out.status.success(), "{path} is not git-ignored");
 }

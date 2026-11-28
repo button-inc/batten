@@ -1,0 +1,60 @@
+[package]
+name = "batten-core"
+description = "The layer beneath Batten's module cycle that git anchors: the git reads and writes, the landing lease, the shell parse, and the vocabularies they share."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+
+# THE THIRD CUT PHASE 2 OF CLOUD-2789 MEASURED. Once the shell parse, the
+# finding grammar and the glob selector came out of `hook`, `refusal` and
+# `rules`, and `modules cycle` read paths inside macros too, these fifteen
+# modules were a dependency-closed set strictly below the cycle. No edge leads
+# back into `batten`, so this compiles, lints and cross-checks without it.
+# `batten` re-exports each module under its old name.
+
+[dependencies]
+anyhow.workspace = true
+batten-base = { path = "../batten-base", version = "=0.0.222" }
+batten-facts = { path = "../batten-facts", version = "=0.0.222" }
+batten-fsio = { path = "../batten-fsio", version = "=0.0.222" }
+batten-stream = { path = "../batten-stream", version = "=0.0.222" }
+compio.workspace = true
+etcetera.workspace = true
+flate2.workspace = true
+getrandom.workspace = true
+gix.workspace = true
+gix-diff.workspace = true
+gix-packetline.workspace = true
+globset.workspace = true
+ignore.workspace = true
+ra_ap_syntax.workspace = true
+rable.workspace = true
+schemars.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+struson.workspace = true
+syn.workspace = true
+tokio.workspace = true
+toml.workspace = true
+
+[dev-dependencies]
+# `lease` and `main_watch` cases stand up `fetch` and `rest` fixtures.
+batten-base = { path = "../batten-base", version = "=0.0.222", features = ["seam"] }
+
+[target.'cfg(unix)'.dependencies]
+rustix.workspace = true
+
+[features]
+# Test fixtures a `batten` case stands up through these modules: `batten`
+# enables it from its dev-dependencies only, so no shipped build carries it.
+seam = []
+# The lease cases that write to a real remote, as `batten`'s feature of the same
+# name declares them (CLOUD-2059); `batten` forwards it.
+live-remote = []
+
+[lints]
+workspace = true

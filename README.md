@@ -161,9 +161,12 @@ borrowing one.
   wrote. `check` on built-in defaults is still _planned_ (CLOUD-70) — today it
   requires a `batten.toml` in the working directory, which is what makes `init`
   the first command a new repository runs.
-- **Gates decide, they do not estimate.** A predicate that only approximates its
-  own question — a model judgement, or a match over open-ended content — may
-  advise; it never blocks.
+- **Gates decide, they do not estimate.** A gate never blocks on the judgement
+  of the model it gates — the agent's own, or an external judge's; those may
+  advise. A Batten-managed model is a command and may decide: pinned by digest,
+  deterministic, run inside `batten`, its text kept in the engine with only a
+  typed label reaching a module, a remedy that is an action, and precision
+  measured on a committed corpus.
 - **Consumer #1 is Batten itself** — its own checked-in `batten.toml` runs
   against its own repository.
 
@@ -206,15 +209,37 @@ measure time** rather than hardcoded — so the published figure describes what 
 installed rather than a binary nothing calls. `hook` stays measured beside it so
 the launcher's own share is attributable.
 
-| path          | what it does                                           | p50    | p95    | budget   |
-| ------------- | ------------------------------------------------------ | ------ | ------ | -------- |
-| `noop`        | process start, command tree, render                    | 2.1 ms | 2.4 ms | ≤ 100 ms |
-| `check`       | + config load, trust resolution, one-rule tree         | 2.3 ms | 2.7 ms | ≤ 100 ms |
-| `hook`        | + envelope decode, adjudication, decision write        | 2.8 ms | 3.0 ms | ≤ 100 ms |
-| `passthrough` | a call no rule selects — decode, allow, no config load | —      | —      | ≤ 100 ms |
-| `posttool`    | a PostToolUse call — decode, capture the response      | —      | —      | ≤ 100 ms |
-| `stop`        | an end of turn — decode, state record, drain detached  | —      | —      | ≤ 100 ms |
-| `wired`       | the hook as `.claude/settings.json` invokes it         | 8.0 ms | 8.4 ms | ≤ 100 ms |
+| path                     | what it does                                              | p50    | p95    | budget   |
+| ------------------------ | --------------------------------------------------------- | ------ | ------ | -------- |
+| `noop`                   | process start, command tree, render                       | 2.1 ms | 2.4 ms | ≤ 100 ms |
+| `check`                  | + config load, trust resolution, one-rule tree            | 2.3 ms | 2.7 ms | ≤ 100 ms |
+| `hook`                   | + envelope decode, adjudication, decision write           | 2.8 ms | 3.0 ms | ≤ 100 ms |
+| `passthrough`            | a call no rule selects — decode, allow, no config load    | —      | —      | ≤ 100 ms |
+| `posttool`               | a PostToolUse call — decode, capture the response         | —      | —      | ≤ 100 ms |
+| `stop`                   | an end of turn — decode, state record, drain detached     | —      | —      | ≤ 100 ms |
+| `session-start`          | a session start — payload write, setup task spawned       | —      | —      | ≤ 100 ms |
+| `wired`                  | the hook as `.claude/settings.json` invokes it            | 8.0 ms | 8.4 ms | ≤ 100 ms |
+| `cargo-fmt`              | pre-commit: `rustfmt --check` over the staged `.rs` files | 21 ms  | 29 ms  | ≤ 100 ms |
+| `taplo`                  | pre-commit: `taplo lint` over the staged unbound TOML     | 14 ms  | 21 ms  | ≤ 100 ms |
+| `taplo-format`           | pre-commit: `taplo format --check` over the staged TOML   | 17 ms  | 23 ms  | ≤ 100 ms |
+| `merge-conflict-markers` | pre-commit: `batten enforce --rule 'source carry broken'` | 74 ms  | 84 ms  | ≤ 100 ms |
+| `conventional-commit`    | commit-msg: `batten commit check --message`               | 35 ms  | 46 ms  | ≤ 100 ms |
+| `commit-attribution`     | commit-msg: `batten attribution check --message`          | 21 ms  | 26 ms  | ≤ 100 ms |
+
+A commit hook is a batten hook and answers to the same ceiling: the last six
+rows are every default `pre-commit` and `commit-msg` step a commit touching a
+`.rs` file, `batten.toml` and `mise.toml` fires, each run as hk runs it in
+`perf`'s commit fixture (`target/perf/commit-repo`, a shared clone carrying that
+staged change). The `.rs` file is the median one a commit touches
+(`hookcost.rs`, 1,168 lines); `perf` also records `cargo-fmt-worst`, the
+formatter over the 33,775-line `lib.rs`, unbudgeted, so the worst case is on the
+record rather than hidden by the median.
+`config-lint-pinned` and `cfg-gated-test-pinned` left commit time for the `slow`
+tier at 29x and 5x the ceiling (CLOUD-2852), so they carry no row or budget here.
+Their cells do NOT come from the machine the series above comes from, for
+`posttool`'s reason below: they are `mise run perf` at f8fc77c6 (release, 300
+runs) on a 4-core cloud container whose own `noop` read 3.4 ms / 4.2 ms and `hook`
+17.2 ms / 28.1 ms, so read them against those figures, not the rows above.
 
 `posttool` is the same envelope decode plus the response capture, and its cells
 are `—` for `passthrough`'s reason: the series above comes from a quieter
@@ -469,7 +494,7 @@ channel is the child's, and the one thing that makes such a channel readable is
 that **Batten never mints a `2` on it**: a `2` out of `exec` came from the wrapped
 command, and nothing can mistake it for a verdict. Renumbering an output match to
 `2` would spend that guarantee for a symmetry the table does not ask for. Decided
-on CLOUD-292, with the three rejected alternatives recorded there; `crates/batten/src/exit.rs`
+on CLOUD-292, with the three rejected alternatives recorded there; `crates/batten-base/src/exit.rs`
 carries the reasoning and `crates/batten/tests/it/extension_surfaces.rs` gates it.
 
 ### Whatever you reach for: output is a pointer, never the payload
@@ -582,6 +607,9 @@ harness payload on **stdin** — which is what the `stdin` input is for:
 
 With `stdin` empty the Action closes the descriptor rather than leaving it open,
 so a verb that reads standard input ends at EOF instead of blocking the job.
+
+`exit-code` accepts every normalized event, so a `[[hook.handler]]` keyed on any
+of them runs there, and its advisory drain wakes on `PostToolBatch`.
 
 The Action does **not** prepend its install directory to `PATH`. A `$GITHUB_PATH`
 write changes how every later step in the job resolves a command, which is a

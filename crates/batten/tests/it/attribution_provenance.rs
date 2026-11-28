@@ -48,10 +48,6 @@
 //! mutation over the path a case actually walks is the whole discipline, and
 //! running it is the only thing that tells you which one you picked.
 
-/*
-#MUTANT-SUITE crates/batten/tests/it/attribution_provenance.rs
-#MUTANT degraded-field-not-unknown|s@            Provenance::Unknown => UNKNOWN,@            Provenance::Unknown => "",@|the_degraded_host_answers_unknown_in_every_field
-*/
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 

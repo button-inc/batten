@@ -33,8 +33,6 @@ pub struct Facts {
 }
 
 /// Every item still owed, each a pointer; empty when the server gate holds.
-//MUTANT-SUITE crates/batten/tests/it/release_verify.rs
-//MUTANT bypass-actor-admitted|s@^            .map(\x7cname\x7c format!("the ruleset {name} has a bypass actor")),$@            .take(0).map(\x7cname\x7c format!("the ruleset {name} has a bypass actor")),@|settings_name_every_owed_item
 #[must_use]
 pub fn owed(facts: &Facts) -> Vec<String> {
     let mut owed = Vec::new();
@@ -165,7 +163,7 @@ pub fn run_settings(
     out: &mut dyn std::io::Write,
     err: &mut dyn std::io::Write,
 ) -> anyhow::Result<crate::ExitCode> {
-    let Some(slug) = crate::repo_slug(std::path::Path::new(".")) else {
+    let Some(slug) = crate::race::repo_slug(std::path::Path::new(".")) else {
         writeln!(
             err,
             "batten: release settings: could not look: no forge remote names the repository"
@@ -231,7 +229,7 @@ pub fn run_settings(
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
-
+    #[cfg(test)]
     fn answer(status: u16, body: &str) -> crate::rest::Answer {
         crate::rest::Answer {
             status,

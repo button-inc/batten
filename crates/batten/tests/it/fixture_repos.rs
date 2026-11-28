@@ -28,12 +28,13 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
+use batten::rules::RuleKindExt as _;
 
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use batten::config::Config;
-use batten::rules::RuleKind;
+use batten::config_model::Config;
+use batten::config_model::RuleKind;
 
 /// The committed corpus root.
 ///

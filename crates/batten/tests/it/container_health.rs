@@ -35,6 +35,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
+use batten::capture::StreamedChild as _;
 
 use std::path::Path;
 use std::process::{Output, Stdio};
@@ -75,7 +76,15 @@ fn fixture(name: &str, program: &str) -> std::path::PathBuf {
 
 /// One hook call on `event`, through the door the host uses.
 fn hook_on(dir: &Path, event: &str) -> Output {
-    let payload = format!(r#"{{"hook_event_name":"{event}","session_id":"s-health","cwd":"/w"}}"#);
+    let payload = format!(
+        r#"{{"hook_event_name":"{event}","session_id":"{session}","cwd":"/w"}}"#,
+        session = common::session_id("s-health")
+    );
+    hook_with(dir, &payload)
+}
+
+/// One hook call carrying `payload`, through the door the host uses.
+fn hook_with(dir: &Path, payload: &str) -> Output {
     let mut command = batten();
     command
         .current_dir(dir)
@@ -93,13 +102,43 @@ fn hook_on(dir: &Path, event: &str) -> Output {
             .write_all(payload.as_bytes())
             .unwrap();
     }
-    let output = child.wait_with_output().unwrap();
+    let output = child.streamed_wait().unwrap();
     assert_eq!(
         output.status.code(),
         Some(0),
         "a health advisory is never a refusal — house-style §7"
     );
     output
+}
+
+/// The session's first moment AS THE SESSION HEARS IT (CLOUD-2840): the
+/// report is the setup task's now, so `SessionStart` starts it, and the first
+/// call after it finishes carries what it found.
+fn session_report(dir: &Path) -> Option<String> {
+    let started = hook_on(dir, "SessionStart");
+    assert!(
+        advisory(&started).is_none_or(|text| !text.contains(CHECK)),
+        "the health report is the task's, never the door's"
+    );
+    // OWED BY EVERY CONSUMER (review of 076a19082): this fixture declares no
+    // session-start row and no `[[startup]]` row, and the door still tells the
+    // agent to dispatch the task that re-decides the container's health.
+    assert!(
+        advisory(&started).is_some_and(|text| text.contains("batten startup --session")),
+        "the door advises the dispatch the health report rides on"
+    );
+    // `session_start` is unix-only, as is the detached setup task it waits on.
+    #[cfg(unix)]
+    let _ = crate::session_start::settle(dir);
+    let payload = serde_json::json!({
+        "hook_event_name": "PreToolUse",
+        "session_id": common::session_id("s-health"),
+        "cwd": dir,
+        "tool_name": "Read",
+        "tool_input": {"file_path": "a.txt"},
+    })
+    .to_string();
+    advisory(&hook_with(dir, &payload))
 }
 
 /// The `additionalContext` the host would hand the model, if any.
@@ -141,7 +180,7 @@ fn advisory(output: &Output) -> Option<String> {
 #[test]
 fn a_declared_program_nothing_can_reach_is_reported_at_session_start() {
     let dir = fixture("health-unreachable", "batten-no-such-program-exists-here");
-    let text = advisory(&hook_on(&dir, "SessionStart")).expect("a broken container is news");
+    let text = session_report(&dir).expect("a broken container is news");
     assert!(
         text.contains("workspace state broken at ") && !text.contains("rule '"),
         "the advisory names its class so a reader can tell the producers apart: {text}"
@@ -161,7 +200,7 @@ fn a_declared_program_nothing_can_reach_is_reported_at_session_start() {
 #[test]
 fn a_reachable_program_is_not_reported_as_a_container_fault() {
     let dir = fixture("health-reachable", "git");
-    let text = advisory(&hook_on(&dir, "SessionStart")).unwrap_or_default();
+    let text = session_report(&dir).unwrap_or_default();
     assert!(
         !text.contains(CHECK),
         "a program the spawn would resolve is not a container fault: {text}"

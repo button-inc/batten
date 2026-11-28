@@ -13,6 +13,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
+use batten::capture::StreamedChild as _;
 
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
@@ -62,7 +63,7 @@ fn crash_as(repo: &Path, task: &str, pid: &str, started: u64, last: u64) {
 fn stop(repo: &Path, home: &Path, active: bool) -> Output {
     let payload = serde_json::json!({
         "hook_event_name": "Stop",
-        "session_id": "s-1",
+        "session_id": common::session_id("s-1"),
         "stop_hook_active": active,
         "last_assistant_message": "Done.",
     });
@@ -74,7 +75,7 @@ fn stop(repo: &Path, home: &Path, active: bool) -> Output {
 fn dispatch_land(repo: &Path, home: &Path) {
     let payload = serde_json::json!({
         "hook_event_name": "PostToolUse",
-        "session_id": "s-1",
+        "session_id": common::session_id("s-1"),
         "tool_name": "Bash",
         "tool_input": {"command": "mise run land", "run_in_background": true},
         "tool_response": {"backgroundTaskId": "b-1"},
@@ -96,7 +97,7 @@ fn isolated(repo: &Path, home: &Path) -> common::Batten {
     common::state_home(&mut command, home);
     command
         .current_dir(repo)
-        .env("GIT_CEILING_DIRECTORIES", env!("CARGO_TARGET_TMPDIR"));
+        .env("GIT_CEILING_DIRECTORIES", common::target_tmp());
     command
 }
 
@@ -116,7 +117,7 @@ fn hook(repo: &Path, home: &Path, payload: &serde_json::Value) -> Output {
         .expect("piped stdin")
         .write_all(payload.to_string().as_bytes())
         .expect("write payload");
-    child.wait_with_output().expect("run batten adjudicate")
+    child.streamed_wait().expect("run batten adjudicate")
 }
 
 /// Now, as the epoch second a receipt written now carries.
@@ -334,7 +335,7 @@ fn taking_the_landing_lock_clears_the_dispatch_receipt() {
         .env("LAND_WORKFLOW", "fast-forward.yml")
         .env_remove("LAND_ENTRY_GATES")
         .env_remove("LAND_BODY_GATES")
-        .output()
+        .streamed_output()
         .expect("run batten land lap");
     assert!(
         !receipt.exists(),

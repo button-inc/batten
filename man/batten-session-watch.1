@@ -1,0 +1,19 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH batten-session-watch 1  batten 
+.SH NAME
+batten\-session\-watch \- Wait until a child session is done, dead or never started, from its transcript alone
+.SH SYNOPSIS
+\fBbatten session watch\fR [\fB\-\-session\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fB\-\-server\fR> 
+.SH DESCRIPTION
+Wait until a child session is done, dead or never started, from its transcript alone
+.SH OPTIONS
+.TP
+\fB\-\-server\fR \fI<server>\fR
+The `[[mcp.source]]` server that answers the session toolbox\*(Aqs methods
+.TP
+\fB\-\-session\fR \fI<session>\fR
+A session to watch instead of this session\*(Aqs unarchived children (repeatable)
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help

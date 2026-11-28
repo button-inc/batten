@@ -62,15 +62,33 @@ rules contains "layer place wrong"
 # Every module this table has placed. A module in the judged set and absent here
 # is refused rather than allowed.
 declared_modules := {
-	"action", "admission", "attribution", "baseline", "budget", "bypass", "cache", "capture", "ci",
+	"action", "admission", "attribution", "baseline", "budget",
+	# `build_identity` arrived with CLOUD-2903: the build's own identity, which
+	# `build.rs` stamps; a leaf nothing in the library calls.
+	"build_identity", "bypass", "cache", "capture", "ci",
 	"cli", "commit", "completion", "config", "contract", "decision", "defects",
 	"design", "doctor", "drain", "effect", "emission", "epoch", "error", "exec",
 	"exit", "facts", "findings", "git", "graph", "handler", "hook", "identity", "init",
+	# `module_graph` arrived with CLOUD-2789: the crate's own module graph read
+	# off the syntax tree, for the gate that holds its largest cycle.
+	"module_graph",
+	# CLOUD-2789's phase 2 vocabulary, each below the module cycle by
+	# measurement: `config_model` (the config's types), `preset_catalog` (the
+	# vendored presets as data), `surface_table` (the command surface as data)
+	# and `config_check` (each section's rules, below the loader). `item_index`
+	# (CLOUD-2790) resolves a path to its defining site for `test replay`.
+	"config_model", "preset_catalog", "surface_table", "config_check", "item_index",
 	"invocation", "journal", "judge", "landed", "lib", "lint", "markers", "mint", "minted", "outputs",
-	"output", "pattern", "policy", "provision", "receipt", "redirect", "refusal",
+	"output", "pattern", "policy", "provision", "receipt", "redirect", "refusal", "rego_units",
 	"render", "repair", "resolve", "rules", "secret", "secrets", "session", "severity", "sink",
-	"register", "spec", "state", "stop", "store", "surface", "transcript", "traversal", "trust", "uses",
+	# `session_watch` (CLOUD-2826): a parent's dispatched children, read through
+	# the declared session toolbox.
+	"session_watch",
+	"register", "spec", "state", "stop", "store", "surface", "transcript", "traversal", "trust", "trust_pin", "uses",
 	"verbs", "verdict", "waiver", "worktree",
+	# `version` (CLOUD-2906, batten-base): the one semver reader every version
+	# string is parsed through; a leaf.
+	"version",
 	# `brief`, `main` and `selfwrite` were absent from the first draft of this
 	# table, and the coverage rule caught all three on its first run against the
 	# real tree — which is the property working before any human read it. `main`
@@ -160,6 +178,11 @@ declared_modules := {
 	# `#[cfg(test)]` cannot be shared across the three scopes that need it (this
 	# crate's unit tests, the `it` binary, and the standalone `tests/*.rs`).
 	"scratch",
+	# `fixture_root` arrived with CLOUD-2904 (D3) and is `scratch`'s class: test
+	# support at the leaf, reading nothing in this crate and read by no library
+	# module. Each lib case takes its own empty root under the temp dir, so
+	# discovery never climbs into the checkout the test process stands in.
+	"fixture_root",
 	# `testing` arrived with CLOUD-2059 and this rule named it on the last gate
 	# before landing. It is `scratch`'s class — test support, `pub` for the same
 	# three scopes, doc-hidden — holding the harness's DECISIONS (which variables
@@ -183,6 +206,15 @@ declared_modules := {
 	# a pure, lossless rewrite that a `fix` calls. It reaches nothing in this
 	# crate, only `ra_ap_syntax`, so it is a LEAF.
 	"codemod",
+	# `fsio` arrived with CLOUD-2692: every filesystem read the crate makes, so a
+	# read can be batched, streamed or queued in one place. It reaches nothing in
+	# this crate, only `std` and `compio`, so it is a LEAF.
+	"fsio",
+	# `mutation_markers` arrived with CLOUD-2253: the Rust tier's build-time
+	# refusal of hand-written mutation markers and a second cargo-mutants argv.
+	# `build.rs` includes it by `#[path]`, so it is compiled outside this crate
+	# and must reach nothing in it: a LEAF by construction, not by choice.
+	"mutation_markers",
 	# `remedy` arrived with CLOUD-1576: two pure string predicates over a row's
 	# remedy columns, which `rules` and `lint` call. It reaches nothing in this
 	# crate, so it is a LEAF.
@@ -614,6 +646,13 @@ declared_modules := {
 	# and the fact model bars that from a call being adjudicated -- `lib` is the
 	# caller that runs these at session start, which is not such a call.
 	"startup",
+	# `session_setup` arrived with CLOUD-2840: the session's setup as ONE detached
+	# task. It sits ABOVE `startup`, `handler`, `doctor` and `task`, all of which
+	# it drives, and below `lib`, its only caller: the hook starts it, and
+	# `startup --session` is the task. Like `startup` it must not be reachable
+	# from the mediated boundary as a step: what the boundary reads of it is the
+	# recorded outcome, never a spawn.
+	"session_setup",
 	# `environment` arrived with CLOUD-1383 and this rule named it, which is the
 	# coverage half working yet again: the module was written, its tier was green,
 	# clippy was clean, and this is what said nobody had placed it.
@@ -739,6 +778,10 @@ declared_modules := {
 	# functions over `std::fs` and a path. Every module that mutates a file calls
 	# it, so it must sit below all of them, which a leaf does by construction.
 	"durable",
+	# `lock_wait` arrived with CLOUD-2789 and is `durable`'s class: a LEAF that
+	# reaches nothing in this crate. Every module that takes a file lock calls
+	# it, so it sits below all of them.
+	"lock_wait",
 	# `forge_query` arrived with CLOUD-843's forge-read foundation. It is a
 	# PRODUCER in `record`'s class, and it sits directly above the three modules
 	# it composes: it walks `forge`'s window over `rest`'s transport and writes
@@ -905,6 +948,39 @@ declared_modules := {
 	# `step`'s class of effect, and writes the runner's files through `durable`.
 	# It decides nothing, so its `rules` and `hook` edges are forbidden below.
 	"ci_step",
+	# `forge_event` arrived with the your-counselling bundle: it shapes one forge
+	# webhook delivery into the `forge` hook event the handlers select on.
+	# `githook` arrived with it: argv[0] dispatch makes batten every git hook,
+	# routing through `[hook.git]`, an entry point like `main`.
+	"forge_event", "githook",
+	# THE CRATE SPLIT'S MODULES (#1276), named once `layer place wrong` read every
+	# package's top-level source rather than `crates/batten/src` alone. The crate
+	# DAG is the first placement: `batten-facts` < `batten-base` < `batten-core` <
+	# `batten`, with `batten-codemods` above `batten`, and Cargo refuses an edge
+	# up it, so each sits below every `batten` module that depends on its crate
+	# without a forbidden edge here to say so. Within its crate each is placed by
+	# its own non-test imports, measured.
+	#
+	# `batten-facts`: `digest` (hex and SHA-256) and `coupling` (DL and
+	# propagation cost over a dependency graph) reach nothing in the crate, so
+	# both are LEAVES. `units` reaches `facts` and `source` and sits above them:
+	# it is the Rust producer of the `Units` fact the model declares.
+	"digest", "coupling", "units",
+	# `batten-base`: `clock` and `low_water` say they are leaves in their own
+	# headers and reach nothing. `crate_cut` reaches `exit`, `fsio`,
+	# `module_graph`, `durable` and `source`, so it is a producer above the
+	# module graph it reads, and nothing in the crate reads it.
+	"clock", "low_water", "crate_cut",
+	# `batten-core`: `grammar` is a leaf by its header. `selector` reaches only
+	# `error`; `path_set` reaches `selector` and `error` and sits above it, below
+	# `rules` by its header. `shell`, `shell_logic` and `interpreter` are the
+	# shell parse and reach one another (the crate's recorded cycle of 3 in
+	# `modules.lock`) and `facts` below them; nothing in the crate above them is
+	# reached.
+	"grammar", "selector", "path_set", "shell", "shell_logic", "interpreter",
+	# `batten-codemods`: `fix` reaches nothing in its crate, only `std` and
+	# `rustfix`, so it is a LEAF.
+	"fix",
 }
 
 # THE FORBIDDEN EDGES, each traceable to prose already in the tree.
@@ -920,7 +996,13 @@ declared_modules := {
 #   surface (data) -> cli (typed values) -> lib (dispatch)
 #   config (load) -> resolve (precedence) -> trust (judging) -> lint -> epoch
 #   store (which store) / findings (what is in it) / journal (how it is written)
-forbidden[from] contains to if {
+#
+# AN OBJECT OF SETS, WRITTEN AS ONE (#1276): `forbidden[from] contains to` is the
+# same value, but regorus 0.15's bytecode answers that keyed partial set as the
+# flat set of every target, so the bundle decided on the interpreter. Every
+# target set here is non-empty, so the two spellings agree on every lookup and on
+# `count(forbidden)`.
+forbidden := {from: targets |
 	some from, targets in {
 		"rules": {"hook"},
 		# CLOUD-1121/CLOUD-745: `hook` adjudicates a mediated call under
@@ -1044,7 +1126,22 @@ forbidden[from] contains to if {
 		# `step` reaches `resolve`, so the edge is `config -> resolve` one hop
 		# further out. The loader names the row through the leaf instead.
 		"config": {"resolve", "trust", "lint", "epoch", "step"},
+		# CLOUD-2789's vocabulary sits below the loader and every feature: that
+		# placement is what took it out of the module cycle, and an edge back up
+		# would put it in again. The catalog sits below the model it feeds; the
+		# command table below the layer that interprets it.
+		"config_model": {"config", "config_check", "rules", "hook", "resolve", "trust"},
+		"preset_catalog": {"config_model", "config", "preset"},
+		"config_check": {"config", "rules", "hook", "resolve", "trust", "record", "receipt"},
+		"surface_table": {"surface", "cli", "lib", "config"},
+		"item_index": {"rules", "hook", "config", "replay"},
 		"resolve": {"trust", "lint", "epoch"},
+		# The base-ref read and its pin, split out of `trust` so `resolve` can load
+		# layer 1 from a ref without reaching the judgement above it. The `uses`
+		# fact never saw `resolve -> trust`: every reach was a qualified path,
+		# invisible until the fact gained `qualified`. It reads `git`, `config`
+		# and `state` and decides nothing, so it sits below `resolve`.
+		"trust_pin": {"resolve", "trust", "lint", "epoch"},
 		"trust": {"lint", "epoch"},
 		"lint": {"epoch"},
 		"store": {"findings", "journal"},
@@ -1134,6 +1231,11 @@ forbidden[from] contains to if {
 		# is the class `rules/policy-modules.md` records for parsers. The source is
 		# injected so that edge is unwritable rather than merely unwise.
 		"graph": {"rules", "hook", "facts"},
+		# `module_graph -> {rules, hook, facts}` (CLOUD-2789): it reads Rust
+		# source for its structure, as `codemod` does, and judges nothing; an
+		# edge to a decider would make the gate over the crate's cycles depend
+		# on a module inside the cycle it measures.
+		"module_graph": {"rules", "hook", "facts"},
 		# `register -> {rules, hook}` (CLOUD-2005): the key-set module JOINS and
 		# never acquires. `rules` reads each declared path through `acquire`
 		# and hands over lines or parsed frontmatter, so an edge back would make
@@ -1225,14 +1327,13 @@ forbidden[from] contains to if {
 		# decides over a tree or a mediated call.
 		"replay": {"rules", "hook"},
 	}
-	some to in targets
 }
 
 # The module a judged path denotes. Stem of the file name, which is Rust's own
 # mapping from `foo.rs` to module `foo`.
 module_of(path) := name if {
 	parts := split(path, "/")
-	file := parts[count(parts) - 1]
+	file = parts[count(parts) - 1]
 	name := substring(file, 0, count(file) - 3)
 }
 

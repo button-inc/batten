@@ -44,7 +44,7 @@
 #MUTANT engine-two-unrequired|s@^\tnot refuses_exit(row, 2)$@\tfalse@|an_engine_verb_whose_refusal_is_unclassified_is_refused
 #MUTANT corpus-two-admitted|s@^\trefuses_exit(row, 2)$@\tfalse@|a_shell_task_naming_both_exits_is_refused
 #MUTANT corpus-one-unrequired|s@^\tnot refuses_exit(row, 1)$@\tfalse@|a_shell_task_whose_refusal_is_unclassified_is_refused
-#MUTANT task-body-unread|s@^\tbody := input.tree.documents\["mise.toml"\].tasks\[task\]$@\tbody := {}@|an_engine_task_read_through_the_corpus_table_is_refused
+#MUTANT task-body-unread|s@^\tbody = input.tree.documents\["mise.toml"\].tasks\[task\]$@\tbody = {}@|an_engine_task_read_through_the_corpus_table_is_refused
 #MUTANT corpus-arm-unread|s@^\tnot regex.match(data.batten.patterns\["engine-invocation"\], line)$@\tfalse@|a_task_mixing_shell_and_engine_lines_is_the_corpus_table
 
 # METADATA
@@ -118,9 +118,9 @@ commands(body) := [trimmed |
 engine_table(row) if row.run[0] == "batten"
 
 engine_table(row) if {
-	task := mise_task(row)
-	body := input.tree.documents["mise.toml"].tasks[task]
-	lines := commands(body)
+	task = mise_task(row)
+	body = input.tree.documents["mise.toml"].tasks[task]
+	lines = commands(body)
 	count(lines) > 0
 	every line in lines {
 		regex.match(data.batten.patterns["engine-invocation"], line)
@@ -128,8 +128,8 @@ engine_table(row) if {
 }
 
 corpus_table(row) if {
-	task := mise_task(row)
-	body := input.tree.documents["mise.toml"].tasks[task]
+	task = mise_task(row)
+	body = input.tree.documents["mise.toml"].tasks[task]
 	some line in commands(body)
 	not regex.match(data.batten.patterns["engine-invocation"], line)
 }
@@ -191,7 +191,7 @@ violation contains {
 	some name in wrong
 	some placement in row_line
 	placement[0] == name
-	number := placement[1]
+	number = placement[1]
 }
 
 violation contains {

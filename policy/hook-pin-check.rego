@@ -64,11 +64,11 @@ manifest_path := "mise.toml"
 tasks_prefix := "mise-tasks/"
 
 settings_lines := lines if {
-	lines := input.tree.lines[settings_path]
+	lines = input.tree.lines[settings_path]
 }
 
 manifest_lines := lines if {
-	lines := input.tree.lines[manifest_path]
+	lines = input.tree.lines[manifest_path]
 }
 
 # --- the pinned set ----------------------------------------------------------
@@ -109,7 +109,7 @@ pinned contains tool if {
 	key := replace(trim_space(substring(line, 0, indexof(line, "="))), "\"", "")
 	key != ""
 	segments := split(key, "/")
-	tool := segments[count(segments) - 1]
+	tool = segments[count(segments) - 1]
 	tool != ""
 }
 
@@ -143,12 +143,12 @@ by_path contains task if {
 	contains(value, tasks_prefix)
 	not contains(value, "mise run")
 	after := substring(value, indexof(value, tasks_prefix) + count(tasks_prefix), -1)
-	task := split(after, " ")[0]
+	task = split(after, " ")[0]
 	task != ""
 }
 
 script_lines(task) := lines if {
-	lines := input.tree.lines[concat("", [tasks_prefix, task])]
+	lines = input.tree.lines[concat("", [tasks_prefix, task])]
 }
 
 # Comments stripped, so the paragraphs explaining why a tool was dropped do not

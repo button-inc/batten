@@ -82,13 +82,18 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 
+use crate::config_check::receipt::safe_subject;
+use crate::config_check::receipt::validate_check_name;
+#[cfg(test)]
+use crate::config_check::receipt::validate_verified_by;
+use crate::config_model::ReceiptKey;
+use crate::digest::sha256_hex as hex_sha256;
 use crate::error::UsageError;
 use crate::exit::ExitCode;
-use crate::output::{Mode, Verbosity};
-use crate::rules::ReceiptKey;
-use crate::{config, git, identity, output, state};
+use crate::output::Mode;
+use crate::surface_table::Verbosity;
+use crate::{git, identity, output, state};
 
 /// The in-toto Statement v1 type identifier (CLOUD-132: adopt the format).
 ///
@@ -392,6 +397,63 @@ pub fn validity(
     current_main: &str,
     git_dir: &str,
 ) -> Validity {
+    judged(receipt, expected, head, current_main, Some(git_dir), None)
+}
+
+/// What a statement binds besides its subject: the policy and the governing
+/// surface at the subject commit (CLOUD-1544).
+///
+/// The two facts a PUBLISHED receipt is judged on in place of the checkout that
+/// minted it. Resolved by the caller from the commit, exactly as
+/// [`run_record`] resolves them when it mints, so the two cannot come to
+/// disagree about what a commit binds.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Bound {
+    /// Lowercase hex SHA-256 of `batten.toml` at the subject commit.
+    pub policy_digest: String,
+    /// [`crate::epoch::compute`] at the subject commit.
+    pub config_epoch: String,
+}
+
+/// The validity of a PUBLISHED receipt (CLOUD-1544): one pulled from the state
+/// repository rather than minted in this checkout.
+///
+/// **The git-dir conjunct is dropped, and only for this class.** A published
+/// receipt was minted in another container by construction, so [`validity`]'s
+/// "taken here" arm would refuse every one of them and the transport would be an
+/// archive, not a cache. In its place the receipt is held to what its statement
+/// already binds: the subject commit (as [`validity`] does), the trunk it was
+/// current against (as [`validity`] does), and — the two comparisons [`validity`]
+/// never makes — the policy digest and config epoch, against `bound` as resolved
+/// for HEAD here. A receipt minted under another policy or another governing
+/// surface is `Missing`: it attests a different question, and "run it" is the
+/// remedy.
+///
+/// A locally minted receipt never reaches this arm: it lives in the canonical
+/// store, and [`run_status`] reads the published store only where that one
+/// answered `Missing`.
+#[must_use]
+pub fn published_validity(
+    receipt: Option<&Statement>,
+    expected: &str,
+    head: &str,
+    current_main: &str,
+    bound: &Bound,
+) -> Validity {
+    judged(receipt, expected, head, current_main, None, Some(bound))
+}
+
+/// The one predicate both arms share: `git_dir` is the local arm's conjunct and
+/// `bound` the published arm's, so neither can drift from the other on the
+/// subject, the trunk, the check name or the conclusion.
+fn judged(
+    receipt: Option<&Statement>,
+    expected: &str,
+    head: &str,
+    current_main: &str,
+    git_dir: Option<&str>,
+    bound: Option<&Bound>,
+) -> Validity {
     let Some(receipt) = receipt else {
         return Validity::Missing;
     };
@@ -414,7 +476,15 @@ pub fn validity(
     if receipt.predicate.check != expected || receipt.predicate.conclusion != CONCLUSION_PASS {
         return Validity::Refuted;
     }
-    if receipt.predicate.recorded_git_dir != git_dir {
+    if let Some(git_dir) = git_dir
+        && receipt.predicate.recorded_git_dir != git_dir
+    {
+        return Validity::Missing;
+    }
+    if let Some(bound) = bound
+        && (receipt.predicate.policy_digest.sha256 != bound.policy_digest
+            || receipt.predicate.config_epoch != bound.config_epoch)
+    {
         return Validity::Missing;
     }
     if subject.digest.git_commit != head {
@@ -489,54 +559,182 @@ fn repo_facts() -> Result<RepoFacts> {
     })
 }
 
-/// Validate a check name for use as an identity field and a filename
-/// component: ASCII alphanumeric first, then alphanumeric plus `.`, `_`, `-`.
-fn validate_check_name(check: &str) -> Result<()> {
-    let mut chars = check.chars();
-    let first_ok = chars.next().is_some_and(|c| c.is_ascii_alphanumeric());
-    let rest_ok = chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'));
-    if first_ok && rest_ok {
-        Ok(())
-    } else {
-        Err(UsageError::raise(format!(
-            "check name {check:?} is not a valid identifier (ASCII alphanumeric, then alphanumeric or `.`, `_`, `-`)"
-        )))
-    }
-}
-
-/// Refuse a `[receipt] verified_by` naming a check no receipt can ever be
-/// written for.
-///
-/// # AT LOAD, BECAUSE THE ALTERNATIVE IS A CONFIG THAT IS PERMANENTLY UNUSABLE
-///
-/// `receipt record` and `receipt status` already refuse these names, and nothing
-/// held the config table to the same rule (review of #848). So
-/// `verified_by = ["fmt check"]` loaded clean, `receipt record "fmt check"`
-/// exited `1` with *"not a valid identifier"*, no receipt could ever exist, and
-/// [`run_verified`] — which validates nothing and hashes the name straight into
-/// a path — reported `NOT verified: <head> fmt check missing` forever. The
-/// refusal pointed at a missing receipt rather than at the unwritable name that
-/// made it missing, which is the inert-typo class every other declared table in
-/// `config::validate_tables` is refused at load for.
-///
-/// Fail-closed either way; what changes is that the diagnosis names the cause.
-///
-/// # Errors
-///
-/// [`crate::UsageError`] naming the first offending check.
-pub fn validate_verified_by(checks: &[String]) -> Result<()> {
-    for check in checks {
-        validate_check_name(check)?;
-    }
-    Ok(())
-}
-
 /// The canonical receipt path for a check: `<state>/receipts/<fingerprint>.json`.
 fn receipt_path(repo_root: &str, check: &str) -> Result<std::path::PathBuf> {
     let fingerprint = identity::scope_fingerprint(check, RECEIPT_SCOPE_KEY);
     Ok(state::repo_state_dir(Path::new(repo_root))?
         .join("receipts")
         .join(format!("{}.json", fingerprint.to_hex())))
+}
+
+/// How many (head, base) slots a check keeps beside its canonical receipt, the
+/// bound step receipts keep (CLOUD-2784). Past it, the oldest go first.
+const KEPT_SLOTS: usize = 32;
+
+/// The directory a check's (head, base) slots live in (CLOUD-2253 A3).
+///
+/// A SIBLING STORE, never inside `receipts/`: that store is one file per check,
+/// updated in place, and its readers list it as exactly that.
+fn slot_dir(repo_root: &str, check: &str) -> Result<std::path::PathBuf> {
+    let fingerprint = identity::scope_fingerprint(check, RECEIPT_SCOPE_KEY);
+    Ok(state::repo_state_dir(Path::new(repo_root))?
+        .join("receipt-slots")
+        .join(fingerprint.to_hex()))
+}
+
+/// The slot one (head, base) pair is filed under.
+fn slot_path(repo_root: &str, check: &str, head: &str, base: &str) -> Result<std::path::PathBuf> {
+    Ok(slot_dir(repo_root, check)?.join(format!("{head}.{base}.json")))
+}
+
+/// The base the gate this receipt records actually judged (CLOUD-2253 A3):
+/// the speculation's base when a lap published one (`BATTEN_SPEC_BASE`), else
+/// the tracking ref. A published base that will not resolve is not a base, so
+/// the tracking ref answers.
+fn judged_base(facts: &RepoFacts) -> String {
+    std::env::var(crate::speculation::PUBLISHED_AS)
+        .ok()
+        .filter(|base| !base.trim().is_empty())
+        .and_then(|base| git::resolve_ref(Path::new("."), base.trim()).ok().flatten())
+        .unwrap_or_else(|| facts.main.clone())
+}
+
+/// The directory, under the canonical receipt store, that receipts pulled from
+/// the state repository are materialised into (CLOUD-1544).
+///
+/// **The stamp is the location.** A pulled statement is byte-identical to the
+/// one its producer minted, so nothing inside it can say "published" without
+/// changing every reader's bytes; where it lives says it instead. A subdirectory,
+/// as `overrides/` is, so every reader that lists the store's top-level files
+/// reads exactly what it read before.
+pub const PUBLISHED_DIR: &str = "published";
+
+/// Where a published receipt for `check` is materialised.
+fn published_path(repo_root: &str, check: &str) -> Result<std::path::PathBuf> {
+    let fingerprint = identity::scope_fingerprint(check, RECEIPT_SCOPE_KEY);
+    Ok(state::repo_state_dir(Path::new(repo_root))?
+        .join("receipts")
+        .join(PUBLISHED_DIR)
+        .join(format!("{}.json", fingerprint.to_hex())))
+}
+
+/// The [`Bound`] HEAD carries here, resolved as [`run_record`] resolves it.
+fn head_bound() -> Result<Bound> {
+    let policy = git::show(Path::new("."), "HEAD", crate::config_model::CONFIG_FILE)
+        .map_err(|_| {
+            UsageError::raise(
+                "batten.toml is not committed at HEAD, so there is no policy to digest",
+            )
+        })?
+        .into_bytes();
+    Ok(Bound {
+        policy_digest: hex_sha256(&policy),
+        config_epoch: crate::epoch::compute(Path::new("."), Some("HEAD"))?,
+    })
+}
+
+/// A head-keyed check's verdict over THIS checkout's stores: the canonical
+/// receipt, else the slot filed for this (head, trunk) pair (CLOUD-2253 A3).
+///
+/// THE SLOT ANSWERS ONLY A YES. The canonical receipt is the most recent and
+/// says why a miss is a miss — another head, another trunk — so a missing or
+/// stale slot leaves its verdict standing.
+///
+/// The mediated path reads this half only: it computes no config epoch, so the
+/// published fallback below stays off the hot path.
+fn local_head_validity(facts: &RepoFacts, check: &str) -> Validity {
+    let canonical = receipt_path(&facts.repo_root, check)
+        .ok()
+        .and_then(|path| load_statement(&path));
+    let verdict = validity(
+        canonical.as_ref(),
+        check,
+        &facts.head,
+        &facts.main,
+        &facts.git_dir,
+    );
+    if verdict == Validity::Valid {
+        return verdict;
+    }
+    let slot = slot_path(&facts.repo_root, check, &facts.head, &facts.main)
+        .ok()
+        .and_then(|path| load_statement(&path));
+    match validity(
+        slot.as_ref(),
+        check,
+        &facts.head,
+        &facts.main,
+        &facts.git_dir,
+    ) {
+        Validity::Valid => Validity::Valid,
+        _ => verdict,
+    }
+}
+
+/// `head`-keyed validity: this checkout's stores first, the published one where
+/// they answered `Missing` (CLOUD-1544).
+///
+/// Only `Missing` falls through. Every other local verdict is a statement about a
+/// receipt THIS checkout minted, and a published one must not paper over a
+/// stale or refuted local reading.
+fn head_validity(facts: &RepoFacts, check: &str) -> Result<Validity> {
+    let local = local_head_validity(facts, check);
+    if local != Validity::Missing {
+        return Ok(local);
+    }
+    let Some(published) = load_statement(&published_path(&facts.repo_root, check)?) else {
+        return Ok(local);
+    };
+    Ok(published_validity(
+        Some(&published),
+        check,
+        &facts.head,
+        &facts.main,
+        &head_bound()?,
+    ))
+}
+
+/// File `statement` under its (head, base) slot, and keep the newest
+/// [`KEPT_SLOTS`].
+fn file_slot(repo_root: &str, check: &str, statement: &Statement) -> Result<()> {
+    let head = statement
+        .subject
+        .first()
+        .map(|subject| subject.digest.git_commit.as_str())
+        .unwrap_or_default();
+    let path = slot_path(repo_root, check, head, &statement.predicate.recorded_main)?;
+    let dir = slot_dir(repo_root, check)?;
+    std::fs::create_dir_all(&dir)
+        .with_context(|| format!("create the receipt slots {}", dir.display()))?;
+    let json = serde_json::to_string_pretty(statement)?;
+    crate::durable::replace(&path, format!("{json}\n"))
+        .with_context(|| format!("write the receipt slot {}", path.display()))?;
+    evict_slots(&dir, &path);
+    Ok(())
+}
+
+/// Drop all but the newest [`KEPT_SLOTS`] slots in `dir`, never `kept`. Best
+/// effort: an eviction that fails costs disk, never a verdict.
+fn evict_slots(dir: &Path, kept: &Path) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let mut slots: Vec<(std::time::SystemTime, std::path::PathBuf)> = entries
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| path != kept)
+        .map(|path| {
+            let at = std::fs::metadata(&path)
+                .and_then(|meta| meta.modified())
+                .unwrap_or(std::time::UNIX_EPOCH);
+            (at, path)
+        })
+        .collect();
+    slots.sort();
+    let over = (slots.len() + 1).saturating_sub(KEPT_SLOTS);
+    for (_, path) in slots.into_iter().take(over) {
+        let _ = std::fs::remove_file(path);
+    }
 }
 
 /// Resolve the verdict for each named check, for a caller that must not do I/O.
@@ -589,7 +787,7 @@ impl SourcedStore {
     /// CLOUD-859's fix, since the existing three-valued contract already carries
     /// it and no new verdict was needed.
     pub(crate) fn record(&self, check: &str) -> Option<crate::facts::Sourced> {
-        crate::facts::Sourced::parse(&std::fs::read_to_string(self.path(check)?).ok()?)
+        crate::facts::Sourced::parse(&crate::fsio::read_to_string(self.path(check)?).ok()?)
     }
 
     /// Whether `check`'s record is older than the declaring row's bound
@@ -651,7 +849,7 @@ fn sourced_store_in(
         None
     };
     // `named` over an agent-sourced check is REFUSED AT LOAD
-    // (`facts::validate_keying`), so this is reachable only from a policy
+    // (`rules::validate_keying`), so this is reachable only from a policy
     // assembled in-process. Resolved anyway rather than left to a wildcard arm
     // below: `_ =>` would silently absorb a fourth keying, which is the shape
     // `facts.rs`'s own no-wildcard scan exists to refuse.
@@ -667,7 +865,7 @@ fn sourced_store_in(
             ReceiptKey::Branch => branch.clone()?,
             ReceiptKey::Named => named.clone()?,
             // `delta` over an agent-sourced check is REFUSED AT LOAD
-            // (`facts::validate_keying`) for the reason `named` is, one step
+            // (`rules::validate_keying`) for the reason `named` is, one step
             // further along: the identity needs the row's `key_base`, and a
             // `[[fact]]` row has no such column to read one from. So this is
             // reachable only from a policy assembled in-process, and it answers
@@ -687,13 +885,13 @@ fn sourced_store_in(
 /// sides ask on different calls: the read resolves subjects for the checks a
 /// mediated call requires, and the write resolves one for the fact whose command
 /// just ran. That difference is exactly why
-/// [`crate::facts::validate_keying`] refuses `named` for an agent-sourced
+/// [`crate::config_check::rules::validate_keying`] refuses `named` for an agent-sourced
 /// check — this envelope carries no subject to project — so the third arm is
 /// unreachable through a loaded config and is written out rather than wildcarded.
-fn sourced_subject(key: ReceiptKey, named: Option<&str>) -> Option<String> {
+fn sourced_subject(here: &Path, key: ReceiptKey, named: Option<&str>) -> Option<String> {
     match key {
-        ReceiptKey::Head => git::head_commit(Path::new(".")).ok(),
-        ReceiptKey::Branch => git::current_branch(Path::new(".")).ok()?,
+        ReceiptKey::Head => git::head_commit(here).ok(),
+        ReceiptKey::Branch => git::current_branch(here).ok()?,
         ReceiptKey::Named => named
             .filter(|value| safe_subject(value))
             .map(ToOwned::to_owned),
@@ -730,12 +928,24 @@ pub fn record_sourced(
     named: Option<&str>,
     record: &crate::facts::Sourced,
 ) -> Result<()> {
-    let git_dir = git::git_dir(Path::new(".")).map_err(|_| {
+    record_sourced_in(Path::new("."), name, key, named, record)
+}
+
+/// [`record_sourced`] filed in the checkout at `here`, so a case writes into its
+/// own fixture repository and never into the suite's checkout (CLOUD-2904).
+fn record_sourced_in(
+    here: &Path,
+    name: &str,
+    key: ReceiptKey,
+    named: Option<&str>,
+    record: &crate::facts::Sourced,
+) -> Result<()> {
+    let git_dir = git::git_dir(here).map_err(|_| {
         UsageError::raise(
             "not a git repository, so there is nowhere an agent-sourced fact could be recorded",
         )
     })?;
-    let subject = sourced_subject(key, named).ok_or_else(|| {
+    let subject = sourced_subject(here, key, named).ok_or_else(|| {
         UsageError::raise(
             "the declared key's subject does not resolve in this checkout, so there is no subject to file an agent-sourced record under",
         )
@@ -746,34 +956,6 @@ pub fn record_sourced(
     }
     crate::durable::replace(path, record.render())?;
     Ok(())
-}
-
-/// Whether `subject` is safe to use as one path component under the receipt
-/// store (CLOUD-987).
-///
-/// **Refused, never rewritten.** The subject of a [`ReceiptKey::Named`] receipt
-/// comes out of the mediated call's own arguments, so it is the least trusted
-/// string in the envelope that this engine turns into a filename. Rewriting a bad
-/// one — stripping separators, replacing `..` — would file two different subjects
-/// under one receipt and let a fresh read of A authorise a stale write to B,
-/// which is precisely the confusion `ReceiptKey::Named` exists to prevent. So a
-/// value that is not already a single safe component is not a subject at all.
-///
-/// The bound is structural rather than a format: what a tracker's identifiers
-/// look like is a consumer fact (non-negotiable rule 1), and a row that wants to
-/// insist on a shape has `when_present` and its own selection for that. What the
-/// core knows is that a path component may not be empty, may not be `.` or `..`,
-/// may not contain a separator or a NUL, and may not be unboundedly long.
-///
-/// `pub(crate)` since CLOUD-1024: the mint that WRITES a named receipt has to
-/// refuse exactly the subjects the reader refuses, or the two halves disagree
-/// about which filenames exist.
-pub(crate) fn safe_subject(subject: &str) -> bool {
-    !subject.is_empty()
-        && subject != "."
-        && subject != ".."
-        && subject.len() <= 128
-        && !subject.contains(|ch: char| ch == '/' || ch == '\\' || ch == '\0' || ch.is_control())
 }
 
 /// The subject a [`ReceiptKey::Delta`] receipt is filed under (CLOUD-1547).
@@ -873,7 +1055,7 @@ pub(crate) fn verdicts(
     subject: Option<&str>,
     key_bases: &BTreeMap<String, String>,
     max_ages: &BTreeMap<String, u64>,
-    field_bounds: &BTreeMap<String, crate::rules::FieldBound>,
+    field_bounds: &BTreeMap<String, crate::config_model::FieldBound>,
     now: std::time::SystemTime,
 ) -> Option<BTreeMap<String, Validity>> {
     let facts = repo_facts().ok()?;
@@ -891,7 +1073,7 @@ pub(crate) fn verdicts(
     let branch = checks
         .values()
         .any(|key| *key == ReceiptKey::Branch)
-        .then(|| branch_facts(&facts.main))
+        .then(|| branch_facts(Path::new(&facts.repo_root), &facts.main))
         .flatten();
     // The same shape one line up, and the same reason (CLOUD-987): resolved only
     // when a `named`-keyed row asked, and `None` is could-not-look for the
@@ -942,22 +1124,18 @@ pub(crate) fn verdicts(
                     None
                 };
                 let verdict = match key {
-                    ReceiptKey::Head => {
-                        let statement = receipt_path(&facts.repo_root, check)
-                            .ok()
-                            .and_then(|path| load_statement(&path));
-                        validity(
-                            statement.as_ref(),
-                            check,
-                            &facts.head,
-                            &facts.main,
-                            &facts.git_dir,
-                        )
-                    }
+                    ReceiptKey::Head => local_head_validity(&facts, check),
                     // `None` above is could-not-look for this check: allow it.
                     ReceiptKey::Branch => {
                         branch.as_ref().map_or(Validity::Valid, |(branch, own)| {
-                            branch_validity(&facts.git_dir, check, branch, &facts.head, *own)
+                            branch_validity(
+                                Path::new(&facts.repo_root),
+                                &facts.git_dir,
+                                check,
+                                branch,
+                                &facts.head,
+                                *own,
+                            )
                         })
                     }
                     ReceiptKey::Named => named.as_ref().map_or(Validity::Valid, |value| {
@@ -1049,9 +1227,9 @@ pub(crate) fn verdicts(
 /// rule is pinned to `RuleScope::MediatedCall`, so `verify` had re-implemented
 /// the branch-keyed question in shell as a presence test — strictly weaker than
 /// this, and green on the exact restart CLOUD-516 was filed for.
-fn branch_facts(main: &str) -> Option<(String, usize)> {
-    let branch = crate::git::current_branch(Path::new(".")).ok()??;
-    let own = own_commit_count(main)?;
+fn branch_facts(root: &Path, main: &str) -> Option<(String, usize)> {
+    let branch = crate::git::current_branch(root).ok()??;
+    let own = own_commit_count(root, main)?;
     Some((branch, own))
 }
 
@@ -1068,8 +1246,8 @@ fn branch_facts(main: &str) -> Option<(String, usize)> {
 /// legal precisely because selecting which commits to count is a different act
 /// from concluding one commit contains another. This counts; it concludes
 /// nothing about whether the branch landed.
-fn own_commit_count(main: &str) -> Option<usize> {
-    git::commit_count(Path::new("."), &format!("{main}..HEAD")).ok()
+fn own_commit_count(root: &Path, main: &str) -> Option<usize> {
+    git::commit_count(root, &format!("{main}..HEAD")).ok()
 }
 
 /// The filename a branch-keyed receipt takes: `<check>.<branch>`, with every
@@ -1119,7 +1297,7 @@ fn named_validity(git_dir: &str, check: &str, subject: &str) -> Validity {
     let path = Path::new(git_dir)
         .join("batten-receipts")
         .join(format!("{check}.{subject}"));
-    if std::fs::read_to_string(&path).is_ok() {
+    if crate::fsio::read_to_string(&path).is_ok() {
         Validity::Valid
     } else {
         Validity::Missing
@@ -1188,8 +1366,17 @@ fn named_validity(git_dir: &str, check: &str, subject: &str) -> Validity {
 ///
 /// Read from `--git-dir`, so it resolves per worktree and one worktree's claim
 /// cannot vouch for another's.
-fn branch_validity(git_dir: &str, check: &str, branch: &str, head: &str, own: usize) -> Validity {
-    branch_validity_with(git_dir, check, branch, head, own, moved_forward)
+fn branch_validity(
+    root: &Path,
+    git_dir: &str,
+    check: &str,
+    branch: &str,
+    head: &str,
+    own: usize,
+) -> Validity {
+    branch_validity_with(git_dir, check, branch, head, own, |base, head| {
+        moved_forward(root, base, head)
+    })
 }
 
 /// How many commits `head` carries that `base` does not, or `None` for "could
@@ -1200,8 +1387,8 @@ fn branch_validity(git_dir: &str, check: &str, branch: &str, head: &str, own: us
 /// range forms alone because selecting which commits to count is a different act
 /// from drawing that conclusion. This counts; it concludes nothing about
 /// landing.
-fn moved_forward(base: &str, head: &str) -> Option<usize> {
-    git::commit_count(Path::new("."), &format!("{base}..{head}")).ok()
+fn moved_forward(root: &Path, base: &str, head: &str) -> Option<usize> {
+    git::commit_count(root, &format!("{base}..{head}")).ok()
 }
 
 /// [`branch_validity`] with the range reader injected, so the direction below is
@@ -1217,7 +1404,7 @@ fn branch_validity_with(
     let path = Path::new(git_dir)
         .join("batten-receipts")
         .join(branch_receipt_name(check, branch));
-    let Ok(body) = std::fs::read_to_string(&path) else {
+    let Ok(body) = crate::fsio::read_to_string(&path) else {
         return Validity::Missing;
     };
     let recorded = recorded_base(&body);
@@ -1334,7 +1521,15 @@ fn lexically_normal(path: &Path) -> std::path::PathBuf {
 /// resolve, a git that will not answer — each resolves to "not judgeable", the
 /// fail-open posture CLOUD-312 §5 preserves end to end.
 pub(crate) fn judgeable(path: &str) -> bool {
-    let Ok(root) = crate::git::repo_root(Path::new(".")) else {
+    judgeable_in(Path::new("."), path)
+}
+
+/// [`judgeable`], for `path` read relative to `dir` rather than to this
+/// process's working directory — the one a case drives against a fixture
+/// repository, so its answer is about that fixture and never about whichever
+/// checkout the suite happens to run in (CLOUD-2904).
+fn judgeable_in(dir: &Path, path: &str) -> bool {
+    let Ok(root) = crate::git::repo_root(dir) else {
         return false;
     };
     // `absolute` rather than `canonicalize`: the file need not exist yet, which
@@ -1356,7 +1551,7 @@ pub(crate) fn judgeable(path: &str) -> bool {
     // over-denying claim gate is the false-positive rate that gets a guard
     // switched off.
     let Ok(absolute) =
-        std::path::absolute(Path::new(path)).map(|absolute| lexically_normal(&absolute))
+        std::path::absolute(dir.join(path)).map(|absolute| lexically_normal(&absolute))
     else {
         return false;
     };
@@ -1372,7 +1567,7 @@ pub(crate) fn judgeable(path: &str) -> bool {
     let Some(target) = absolute.to_str() else {
         return false;
     };
-    !crate::git::check_ignore(Path::new("."), target).unwrap_or(true)
+    !crate::git::check_ignore(dir, target).unwrap_or(true)
 }
 
 /// Load a statement, failing closed: an unreadable, unparseable, or
@@ -1396,71 +1591,22 @@ pub fn head_receipt_valid(check: &str) -> bool {
     let Ok(facts) = repo_facts() else {
         return false;
     };
-    let Ok(path) = receipt_path(&facts.repo_root, check) else {
-        return false;
-    };
-    validity(
-        load_statement(&path).as_ref(),
-        check,
-        &facts.head,
-        &facts.main,
-        &facts.git_dir,
-    ) == Validity::Valid
+    // Through the published fallback (CLOUD-1544): a lifecycle reader, never
+    // the mediated path, so the epoch it may compute is off the hot path.
+    head_validity(&facts, check).is_ok_and(|verdict| verdict == Validity::Valid)
 }
 
 fn load_statement(path: &Path) -> Option<Statement> {
-    let bytes = std::fs::read(path).ok()?;
+    let bytes = crate::fsio::read(path).ok()?;
     let statement: Statement = serde_json::from_slice(&bytes).ok()?;
     (statement.statement_type == STATEMENT_TYPE && statement.predicate_type == PREDICATE_TYPE)
         .then_some(statement)
 }
 
-/// Lowercase hex SHA-256 over `bytes` — the value an in-toto digest set's
-/// `sha256` key carries.
-///
-/// Public because the envelope's digest vocabulary is shared: [`crate::design`]
-/// binds a capture with the same digest-set spelling, and a second hash of the
-/// same bytes written in a second module is how two "sha256" fields come to
-/// disagree. A *plain* digest, deliberately not [`crate::identity`]'s
-/// domain-tagged construction: this value is produced by whatever attestation
-/// tool wrote the record, so it must be the ordinary one anybody can reproduce.
-#[must_use]
-pub fn hex_sha256(bytes: &[u8]) -> String {
-    let digest = Sha256::digest(bytes);
-    let mut hex = String::with_capacity(digest.len() * 2);
-    for byte in digest {
-        // Infallible nibble pushes, the same shape as `Fingerprint::to_hex`.
-        hex.push(char::from_digit(u32::from(byte >> 4), 16).unwrap_or('0'));
-        hex.push(char::from_digit(u32::from(byte & 0x0f), 16).unwrap_or('0'));
-    }
-    hex
-}
-
-/// Format seconds since the Unix epoch as RFC 3339 UTC (`1970-01-01T00:00:00Z`).
-///
-/// The date half comes from [`crate::waiver::Date::from_unix_seconds`] — one
-/// hand-written civil-from-days conversion in the tree rather than two, so a date
-/// still costs no dependency and cannot be right in one module and wrong in the
-/// other. Only the time-of-day arithmetic is here.
-///
-/// **The receipt's validity never reads this timestamp — expiry is a git fact,
-/// never a clock.** That is right *here* and does not generalise: a receipt's
-/// claim is about a specific SHA, so a SHA comparison is the invalidator. A
-/// waiver's claim is a human judgement whose warrant decays in calendar time and
-/// leaves no git trace, which is why [`crate::waiver`] does evaluate a clock — at
-/// its boundary, with the date threaded in as data. Different claims, different
-/// invalidators (CLOUD-208).
-#[must_use]
-pub fn rfc3339_utc(unix_seconds: u64) -> String {
-    let date = crate::waiver::Date::from_unix_seconds(unix_seconds);
-    let second_of_day = unix_seconds % 86_400;
-    let (hour, minute, second) = (
-        second_of_day / 3_600,
-        (second_of_day % 3_600) / 60,
-        second_of_day % 60,
-    );
-    format!("{}T{hour:02}:{minute:02}:{second:02}Z", date.text())
-}
+/// Format seconds since the Unix epoch as RFC 3339 UTC (`1970-01-01T00:00:00Z`):
+/// the one formatter, kept in the `clock` leaf beside the civil-date arithmetic
+/// it reads (CLOUD-2789).
+use crate::clock::rfc3339_utc;
 
 /// How many paths differ from HEAD, or [`None`] when the tree matches it.
 ///
@@ -1631,7 +1777,7 @@ pub fn run_record(check: &str, mode: Mode, err: &mut dyn Write) -> Result<ExitCo
     validate_check_name(check)?;
     let facts = repo_facts()?;
     tree_is_head(&facts, err)?;
-    let policy = git::show(Path::new("."), "HEAD", config::CONFIG_FILE)
+    let policy = git::show(Path::new("."), "HEAD", crate::config_model::CONFIG_FILE)
         .map_err(|_| {
             UsageError::raise(
                 "batten.toml is not committed at HEAD, so there is no policy to digest",
@@ -1660,7 +1806,11 @@ pub fn run_record(check: &str, mode: Mode, err: &mut dyn Write) -> Result<ExitCo
         predicate_type: PREDICATE_TYPE.to_owned(),
         predicate: Predicate {
             check: check.to_owned(),
-            recorded_main: facts.main.clone(),
+            // THE BASE THE GATE JUDGED, NOT THE ONE THE REF HAPPENS TO READ
+            // (CLOUD-2253 A3). Under a speculation the gate ran over the
+            // holder's head; recording the tracking ref made a won bet read
+            // StaleMain and re-run a gate over byte-identical inputs.
+            recorded_main: judged_base(&facts),
             recorded_git_dir: facts.git_dir.clone(),
             policy_digest: PolicyDigest {
                 sha256: hex_sha256(&policy),
@@ -1685,6 +1835,16 @@ pub fn run_record(check: &str, mode: Mode, err: &mut dyn Write) -> Result<ExitCo
     let json = serde_json::to_string_pretty(&statement)?;
     crate::durable::replace(&canonical, format!("{json}\n"))
         .with_context(|| format!("write the receipt {}", canonical.display()))?;
+    // AND ITS (HEAD, BASE) SLOT, so a return to a pair already judged is a hit
+    // however many receipts were written since (CLOUD-2253 A3). A speculative
+    // gate files the tracking ref's slot too: the bet is still pending while
+    // the trunk stands, and the receipt it replaces answered that pair.
+    file_slot(&facts.repo_root, check, &statement)?;
+    if statement.predicate.recorded_main != facts.main {
+        let mut pending = statement.clone();
+        pending.predicate.recorded_main.clone_from(&facts.main);
+        file_slot(&facts.repo_root, check, &pending)?;
+    }
 
     let compat_dir = Path::new(&facts.git_dir).join("batten-receipts");
     std::fs::create_dir_all(&compat_dir)
@@ -1743,7 +1903,7 @@ fn record_agent_context(
     mode: Mode,
     err: &mut dyn Write,
 ) -> Result<()> {
-    let config = crate::config::load(Path::new(crate::config::CONFIG_FILE))?;
+    let config = crate::config::load(Path::new(crate::config_model::CONFIG_FILE))?;
     let declared = config
         .transcript
         .as_ref()
@@ -1808,7 +1968,7 @@ fn record_agent_context(
             )?;
             return Ok(());
         }
-        crate::transcript::Capability::Present(stream) => stream,
+        crate::transcript::Capability::Present(stream) => *stream,
     };
 
     let statement = AgentStatement {
@@ -1900,8 +2060,6 @@ struct StatusReport<'a> {
 /// A **detached HEAD under `--key branch`** is an internal error rather than a
 /// verdict, for [`branch_facts`]'s reason: a rebase detaches, and answering
 /// "not valid" there would make every rebase look like an unclaimed branch.
-//MUTANT delta-base-unchecked|s@^            if git::resolve_ref(Path::new(&facts.repo_root), base)?.is_none() {$@            if false {@|an_unresolvable_base_is_refused_rather_than_read_missing
-//MUTANT delta-status-unread|s@^                    let verdict = named_validity(&facts.git_dir, check, &identity);$@                    let verdict = Validity::Valid;@|a_dispatched_review_answers_only_once_it_completes
 pub fn run_status(
     check: &str,
     key: ReceiptKey,
@@ -1966,26 +2124,21 @@ pub fn run_status(
                 None => ("-".to_owned(), Validity::Missing),
             }
         }
-        ReceiptKey::Head => {
-            let statement = load_statement(&receipt_path(&facts.repo_root, check)?);
-            (
-                facts.head.clone(),
-                validity(
-                    statement.as_ref(),
-                    check,
-                    &facts.head,
-                    &facts.main,
-                    &facts.git_dir,
-                ),
-            )
-        }
+        ReceiptKey::Head => (facts.head.clone(), head_validity(&facts, check)?),
         ReceiptKey::Branch => {
-            let Some((branch, own)) = branch_facts(&facts.main) else {
+            let Some((branch, own)) = branch_facts(Path::new(&facts.repo_root), &facts.main) else {
                 return Err(anyhow::anyhow!(
                     "receipt status --key branch: HEAD is detached, so there is no branch to key a receipt on. This is not a verdict about the receipt — a rebase detaches, and reporting one here would read as an unclaimed branch."
                 ));
             };
-            let verdict = branch_validity(&facts.git_dir, check, &branch, &facts.head, own);
+            let verdict = branch_validity(
+                Path::new(&facts.repo_root),
+                &facts.git_dir,
+                check,
+                &branch,
+                &facts.head,
+                own,
+            );
             (branch, verdict)
         }
     };
@@ -2038,8 +2191,6 @@ pub fn run_status(
 /// verdict about any receipt. And a [`UsageError`] for `--json` beside more than
 /// one check: the verb's document is ONE verdict, and several documents on one
 /// stream are not one document.
-//MUTANT-SUITE crates/batten/src/receipt.rs
-//MUTANT receipt-any-stops-at-the-first|s@        if verdict == ExitCode::Success {@        if verdict != ExitCode::Success {@|any_one_valid_receipt_satisfies_the_walk
 pub fn run_status_any(
     checks: &[String],
     key: ReceiptKey,
@@ -2223,14 +2374,9 @@ pub fn run_verified(out: &mut dyn Write) -> Result<ExitCode> {
     let required = verified_by(&authority)?;
     let mut unverified = Vec::new();
     for check in &required {
-        let statement = load_statement(&receipt_path(&facts.repo_root, check)?);
-        let verdict = validity(
-            statement.as_ref(),
-            check,
-            &facts.head,
-            &facts.main,
-            &facts.git_dir,
-        );
+        // The published fallback too (CLOUD-1544), so a head a sibling container
+        // verified and published reads verified here.
+        let verdict = head_validity(&facts, check)?;
         if verdict != Validity::Valid {
             unverified.push((check.clone(), verdict));
         }
@@ -2275,8 +2421,8 @@ pub fn run_verified(out: &mut dyn Write) -> Result<ExitCode> {
 /// of its lines carries the verdict is a different question with a different
 /// answer; a `mode = "replace"` receipt has exactly one line, which is the family
 /// this column is for.
-fn field_refutes(path: &Path, bound: &crate::rules::FieldBound) -> bool {
-    let Ok(text) = std::fs::read_to_string(path) else {
+fn field_refutes(path: &Path, bound: &crate::config_model::FieldBound) -> bool {
+    let Ok(text) = crate::fsio::read_to_string(path) else {
         return false;
     };
     let Some(line) = text.lines().next() else {
@@ -2317,6 +2463,7 @@ const fn key_token(key: ReceiptKey) -> &'static str {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
 
+    #[cfg(test)]
     /// The three-valued read, and the two arms that must ALLOW.
     ///
     /// `Refuted` is the only verdict in this module that is a statement about
@@ -2328,7 +2475,7 @@ mod tests {
     fn a_field_bound_refutes_only_a_field_that_says_something_else() {
         let dir = std::env::temp_dir().join(format!("batten-field-bound-{}", std::process::id()));
         std::fs::create_dir_all(&dir).expect("the scratch directory is creatable");
-        let bound = crate::rules::FieldBound {
+        let bound = crate::config_model::FieldBound {
             at: 6,
             is: "ready".to_owned(),
         };
@@ -2496,27 +2643,35 @@ mod tests {
     /// checkout: the head commit, or a named subject that is one safe component.
     #[test]
     fn the_agent_sourced_subject_is_resolved_from_the_checkout() {
-        let head = git::head_commit(Path::new(".")).unwrap();
-        assert_eq!(sourced_subject(ReceiptKey::Head, None), Some(head.clone()));
+        let root = crate::fixture_root::fixture_root(
+            "the_agent_sourced_subject_is_resolved_from_the_checkout",
+        );
+        crate::gitwrite::commit_paths(&root, &[], "fixture").unwrap();
+        let head = git::head_commit(&root).unwrap();
         assert_eq!(
-            sourced_subject(ReceiptKey::Named, Some("CLOUD-1")).as_deref(),
+            sourced_subject(&root, ReceiptKey::Head, None),
+            Some(head.clone())
+        );
+        assert_eq!(
+            sourced_subject(&root, ReceiptKey::Named, Some("CLOUD-1")).as_deref(),
             Some("CLOUD-1")
         );
-        assert_eq!(sourced_subject(ReceiptKey::Named, Some("a/b")), None);
-        assert_eq!(sourced_subject(ReceiptKey::Delta, None), None);
+        assert_eq!(sourced_subject(&root, ReceiptKey::Named, Some("a/b")), None);
+        assert_eq!(sourced_subject(&root, ReceiptKey::Delta, None), None);
 
         let (open, closed) = (String::from("open"), String::from("closed"));
-        let empty = sourced_store(&[], None).unwrap();
+        let empty = sourced_store_in(&root, &[], None).unwrap();
         assert!(empty.subjects.is_empty());
-        let by_head = sourced_store(&[(&open, &ReceiptKey::Head)], None).unwrap();
+        let by_head = sourced_store_in(&root, &[(&open, &ReceiptKey::Head)], None).unwrap();
         assert_eq!(by_head.subjects.get("open"), Some(&head));
-        let by_name = sourced_store(&[(&closed, &ReceiptKey::Named)], Some("CLOUD-1")).unwrap();
+        let by_name =
+            sourced_store_in(&root, &[(&closed, &ReceiptKey::Named)], Some("CLOUD-1")).unwrap();
         assert_eq!(
             by_name.subjects.get("closed").map(String::as_str),
             Some("CLOUD-1")
         );
-        assert!(sourced_store(&[(&closed, &ReceiptKey::Named)], Some("../x")).is_none());
-        assert!(sourced_store(&[(&closed, &ReceiptKey::Delta)], None).is_none());
+        assert!(sourced_store_in(&root, &[(&closed, &ReceiptKey::Named)], Some("../x")).is_none());
+        assert!(sourced_store_in(&root, &[(&closed, &ReceiptKey::Delta)], None).is_none());
     }
 
     /// A branch-keyed record files under the checkout's branch, and a detached
@@ -2548,23 +2703,41 @@ mod tests {
     /// The write files the record exactly where the store reads it.
     #[test]
     fn an_agent_sourced_record_is_written_where_the_store_reads_it() {
-        /// Removes the record this case writes into the checkout's own store,
-        /// whether or not an assertion below fails first. The store reads the
-        /// checkout it runs in, having no root to take (CLOUD-2475).
+        /// Removes the record this case writes into its fixture's store,
+        /// whether or not an assertion below fails first (CLOUD-2904: the store
+        /// and the writer take the fixture's root, never the checkout's).
         struct Removed(std::path::PathBuf);
         impl Drop for Removed {
             fn drop(&mut self) {
                 let _ = std::fs::remove_file(&self.0);
             }
         }
+        let root = crate::fixture_root::fixture_root(
+            "an_agent_sourced_record_is_written_where_the_store_reads_it",
+        );
+        crate::gitwrite::commit_paths(&root, &[], "fixture").unwrap();
         // UNIQUE TO THIS RUN, so no record an earlier run left behind can
         // answer the read-back for this one.
-        let name = format!("batten-unit-{}-{}", std::process::id(), crate::now_unix());
-        let store = sourced_store(&[(&name, &ReceiptKey::Named)], Some("CLOUD-1")).unwrap();
+        let name = format!(
+            "batten-unit-{}-{}",
+            std::process::id(),
+            crate::clock::now_unix()
+        );
+        let store =
+            sourced_store_in(&root, &[(&name, &ReceiptKey::Named)], Some("CLOUD-1")).unwrap();
         let _written = Removed(store.path(&name).unwrap());
-        record_sourced(&name, ReceiptKey::Named, Some("CLOUD-1"), &sourced(5)).unwrap();
+        record_sourced_in(
+            &root,
+            &name,
+            ReceiptKey::Named,
+            Some("CLOUD-1"),
+            &sourced(5),
+        )
+        .unwrap();
         assert_eq!(store.record(&name).map(|record| record.rows), Some(5));
-        assert!(record_sourced(&name, ReceiptKey::Named, Some("a/b"), &sourced(5)).is_err());
+        assert!(
+            record_sourced_in(&root, &name, ReceiptKey::Named, Some("a/b"), &sourced(5)).is_err()
+        );
     }
 
     // -- The predicate: all four verdicts, in the bash readers' order. --
@@ -2782,7 +2955,7 @@ mod tests {
         let _ = std::fs::remove_file(&path);
     }
 
-    /// `#MUTANT receipt-any-stops-at-the-first` reddens here. The disjunction
+    /// A mutant stopping at the first kind reddens here. The disjunction
     /// `verify`'s claim step asks (CLOUD-843): the second kind answering is
     /// enough, and the third is never read.
     #[test]
@@ -2879,7 +3052,7 @@ mod tests {
             id: "CLOUD-1".to_owned(),
             status: "Todo".to_owned(),
             assigned: false,
-            live_pr: None,
+            live_prs: Vec::new(),
             description: None,
             created_at: None,
         }];
@@ -2955,6 +3128,7 @@ mod tests {
         std::fs::create_dir_all(&receipts).expect("create the store");
         std::fs::write(receipts.join("claim.branch"), body).expect("mint");
         branch_validity(
+            &crate::fixture_root::fixture_root("receipt-branch-validity"),
             dir.to_str().expect("utf-8 scratch path"),
             "claim",
             "branch",
@@ -3076,6 +3250,7 @@ mod tests {
         let dir = tempdir("absent");
         assert_eq!(
             branch_validity(
+                &crate::fixture_root::fixture_root("receipt-branch-validity"),
                 dir.to_str().expect("utf-8 scratch path"),
                 "claim",
                 "branch",
@@ -3145,7 +3320,14 @@ mod tests {
         )
         .expect("mint twice");
         assert_eq!(
-            branch_validity(git_dir, "issue-search", "feature", "head", 0),
+            branch_validity(
+                &crate::fixture_root::fixture_root("receipt-branch-validity"),
+                git_dir,
+                "issue-search",
+                "feature",
+                "head",
+                0
+            ),
             Validity::Valid,
             "re-running the prescribed step must clear the refusal that prescribed it"
         );
@@ -3159,7 +3341,14 @@ mod tests {
         )
         .expect("mint twice, both before the restart");
         assert_eq!(
-            branch_validity(git_dir, "issue-search", "restarted", "head", 0),
+            branch_validity(
+                &crate::fixture_root::fixture_root("receipt-branch-validity"),
+                git_dir,
+                "issue-search",
+                "restarted",
+                "head",
+                0
+            ),
             Validity::StaleMain,
             "reading the newest base must not grandfather in a pre-restart receipt"
         );
@@ -3186,7 +3375,7 @@ mod tests {
             id: "CLOUD-1".to_owned(),
             status: "Todo".to_owned(),
             assigned: false,
-            live_pr: None,
+            live_prs: Vec::new(),
             description: None,
             created_at: None,
         }];
@@ -3200,7 +3389,7 @@ mod tests {
             "2026-01-01T00:00:00Z",
         )
         .expect("mint a receipt");
-        let text = std::fs::read_to_string(&minted).expect("read the minted receipt");
+        let text = crate::fsio::read_to_string(&minted).expect("read the minted receipt");
         assert_eq!(
             recorded_base(&text),
             Some("deadbeef".to_owned()),
@@ -3245,30 +3434,65 @@ mod tests {
         let dir = tempdir("addressing");
         let git_dir = dir.to_str().expect("utf-8 scratch path");
         assert_eq!(
-            branch_validity(git_dir, "claim", "feature", "aaa", 0),
+            branch_validity(
+                &crate::fixture_root::fixture_root("receipt-branch-validity"),
+                git_dir,
+                "claim",
+                "feature",
+                "aaa",
+                0
+            ),
             Validity::Missing
         );
         let receipts = dir.join("batten-receipts");
         std::fs::create_dir_all(&receipts).expect("create the store");
         std::fs::write(receipts.join("claim.feature"), "CLOUD-444\nbase aaa\n").expect("mint");
         assert_eq!(
-            branch_validity(git_dir, "claim", "feature", "aaa", 0),
+            branch_validity(
+                &crate::fixture_root::fixture_root("receipt-branch-validity"),
+                git_dir,
+                "claim",
+                "feature",
+                "aaa",
+                0
+            ),
             Validity::Valid
         );
         // A new commit still cannot invalidate it — the asymmetry the second
         // keying exists for, and the one thing CLOUD-516 did not change.
         assert_eq!(
-            branch_validity(git_dir, "claim", "feature", "aaa", 12),
+            branch_validity(
+                &crate::fixture_root::fixture_root("receipt-branch-validity"),
+                git_dir,
+                "claim",
+                "feature",
+                "aaa",
+                12
+            ),
             Validity::Valid
         );
         // A receipt for another branch does not vouch for this one.
         assert_eq!(
-            branch_validity(git_dir, "claim", "other", "aaa", 0),
+            branch_validity(
+                &crate::fixture_root::fixture_root("receipt-branch-validity"),
+                git_dir,
+                "claim",
+                "other",
+                "aaa",
+                0
+            ),
             Validity::Missing
         );
         // Nor does another check's receipt on the same branch.
         assert_eq!(
-            branch_validity(git_dir, "verify", "feature", "aaa", 0),
+            branch_validity(
+                &crate::fixture_root::fixture_root("receipt-branch-validity"),
+                git_dir,
+                "verify",
+                "feature",
+                "aaa",
+                0
+            ),
             Validity::Missing
         );
         // A directory at the path is not a receipt: reading it fails, which is
@@ -3276,7 +3500,14 @@ mod tests {
         // nothing.
         std::fs::create_dir_all(receipts.join("claim.dir")).expect("create a directory");
         assert_eq!(
-            branch_validity(git_dir, "claim", "dir", "aaa", 0),
+            branch_validity(
+                &crate::fixture_root::fixture_root("receipt-branch-validity"),
+                git_dir,
+                "claim",
+                "dir",
+                "aaa",
+                0
+            ),
             Validity::Missing
         );
     }
@@ -3407,24 +3638,35 @@ mod tests {
     /// or ignored. The case runs in the crate directory, inside this checkout.
     #[test]
     fn only_a_path_of_the_work_in_this_tree_is_judgeable() {
-        assert!(judgeable("Cargo.toml"));
+        // A FIXTURE REPOSITORY, never the checkout the suite runs in (CLOUD-2904):
+        // read from a linked worktree, the checkout's root is the MAIN one, so
+        // the same assertions failed there and passed in the main checkout.
+        let repo = crate::scratch::scratch("receipt-judgeable");
+        crate::gitwrite::init_on_main(&repo).expect("init");
+        std::fs::write(repo.join(".gitignore"), "/target\n").expect("ignore");
+        std::fs::create_dir_all(repo.join("crate")).expect("crate");
+        std::fs::write(repo.join("crate/Cargo.toml"), "").expect("manifest");
+        let at = repo.join("crate");
+        assert!(judgeable_in(&at, "Cargo.toml"));
         assert!(
-            judgeable("src/no-such-new-file.rs"),
+            judgeable_in(&at, "src/no-such-new-file.rs"),
             "a new file is the work"
         );
-        assert!(!judgeable("../../.git/HEAD"));
-        assert!(!judgeable("../../../outside-the-repository.md"));
-        assert!(!judgeable("../../target/debug/anything"), "ignored");
+        assert!(!judgeable_in(&at, "../.git/HEAD"));
+        assert!(!judgeable_in(&at, "../../outside-the-repository.md"));
+        assert!(!judgeable_in(&at, "../target/debug/anything"), "ignored");
     }
 
     /// A range from HEAD to itself is empty, whatever the checkout.
     #[test]
     fn a_range_from_head_to_itself_counts_nothing() {
-        assert_eq!(own_commit_count("HEAD"), Some(0));
-        assert_eq!(moved_forward("HEAD", "HEAD"), Some(0));
+        let root = crate::fixture_root::fixture_root("a_range_from_head_to_itself_counts_nothing");
+        crate::gitwrite::commit_paths(&root, &[], "fixture").unwrap();
+        assert_eq!(own_commit_count(&root, "HEAD"), Some(0));
+        assert_eq!(moved_forward(&root, "HEAD", "HEAD"), Some(0));
         assert_eq!(
-            branch_facts("HEAD"),
-            git::current_branch(Path::new("."))
+            branch_facts(&root, "HEAD"),
+            git::current_branch(&root)
                 .unwrap()
                 .map(|branch| (branch, 0))
         );
@@ -3457,11 +3699,47 @@ mod tests {
         );
         let _ = std::fs::remove_dir_all(&root);
     }
+
+    /// Eviction keeps the newest [`KEPT_SLOTS`] slots counting `kept`, drops the
+    /// oldest, and never drops `kept` however old it is (CLOUD-2789).
+    ///
+    /// Fails by: an eviction that removes nothing, or one that skips every slot
+    /// but `kept` and so finds nothing to evict.
+    #[test]
+    fn eviction_keeps_the_newest_slots_and_the_kept_one() {
+        let dir = crate::scratch::scratch("evict-slots");
+        let at = |n: u64| std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_000_000 + n);
+        let slot = |name: &str, n: u64| {
+            let path = dir.join(name);
+            std::fs::write(&path, "{}\n").unwrap();
+            std::fs::File::options()
+                .write(true)
+                .open(&path)
+                .unwrap()
+                .set_modified(at(n))
+                .unwrap();
+            path
+        };
+        let kept = slot("kept", 0);
+        let others: Vec<_> = (1..=KEPT_SLOTS as u64 + 2)
+            .map(|n| slot(&format!("slot-{n:03}"), n))
+            .collect();
+        assert_eq!(
+            std::fs::read_dir(&dir).unwrap().count(),
+            KEPT_SLOTS + 3,
+            "the premise: three slots over the bound"
+        );
+        evict_slots(&dir, &kept);
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), KEPT_SLOTS);
+        assert!(kept.exists(), "the kept slot survives though it is oldest");
+        assert!(
+            others[..3].iter().all(|path| !path.exists()),
+            "the three oldest others are dropped"
+        );
+        assert!(others[3..].iter().all(|path| path.exists()));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
 
 // The receipt verbs and the hook's receipt verdicts read the checkout they run
 // in, so the compiled-binary tier is what judges them.
-//MUTANT-SUITE crates/batten/tests/it/receipt_verified.rs
-//MUTANT-SUITE crates/batten/tests/it/receipt_clean.rs
-//MUTANT-SUITE crates/batten/tests/it/review_receipt_delta.rs
-//MUTANT-SUITE crates/batten/tests/it/call_arguments.rs

@@ -1,6 +1,9 @@
 #MUTANT-SUITE crates/batten/tests/it/lock_complete.rs
 #MUTANT residue-unread|s@not platform in known_platforms@false@|a_platform_key_mise_does_not_emit_is_reported
 #MUTANT required-platform-unread|s@count(names) > 0@false@|a_required_platform_missing_entirely_is_reported
+# CLOUD-2881: locked mode is what makes the read safe, so ignoring it refuses the
+# repository's own settings.
+#MUTANT locked-mode-ignored|s@^\tnot locked_on$@\ttrue@|a_locked_lockfile_permits_no_write
 # THE CASE HAS TO BE DECIDED OPPOSITELY BY THE TWO SPELLINGS (CLOUD-1444). This
 # row turns the component-boundary test into a plain prefix test, and it used to
 # name `a_pin_its_entry_does_not_name_is_reported` — a case pinning `2.0.0`
@@ -86,12 +89,12 @@ rules contains "lock read unread"
 # Both are one map lookup here, and the quoted-versus-bare tool name that the awk
 # needed a `gsub` for is simply a key.
 lock := node if {
-	node := input.tree.staged["mise.lock"]
+	node = input.tree.staged["mise.lock"]
 	is_object(node)
 }
 
 manifest := node if {
-	node := input.tree.staged["mise.toml"]
+	node = input.tree.staged["mise.toml"]
 	is_object(node)
 }
 
@@ -141,7 +144,7 @@ lock_tools[name] := entry if {
 	some name, entries in lock.tools
 	is_array(entries)
 	count(entries) > 0
-	entry := entries[count(entries) - 1]
+	entry = entries[count(entries) - 1]
 }
 
 platform_keys[name] := keys if {
@@ -166,8 +169,8 @@ real_platforms[name] := names if {
 }
 
 has_url(name, platform) if {
-	entry := lock_tools[name]
-	block := entry[sprintf("platforms.%s", [platform])]
+	entry = lock_tools[name]
+	block = entry[sprintf("platforms.%s", [platform])]
 	is_string(block.url)
 }
 
@@ -300,7 +303,7 @@ violation contains {
 } if {
 	some name, names in locked_platforms
 	count(names) == 0
-	backend := lock_tools[name].backend
+	backend = lock_tools[name].backend
 	not locks_nothing(backend)
 }
 
@@ -324,8 +327,9 @@ violation contains {
 #
 # CLOUD-333. Every predicate above judges an entry that is PRESENT, so the gate
 # was blind to the omission — and the omission is the one failure a local run
-# structurally cannot see. `[settings] lockfile = false` means nothing here ever
-# installs `--locked`, so an unlocked tool installs fine on this machine forever;
+# structurally cannot see. Under `[settings] lockfile = false` (this repository's
+# setting until CLOUD-2881) nothing here installed `--locked`, so an unlocked tool
+# installed fine on this machine forever;
 # CI passes `--locked` and dies at the INSTALL step, before a single gate runs, in
 # every job whose install list names the tool. Measured on PR #272, where `msrv`
 # and `commit-lint` went red for a `cargo-msrv` pin neither of them owns, past a
@@ -379,7 +383,7 @@ pinned_version(value) := value if is_string(value)
 
 pinned_version(value) := version if {
 	is_object(value)
-	version := value.version
+	version = value.version
 	is_string(version)
 }
 
@@ -406,9 +410,9 @@ violation contains {
 	"subjects": [pointer("mise.toml", [name]), {"artifact": name}],
 } if {
 	some name, value in declared_tools
-	pin := pinned_version(value)
+	pin = pinned_version(value)
 	plain_version(pin)
-	locked := lock_tools[name].version
+	locked = lock_tools[name].version
 	is_string(locked)
 	not satisfies(locked, pin)
 }
@@ -421,9 +425,24 @@ violation contains {
 # per-caller opt-out this repo tried first (`MISE_LOCKFILE=false` in the
 # session-start hook) cannot reach a caller it does not own, which is exactly how
 # a sandbox's own provisioning kept dirtying the tree afterwards.
-writes_enabled if manifest.settings.lockfile == true
+#
+# LOCKED MODE NEVER WRITES (CLOUD-2881). mise gates every install-time lock write
+# on `locked` (mise 2026.9.1 `src/lockfile.rs:1903`, `:2596`), so the lockfile
+# read with locked mode on permits no write; measured cold, a full `mise install`
+# under both left `mise.lock` byte-identical. That conjunction is the setting
+# this repository holds, and `tool install loose` refuses anything less.
+lockfile_on if manifest.settings.lockfile == true
 
-writes_enabled if manifest.settings.lockfile == 1
+lockfile_on if manifest.settings.lockfile == 1
+
+locked_on if manifest.settings.locked == true
+
+locked_on if manifest.settings.locked == 1
+
+writes_enabled if {
+	lockfile_on
+	not locked_on
+}
 
 violation contains {
 	"rule": "lock write unsafe",
@@ -435,12 +454,14 @@ violation contains {
 
 # --- predicate 7: a workflow that installs unlocked ---------------------------
 #
-# The other half of that setting. `lockfile = false` turns off the whole lockfile
-# feature rather than only the write, so `mise install --locked` fails outright
-# with "locked mode requires lockfile to be enabled". A workflow therefore has to
-# set `MISE_LOCKFILE` itself, and one that forgets does not fail loudly:
-# mise-action only passes `--locked` when it detects a lockfile, so the job
-# installs UNLOCKED and goes green. That is a checksum check silently dropped.
+# The other half of that setting. Under `lockfile = false` (until CLOUD-2881)
+# the whole lockfile feature was off, so `mise install --locked` failed outright
+# with "locked mode requires lockfile to be enabled", and a workflow had to set
+# `MISE_LOCKFILE` itself. One that forgot did not fail loudly: mise-action only
+# passes `--locked` when it detects a lockfile, so the job installed UNLOCKED and
+# went green — a checksum check silently dropped. Locked `[settings]` now hold a
+# workflow without it; the assignment stays required so a workflow keeps its
+# locked install through any later edit to `[settings]`.
 #
 # THE LINE SURFACE RATHER THAN `staged`, AND IT IS THE ONE PLACE A VERDICT READS
 # THE WORKTREE. `staged` takes literal paths — `git.rs::staged_facts` looks each
@@ -745,6 +766,16 @@ test_re_enabled_lockfile_writes_are_a_finding if {
 	)
 		with data.batten.patterns as fixture_patterns
 	v.rule == "lock write unsafe"
+}
+
+# Locked mode never writes the lock (CLOUD-2881), so the lockfile read with it
+# on permits no residue.
+test_a_locked_lockfile_permits_no_write if {
+	count(violation) == 0 with input as fixture_input(
+		fixture_lock,
+		{"settings": {"lockfile": true, "locked": true}, "tools": {"t": "1.0.0"}},
+	)
+		with data.batten.patterns as fixture_patterns
 }
 
 # A `lockfile` key outside `[settings]` is not the setting. The predecessor needed

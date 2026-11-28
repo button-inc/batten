@@ -19,7 +19,9 @@ const POINTER: &str = "read .serena/memories/github-access.md";
 
 /// The repository root, whose committed `batten.toml` registers the module.
 fn root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
+    // THE COMMITTED TREE IN A REPOSITORY OF ITS OWN (CLOUD-2904), never the
+    // checkout, whose HEAD, refs and receipts are not what these cases are about.
+    common::committed_repo().to_path_buf()
 }
 
 /// A fixture copy of the committed row and class, over the committed module.
@@ -52,7 +54,7 @@ fn bench_with(name: &str, extra: &str) -> PathBuf {
 }
 
 fn bash(command: &str) -> String {
-    bash_in("s1", command)
+    bash_in(&common::session_id("s1"), command)
 }
 
 /// A Bash call in `session` (CLOUD-2075: the lifecycle is per context).
@@ -69,7 +71,7 @@ fn bash_in(session: &str, command: &str) -> String {
 fn tool(name: &str) -> String {
     serde_json::json!({
         "hook_event_name": "PreToolUse",
-        "session_id": "s1",
+        "session_id": common::session_id("s1"),
         "tool_name": name,
         "tool_input": {},
     })
@@ -92,7 +94,12 @@ fn a_forge_call_is_handed_its_memory() {
         bash("gh pr view 1"),
         bash("cd /tmp && mise exec -- gh api repos/o/r"),
         bash("git push origin HEAD"),
+        // Through the engine's subcommand and task readings (step 14): a global
+        // option before the verb, and the other spellings of starting `land`.
+        bash("git -C /tmp push origin HEAD"),
         bash("mise run land"),
+        bash("mise r land"),
+        bash("mise -C /tmp run -- land"),
         tool("mcp__github__get_me"),
         tool("mcp__claude-code-remote__add_repo"),
     ] {
@@ -159,8 +166,9 @@ fn the_committed_policy_hands_a_gh_read_its_memory() {
 #[test]
 fn a_warn_advisory_is_full_once_then_a_pointer() {
     let dir = bench("forge-read-first-lifecycle");
-    let (first_code, first) = adjudicate(&dir, &bash_in("s1", "gh pr view 1"));
-    let (second_code, second) = adjudicate(&dir, &bash_in("s1", "gh pr view 1"));
+    let (first_code, first) = adjudicate(&dir, &bash_in(&common::session_id("s1"), "gh pr view 1"));
+    let (second_code, second) =
+        adjudicate(&dir, &bash_in(&common::session_id("s1"), "gh pr view 1"));
     assert_eq!((first_code, second_code), (Some(0), Some(0)));
     let labels = "batten warn forge read first";
     assert!(first.contains(labels) && first.contains(" —"), "{first}");

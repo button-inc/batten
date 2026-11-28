@@ -55,7 +55,7 @@
 #MUTANT block-may-span-code|s@^\tattribute_or_doc(lines\[start + [12]\])$@\ttrue@|a_cfg_far_from_the_test_with_code_between_is_not_a_gated_test
 #MUTANT reach-may-be-empty|s@^reach := \[1, 2, 3\]$@reach := []@|a_branch_that_adds_a_platform_gated_test_is_refused
 #MUTANT direction-may-invert|s@\tafter > base@\tafter < base@|a_branch_that_adds_a_platform_gated_test_is_refused
-#MUTANT base-may-read-as-empty|s@\tbase := gated_tests(base_lines_of(path))@\tbase := 0@|a_pre_existing_platform_gated_test_survives_an_edit
+#MUTANT base-may-read-as-empty|s@\tbase = gated_tests(base_lines_of(path))@\tbase = 0@|a_pre_existing_platform_gated_test_survives_an_edit
 package batten
 
 import rego.v1
@@ -66,7 +66,7 @@ rules contains "test cover unseen"
 # `undefined`: the engine emits `null` where the base would not resolve, and
 # `not input.tree["base-delta"]` is dead for exactly that value.
 delta := d if {
-	d := input.tree["base-delta"]
+	d = input.tree["base-delta"]
 	is_object(d)
 }
 
@@ -208,8 +208,11 @@ gated_tests(lines) := count([index |
 # An ADDED path has no base side, and its base count is therefore zero rather
 # than unreadable: a new file carrying a platform-gated test is the same defect
 # arriving in one commit instead of two.
-base_lines_of(path) := lines if {
-	lines := delta["base-lines"][path]
+#
+# The local is not `lines`: bound with `=`, that name unifies with the package
+# rule `lines` (`run-arg-shape.rego`'s test helper) instead of declaring a local.
+base_lines_of(path) := base_side if {
+	base_side = delta["base-lines"][path]
 }
 
 base_lines_of(path) := [] if {
@@ -227,8 +230,8 @@ touched contains path if {
 grew contains [path, after] if {
 	some path in touched
 	endswith(path, ".rs")
-	after := gated_tests(input.tree.lines[path])
-	base := gated_tests(base_lines_of(path))
+	after = gated_tests(input.tree.lines[path])
+	base = gated_tests(base_lines_of(path))
 	after > base
 }
 

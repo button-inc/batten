@@ -54,7 +54,7 @@ use common::{Fixture, at_root, batten};
 fn derived_schema() -> serde_json::Value {
     let output = batten()
         .args(["generate", "schema"])
-        .output()
+        .streamed_output()
         .expect("run batten generate schema");
     assert_eq!(output.status.code(), Some(0));
     serde_json::from_slice(&output.stdout).expect("the schema is JSON")
@@ -82,8 +82,8 @@ fn check_in(dir: &std::path::Path) -> Output {
     common::run(dir, &["check"])
 }
 
-/// The build's own version, which the gate compares against.
-const VERSION: &str = env!("CARGO_PKG_VERSION");
+/// The build's own identity, which the gate compares against (CLOUD-2903).
+const VERSION: &str = batten::config::VERSION;
 
 // --- the schema is derived, published, and agrees with the binary ------------
 
@@ -96,7 +96,7 @@ fn the_committed_schema_is_the_one_the_binary_derives() {
         .expect("read the committed schema");
     let output = batten()
         .args(["generate", "schema"])
-        .output()
+        .streamed_output()
         .expect("run batten generate schema");
     assert_eq!(
         committed.as_bytes(),
@@ -111,12 +111,12 @@ fn the_schema_is_byte_stable_across_runs() {
     // fail at random and teach everyone to re-run it until it passed.
     let first = batten()
         .args(["generate", "schema"])
-        .output()
+        .streamed_output()
         .unwrap()
         .stdout;
     let second = batten()
         .args(["generate", "schema"])
-        .output()
+        .streamed_output()
         .unwrap()
         .stdout;
     assert_eq!(first, second, "the derived schema was not byte-stable");
@@ -166,7 +166,8 @@ fn the_schema_validates_this_repositorys_own_config() {
     // is asserted against the config Batten itself is gated by.
     let schema = derived_schema();
     let validator = jsonschema::validator_for(&schema).expect("the schema compiles");
-    let own = fs::read_to_string(at_root("batten.toml")).expect("read batten.toml");
+    let own = fs::read_to_string(common::committed_config_file("config_schema"))
+        .expect("read batten.toml");
     assert!(
         validator.is_valid(&as_json(&own)),
         "this repository's own batten.toml failed the schema it ships"
@@ -223,7 +224,7 @@ fn generate_schema_writes_no_file() {
     let output = batten()
         .args(["generate", "schema"])
         .current_dir(&dir)
-        .output()
+        .streamed_output()
         .expect("run batten generate schema");
     assert_eq!(output.status.code(), Some(0));
     assert_eq!(
@@ -337,7 +338,7 @@ fn every_verb_that_reads_config_reports_a_too_old_build() {
         let output = batten()
             .args(args)
             .current_dir(&dir)
-            .output()
+            .streamed_output()
             .unwrap_or_else(|error| {
                 panic!(
                     "run batten {args:?}: {error}; working directory present: {}, program present: {}",
@@ -434,7 +435,7 @@ fn the_schema_cannot_express_per_kind_requirements() {
 fn derived_override_schema() -> serde_json::Value {
     let output = batten()
         .args(["generate", "schema", "--surface", "override"])
-        .output()
+        .streamed_output()
         .expect("run batten generate schema --surface override");
     assert_eq!(output.status.code(), Some(0));
     serde_json::from_slice(&output.stdout).expect("the override schema is JSON")
@@ -458,7 +459,7 @@ fn the_committed_override_schema_is_the_one_the_binary_derives() {
         .expect("read the committed override schema");
     let output = batten()
         .args(["generate", "schema", "--surface", "override"])
-        .output()
+        .streamed_output()
         .expect("run batten generate schema --surface override");
     assert_eq!(
         String::from_utf8_lossy(&output.stdout).trim(),
@@ -734,48 +735,74 @@ fn the_honoured_keys_still_load_together() {
 // pre-commit run of a cheap gate, and a list of stated exceptions is a second
 // authority that goes stale the same way the first one did.
 
-/// The `crates/batten/src/*.rs` entries of `hk.pkl`'s `schema-check` glob.
+/// The `crates/<crate>/src/**.rs` entries of `hk.pkl`'s `schema-check` glob,
+/// as repo-relative paths.
+///
+/// EVERY CRATE, by full path. This read only `crates/batten/src/` until the
+/// crate split moved most derives into `batten-base`, `batten-core` and
+/// `batten-facts`; the census then compared a sliver of the glob against a
+/// sliver of the derives, and the list drifted both ways unseen.
 fn schema_check_globbed_modules() -> Vec<String> {
     let hk = fs::read_to_string(at_root("hk.pkl")).expect("read hk.pkl");
     let start = hk
         .find("[\"schema-check\"]")
         .expect("hk.pkl declares a schema-check step");
+    // THE STEP CLOSES AT ITS OWN INDENT, wherever hk.pkl nests it: it moved from
+    // `gate` into `pre-commit` (CLOUD-2789), and a fixed two-space close then
+    // matched the hook's and read the next step's glob too.
+    let indent = &hk[hk[..start].rfind('\n').map_or(0, |at| at + 1)..start];
     let rest = &hk[start..];
-    let step = &rest[..rest.find("\n  }").expect("the step closes")];
+    let step = &rest[..rest
+        .find(&format!("\n{indent}}}"))
+        .expect("the step closes")];
 
     let mut modules: Vec<String> = step
         .lines()
         .filter_map(|line| {
             let entry = line.trim().trim_end_matches(',').trim_matches('"');
-            entry
-                .strip_prefix("crates/batten/src/")?
-                .strip_suffix(".rs")
-                .map(str::to_owned)
+            (entry.starts_with("crates/")
+                && entry.contains("/src/")
+                && std::path::Path::new(entry)
+                    .extension()
+                    .is_some_and(|ext| ext.eq_ignore_ascii_case("rs")))
+            .then(|| entry.to_owned())
         })
         .collect();
     modules.sort();
     modules
 }
 
-/// Every module under `crates/batten/src` that derives `JsonSchema`, which is
-/// exactly the set either schema can be reachable from.
+/// Every source file under any `crates/<crate>/src` that derives `JsonSchema`,
+/// as a repo-relative path: exactly the set either schema can be reachable
+/// from. Walks each crate's whole `src` tree, so a derive in a submodule
+/// counts too.
 fn modules_deriving_json_schema() -> Vec<String> {
-    let mut modules: Vec<String> = fs::read_dir(at_root("crates/batten/src"))
-        .expect("read the crate source directory")
-        .map(|entry| entry.expect("read a directory entry").path())
-        .filter(|path| path.extension().is_some_and(|ext| ext == "rs"))
-        .filter(|path| {
-            fs::read_to_string(path)
-                .expect("read a source file")
-                .contains("JsonSchema")
-        })
-        .map(|path| {
-            path.file_stem()
-                .expect("a .rs file has a stem")
-                .to_string_lossy()
-                .into_owned()
-        })
+    let mut pending: Vec<std::path::PathBuf> = fs::read_dir(at_root("crates"))
+        .expect("read the crates directory")
+        .map(|entry| entry.expect("read a directory entry").path().join("src"))
+        .filter(|src| src.is_dir())
         .collect();
+    let root = at_root("");
+    let mut modules: Vec<String> = Vec::new();
+    while let Some(dir) = pending.pop() {
+        for entry in fs::read_dir(&dir).expect("read a source directory") {
+            let path = entry.expect("read a directory entry").path();
+            if path.is_dir() {
+                pending.push(path);
+            } else if path.extension().is_some_and(|ext| ext == "rs")
+                && fs::read_to_string(&path)
+                    .expect("read a source file")
+                    .contains("JsonSchema")
+            {
+                modules.push(
+                    path.strip_prefix(&root)
+                        .expect("under the repository root")
+                        .to_string_lossy()
+                        .into_owned(),
+                );
+            }
+        }
+    }
     modules.sort();
     modules
 }
@@ -835,7 +862,7 @@ const SURFACES: [(&str, &str); 2] = [
 fn derived_for(surface: &str) -> Vec<u8> {
     let output = batten()
         .args(["generate", "schema", "--surface", surface])
-        .output()
+        .streamed_output()
         .expect("run batten generate schema --surface");
     assert_eq!(output.status.code(), Some(0));
     output.stdout
@@ -1086,7 +1113,7 @@ fn census_cap(path: &str) -> u64 {
     u64::try_from(cap).expect("a cap fits in u64")
 }
 
-/// `#MUTANT text-schema-uncapped` reddens here.
+/// A mutant leaving a text leaf uncapped reddens here.
 #[test]
 fn every_text_leaf_in_both_schemas_carries_its_census_cap() {
     let mut problems = Vec::new();

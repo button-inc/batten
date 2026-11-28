@@ -92,7 +92,7 @@ fn lease(dir: &Path, args: &[&str]) -> Output {
         .env_remove("GITHUB_SERVER_URL")
         .env_remove("LAND_LOCK_REMOTE")
         .current_dir(dir)
-        .output()
+        .streamed_output()
         .expect("the compiled binary runs")
 }
 
@@ -204,9 +204,12 @@ fn a_stale_guard_asks_to_cancel_and_runs_when_refused() {
 
 /// `stop` signals the holder it names, so its own trap runs.
 ///
-/// Fails by: no signal sent at all, which leaves the holder sleeping out its
-/// whole interval. Off unix there is no signal to send (`stop` is inert by
-/// construction there), so there is no subject to drive.
+/// Fails by: no signal sent at all. The holder is `cat` on a stdin pipe this
+/// case holds open, so nothing but a signal can end it: a `stop` that sends
+/// none leaves the wait below on the holder's exit forever, and the mutation
+/// judge's per-case cut files that as a timeout (CLOUD-2789). Off unix there is
+/// no signal to send (`stop` is inert by construction there), so there is no
+/// subject to drive.
 #[test]
 fn stop_terminates_the_holder_it_names() {
     if cfg!(not(unix)) {
@@ -216,31 +219,17 @@ fn stop_terminates_the_holder_it_names() {
         clippy::disallowed_types,
         reason = "stays, and test-only: the subject is a signal to ANOTHER process, so a real child is the only holder that can receive one"
     )]
-    let mut holder = std::process::Command::new("sleep")
-        .arg("600")
+    let mut holder = std::process::Command::new("cat")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
         .spawn()
         .expect("a holder to stop");
-    let pid = holder.id();
-    // Reaped on its own thread, so a `stop` that sends nothing FAILS here within
-    // the bound rather than hanging out the holder's whole interval.
-    let (reaped, exited) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
-        let _ = reaped.send(holder.wait());
-    });
-    batten::lease::stop(pid);
-    let Ok(reaped) = exited.recv_timeout(std::time::Duration::from_secs(30)) else {
-        // Nothing stopped it: kill it so the reaping thread ends, then fail.
-        #[expect(
-            clippy::disallowed_types,
-            reason = "stays, and test-only: the cleanup of the real child this case spawned, when the subject failed to signal it"
-        )]
-        let _ = std::process::Command::new("kill")
-            .args(["-KILL", &pid.to_string()])
-            .status();
-        let _ = exited.recv();
-        panic!("stop sent no signal: the holder was still running after 30s");
-    };
-    let status = reaped.expect("the holder is reaped");
+    // Held, never written or closed until the holder has exited: an EOF would
+    // end `cat` on its own and pass a `stop` that signalled nothing.
+    let open = holder.stdin.take();
+    batten::lease::stop(holder.id());
+    let status = holder.wait().expect("the holder is reaped");
+    drop(open);
     #[cfg(unix)]
     {
         use std::os::unix::process::ExitStatusExt;
@@ -288,7 +277,7 @@ fn a_ceiling_between_a_directory_and_its_repository_fences_the_walk() {
         if let Some(ceiling) = ceiling {
             command.env("GIT_CEILING_DIRECTORIES", ceiling);
         }
-        let _ = command.output().expect("the compiled binary runs");
+        let _ = command.streamed_output().expect("the compiled binary runs");
         std::fs::read_to_string(forge.join("args")).unwrap_or_default()
     };
     let open = asking(None);

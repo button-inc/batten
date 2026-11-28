@@ -11,7 +11,7 @@
 //!
 //! # Two planes, and this is the observability one
 //!
-//! A gate's *verdict* is a computable predicate, never a model judgement
+//! A gate's *verdict* is a computable predicate, never a gated-model judgement
 //! (CLOUD-93 / CLOUD-131). Recording **who called** — which model, through which
 //! harness, in which session — is provenance, not judgement. Nothing here
 //! participates in any verdict; the record is written after one is reached.
@@ -158,7 +158,7 @@ impl<'de> Deserialize<'de> for Provenance {
 /// Who made the mediated call: which model, through which harness, in which
 /// session.
 ///
-/// A hook caller passes [`crate::hook::Harness::as_str`] for `harness`. This
+/// A hook caller passes [`crate::config_model::Harness::as_str`] for `harness`. This
 /// module imports nothing from [`crate::hook`] on purpose — a decision can also
 /// come from a gate no harness invoked, where the honest answer is
 /// [`Provenance::Unknown`] rather than a harness token invented to fill a field.
@@ -594,7 +594,7 @@ pub fn load_all(repo_root: &Path) -> Result<Vec<DecisionRecord>> {
 
     let mut all = Vec::new();
     for path in paths {
-        let text = std::fs::read_to_string(&path)
+        let text = crate::fsio::read_to_string(&path)
             .with_context(|| format!("read the decision shard {}", path.display()))?;
         all.extend(
             text.lines()
@@ -632,6 +632,7 @@ pub fn shard_path(repo_root: &Path, worktree: &Path) -> Result<PathBuf> {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+    #[cfg(test)]
     use crate::identity::{FindingKind, SpanNormalization, code_fingerprint};
 
     fn record() -> DecisionRecord {

@@ -41,7 +41,7 @@ use common::{Fixture, run_with_stdin, stderr};
 /// one this repository actually enables.
 fn repo(name: &str) -> PathBuf {
     let staged = Fixture::new(name)
-        .config(include_str!("../../../../batten.toml"))
+        .config(&common::committed_config())
         .file("mise.toml", "[tools]\njq = \"1.7\"\n");
     // The in-repo modules that config registers, copied by ENUMERATION rather
     // than by name — `board_receipts.rs`'s reasoning, and naming them would put a
@@ -496,13 +496,29 @@ fn a_session_start_records_the_programs_the_pin_composes() {
         serde_json::to_string(&dir.display().to_string()).expect("a path is encodable")
     );
     let mut command = common::batten();
-    command.env("PATH", path);
-    let _ = common::stdin_run(
+    command.env("PATH", &path);
+    let door = common::stdin_run(
         &mut command,
         &dir,
         &["adjudicate", "--harness", "claude-code"],
         &payload,
     );
+    // OWED BY EVERY CONSUMER (review of 076a19082): the pin is recorded by the
+    // task the door advises, whatever the consumer declares.
+    assert!(
+        common::stdout(&door).contains("batten startup --session"),
+        "the door advises the dispatch the pin record rides on: {}",
+        common::stdout(&door)
+    );
+    // THE PIN RECORD IS THE SETUP TASK'S (CLOUD-2840): the agent dispatches it
+    // under the session's `PATH`, so the stub still answers.
+    // `session_start` is unix-only, as is the setup task it dispatches.
+    #[cfg(unix)]
+    {
+        let mut task = common::batten();
+        task.env("PATH", &path);
+        let _ = crate::session_start::settle_with(&dir, task);
+    }
 
     match pinned::cached(&dir) {
         Look::Is(programs) => assert_eq!(

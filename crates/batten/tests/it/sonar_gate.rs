@@ -58,6 +58,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
+use batten::capture::StreamedChild as _;
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -97,8 +98,10 @@ const VOCABULARY: [&str; 8] = [
 
 /// The committed `batten.toml`, parsed.
 fn committed() -> toml::Value {
-    toml::from_str(&std::fs::read_to_string(at_root("batten.toml")).expect("the config"))
-        .expect("batten.toml parses")
+    toml::from_str(
+        &std::fs::read_to_string(common::committed_config_file("sonar_gate")).expect("the config"),
+    )
+    .expect("batten.toml parses")
 }
 
 /// The rows of one array-of-tables whose `key` is one of `ids`.
@@ -230,7 +233,7 @@ fn step(dir: &Path, forge: &Path, argv: &[String]) -> Output {
         .env("GH_REPO", REPO)
         .env("BATTEN_REST_FIXTURE", forge)
         .current_dir(dir)
-        .output()
+        .streamed_output()
         .expect("the compiled binary runs")
 }
 
@@ -659,7 +662,7 @@ fn engine_word(runs: &[Value]) -> String {
         .expect("stdin is piped")
         .write_all(tsv(runs).as_bytes())
         .expect("the reading reaches the child");
-    let output = child.wait_with_output().expect("the child answers");
+    let output = child.streamed_wait().expect("the child answers");
     let document: Value = serde_json::from_slice(&output.stdout).expect("a JSON verdict");
     document["verdict"]
         .as_str()
@@ -840,7 +843,7 @@ fn a_row_torn_mid_json_is_partial() {
     let explained = common::batten()
         .args(["policy", "explain", "check read partial"])
         .current_dir(&dir)
-        .output()
+        .streamed_output()
         .expect("the compiled binary runs");
     assert_eq!(explained.status.code(), Some(0), "{}", said(&explained));
     let class = String::from_utf8_lossy(&explained.stdout);

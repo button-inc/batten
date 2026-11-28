@@ -25,14 +25,17 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
+use batten::verdict::DeclaredVerdictExt as _;
 
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use batten::config_model::DeclaredVerdict;
+use batten::config_model::Rule;
 use batten::facts::Look;
 use batten::policy::{self, Vocabulary};
-use batten::rules::Rule;
-use batten::verdict::{self, DeclaredVerdict, Subject};
+use batten::verdict;
+use batten::verdict::Subject;
 
 /// A mediated-call policy row naming `module`.
 fn row(id: &str, module: &str) -> Rule {
@@ -206,7 +209,7 @@ fn a_tombstoned_token_that_is_still_raised_is_refused() {
 fn a_tombstone_resolves_through_its_chain() {
     let mut table = common::verdicts(&["old probe probe", "new probe probe"]);
     table[0].successor = Some("new probe probe".to_owned());
-    verdict::validate(&table, &batten::verdict::Vocabulary::default())
+    verdict::validate(&table, &batten::config_model::Vocabulary::default())
         .expect("a terminating chain is well formed");
     let (resolved, retired) =
         verdict::resolve(&table, "old probe probe").expect("the token resolves");
@@ -229,7 +232,7 @@ fn a_tombstone_resolves_through_its_chain() {
 fn a_row_naming_only_a_withdrawal_loads_and_reports_retired() {
     let mut table = common::verdicts(&["gone probe probe"]);
     table[0].withdrawn = Some("the thing it refused is no longer refused by anything".to_owned());
-    verdict::validate(&table, &batten::verdict::Vocabulary::default())
+    verdict::validate(&table, &batten::config_model::Vocabulary::default())
         .expect("a withdrawal is a well-formed retirement");
     assert!(
         table[0].retired(),
@@ -265,7 +268,7 @@ fn an_empty_withdrawal_reason_is_refused() {
     for blank in ["", "   ", "\n"] {
         let mut table = common::verdicts(&["gone probe probe"]);
         table[0].withdrawn = Some(blank.to_owned());
-        let err = verdict::validate(&table, &batten::verdict::Vocabulary::default())
+        let err = verdict::validate(&table, &batten::config_model::Vocabulary::default())
             .expect_err("an empty withdrawal explains nothing");
         let text = format!("{err}");
         assert!(
@@ -286,7 +289,7 @@ fn a_row_naming_both_arms_is_refused() {
     let mut table = common::verdicts(&["old probe probe", "new probe probe"]);
     table[0].successor = Some("new probe probe".to_owned());
     table[0].withdrawn = Some("and also nobody refuses it".to_owned());
-    let err = verdict::validate(&table, &batten::verdict::Vocabulary::default())
+    let err = verdict::validate(&table, &batten::config_model::Vocabulary::default())
         .expect_err("a row cannot be both replaced and withdrawn");
     let text = format!("{err}");
     assert!(
@@ -303,14 +306,14 @@ fn a_row_naming_both_arms_is_refused() {
 fn the_withdrawal_arm_weakens_neither_successor_refusal() {
     let mut dangling = common::verdicts(&["old probe probe"]);
     dangling[0].successor = Some("never declared probe".to_owned());
-    let err = verdict::validate(&dangling, &batten::verdict::Vocabulary::default())
+    let err = verdict::validate(&dangling, &batten::config_model::Vocabulary::default())
         .expect_err("a successor nothing declares is refused");
     assert!(format!("{err}").contains("never declared probe"));
 
     let mut cycle = common::verdicts(&["a probe probe", "b probe probe"]);
     cycle[0].successor = Some("b probe probe".to_owned());
     cycle[1].successor = Some("a probe probe".to_owned());
-    let err = verdict::validate(&cycle, &batten::verdict::Vocabulary::default())
+    let err = verdict::validate(&cycle, &batten::config_model::Vocabulary::default())
         .expect_err("a chain that cycles terminates nowhere");
     assert!(format!("{err}").contains("cycles"));
 }
@@ -322,7 +325,7 @@ fn the_withdrawal_arm_weakens_neither_successor_refusal() {
 fn a_withdrawal_is_not_read_as_a_successor() {
     let mut table = common::verdicts(&["gone probe probe"]);
     table[0].withdrawn = Some("something that isnotatoken".to_owned());
-    verdict::validate(&table, &batten::verdict::Vocabulary::default())
+    verdict::validate(&table, &batten::config_model::Vocabulary::default())
         .expect("a withdrawal reason is prose, never a token the registry must declare");
 }
 
@@ -372,8 +375,10 @@ fn a_vendored_preset_loads_with_no_consumer_rows_at_all() {
         // shape `hook::call_document` never produces, and the deny this case
         // asserts would vanish for a reason that has nothing to do with the
         // registry. That is not hypothetical here: it is what this line did on
-        // the commit that moved the anchor.
-        r#"{"call": {"command": "git commit --allow-empty -m x", "segments": [{"words": ["git", "commit", "--allow-empty", "-m", "x"], "raw": "git commit --allow-empty -m x", "terminator": null}], "programs": [{"program": "git", "name": "git", "arguments": ["commit", "--allow-empty", "-m", "x"], "mediated": false}]}}"#,
+        // the commit that moved the anchor — and again when the preset moved
+        // onto `subcommand` (CLOUD-2813), which the engine projects past git's
+        // own options and this fixture did not carry.
+        r#"{"call": {"command": "git commit --allow-empty -m x", "segments": [{"words": ["git", "commit", "--allow-empty", "-m", "x"], "raw": "git commit --allow-empty -m x", "terminator": null}], "programs": [{"program": "git", "name": "git", "arguments": ["commit", "--allow-empty", "-m", "x"], "subcommand": "commit", "mediated": false}]}}"#,
     ) else {
         panic!("the preset answered could-not-look");
     };
@@ -549,6 +554,7 @@ fn a_command_route_naming_a_defined_task_is_clean_over_the_engine() {
 /// `spawn_census`'s `Command::new` scan was not.
 #[test]
 fn every_native_class_is_raised_by_production_code() {
+    use ra_ap_syntax::{AstNode as _, ast, ast::HasAttrs as _};
     let declared = declared_native_variants();
     assert!(
         declared.len() >= 20,
@@ -557,27 +563,92 @@ fn every_native_class_is_raised_by_production_code() {
     );
 
     let mut raised: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
-    for path in common::rust_sources() {
+    // Every crate's engine sources: the split (CLOUD-2789) moved raisers into
+    // `batten-core` and `batten-base`, and a walk of `crates/batten/src` alone
+    // read every class they raise as dead.
+    for path in common::engine_sources() {
         // `verdict.rs` DECLARES them; naming a variant there is not raising it,
         // and counting the enum and `id()` as call sites is what would make this
         // gate vacuous.
-        if path.ends_with("verdict.rs") || !path.starts_with(common::at_root("crates/batten/src")) {
+        if path.ends_with("verdict.rs") {
             continue;
         }
         let body = std::fs::read_to_string(&path).expect("a source file");
-        // A `#[cfg(test)]` module is not production code. A class raised only by
-        // its own unit test is exactly the dead class this asserts against.
-        let production = body
-            .find("#[cfg(test)]")
-            .map_or(&body[..], |at| &body[..at]);
-        for found in production.match_indices("Native::") {
-            let rest = &production[found.0 + "Native::".len()..];
-            let name: String = rest
-                .chars()
-                .take_while(|ch| ch.is_alphanumeric() || *ch == '_')
-                .collect();
-            if !name.is_empty() {
+        // ON THE LOSSLESS TREE (`rules/scanning.md`): a `Native::<Class>` path
+        // counts unless an ancestor item carries `#[cfg(test)]`. The text scan
+        // this replaced cut each file at its FIRST `#[cfg(test)]`, and `hook.rs`
+        // has one long before most of its raisers, so 24 classes it raises in
+        // production read as dead.
+        let batten_facts::facts::Look::Is(file) =
+            batten_facts::source::rust_tree(&body, ra_ap_syntax::Edition::Edition2024)
+        else {
+            panic!(
+                "{} did not parse: an unread file raises nothing it can be credited with",
+                path.display()
+            );
+        };
+        for found in file.syntax().descendants().filter_map(ast::Path::cast) {
+            let Some(qualifier) = found.qualifier().and_then(|q| q.segment()) else {
+                continue;
+            };
+            if qualifier.syntax().text() != "Native" {
+                continue;
+            }
+            let Some(name) = found
+                .segment()
+                .map(|segment| segment.syntax().text().to_string())
+            else {
+                continue;
+            };
+            let test_only = found
+                .syntax()
+                .ancestors()
+                .filter_map(ast::AnyHasAttrs::cast)
+                .any(|item| {
+                    item.attrs()
+                        .any(|attr| attr.syntax().text() == "#[cfg(test)]")
+                });
+            if !test_only && name.chars().next().is_some_and(char::is_uppercase) {
                 raised.insert(name);
+            }
+        }
+        // A MACRO ARGUMENT IS A TOKEN TREE, not a path: `vec![point("tagger",
+        // Native::TaggerUnaccountable)]` holds no `ast::Path`, so the walk above
+        // cannot see it (the codemod skill's stated blind spot). Read the
+        // tree's own tokens for `Native` `::` `<Name>`, under the same
+        // `#[cfg(test)]` ancestry rule.
+        for tree in file.syntax().descendants().filter_map(ast::TokenTree::cast) {
+            let test_only = tree
+                .syntax()
+                .ancestors()
+                .filter_map(ast::AnyHasAttrs::cast)
+                .any(|item| {
+                    item.attrs()
+                        .any(|attr| attr.syntax().text() == "#[cfg(test)]")
+                });
+            if test_only {
+                continue;
+            }
+            let words: Vec<String> = tree
+                .syntax()
+                .children_with_tokens()
+                .filter_map(ra_ap_syntax::NodeOrToken::into_token)
+                .filter(|token| !token.kind().is_trivia())
+                .map(|token| token.text().to_owned())
+                .collect();
+            for (at, word) in words.iter().enumerate() {
+                if word != "Native" {
+                    continue;
+                }
+                let rest = &words[at + 1..];
+                let name = match rest {
+                    [colons, name, ..] if colons == "::" => name,
+                    [first, second, name, ..] if first == ":" && second == ":" => name,
+                    _ => continue,
+                };
+                if name.chars().next().is_some_and(char::is_uppercase) {
+                    raised.insert(name.clone());
+                }
             }
         }
     }
@@ -602,7 +673,7 @@ fn every_native_class_is_raised_by_production_code() {
 /// The `Debug` name is the variant's own identifier, the spelling a raising site
 /// writes after `Native::`.
 fn declared_native_variants() -> Vec<String> {
-    verdict::Native::ALL
+    batten::error::Native::ALL
         .iter()
         .map(|native| format!("{native:?}"))
         .collect()

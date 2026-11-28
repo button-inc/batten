@@ -711,17 +711,30 @@ reason = "publishing needs a key"
     .expect("write config");
     let resolved = batten::resolve::resolve(&dir, &batten::resolve::Overrides::default())
         .expect("the config resolves");
-    let policy =
-        batten::hook::Policy::from_resolved(&resolved, batten::hook::Harness::ExitCode, &dir, None)
-            .expect("the policy assembles");
+    let policy = batten::hook::Policy::from_resolved(
+        &resolved,
+        batten::config_model::Harness::ExitCode,
+        &dir,
+        None,
+        &|server| {
+            resolved
+                .mcp
+                .as_ref()
+                .is_some_and(|mcp| batten::mcp::answers(mcp, &dir, server))
+        },
+    )
+    .expect("the policy assembles");
 
     let payload = serde_json::json!({
         "hook_event_name": "PreToolUse",
         "tool_name": "Bash",
         "tool_input": {"command": "gh pr create"},
     });
-    let call = batten::hook::decode(batten::hook::Harness::ClaudeCode, &payload.to_string())
-        .expect("the payload decodes");
+    let call = batten::hook::decode(
+        batten::config_model::Harness::ClaudeCode,
+        &payload.to_string(),
+    )
+    .expect("the payload decodes");
 
     assert_eq!(
         policy.key_base_for(&call),
@@ -738,8 +751,11 @@ reason = "publishing needs a key"
         "tool_name": "Bash",
         "tool_input": {"command": "gh pr create", "state": "In Review"},
     });
-    let named = batten::hook::decode(batten::hook::Harness::ClaudeCode, &named.to_string())
-        .expect("the payload decodes");
+    let named = batten::hook::decode(
+        batten::config_model::Harness::ClaudeCode,
+        &named.to_string(),
+    )
+    .expect("the payload decodes");
     assert_eq!(
         policy.key_base_for(&named),
         Some("excluded-base"),

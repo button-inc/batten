@@ -31,14 +31,19 @@
 //! own provisioning (the bats submodule, rustup cross targets). That one is
 //! repo tooling; this is the product verb.
 
+use crate::handler::HandlerExt as _;
+use crate::hook::HarnessExt as _;
+use crate::hook::HarnessWiringExt as _;
+use crate::rules::RuleExt as _;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 
+use crate::config_model::Rule;
 use crate::exit::ExitCode;
-use crate::rules::Rule;
-use crate::wiring::{committed_events, entries_under, same_file};
+use crate::fsio::same_file;
+use crate::wiring::{committed_events, entries_under};
 use crate::{config, git, hook, resolve, wiring};
 
 /// One diagnostic's outcome.
@@ -127,10 +132,25 @@ impl Check {
     /// passed (CLOUD-2078): its name, its reason and its subjects as pointers.
     #[must_use]
     pub fn finding(&self) -> Option<crate::refusal::Refusal> {
-        let reason = self.reason?;
-        let subjects = finding_subjects(self.name, reason, &self.subjects);
-        Some(workspace_refusal(&subjects))
+        Some(workspace_finding(self.name, self.reason?, &self.subjects))
     }
+}
+
+/// A failing check or `[[startup]]` row as `workspace state broken`, from its
+/// name, reason and declared subjects: the one constructor both inline readers
+/// and a recorded outcome surfaced later go through (CLOUD-2840).
+#[must_use]
+pub fn workspace_finding(name: &str, reason: &str, declared: &[String]) -> crate::refusal::Refusal {
+    let subjects = finding_subjects(name, reason, declared);
+    // A MISSING CONFIG IS NOT A BROKEN ONE (CLOUD-2657): `startup --repair`
+    // repairs what a config declares, and there is none, so the class's own
+    // routes would loop. The route keeps `run batten init` on every firing;
+    // the fix replaces the class's `Do:` on the full arm.
+    if reason != "config-missing" {
+        return workspace_refusal(&subjects, crate::refusal::Fix::None);
+    }
+    let fix = crate::refusal::Fix::Run(INIT_REMEDY.to_owned());
+    workspace_refusal(&subjects, fix).with_command_route("batten init")
 }
 
 /// The subjects a failing doctor check or startup row carries, in that order.
@@ -153,12 +173,19 @@ pub fn finding_subjects(
 }
 
 /// `workspace state broken` over `subjects` (CLOUD-2078).
-//MUTANT container-health-misclassed|s@^    let class = crate::verdict::Native::WorkspaceStateBroken;$@    let class = crate::verdict::Native::RunBroken;@|a_declared_program_nothing_can_reach_is_reported_at_session_start
 #[must_use]
-pub fn workspace_refusal(subjects: &[crate::verdict::Subject]) -> crate::refusal::Refusal {
-    let class = crate::verdict::Native::WorkspaceStateBroken;
-    crate::refusal::Refusal::engine(class, subjects, crate::refusal::Fix::None)
+pub fn workspace_refusal(
+    subjects: &[crate::verdict::Subject],
+    fix: crate::refusal::Fix,
+) -> crate::refusal::Refusal {
+    let class = crate::error::Native::WorkspaceStateBroken;
+    crate::refusal::Refusal::engine(class, subjects, fix)
 }
+
+/// The full arm's `Do:` for a missing config (CLOUD-2657). Plain words, and a
+/// different text from the `batten init` route, since a fix equal to a route's
+/// target is dropped as already said.
+const INIT_REMEDY: &str = "run batten init to write the missing batten.toml, then batten doctor";
 
 /// One `diagnose` check. A stable reason id, never the error text, so the
 /// rendering carries no filesystem path.
@@ -377,7 +404,7 @@ const HOOK_HANDLERS: &str = "hook-handlers";
 /// **A residual false positive is accepted, on an asymmetry that paragraph does
 /// not weigh.** A source file can still take a fresh mtime with unchanged
 /// content on an A→B→A branch round trip. The cost of that is one unnecessary
-/// `mise run install:local`, which is idempotent and cheap. The cost of the
+/// `batten engine install`, which is idempotent and cheap. The cost of the
 /// false NEGATIVE it replaces is an entire unenforced session — `config.rs`'s
 /// own record has three mediated gates permitting for a whole session and six
 /// commits carrying a denied trailer reaching the remote. Those are not
@@ -520,7 +547,19 @@ pub enum Egress {
     /// A proxy is set and the GitHub hosts are not fenced out of it.
     ///
     /// `mise install` fails on the first third-party tool and blames the tool.
+    ///
+    /// ONLY WHILE A LIVE CREDENTIAL IS THERE TO GO DIRECT WITH: the fence
+    /// belonged to the PAT design (CLOUD-2122), and with none the proxy is the
+    /// route ([`Egress::Routed`]).
     Unfenced,
+    /// A proxy is set, the GitHub hosts are not fenced out of it, and no live
+    /// credential would go direct, so the proxy IS the route (CLOUD-2688:
+    /// "there is no PAT here; the proxy is the route"). Decided by the
+    /// credential exactly as provision decides a removal
+    /// (`removals_allowed = credential == Credential::Live`), so the two never
+    /// disagree about whether the fence is owed (#1276, where every cloud
+    /// container failed its preflight on it).
+    Routed,
 }
 
 impl Egress {
@@ -528,7 +567,7 @@ impl Egress {
     #[must_use]
     pub const fn line(&self) -> &'static str {
         match self {
-            Egress::Unproxied => "egress ok",
+            Egress::Unproxied | Egress::Routed => "egress ok",
             Egress::Partial => "egress failed egress-partial",
             Egress::Unfenced => "egress failed egress-unfenced",
         }
@@ -544,7 +583,7 @@ impl Egress {
     #[must_use]
     pub const fn code(&self) -> ExitCode {
         match self {
-            Egress::Unproxied => ExitCode::Success,
+            Egress::Unproxied | Egress::Routed => ExitCode::Success,
             Egress::Partial | Egress::Unfenced => ExitCode::Usage,
         }
     }
@@ -646,7 +685,7 @@ fn residue(rustlib: &Path, target: &str) -> bool {
         return true;
     }
     let component = format!("rust-std-{target}");
-    std::fs::read_to_string(rustlib.join("components"))
+    crate::fsio::read_to_string(rustlib.join("components"))
         .is_ok_and(|text| text.lines().any(|line| line == component))
 }
 
@@ -731,7 +770,7 @@ fn purge(rustlib: &Path, target: &str) {
         rustlib.join(format!("manifest-rust-std-{target}")),
     ));
     let components = rustlib.join("components");
-    if let Ok(text) = std::fs::read_to_string(&components) {
+    if let Ok(text) = crate::fsio::read_to_string(&components) {
         let component = format!("rust-std-{target}");
         let kept: Vec<&str> = text.lines().filter(|line| *line != component).collect();
         // REWRITTEN ONLY WHEN A LINE WENT. A rewrite that changed nothing would
@@ -774,6 +813,26 @@ pub fn record_gap(root: &Path, refusal: &crate::refusal::Refusal) {
     let _ = crate::journal::append_line(&store, &crate::journal::shard_id(root), &line);
 }
 
+/// Record one permission event the host sent about a call (CLOUD-2768): the
+/// event's token as the rule, `subject` (the tool's name, or for a shell call
+/// its first program's), and the day. [`record_gap`]'s journal family, so `doctor
+/// gaps` folds these with the refusals. POINTER-ONLY (rule 4): the caller hands
+/// in a name, never an argument or the host's `reason`. Silent on every
+/// failure, as [`record_gap`] is.
+pub fn record_permission_event(root: &Path, event: &str, subject: &str) {
+    let (Ok(git_dir), Ok(today)) = (git::git_dir(root), crate::waiver::today()) else {
+        return;
+    };
+    let line = serde_json::json!({
+        "rule": event,
+        "subject": subject,
+        "date": today.text(),
+    })
+    .to_string();
+    let store = crate::record::journal_store(&git_dir, GAP_FAMILY);
+    let _ = crate::journal::append_line(&store, &crate::journal::shard_id(root), &line);
+}
+
 /// One counted record, as [`record_gap`] writes it. `Cow`, because a string
 /// holding an escape cannot borrow from the line.
 #[derive(serde::Deserialize)]
@@ -788,7 +847,10 @@ struct GapRecord<'a> {
 
 /// `batten doctor gaps`: one line per (rule, subject) a counting rule refused,
 /// with its count and the last day it happened, most-refused first
-/// (CLOUD-2292).
+/// (CLOUD-2292). A line whose rule is `permission-request` or
+/// `permission-denied` is not a refusal: it counts a prompt or a classifier
+/// denial the host sent for a call batten allowed ([`record_permission_event`],
+/// CLOUD-2768).
 ///
 /// Plan mode's refusal counts, so a program that is really a read and keeps
 /// appearing here is a reader the preset lacks, which `batten preset eject`
@@ -983,13 +1045,31 @@ const EGRESS_NEVER_FENCED_HOST: &str = "egress-probe.invalid";
 /// partially fenced.
 #[must_use]
 pub fn diagnose_egress() -> Egress {
-    if crate::fetch::is_direct(EGRESS_NEVER_FENCED_HOST) {
+    egress_of(
+        crate::fetch::is_direct(EGRESS_NEVER_FENCED_HOST),
+        crate::fetch::is_direct(EGRESS_RESOLVER_HOST),
+        crate::provision::credential_quiet,
+    )
+}
+
+/// [`diagnose_egress`] over its three readings. The credential is asked LAST
+/// and only for an unfenced proxy, because asking may probe the forge.
+fn egress_of(
+    everything_direct: bool,
+    resolver_direct: bool,
+    credential: impl FnOnce() -> crate::provision::Credential,
+) -> Egress {
+    if everything_direct {
         return Egress::Unproxied;
     }
-    if crate::fetch::is_direct(EGRESS_RESOLVER_HOST) {
+    if resolver_direct {
         return Egress::Partial;
     }
-    Egress::Unfenced
+    if credential() == crate::provision::Credential::Live {
+        Egress::Unfenced
+    } else {
+        Egress::Routed
+    }
 }
 
 /// Whether every tool the manifest DECLARES is actually installed (CLOUD-1683).
@@ -1198,7 +1278,7 @@ pub fn unprovisioned(declared: &[String], installed: &[String]) -> Vec<String> {
 /// `no_artifact_name_reaches_the_core` as the gate that enforces it.
 #[must_use]
 pub fn diagnose_toolchain(manifest: &Path, probe: &str) -> Toolchain {
-    let Ok(text) = std::fs::read_to_string(manifest) else {
+    let Ok(text) = crate::fsio::read_to_string(manifest) else {
         return Toolchain::Unreadable;
     };
     let declared = declared_tools(&text);
@@ -1227,8 +1307,6 @@ pub fn diagnose_toolchain(manifest: &Path, probe: &str) -> Toolchain {
 ///
 /// Reads both files and hashes them; spawns nothing. Length is compared first
 /// only as a short-circuit — two files of different lengths cannot be identical.
-//MUTANT-SUITE crates/batten/tests/it/doctor.rs
-//MUTANT mediator-ignores-the-target-dir|s@^    let built = crate::engine::release_build(dir);$@    let built = dir.join("target").join("release").join(crate::surface::BINARY);@|the_mediator_is_compared_against_the_build_this_tree_actually_writes
 #[must_use]
 pub fn diagnose_mediator(dir: &Path) -> Mediator {
     // The tree builds a mediator iff it carries the crate that produces one.
@@ -1236,6 +1314,22 @@ pub fn diagnose_mediator(dir: &Path) -> Mediator {
     // checkout" and "batten's own checkout before its first build" distinct: the
     // second is a could-not-look and the first is not a question at all.
     if !dir.join("crates/batten/Cargo.toml").is_file() {
+        return Mediator::NotApplicable;
+    }
+    // AND IT IS ASKED ONLY UNDER A SOURCE PIN (CLOUD-2840). A tree pinning a
+    // release, or pinning nothing, is served by the released engine exactly as
+    // CI is: its own `target/` is not the engine, so an unbuilt or older one is
+    // no fault, and the repair this verdict names — the local build — would be a
+    // cold `cargo build --release` on every session start for nothing. Only a
+    // source pin makes the checkout's build the engine to compare against.
+    let source_pinned = crate::fsio::read_to_string(dir.join(crate::config_model::CONFIG_FILE))
+        .ok()
+        .and_then(|text| crate::engine::declared(&text))
+        .is_some_and(|pin| {
+            use crate::engine::PinExt as _;
+            matches!(pin.kind(), crate::engine::PinKind::Source(_))
+        });
+    if !source_pinned {
         return Mediator::NotApplicable;
     }
     let Some(resolved) = crate::rules::on_path_verbatim("batten") else {
@@ -1257,13 +1351,13 @@ pub fn diagnose_mediator(dir: &Path) -> Mediator {
     // documented worktree setup the verb then answered `Unbuilt` over a built
     // tree and `BuildBehindSource` could never fire at all.
     let built = crate::engine::release_build(dir);
-    let (Ok(left), Ok(right)) = (std::fs::read(&resolved), std::fs::read(&built)) else {
+    let (Ok(left), Ok(right)) = (crate::fsio::read(&resolved), crate::fsio::read(&built)) else {
         return Mediator::Unbuilt;
     };
     if left.len() != right.len() {
         return Mediator::Stale;
     }
-    if crate::receipt::hex_sha256(&left) != crate::receipt::hex_sha256(&right) {
+    if crate::digest::sha256_hex(&left) != crate::digest::sha256_hex(&right) {
         return Mediator::Stale;
     }
     // THE INSTALL MATCHES THE BUILD — WHICH SAYS NOTHING ABOUT THE SOURCE
@@ -1354,20 +1448,23 @@ fn newest_source_under(root: &Path) -> Option<std::time::SystemTime> {
 /// repository failed its own `doctor` (CLOUD-617). Two answers to "is this
 /// program on PATH" is one too many: the probe must agree with the spawn it is
 /// predicting, or it diagnoses a run that would have worked.
-fn on_path(program: &str) -> bool {
+pub(crate) fn on_path(program: &str) -> bool {
     if program.contains([std::path::MAIN_SEPARATOR, '/']) {
         return Path::new(program).is_file();
     }
     crate::rules::on_path_verbatim(program).is_some()
 }
 
-/// The two hooks a commit in this clone must run for the gate to be on its path.
+/// The hooks a commit in this clone must run for the gate to be on its path.
 ///
 /// `pre-commit` runs the gate; `commit-msg` carries the Conventional Commits
 /// check release-plz's semver bump depends on, so leaving it out would assert the
-/// expensive half and not the deciding one. Both are git's own names, which is
-/// what keeps this list generic: every consumer's commit path runs these two.
-pub(crate) const COMMIT_HOOKS: [&str; 2] = ["pre-commit", "commit-msg"];
+/// expensive half and not the deciding one. `pre-push` is the one point every
+/// commit passes WHATEVER made it: `git revert` and `git cherry-pick` commit
+/// through the sequencer, which runs no `commit-msg`, and a `Revert "…"` subject
+/// reached `verify` unjudged that way. All three are git's own names, which is
+/// what keeps this list generic: every consumer's commit path runs them.
+pub(crate) const COMMIT_HOOKS: [&str; 3] = ["pre-commit", "commit-msg", "pre-push"];
 
 /// The stable reason id for a commit path that does not run the gate.
 const COMMIT_HOOK_MISSING: &str = "commit-hook-missing";
@@ -1433,9 +1530,8 @@ fn is_runnable_hook(at: &Path) -> bool {
 /// One predicate reached from both, on [`diagnose_commit_gate`]'s reason: a
 /// startup row asks it alone, and a second reading could drift from the report.
 #[must_use]
-//MUTANT dropped-rows-pass|s@Check::failed(CONFIG, "config-rows-dropped")@Check::passed(CONFIG)@|doctor_config_fails_on_a_row_this_build_cannot_resolve
 pub fn diagnose_config(dir: &Path) -> Check {
-    match config::load(&dir.join(config::CONFIG_FILE)) {
+    match config::load(&dir.join(crate::config_model::CONFIG_FILE)) {
         // Loading proves the file parses and the version gates pass; resolving
         // proves the §8 chain (including a `batten.local.toml`) is coherent too.
         // Both are wanted — a config that parses but whose local override is
@@ -1454,7 +1550,7 @@ pub fn diagnose_config(dir: &Path) -> Check {
             Ok(_) => Check::passed(CONFIG),
             Err(_) => Check::failed(CONFIG, "config-unresolvable"),
         },
-        Err(_) if !dir.join(config::CONFIG_FILE).exists() => {
+        Err(_) if !dir.join(crate::config_model::CONFIG_FILE).exists() => {
             Check::failed(CONFIG, "config-missing")
         }
         Err(_) => Check::failed(CONFIG, "config-invalid"),
@@ -1515,8 +1611,6 @@ pub fn diagnose_commit_gate(dir: &Path) -> Check {
 // loop, where a check stuck on `ok` reports the row provisioned, `--repair`
 // never runs its argv, and the fixture's hooks stay absent. That is also what
 // makes the declared precondition load-bearing rather than decorative.
-//MUTANT-SUITE crates/batten/tests/it/startup.rs
-//MUTANT hooks-check-reports-without-deciding|s@^        Check::failed_naming(COMMIT_GATE, COMMIT_HOOK_MISSING, missing)$@        Check::passed(COMMIT_GATE)@|a_clone_with_no_commit_hooks_fails_the_row_and_repair_installs_them
 
 /// The check the declared transcript earns, or `None` where none is declared
 /// (CLOUD-1035).
@@ -1819,7 +1913,7 @@ pub fn diagnose(dir: &Path) -> Report {
     //
     // `Unsurveyed` is a FAILED check rather than a passed one, which is the
     // whole reason the column has two variants. An absence of data reading as
-    // an absence of capability is the trap `hook::Harness::operation_of`
+    // an absence of capability is the trap `crate::config_model::Harness::operation_of`
     // records for Gemini and Copilot, and a diagnostic that reported "no plan
     // tool" for a host nobody has looked at would be repeating it in the one
     // place an operator goes to find out what is true.
@@ -1836,7 +1930,7 @@ pub fn diagnose(dir: &Path) -> Report {
     // What it does catch is a harness added with neither a fetch nor an owner,
     // which is the moment the gap becomes invisible.
     checks.push(
-        if crate::hook::Harness::ALL.iter().any(|harness| {
+        if crate::config_model::Harness::ALL.iter().any(|harness| {
             matches!(
                 harness.capabilities().plan_tools,
                 crate::hook::PlanTools::Unsurveyed(owner) if owner.is_empty()
@@ -1847,6 +1941,13 @@ pub fn diagnose(dir: &Path) -> Report {
             Check::passed(PLAN_SURFACE)
         },
     );
+
+    // THE WIRING CENSUS, ON THE SURFACES THE TREE AND THE LIVE SESSION OWN
+    // (CLOUD-2676). Merged `$HOME` findings are dropped and stay in `doctor
+    // hooks`: a world property in `diagnose` is what turned
+    // `this_repository_is_healthy` red once, and a user-level registration is
+    // exactly one.
+    checks.push(hook_wiring_check(dir));
 
     // The working-tree authority: `doctor` diagnoses the checkout in front of
     // it, so it does not take a base ref.
@@ -1872,7 +1973,53 @@ pub struct WiringFinding {
     pub event: String,
     /// The stable reason id.
     pub reason: &'static str,
+    /// Which surface this is about, as a pointer token and never an absolute
+    /// path (CLOUD-2676): the repo-relative file for a committed finding, or
+    /// `~/<file>` for a merged one. `~/`-relative is byte-stable across machines.
+    pub file: String,
+    /// The one command that repairs this finding, from [`fix_for`].
+    pub fix: String,
 }
+
+/// The one-line repair for a wiring finding (CLOUD-2676).
+///
+/// Three groups. A missing file or registration is what `wiring register --all`
+/// adds; anything wrong WITH batten's entries is restored from the derivation,
+/// because `add_missing` only adds; a merged registration is `reclaim`'s.
+fn fix_for(reason: &str, harness: crate::config_model::Harness) -> String {
+    match reason {
+        FILE_MISSING | EVENT_UNREGISTERED => "batten wiring register --all".to_owned(),
+        EVENT_UNDERIVED
+        | EVENT_REGISTERED_N_TIMES
+        | MATCHER_NARROWS
+        | COMMAND_DRIFT
+        | SIBLING_REGISTERED
+        | FILE_UNREADABLE => {
+            format!("batten generate hooks --harness {}", harness.as_str())
+        }
+        MERGED_REGISTRATION | MERGED_SIBLING => "batten wiring reclaim".to_owned(),
+        _ => String::new(),
+    }
+}
+
+/// Plain `doctor`'s `hook-wiring` check: fails when any wiring finding remains
+/// after dropping the ones on a merged home surface (CLOUD-2676).
+fn hook_wiring_check(dir: &Path) -> Check {
+    let unwired = diagnose_hooks(dir)
+        .harnesses
+        .into_iter()
+        .flat_map(|harness| harness.findings)
+        .filter(|finding| !finding.file.starts_with("~/"))
+        .count();
+    if unwired == 0 {
+        Check::passed(HOOK_WIRING)
+    } else {
+        Check::failed(HOOK_WIRING, "hook-wiring-unwired")
+    }
+}
+
+/// Plain `doctor`'s wiring check name.
+const HOOK_WIRING: &str = "hook-wiring";
 
 /// One harness's wiring diagnosis.
 ///
@@ -1944,7 +2091,7 @@ pub struct HarnessWiring {
     /// one, or a simply absent one — and no reader could tell which, so the
     /// collapse this field exists to prevent was reproduced one level down. The
     /// siblings below split them, and [`MergedTally::partitions`] asserts their
-    /// sum against [`hook::Harness::merge_surfaces`]'s own length, so a fifth
+    /// sum against [`crate::config_model::Harness::merge_surfaces`]'s own length, so a fifth
     /// disposition cannot be added without landing somewhere countable.
     pub merged_surfaces_read: usize,
     /// Merged surfaces this host declares that are not present on disk.
@@ -2153,7 +2300,11 @@ const FILE_UNREADABLE: &str = "hook-wiring-file-unreadable";
     clippy::too_many_lines,
     reason = "one harness's diagnosis reads as one sequence: locate the file, judge               batten's entries per derived event, then the rest of the surface. Splitting               it would thread `findings`, `registrations` and `siblings` through helpers               that exist only to satisfy a line count, and each of the three phases is               already commented as its own step."
 )]
-fn diagnose_harness(dir: &Path, harness: hook::Harness, exclusive: bool) -> Option<HarnessWiring> {
+fn diagnose_harness(
+    dir: &Path,
+    harness: crate::config_model::Harness,
+    exclusive: bool,
+) -> Option<HarnessWiring> {
     let wiring = harness.wiring()?;
     let path = match wiring.file {
         hook::WiringFile::Key { path, .. } | hook::WiringFile::Whole(path) => path,
@@ -2177,9 +2328,18 @@ fn diagnose_harness(dir: &Path, harness: hook::Harness, exclusive: bool) -> Opti
     // counter names, which is the collapse the split counters were added to
     // remove one level down. It would also break `MergedTally::partitions`: the
     // five must sum to `merge_surfaces().len()`, and five zeroes do not.
+    let finish = |findings: &mut Vec<WiringFinding>, merged: Vec<WiringFinding>| {
+        for finding in findings.iter_mut() {
+            path.clone_into(&mut finding.file);
+        }
+        findings.extend(merged);
+        for finding in findings.iter_mut() {
+            finding.fix = fix_for(finding.reason, harness);
+        }
+    };
     let row = |mut findings: Vec<WiringFinding>, registrations, siblings| {
         let merged = diagnose_merged(dir, harness, &command, exclusive);
-        findings.extend(merged.findings);
+        finish(&mut findings, merged.findings);
         HarnessWiring {
             harness: harness.as_str(),
             registrations,
@@ -2200,11 +2360,13 @@ fn diagnose_harness(dir: &Path, harness: hook::Harness, exclusive: bool) -> Opti
     // has no file on it is unwired, which is the state this check exists to
     // report — reading "nothing to compare" as "nothing wrong" is the shape the
     // gate keeps re-meeting.
-    let Ok(raw) = std::fs::read_to_string(dir.join(path)) else {
+    let Ok(raw) = crate::fsio::read_to_string(dir.join(path)) else {
         return Some(row(
             vec![WiringFinding {
                 event: String::new(),
                 reason: FILE_MISSING,
+                file: String::new(),
+                fix: String::new(),
             }],
             0,
             0,
@@ -2215,6 +2377,8 @@ fn diagnose_harness(dir: &Path, harness: hook::Harness, exclusive: bool) -> Opti
             vec![WiringFinding {
                 event: String::new(),
                 reason: FILE_UNREADABLE,
+                file: String::new(),
+                fix: String::new(),
             }],
             0,
             0,
@@ -2233,7 +2397,7 @@ fn diagnose_harness(dir: &Path, harness: hook::Harness, exclusive: bool) -> Opti
         let mut here = 0;
         for (matcher, entry) in events
             .get(*spelling)
-            .map(entries_under)
+            .map(|value| entries_under(value, harness.entry_shape()))
             .unwrap_or_default()
             .into_iter()
             .filter(|(_, entry)| entry.contains("batten"))
@@ -2244,6 +2408,8 @@ fn diagnose_harness(dir: &Path, harness: hook::Harness, exclusive: bool) -> Opti
                 findings.push(WiringFinding {
                     event: (*spelling).to_owned(),
                     reason: MATCHER_NARROWS,
+                    file: String::new(),
+                    fix: String::new(),
                 });
             }
             // STRUCTURAL, not a substring: `reaches_engine` states why, and the
@@ -2252,6 +2418,8 @@ fn diagnose_harness(dir: &Path, harness: hook::Harness, exclusive: bool) -> Opti
                 findings.push(WiringFinding {
                     event: (*spelling).to_owned(),
                     reason: COMMAND_DRIFT,
+                    file: String::new(),
+                    fix: String::new(),
                 });
             }
         }
@@ -2262,20 +2430,28 @@ fn diagnose_harness(dir: &Path, harness: hook::Harness, exclusive: bool) -> Opti
             findings.push(WiringFinding {
                 event: (*spelling).to_owned(),
                 reason: EVENT_UNREGISTERED,
+                file: String::new(),
+                fix: String::new(),
             });
         } else if here > 1 {
             findings.push(WiringFinding {
                 event: (*spelling).to_owned(),
                 reason: EVENT_REGISTERED_N_TIMES,
+                file: String::new(),
+                fix: String::new(),
             });
         }
     }
 
-    // Everything else on the surface: a batten entry under an event the
-    // derivation does not emit, and the sibling count.
-    let spellings: Vec<&str> = derived.iter().map(|(_, spelling)| *spelling).collect();
+    // Everything else on the surface: a batten entry under an event the host
+    // does not emit, and the sibling count. Judged against what the derivation
+    // ADMITS (every event the host emits), not what it registers by default:
+    // a consumer that puts Batten on the whole surface is not underived
+    // (CLOUD-2581). `derived` above stays the required set.
+    let admitted = wiring.admits(harness);
+    let spellings: Vec<&str> = admitted.iter().map(|(_, spelling)| *spelling).collect();
     for (event, value) in events.iter() {
-        for (_, entry) in entries_under(value) {
+        for (_, entry) in entries_under(value, harness.entry_shape()) {
             if !entry.contains("batten") {
                 siblings += 1;
                 // COUNTED ALWAYS, REFUSED ONLY UNDER THE DECLARATION. The count
@@ -2286,6 +2462,8 @@ fn diagnose_harness(dir: &Path, harness: hook::Harness, exclusive: bool) -> Opti
                     findings.push(WiringFinding {
                         event: event.clone(),
                         reason: SIBLING_REGISTERED,
+                        file: String::new(),
+                        fix: String::new(),
                     });
                 }
             } else if !spellings.contains(&event.as_str()) {
@@ -2293,6 +2471,8 @@ fn diagnose_harness(dir: &Path, harness: hook::Harness, exclusive: bool) -> Opti
                 findings.push(WiringFinding {
                     event: event.clone(),
                     reason: EVENT_UNDERIVED,
+                    file: String::new(),
+                    fix: String::new(),
                 });
             }
         }
@@ -2306,7 +2486,7 @@ fn diagnose_harness(dir: &Path, harness: hook::Harness, exclusive: bool) -> Opti
     // launcher file, and a check that went red for its absence would be red on
     // every developer's box for a state nobody can fix.
     let merged = diagnose_merged(dir, harness, &command, exclusive);
-    findings.extend(merged.findings);
+    finish(&mut findings, merged.findings);
 
     Some(HarnessWiring {
         harness: harness.as_str(),
@@ -2351,7 +2531,7 @@ fn diagnose_harness(dir: &Path, harness: hook::Harness, exclusive: bool) -> Opti
 /// Clause (a) matches on the token's file **stem**, so an absolute path and a
 /// `.exe` both pass while `batten-hook.sh` stays drift for a consumer's launcher
 /// column to answer for.
-fn reaches_engine(entry: &str, harness: hook::Harness) -> bool {
+fn reaches_engine(entry: &str, harness: crate::config_model::Harness) -> bool {
     // (b) No shell control operator anywhere in the entry. Checked over
     // characters rather than the two-character operators, so `&&` and `||` are
     // covered by `&` and `|`.
@@ -2398,7 +2578,7 @@ fn reaches_engine(entry: &str, harness: hook::Harness) -> bool {
 
 /// What one host's merged surfaces amount to, as a partition rather than a pair.
 ///
-/// Every surface [`hook::Harness::merge_surfaces`] declares lands in exactly one
+/// Every surface [`crate::config_model::Harness::merge_surfaces`] declares lands in exactly one
 /// disposition, which is what makes [`MergedTally::partitions`] an invariant
 /// rather than a hope. The pair this replaced could not do that: four different
 /// answers all rendered as `read: 0`.
@@ -2452,7 +2632,7 @@ impl MergedTally {
 /// fuses siblings with batten's own entries.
 fn diagnose_merged(
     dir: &Path,
-    harness: hook::Harness,
+    harness: crate::config_model::Harness,
     command: &str,
     exclusive: bool,
 ) -> MergedTally {
@@ -2477,7 +2657,7 @@ fn diagnose_merged(
 fn merged_from(
     home: Option<&Path>,
     dir: &Path,
-    harness: hook::Harness,
+    harness: crate::config_model::Harness,
     command: &str,
     exclusive: bool,
 ) -> MergedTally {
@@ -2503,14 +2683,14 @@ fn merged_from(
 fn merged_under(
     home: &Path,
     dir: &Path,
-    harness: hook::Harness,
+    harness: crate::config_model::Harness,
     command: &str,
     exclusive: bool,
 ) -> MergedTally {
     let surfaces = harness.merge_surfaces();
     let mut tally = MergedTally::default();
     for surface in surfaces {
-        let path = home.join(surface);
+        let path = hook::user_config_path(harness, home, surface);
         // THE SAME FILE IS NOT A SECOND AUTHORITY. Several hosts spell their
         // user-level surface and their project-level one identically, differing
         // only in the directory each is resolved against, so a checkout sitting
@@ -2526,7 +2706,7 @@ fn merged_under(
             tally.deduplicated += 1;
             continue;
         }
-        let Ok(raw) = std::fs::read_to_string(&path) else {
+        let Ok(raw) = crate::fsio::read_to_string(&path) else {
             // ABSENT AND UNREADABLE ARE DIFFERENT REMEDIES, so they are
             // different counters, exactly as `FILE_MISSING` and
             // `FILE_UNREADABLE` are different reason ids on the committed side.
@@ -2562,13 +2742,28 @@ fn merged_under(
         // "looked and found none" and "could not look" have to stay apart, and a
         // counter incremented one step too early makes them the same number.
         tally.read += 1;
+        // BATTEN'S OWN IDENTICAL REGISTRATION ON THE USER SURFACE IS NOT A SECOND
+        // AUTHORITY (CLOUD-2953): the host runs one handler once however many
+        // files define it, and this is the copy every working directory loads.
+        // Only the byte-identical event map is accepted; any other spelling, or
+        // batten on any other merged surface, is still a finding.
+        if harness.user_surface() == Some(*surface)
+            && harness.wiring().is_some_and(|wiring| {
+                serde_json::Value::Object(events.clone().into_owned())
+                    == wiring::owned_events(wiring, harness, &hook::wiring_command(harness))
+            })
+        {
+            continue;
+        }
         for (event, value) in events.iter() {
-            for (_, entry) in entries_under(value) {
+            for (_, entry) in entries_under(value, harness.entry_shape()) {
                 tally.commands += 1;
                 if entry.contains(command) || entry.contains("batten") {
                     tally.findings.push(WiringFinding {
                         event: event.clone(),
                         reason: MERGED_REGISTRATION,
+                        file: format!("~/{surface}"),
+                        fix: String::new(),
                     });
                 } else {
                     // THE SAME SELECTOR THE COMMITTED SIDE USES, deliberately:
@@ -2581,6 +2776,8 @@ fn merged_under(
                         tally.findings.push(WiringFinding {
                             event: event.clone(),
                             reason: MERGED_SIBLING,
+                            file: format!("~/{surface}"),
+                            fix: String::new(),
                         });
                     }
                 }
@@ -2592,10 +2789,10 @@ fn merged_under(
 
 /// Diagnose the hook wiring of every harness the core knows (CLOUD-777).
 ///
-/// **Ranged over [`hook::Harness::ALL`], never a table.** Which harnesses exist
+/// **Ranged over [`crate::config_model::Harness::ALL`], never a table.** Which harnesses exist
 /// is the core's own answer, so a seventh adapter is diagnosed the day it lands
 /// rather than silently omitted — the shape a hand-kept list answers "no" to.
-/// `exit-code` declares no wiring surface and [`hook::Harness::wiring`] returns
+/// `exit-code` declares no wiring surface and [`crate::config_model::Harness::wiring`] returns
 /// `None` for it, which is what excludes it: the neutral contract is an envelope
 /// in and a decision as an exit status out, with no file to register in.
 ///
@@ -2619,7 +2816,7 @@ pub fn diagnose_hooks(dir: &Path) -> WiringReport {
         .and_then(|resolved| resolved.hook.as_ref().map(|hook| hook.exclusive))
         .unwrap_or(false);
     let declared = resolved.and_then(|resolved| resolved.wiring);
-    let harnesses: Vec<HarnessWiring> = hook::Harness::ALL
+    let harnesses: Vec<HarnessWiring> = crate::config_model::Harness::ALL
         .iter()
         .filter_map(|harness| diagnose_harness(dir, *harness, exclusive))
         .collect();
@@ -2765,8 +2962,6 @@ pub fn has_session_start_reader(fact: crate::facts::Fact) -> bool {
 /// repository whose policy will not resolve has a louder problem, `doctor`'s
 /// `config` check is what says so, and reporting every rule as unminted over an
 /// unreadable config would bury that.
-//MUTANT factless-rule-demands-a-fact|s@        for token in bundle.session_start_facts() {@        for token in ["pinned-programs", "tasks"] {@|a_rule_reading_no_session_start_fact_is_not_judged
-//MUTANT every-session-is-could-not-look|s@            if reads.and_then(\x7cfact\x7c minted(fact, dir)) != Some(true) {@            if true {@|a_session_with_every_fact_minted_is_clean
 fn unminted_facts(dir: &Path, resolved: Option<&resolve::Resolved>) -> Vec<Unminted> {
     let Some(resolved) = resolved else {
         return Vec::new();
@@ -2775,10 +2970,10 @@ fn unminted_facts(dir: &Path, resolved: Option<&resolve::Resolved>) -> Vec<Unmin
     // the mediated rows is what `hook.rs` does to build the very bundle set this
     // question is about, so asking the same way keeps one answer to "which rules
     // decide a call" rather than two that can disagree.
-    let mediated: Vec<crate::rules::Rule> = resolved
+    let mediated: Vec<crate::config_model::Rule> = resolved
         .rules
         .iter()
-        .filter(|rule| rule.scope == crate::rules::RuleScope::MediatedCall)
+        .filter(|rule| rule.scope == crate::preset_catalog::RuleScope::MediatedCall)
         .cloned()
         .collect();
     if mediated.is_empty() {
@@ -2828,9 +3023,6 @@ fn unminted_facts(dir: &Path, resolved: Option<&resolve::Resolved>) -> Vec<Unmin
 /// machine with only the per-session leaf missing, which is what a session with
 /// no declared work looks like on a host that creates the store lazily. The
 /// caller has already read the link and established the target is absent.
-//MUTANT-SUITE crates/batten/tests/it/session_drain.rs
-//MUTANT store-absence-reads-unreadable|s@    target.parent().is_some_and(Path::is_dir)@    false@|a_pointer_at_an_unwritten_store_is_zero_and_never_could_not_look
-//MUTANT parent-conjunct-dropped|s@    target.parent().is_some_and(Path::is_dir)@    true@|a_pointer_whose_parent_is_absent_too_stays_could_not_look
 fn store_is_merely_unwritten(target: &Path) -> bool {
     target.parent().is_some_and(Path::is_dir)
 }
@@ -2876,15 +3068,9 @@ enum TaskEvidence {
 ///
 /// **A TEMPLATE WITHOUT `{session}` CANNOT BE MATCHED** to a session, so it
 /// answers [`TaskEvidence::Unknown`].
-//MUTANT-SUITE crates/batten/tests/it/session_drain.rs
-//MUTANT transcript-zero-ignores-task-calls|s@^    if called {$@    if false {@|a_transcript_that_declared_a_task_never_reads_as_zero
-//MUTANT transcript-zero-on-empty-stream|s@^    if stream.records.is_empty() {$@    if false {@|an_empty_transcript_is_not_evidence
-//MUTANT transcript-zero-any-session|s@^    if expected != target.to_string_lossy() {$@    if false {@|another_sessions_transcript_is_not_evidence
-//MUTANT transcript-partial-line-dropped|s@^    if !partial.trim_ascii().is_empty() {$@    if false {@|a_half_written_task_call_is_not_zero
-//MUTANT transcript-sessionless-template-matches|s@ \x7c\x7c !template.contains("{session}") {$@ {@|a_sessionless_template_is_not_evidence
 fn transcript_evidence(
     dir: &Path,
-    transcript: &crate::transcript::TranscriptConfig,
+    transcript: &crate::config_model::TranscriptConfig,
     target: &Path,
 ) -> TaskEvidence {
     let (Some(harness), Some(path), Some(template)) = (
@@ -2908,7 +3094,7 @@ fn transcript_evidence(
     // BYTES FIRST, THEN TEXT: a write paused inside a multibyte character leaves
     // a tail that is not UTF-8, and decoding the whole file first would read
     // that torn tail as an unreadable transcript rather than as `Torn`.
-    let Ok(bytes) = std::fs::read(dir.join(path)) else {
+    let Ok(bytes) = crate::fsio::read(dir.join(path)) else {
         return TaskEvidence::Unknown;
     };
     // The last newline opens the tail rather than closing the body: the trim
@@ -2959,14 +3145,9 @@ fn transcript_evidence(
 /// either arm: a target that exists and still will not list is could-not-look,
 /// and a link that will not read is no pointer at all, which is not the same
 /// fact as a pointer at nothing.
-//MUTANT-SUITE crates/batten/tests/it/session_drain.rs
-//MUTANT transcript-arm-dropped|s@^        TaskEvidence::NoTaskCall => !resolved.try_exists().unwrap_or(true),$@        TaskEvidence::NoTaskCall => store_is_merely_unwritten(\&resolved),@|a_transcript_with_no_task_call_is_zero_without_a_store_root
-//MUTANT transcript-zero-without-a-transcript|s@^        TaskEvidence::Unknown => store_is_merely_unwritten(&resolved),$@        TaskEvidence::Unknown => true,@|a_pointer_whose_parent_is_absent_too_stays_could_not_look
-//MUTANT transcript-zero-over-a-present-store|s@^    if resolved.try_exists().unwrap_or(true) {$@    if false {@|an_unreadable_store_is_never_zero
-//MUTANT torn-falls-back|s@^        TaskEvidence::TaskCalled \x7c TaskEvidence::Torn => false,$@        TaskEvidence::TaskCalled => false, TaskEvidence::Torn => store_is_merely_unwritten(\&resolved),@|a_half_written_task_call_is_not_zero
 fn absent_store_is_zero(
     dir: &Path,
-    transcript: &crate::transcript::TranscriptConfig,
+    transcript: &crate::config_model::TranscriptConfig,
     link: &Path,
 ) -> bool {
     let Ok(target) = std::fs::read_link(link) else {
@@ -3067,7 +3248,7 @@ pub fn diagnose_session(dir: &Path) -> SessionReport {
         if path.extension().is_none_or(|ext| ext != "json") {
             continue;
         }
-        let Ok(bytes) = std::fs::read_to_string(&path) else {
+        let Ok(bytes) = crate::fsio::read_to_string(&path) else {
             // ONE unreadable member poisons the whole reading. A partial count
             // is a number that looks measured and is not, and this verb's only
             // failure mode that matters is under-reporting.
@@ -3103,13 +3284,11 @@ pub fn diagnose_session(dir: &Path) -> SessionReport {
     }
 }
 
-//MUTANT unprovisioned-verify-green|s@^        .filter(\x7ctool\x7c !installed.contains(tool))$@        .filter(\x7ctool\x7c installed.contains(tool))@|a_declared_tool_the_probe_does_not_report_is_unprovisioned
-//MUTANT toolchain-probe-blind|s@^    let Some(installed) = installed_tools(probe) else {$@    let Some(installed) = installed_tools(probe).or_else(\x7c\x7c Some(declared.clone())) else {@|a_probe_that_answered_nothing_is_unprovisioned_rather_than_a_pass
-
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
 
+    #[cfg(test)]
     /// A rustlib directory with the residue the case names present.
     fn rustlib(name: &str, traces: &[&str]) -> std::path::PathBuf {
         let dir = std::env::temp_dir().join(format!("batten-rustup-{name}"));
@@ -3261,7 +3440,7 @@ mod tests {
         let registered: std::collections::BTreeSet<String> = crate::hook::HookSource::Git
             .vocabulary()
             .into_iter()
-            .filter(|(_, d)| matches!(d, crate::hook::HookDisposition::Registered { .. }))
+            .filter(|(_, d)| matches!(d, crate::config_model::HookDisposition::Registered { .. }))
             .map(|(name, _)| name)
             .collect();
         let authority: std::collections::BTreeSet<String> =
@@ -3347,7 +3526,7 @@ mod tests {
     /// Fails by: reverting `reaches_engine` to a literal argv.
     #[test]
     fn wiring_naming_an_undeclared_path_does_not_reach_the_engine() {
-        let harness = hook::Harness::ClaudeCode;
+        let harness = crate::config_model::Harness::ClaudeCode;
         let live = hook::wiring_command(harness);
         assert!(
             reaches_engine(&live, harness),
@@ -3381,7 +3560,7 @@ mod tests {
     /// read as reaching the engine (or indexed past its end).
     #[test]
     fn only_a_batten_assignment_or_a_short_argv_falls_short_of_the_engine() {
-        let harness = hook::Harness::ClaudeCode;
+        let harness = crate::config_model::Harness::ClaudeCode;
         let live = hook::wiring_command(harness);
         assert!(reaches_engine(&format!("env LANG=C {live}"), harness));
         assert!(!reaches_engine(&format!("BATTEN_X=1 {live}"), harness));
@@ -3437,7 +3616,8 @@ mod tests {
             .filter(|check| !check.ok)
             .map(|check| check.name)
             .collect();
-        assert_eq!(failed, vec![CONFIG, GIT_REPO]);
+        // `hook-wiring` too: an unwired scratch dir is unwired (CLOUD-2676).
+        assert_eq!(failed, vec![CONFIG, GIT_REPO, HOOK_WIRING]);
     }
 
     #[test]
@@ -3460,7 +3640,7 @@ mod tests {
 
     /// Claude Code's eight events, each carrying the derived command once.
     fn complete_wiring() -> serde_json::Value {
-        let command = hook::wiring_command(hook::Harness::ClaudeCode);
+        let command = hook::wiring_command(crate::config_model::Harness::ClaudeCode);
         let mut events = serde_json::Map::new();
         for spelling in claude_spellings() {
             events.insert(
@@ -3473,11 +3653,11 @@ mod tests {
 
     /// The events the derivation registers for Claude Code, in its order.
     fn claude_spellings() -> Vec<String> {
-        let wiring = hook::Harness::ClaudeCode
+        let wiring = crate::config_model::Harness::ClaudeCode
             .wiring()
             .expect("claude-code declares a wiring surface");
         wiring
-            .registrations(hook::Harness::ClaudeCode)
+            .registrations(crate::config_model::Harness::ClaudeCode)
             .into_iter()
             .map(|(_, spelling)| spelling.to_owned())
             .collect()
@@ -3492,7 +3672,7 @@ mod tests {
     /// why `hook.rs` carries it, but a copy over here would be a second place it
     /// lives. And a fixture that hardcoded the path would keep passing if
     /// `Harness::wiring` moved, testing a file the binary no longer reads.
-    fn surface_of(harness: hook::Harness) -> &'static str {
+    fn surface_of(harness: crate::config_model::Harness) -> &'static str {
         match harness
             .wiring()
             .expect("the harness declares a surface")
@@ -3506,7 +3686,7 @@ mod tests {
     fn claude_row(name: &str, wiring: &serde_json::Value) -> HarnessWiring {
         let dir = write_surface(
             name,
-            hook::Harness::ClaudeCode,
+            crate::config_model::Harness::ClaudeCode,
             &serde_json::to_string_pretty(wiring).unwrap(),
         );
         diagnose_hooks(&dir)
@@ -3517,7 +3697,11 @@ mod tests {
     }
 
     /// A scratch directory carrying `body` at `harness`'s declared surface.
-    fn write_surface(name: &str, harness: hook::Harness, body: &str) -> std::path::PathBuf {
+    fn write_surface(
+        name: &str,
+        harness: crate::config_model::Harness,
+        body: &str,
+    ) -> std::path::PathBuf {
         let dir = scratch(name);
         let path = dir.join(surface_of(harness));
         if let Some(parent) = path.parent() {
@@ -3558,7 +3742,7 @@ mod tests {
     #[test]
     fn a_second_command_on_one_event_is_a_second_authority() {
         let mut wiring = complete_wiring();
-        let command = hook::wiring_command(hook::Harness::ClaudeCode);
+        let command = hook::wiring_command(crate::config_model::Harness::ClaudeCode);
         wiring["hooks"]["Stop"] = serde_json::json!([
             { "hooks": [{ "type": "command", "command": command }] },
             { "hooks": [{ "type": "command", "command": command }] },
@@ -3599,7 +3783,7 @@ mod tests {
     #[test]
     fn an_entry_under_an_event_the_derivation_never_emits_can_never_fire() {
         let mut wiring = complete_wiring();
-        let command = hook::wiring_command(hook::Harness::ClaudeCode);
+        let command = hook::wiring_command(crate::config_model::Harness::ClaudeCode);
         wiring["hooks"]["SomethingThisHostDoesNotEmit"] =
             serde_json::json!([{ "hooks": [{ "type": "command", "command": command }] }]);
         let row = claude_row("hooks-underived", &wiring);
@@ -3612,6 +3796,250 @@ mod tests {
         );
     }
 
+    /// One batten registration under each of `spellings`.
+    fn wiring_on(spellings: &[&str]) -> serde_json::Value {
+        let command = hook::wiring_command(crate::config_model::Harness::ClaudeCode);
+        let mut events = serde_json::Map::new();
+        for spelling in spellings {
+            events.insert(
+                (*spelling).to_owned(),
+                serde_json::json!([{ "hooks": [{ "type": "command", "command": command }] }]),
+            );
+        }
+        serde_json::json!({ "hooks": events })
+    }
+
+    #[test]
+    fn a_wiring_on_every_derived_event_is_green_on_each_host() {
+        // CLOUD-2695: each non-Claude host's documented events, typed literally
+        // from its docs so a truncated table cannot follow its own test, in the
+        // entry shape the host reads (CLOUD-2694). Findings only, never `ok`, so
+        // a merged `$HOME` surface on the machine cannot move the answer.
+        let hosts = documented_events();
+        for (harness, spellings) in hosts {
+            let command = hook::wiring_command(harness);
+            let entry = match harness.entry_shape() {
+                hook::EntryShape::Flat { write, .. } => {
+                    serde_json::json!([{ "type": "command", (write): command }])
+                }
+                hook::EntryShape::Nested => {
+                    serde_json::json!([{ "hooks": [{ "type": "command", "command": command }] }])
+                }
+            };
+            let mut events = serde_json::Map::new();
+            for spelling in spellings {
+                events.insert((*spelling).to_owned(), entry.clone());
+            }
+            let body = serde_json::json!({ "version": 1, "hooks": events });
+            let dir = write_surface(
+                &format!("hooks-every-derived-{}", harness.as_str()),
+                harness,
+                &serde_json::to_string_pretty(&body).unwrap(),
+            );
+            let row = diagnose_hooks(&dir)
+                .harnesses
+                .into_iter()
+                .find(|row| row.harness == harness.as_str())
+                .expect("the host is diagnosed");
+            let wrong: Vec<&WiringFinding> = row
+                .findings
+                .iter()
+                .filter(|finding| {
+                    finding.reason == EVENT_UNDERIVED || finding.reason == EVENT_UNREGISTERED
+                })
+                .filter(|finding| !finding.file.starts_with("~/"))
+                .collect();
+            assert!(wrong.is_empty(), "{}: {wrong:?}", harness.as_str());
+            assert_eq!(row.registrations, spellings.len(), "{}", harness.as_str());
+        }
+    }
+
+    /// Each non-Claude host's documented events, typed literally from its docs so
+    /// a truncated table cannot follow its own test (CLOUD-2695, CLOUD-2700).
+    fn documented_events() -> [(crate::config_model::Harness, &'static [&'static str]); 4] {
+        [
+            (
+                crate::config_model::Harness::CodexCli,
+                &[
+                    "PreToolUse",
+                    "PostToolUse",
+                    "Stop",
+                    "SessionStart",
+                    "SessionEnd",
+                    "SubagentStart",
+                    "SubagentStop",
+                    "PermissionRequest",
+                    "PreCompact",
+                    "PostCompact",
+                    "UserPromptSubmit",
+                    // CLOUD-2700.
+                    "PreModelRequest",
+                    "PostModelRequest",
+                    "Interrupt",
+                ],
+            ),
+            (
+                crate::config_model::Harness::CopilotCli,
+                &[
+                    "PreToolUse",
+                    "PostToolUse",
+                    "PostToolUseFailure",
+                    "Stop",
+                    "SessionStart",
+                    "SessionEnd",
+                    "SubagentStop",
+                    "PreCompact",
+                    "Notification",
+                    "PermissionRequest",
+                    "ErrorOccurred",
+                    "subagentStart",
+                    "userPromptTransformed",
+                ],
+            ),
+            (
+                crate::config_model::Harness::GeminiCli,
+                &[
+                    "BeforeTool",
+                    "AfterTool",
+                    "AfterAgent",
+                    "SessionStart",
+                    "BeforeAgent",
+                    "SessionEnd",
+                    "Notification",
+                    "PreCompress",
+                    "BeforeModel",
+                    "AfterModel",
+                    "BeforeToolSelection",
+                ],
+            ),
+            (
+                crate::config_model::Harness::Cursor,
+                &[
+                    "preToolUse",
+                    "beforeShellExecution",
+                    "beforeMCPExecution",
+                    "beforeReadFile",
+                    "afterFileEdit",
+                    "postToolUse",
+                    "afterShellExecution",
+                    "afterMCPExecution",
+                    "postToolUseFailure",
+                    "stop",
+                    "sessionStart",
+                    "sessionEnd",
+                    "subagentStart",
+                    "subagentStop",
+                    "preCompact",
+                    "afterAgentResponse",
+                    "afterAgentThought",
+                    "workspaceOpen",
+                    "beforeTabFileRead",
+                    "afterTabFileEdit",
+                ],
+            ),
+        ]
+    }
+
+    #[test]
+    fn every_reason_id_has_a_fix() {
+        // CLOUD-2676: every finding names its repair, by group.
+        let claude = crate::config_model::Harness::ClaudeCode;
+        let regenerate = "batten generate hooks --harness claude-code";
+        let table = [
+            (FILE_MISSING, "batten wiring register --all"),
+            (EVENT_UNREGISTERED, "batten wiring register --all"),
+            (EVENT_UNDERIVED, regenerate),
+            (EVENT_REGISTERED_N_TIMES, regenerate),
+            (MATCHER_NARROWS, regenerate),
+            (COMMAND_DRIFT, regenerate),
+            (SIBLING_REGISTERED, regenerate),
+            (FILE_UNREADABLE, regenerate),
+            (MERGED_REGISTRATION, "batten wiring reclaim"),
+            (MERGED_SIBLING, "batten wiring reclaim"),
+        ];
+        for (reason, fix) in table {
+            assert_eq!(fix_for(reason, claude), fix, "{reason}");
+        }
+    }
+
+    #[test]
+    fn a_wiring_on_every_claude_event_is_green() {
+        // CLOUD-2581. The 33 names Claude Code 2.1.319's binary lists, typed
+        // here rather than read from `admits()`, so a truncated table cannot be
+        // followed by its own test.
+        let every = [
+            "PreToolUse",
+            "PostToolUse",
+            "PostToolUseFailure",
+            "PostToolBatch",
+            "Notification",
+            "UserPromptSubmit",
+            "UserPromptExpansion",
+            "SessionStart",
+            "SessionEnd",
+            "Stop",
+            "StopFailure",
+            "SubagentStart",
+            "SubagentStop",
+            "PreCompact",
+            "PostCompact",
+            "PreModelSwitch",
+            "PostModelSwitch",
+            "PermissionRequest",
+            "PermissionDenied",
+            "Setup",
+            "TeammateIdle",
+            "TaskCreated",
+            "TaskCompleted",
+            "Elicitation",
+            "ElicitationResult",
+            "ConfigChange",
+            "WorktreeCreate",
+            "WorktreeRemove",
+            "InstructionsLoaded",
+            "CwdChanged",
+            "FileChanged",
+            "DirectoryAdded",
+            "MessageDisplay",
+        ];
+        let row = claude_row("hooks-every-event", &wiring_on(&every));
+        assert!(row.ok, "{:?}", row.findings);
+        assert!(reasons(&row).is_empty());
+        assert_eq!(row.registrations, 33);
+    }
+
+    #[test]
+    fn an_eight_event_wiring_owes_the_rest_of_the_surface() {
+        // Owner ruling 2026-11-09, over CLOUD-2581's admitted-vs-required split:
+        // Batten is registered on every event the host emits, so the eight it
+        // once registered by default leave 25 owed. A literal list, so the
+        // fixture does not grow with `registrations()` the way
+        // `complete_wiring` does.
+        let eight = [
+            "PreToolUse",
+            "PostToolUse",
+            "Stop",
+            "SessionStart",
+            "TaskCompleted",
+            "ConfigChange",
+            "PostToolBatch",
+            "UserPromptSubmit",
+        ];
+        let row = claude_row("hooks-eight-events", &wiring_on(&eight));
+        assert!(!row.ok);
+        let owed: Vec<&WiringFinding> = row
+            .findings
+            .iter()
+            .filter(|finding| finding.reason == EVENT_UNREGISTERED)
+            .collect();
+        assert_eq!(owed.len(), 25, "{:?}", row.findings);
+        assert!(
+            owed.iter()
+                .all(|finding| finding.fix == "batten wiring register --all"),
+            "{owed:?}"
+        );
+    }
+
     #[test]
     fn a_sibling_is_counted_and_never_named_and_never_a_failure() {
         // Rule 4 — a sibling is a command line, which carries a path. And whether
@@ -3621,7 +4049,7 @@ mod tests {
         // rule 1).
         let mut wiring = complete_wiring();
         wiring["hooks"]["Stop"] = serde_json::json!([
-            { "hooks": [{ "type": "command", "command": hook::wiring_command(hook::Harness::ClaudeCode) }] },
+            { "hooks": [{ "type": "command", "command": hook::wiring_command(crate::config_model::Harness::ClaudeCode) }] },
             { "hooks": [{ "type": "command", "command": "/home/someone/mise-tasks/stop-guard.sh" }] },
         ]);
         let row = claude_row("hooks-sibling", &wiring);
@@ -3656,7 +4084,7 @@ mod tests {
         // Two different remedies — write one, or fix one.
         let dir = write_surface(
             "hooks-unparseable",
-            hook::Harness::ClaudeCode,
+            crate::config_model::Harness::ClaudeCode,
             "not json at all\n",
         );
         let row = diagnose_hooks(&dir)
@@ -3675,7 +4103,7 @@ mod tests {
         // it declares no wiring surface at all.
         let report = diagnose_hooks(&scratch("hooks-census"));
         let diagnosed: Vec<&str> = report.harnesses.iter().map(|row| row.harness).collect();
-        for harness in hook::Harness::ALL {
+        for harness in crate::config_model::Harness::ALL {
             let expected = harness.wiring().is_some();
             assert_eq!(
                 diagnosed.contains(&harness.as_str()),
@@ -3736,16 +4164,18 @@ mod tests {
         // Derived from the harness table rather than typed here: a host's own
         // file layout is the adapter's fact, and spelling one in this crate is
         // what `no_artifact_name_reaches_the_core` refuses (rule 1).
-        let surface = home.join(hook::Harness::ClaudeCode.merge_surfaces()[0]);
+        let surface = home.join(crate::config_model::Harness::ClaudeCode.merge_surfaces()[0]);
         fs::create_dir_all(surface.parent().unwrap()).unwrap();
 
-        let declared = hook::Harness::ClaudeCode.merge_surfaces().len();
+        let declared = crate::config_model::Harness::ClaudeCode
+            .merge_surfaces()
+            .len();
 
         fs::write(&surface, wrong_shape.to_string()).unwrap();
         let tally = merged_under(
             &home,
             &project,
-            hook::Harness::ClaudeCode,
+            crate::config_model::Harness::ClaudeCode,
             "batten hook",
             false,
         );
@@ -3770,7 +4200,7 @@ mod tests {
         let tally = merged_under(
             &home,
             &project,
-            hook::Harness::ClaudeCode,
+            crate::config_model::Harness::ClaudeCode,
             "batten hook",
             false,
         );
@@ -3795,7 +4225,7 @@ mod tests {
     /// `continue`.
     #[test]
     fn every_merged_surface_lands_in_exactly_one_disposition() {
-        let harness = hook::Harness::ClaudeCode;
+        let harness = crate::config_model::Harness::ClaudeCode;
         let declared = harness.merge_surfaces().len();
         assert!(declared > 1, "this host declares more than one surface");
 
@@ -3883,7 +4313,7 @@ mod tests {
     /// Fails by: incrementing `commands` alone and leaving `siblings` at zero.
     #[test]
     fn a_merged_sibling_is_counted_apart_from_battens_own() {
-        let harness = hook::Harness::ClaudeCode;
+        let harness = crate::config_model::Harness::ClaudeCode;
         let home = scratch("merged-sibling-home");
         let project = scratch("merged-sibling-project");
         let surface = home.join(harness.merge_surfaces()[0]);
@@ -3935,7 +4365,7 @@ mod tests {
     /// Fails by: dropping either `if exclusive` guard, or hard-coding it true.
     #[test]
     fn a_sibling_refuses_only_where_the_consumer_declared_the_surface_exclusive() {
-        let harness = hook::Harness::ClaudeCode;
+        let harness = crate::config_model::Harness::ClaudeCode;
         let mut wiring = complete_wiring();
         wiring["hooks"]["Stop"] = serde_json::json!([
             { "hooks": [{ "type": "command", "command": hook::wiring_command(harness) }] },
@@ -3998,7 +4428,7 @@ mod tests {
     /// Fails by: dropping the `if exclusive` guard in `merged_under`.
     #[test]
     fn a_merged_sibling_refuses_only_under_the_declaration_too() {
-        let harness = hook::Harness::ClaudeCode;
+        let harness = crate::config_model::Harness::ClaudeCode;
         let home = scratch("merged-exclusive-home");
         let project = scratch("merged-exclusive-project");
         let surface = home.join(harness.merge_surfaces()[0]);
@@ -4052,7 +4482,7 @@ mod tests {
     /// Fails by: restoring `entry.contains(&command)` in `diagnose_harness`.
     #[test]
     fn a_command_that_reaches_the_engine_and_more_is_not_a_clean_registration() {
-        let harness = hook::Harness::ClaudeCode;
+        let harness = crate::config_model::Harness::ClaudeCode;
         let command = hook::wiring_command(harness);
 
         for spelling in [
@@ -4184,7 +4614,8 @@ mod tests {
                 COMMAND_PROGRAMS,
                 PIN_RECORD,
                 HOOK_HANDLERS,
-                PLAN_SURFACE
+                PLAN_SURFACE,
+                HOOK_WIRING
             ]
         );
     }
@@ -4203,6 +4634,7 @@ mod tests {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod probe_tests {
     use super::*;
+    #[cfg(test)]
     use std::time::{Duration, SystemTime};
 
     /// A git repository holding `config` as its committed authority.
@@ -4210,7 +4642,7 @@ mod probe_tests {
         let dir = crate::scratch::scratch(name);
         crate::gitwrite::init_on_main(&dir).expect("a repository");
         if let Some(text) = config {
-            std::fs::write(dir.join(config::CONFIG_FILE), text).expect("the config");
+            std::fs::write(dir.join(crate::config_model::CONFIG_FILE), text).expect("the config");
         }
         dir
     }
@@ -4240,6 +4672,28 @@ mod probe_tests {
         );
     }
 
+    /// Fails by: an unfenced proxy failed with no live credential, which is
+    /// every cloud container since CLOUD-2688 retired the PAT (#1276's preflight
+    /// failure); or passed WITH one, where the fence is owed; or the credential
+    /// asked before the cheap readings decide.
+    #[test]
+    fn an_unfenced_proxy_is_the_route_unless_a_live_credential_would_go_direct() {
+        use crate::provision::Credential;
+        assert_eq!(
+            egress_of(false, false, || Credential::Unusable),
+            Egress::Routed
+        );
+        assert_eq!(
+            egress_of(false, false, || Credential::Live),
+            Egress::Unfenced
+        );
+        let unasked = || -> Credential { panic!("asked the credential") };
+        assert_eq!(egress_of(true, false, unasked), Egress::Unproxied);
+        assert_eq!(egress_of(false, true, unasked), Egress::Partial);
+        assert_eq!(Egress::Routed.code(), ExitCode::Success);
+        assert_eq!(Egress::Unfenced.code(), ExitCode::Usage);
+    }
+
     #[test]
     fn each_state_renders_its_own_pointer_line_on_both_surfaces() {
         let mediators = [
@@ -4264,6 +4718,7 @@ mod probe_tests {
             (Egress::Unproxied, "egress ok"),
             (Egress::Partial, "egress failed egress-partial"),
             (Egress::Unfenced, "egress failed egress-unfenced"),
+            (Egress::Routed, "egress ok"),
         ];
         for (state, line) in egresses {
             assert_eq!(state.line(), line);
@@ -4319,7 +4774,7 @@ mod probe_tests {
         assert!(!rustlib.join(target).exists());
         assert!(!rustlib.join(format!("manifest-rust-std-{target}")).exists());
         assert_eq!(
-            std::fs::read_to_string(rustlib.join("components")).expect("components"),
+            crate::fsio::read_to_string(rustlib.join("components")).expect("components"),
             "rustc\ncargo\n"
         );
     }
@@ -4330,10 +4785,34 @@ mod probe_tests {
         String::from_utf8(out).expect("utf-8")
     }
 
+    /// A missing config routes to `batten init`, and only a missing one.
+    #[test]
+    fn a_missing_config_routes_to_init() {
+        use crate::refusal::Arm;
+        let missing = Check::failed(CONFIG, "config-missing")
+            .finding()
+            .expect("a failing check");
+        let pointer = missing.render_finding(Arm::Pointer);
+        assert!(pointer.ends_with("; run batten init"), "{pointer}");
+        let full = missing.render_finding(Arm::Full);
+        assert!(
+            full.contains("Do: run batten init to write the missing batten.toml"),
+            "{full}"
+        );
+        let invalid = Check::failed(CONFIG, "config-invalid")
+            .finding()
+            .expect("a failing check")
+            .render_finding(Arm::Pointer);
+        assert!(!invalid.contains("batten init"), "{invalid}");
+    }
+
     #[test]
     fn only_a_counted_refusal_is_recorded_as_a_gap() {
         let root = repository("doctor-record-gap", None);
-        let refusal = workspace_refusal(&finding_subjects("config", "config-missing", &[]));
+        let refusal = workspace_refusal(
+            &finding_subjects("config", "config-missing", &[]),
+            crate::refusal::Fix::None,
+        );
         record_gap(&root, &refusal.clone().counted(false));
         assert_eq!(gaps(&root), "");
         record_gap(&root, &refusal.counted(true));
@@ -4376,6 +4855,45 @@ mod probe_tests {
     fn a_tree_that_builds_no_mediator_is_not_asked() {
         let dir = crate::scratch::scratch("doctor-mediator-na");
         assert_eq!(diagnose_mediator(&dir), Mediator::NotApplicable);
+    }
+
+    /// NO SOURCE PIN, NO BUILD TO COMPARE AGAINST (CLOUD-2840). A tree that
+    /// builds the engine but pins a release, or pins nothing, is served by the
+    /// released engine exactly as CI is, so its own unbuilt `target/` is not a
+    /// mediator fault and must not ask for the build. Only a source pin makes
+    /// the checkout's build the engine, and only then is the comparison asked.
+    /// Fails by: `Unbuilt` over a release-pinned tree with an empty `target/`,
+    /// whose repair is a cold release build on every session start.
+    #[test]
+    fn only_a_source_pinned_tree_is_asked_for_its_build() {
+        let tree = |name: &str, config: Option<&str>| {
+            let dir = crate::scratch::scratch(name);
+            std::fs::create_dir_all(dir.join("crates/batten")).expect("a crate");
+            std::fs::write(dir.join("crates/batten/Cargo.toml"), "# marker\n").expect("a manifest");
+            if let Some(config) = config {
+                std::fs::write(dir.join(crate::config_model::CONFIG_FILE), config)
+                    .expect("a config");
+            }
+            dir
+        };
+        let released = tree(
+            "doctor-mediator-release-pin",
+            Some("version = 1\nengine = { release = \"v0.0.220\" }\n"),
+        );
+        assert_eq!(diagnose_mediator(&released), Mediator::NotApplicable);
+        let unpinned = tree("doctor-mediator-no-pin", Some("version = 1\n"));
+        assert_eq!(diagnose_mediator(&unpinned), Mediator::NotApplicable);
+        let unconfigured = tree("doctor-mediator-no-config", None);
+        assert_eq!(diagnose_mediator(&unconfigured), Mediator::NotApplicable);
+        let sourced = tree(
+            "doctor-mediator-source-pin",
+            Some("version = 1\nengine = { source = \"ab\" }\n"),
+        );
+        assert_ne!(
+            diagnose_mediator(&sourced),
+            Mediator::NotApplicable,
+            "a source pin is the one tree whose build is the engine"
+        );
     }
 
     /// `path` exists, holding nothing, last modified `seconds` past a fixed base.
@@ -4557,7 +5075,5 @@ mod probe_tests {
 
 // The compiled-binary suite over `doctor`: the mediator comparison reads the
 // `PATH` a subprocess is handed, and the merged-surface count the home it is.
-//MUTANT-SUITE crates/batten/tests/it/doctor.rs
 // The session-start chain over the binary: which facts a registered rule reads
 // and whether this session minted them.
-//MUTANT-SUITE crates/batten/tests/it/doctor_session.rs

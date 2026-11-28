@@ -29,10 +29,12 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
+use batten::verdict::DeclaredVerdictExt as _;
 
 use std::fs;
 use std::path::Path;
 
+use batten::capture::Streamed as _;
 use batten::hk;
 
 /// The exit code a caller reads, as an integer, for the assertions below.
@@ -65,6 +67,448 @@ fn step_excludes(pkl: &str, step: &str) -> Option<Vec<String>> {
     Some(globs)
 }
 
+/// The commands no commit-time hook step may run: each compiles, and a commit
+/// hook is a batten hook held to the same 10 ms / 100 ms budget. `cargo fmt` is
+/// absent on purpose: it formats, it does not build.
+const COMPILES: &[&str] = &[
+    "cargo clippy",
+    "cargo build",
+    "cargo run",
+    "cargo test",
+    "cargo check",
+    "cargo nextest",
+    "cargo mutants",
+    "{{vars.batten}}",
+];
+
+/// The `check`/`fix` commands of every step a plain commit runs: the `gate`
+/// steps outside a profile, plus the steps the `pre-commit` and `commit-msg`
+/// hooks declare inline. A profiled step (`slow`) runs only where landing asks.
+fn commit_time_commands(pkl: &str) -> Vec<(String, String)> {
+    let mut commands = Vec::new();
+    let mut in_gate = false;
+    let mut hook: Option<String> = None;
+    let mut step: Option<(String, Vec<String>, bool)> = None;
+    let flush = |step: &mut Option<(String, Vec<String>, bool)>,
+                 out: &mut Vec<(String, String)>| {
+        if let Some((name, cmds, profiled)) = step.take()
+            && !profiled
+        {
+            out.extend(cmds.into_iter().map(|cmd| (name.clone(), cmd)));
+        }
+    };
+    for line in pkl.lines() {
+        if line.starts_with("local gate = ") {
+            in_gate = true;
+            continue;
+        }
+        if in_gate && line == "}" {
+            flush(&mut step, &mut commands);
+            in_gate = false;
+            continue;
+        }
+        if let Some(rest) = line.strip_prefix("  [\"") {
+            let name = rest.split('"').next().unwrap_or_default().to_owned();
+            flush(&mut step, &mut commands);
+            if in_gate {
+                step = Some((name, Vec::new(), false));
+            } else {
+                hook = Some(name);
+            }
+            continue;
+        }
+        if let Some(rest) = line.strip_prefix("      [\"")
+            && matches!(hook.as_deref(), Some("pre-commit" | "commit-msg"))
+        {
+            flush(&mut step, &mut commands);
+            let name = rest.split('"').next().unwrap_or_default().to_owned();
+            step = Some((name, Vec::new(), false));
+            continue;
+        }
+        let trimmed = line.trim_start();
+        if let Some((_, cmds, profiled)) = step.as_mut() {
+            if trimmed.starts_with("profiles") {
+                *profiled = true;
+            } else if let Some(cmd) = trimmed
+                .strip_prefix("check = \"")
+                .or_else(|| trimmed.strip_prefix("fix = \""))
+            {
+                cmds.push(cmd.trim_end_matches('"').to_owned());
+            }
+        }
+    }
+    flush(&mut step, &mut commands);
+    commands
+}
+
+/// The body a `mise run <task>` resolves to, one level down, so a step that
+/// hides a compile inside a task is still seen.
+fn task_body(mise: &toml::Table, command: &str) -> String {
+    let Some(rest) = command.split("mise run").nth(1) else {
+        return String::new();
+    };
+    let task = rest
+        .split_whitespace()
+        .find(|word| !word.starts_with('-'))
+        .unwrap_or_default();
+    mise.get("tasks")
+        .and_then(|tasks| tasks.get(task))
+        .and_then(|row| row.get("run"))
+        .map(|run| match run {
+            toml::Value::String(text) => text.clone(),
+            toml::Value::Array(items) => items
+                .iter()
+                .filter_map(toml::Value::as_str)
+                .collect::<Vec<_>>()
+                .join("\n"),
+            _ => String::new(),
+        })
+        .unwrap_or_default()
+}
+
+/// No step a plain commit runs compiles anything, directly or through the
+/// `mise` task it calls. Commits are made early and often and pushed to draft
+/// pull requests; a commit hook proves the commit well-formed on pinned
+/// released binaries, and landing proves the tree.
+///
+/// Fails by: a compiling step moved out of the `slow` profile (clippy, the
+/// module census on the tree's engine), or a step calling a task whose body
+/// spells `{{vars.batten}}`, which is `cargo run`.
+#[test]
+fn no_commit_time_hook_step_compiles() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let pkl = fs::read_to_string(root.join("hk.pkl")).expect("hk.pkl reads");
+    let mise: toml::Table = fs::read_to_string(root.join("mise.toml"))
+        .expect("mise.toml reads")
+        .parse()
+        .expect("mise.toml parses");
+    let commands = commit_time_commands(&pkl);
+    assert!(
+        commands
+            .iter()
+            .any(|(name, _)| name == "conventional-commit"),
+        "the parse found the commit-msg steps: {commands:?}"
+    );
+    let compiling: Vec<String> = commands
+        .iter()
+        .filter_map(|(name, command)| {
+            let body = task_body(&mise, command);
+            COMPILES
+                .iter()
+                .find(|form| command.contains(*form) || body.contains(*form))
+                .map(|form| format!("{name}: `{form}`"))
+        })
+        .collect();
+    assert!(
+        compiling.is_empty(),
+        "commit-time steps compile: {compiling:?}"
+    );
+}
+
+/// Every command of every step a plain commit runs, AS HK RESOLVES IT:
+/// `pkl eval` over `hk.pkl` with its pinned `Builtins`, so a step taking its
+/// `check`, `check_diff`, `check_list_files` or `fix` from an upstream builtin
+/// (shfmt, taplo, pkl-format, prettier, actionlint, cargo-fmt's fixer) is read
+/// as hk will run it, not as this file happens to spell it. Unprofiled steps of
+/// the `pre-commit` and `commit-msg` hooks only: a `slow` step runs only where
+/// landing asks.
+fn resolved_commit_time_commands() -> Vec<(String, String)> {
+    let config = resolved_hk();
+    let mut commands = Vec::new();
+    for hook in ["pre-commit", "commit-msg"] {
+        let steps = config["hooks"][hook]["steps"]
+            .as_object()
+            .unwrap_or_else(|| panic!("hk.pkl resolves a `{hook}` hook with steps"));
+        for (name, step) in steps {
+            if step.get("profiles").is_some_and(|p| !p.is_null()) {
+                continue;
+            }
+            for key in ["check", "check_diff", "check_list_files", "fix"] {
+                if let Some(command) = step.get(key).and_then(command_text) {
+                    commands.push((name.clone(), command));
+                }
+            }
+        }
+    }
+    commands
+}
+
+/// THE PUSH JUDGES WHO MADE EACH COMMIT, NOT ONLY ITS SUBJECT (CLOUD-2789):
+/// `git rebase` replays commits through the sequencer, which runs no
+/// `commit-msg`, so dab29c3d reached the remote with a denied committer and was
+/// refused only by a landing lap. The `pre-push` hook runs the attribution
+/// verb `commit-attribution` runs, over the same range its subjects step reads.
+///
+/// Fails by: the step dropped, run over a narrower range than the subjects (a
+/// commit the push carries left unjudged), or spelled as a second check rather
+/// than the verb (`attribution.rs`'s cases judge that verb, a copy they never run).
+#[test]
+fn the_push_judges_the_attribution_of_every_commit_it_judges_the_subject_of() {
+    let config = resolved_hk();
+    let steps = config["hooks"]["pre-push"]["steps"]
+        .as_object()
+        .expect("hk.pkl resolves a `pre-push` hook with steps");
+    let check = |name: &str| {
+        steps
+            .get(name)
+            .and_then(|step| step.get("check"))
+            .and_then(command_text)
+            .unwrap_or_else(|| panic!("`pre-push` runs `{name}`: {steps:?}"))
+    };
+    let subjects = check("commit-subjects");
+    let range = subjects
+        .strip_prefix("batten commit check ")
+        .expect("the subjects step is `batten commit check <range>`");
+    assert_eq!(
+        check("commit-attribution"),
+        format!("batten attribution check {range}"),
+        "the attribution verb, over the range the subjects are judged in"
+    );
+}
+
+/// One resolved step command as a single line: a string as written, or an
+/// `argv` joined by spaces.
+fn command_text(spec: &serde_json::Value) -> Option<String> {
+    let command = spec.get("command").unwrap_or(spec);
+    command.as_str().map(str::to_owned).or_else(|| {
+        let argv = command.get("argv")?.as_array()?;
+        Some(
+            argv.iter()
+                .filter_map(serde_json::Value::as_str)
+                .collect::<Vec<_>>()
+                .join(" "),
+        )
+    })
+}
+
+/// `hk.pkl` as hk resolves it: `pkl eval` with its pinned `Builtins`.
+fn resolved_hk() -> serde_json::Value {
+    let mut command = common::pkl_command();
+    command
+        .args(["-f", "json", "hk.pkl"])
+        .current_dir(common::at_root("."));
+    let output = command.streamed_output().expect("pkl evaluates hk.pkl");
+    assert!(
+        output.status.success(),
+        "pkl eval hk.pkl failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    serde_json::from_slice(&output.stdout).expect("`-f json` prints one JSON document")
+}
+
+/// No command a plain commit runs, as hk resolves it from its builtins as well
+/// as from this file, compiles or pays `mise`'s startup unbudgeted.
+///
+/// `mise` alone costs 105-125 ms before a task body runs (CLOUD-1397), past the
+/// 100 ms ceiling every commit-time step answers to, so a step routed through
+/// `mise` is refused unless `policy/perf-assert.rego` budgets it by name — then
+/// its measured arm, not this test, decides.
+///
+/// Fails by: `cargo-fmt` routed back through `mise run lint:fmt` with no
+/// budget, or a builtin's default command (which
+/// `no_commit_time_hook_step_compiles` cannot see) compiling.
+#[test]
+fn no_resolved_commit_time_command_compiles_or_pays_mise_startup_unbudgeted() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let budgets =
+        fs::read_to_string(root.join("policy/perf-assert.rego")).expect("perf-assert reads");
+    let mise: toml::Table = fs::read_to_string(root.join("mise.toml"))
+        .expect("mise.toml reads")
+        .parse()
+        .expect("mise.toml parses");
+    let commands = resolved_commit_time_commands();
+    for reached in ["taplo", "taplo-format", "prettier", "conventional-commit"] {
+        assert!(
+            commands.iter().any(|(name, _)| name == reached),
+            "the resolution reached {reached}: {commands:?}"
+        );
+    }
+    let offending: Vec<String> = commands
+        .iter()
+        .filter_map(|(name, command)| {
+            let body = task_body(&mise, command);
+            if let Some(form) = COMPILES
+                .iter()
+                .find(|form| command.contains(*form) || body.contains(*form))
+            {
+                return Some(format!("{name} compiles: `{form}`"));
+            }
+            let through_mise = command.starts_with("mise ") || command.contains("mise run");
+            (through_mise && !budgets.contains(&format!("\"{name}\": 100")))
+                .then(|| format!("{name} pays mise's startup unbudgeted: `{command}`"))
+        })
+        .collect();
+    assert!(offending.is_empty(), "commit-time commands: {offending:?}");
+}
+
+/// The rustfmt line the commit-time `cargo-fmt` step runs, for `edition`.
+fn staged_rustfmt(edition: &str) -> String {
+    format!("rustfmt --check --edition {edition} --config skip_children=true {{{{files}}}}")
+}
+
+/// The commit-time formatter judges EXACTLY the staged `.rs` files (CLOUD-2789).
+///
+/// `cargo fmt --all --check` formatted the whole workspace on every commit, 5.0 s
+/// p50, past the 100 ms ceiling whatever the commit touched. hk hands a
+/// pre-commit step's `{{files}}` the staged paths its glob selects, so the step's
+/// file set is the staged set only when every command reads `{{files}}`, none
+/// widens to `--all` or a manifest, and no `workspace_indicator` splits the job
+/// per Cargo workspace. The edition is the workspace's, so the hook and landing's
+/// `lint:fmt` cannot disagree on a file.
+///
+/// Fails by: a command going back to `cargo fmt`, `--all` or the indicator; the
+/// glob widening past `.rs`; or the edition drifting from `Cargo.toml`'s.
+#[test]
+fn the_commit_time_formatter_reads_exactly_the_staged_rs_files() {
+    let root = common::at_root(".");
+    let manifest: toml::Table = fs::read_to_string(root.join("Cargo.toml"))
+        .expect("Cargo.toml reads")
+        .parse()
+        .expect("Cargo.toml parses");
+    let edition = manifest["workspace"]["package"]["edition"]
+        .as_str()
+        .expect("the workspace declares one edition");
+    let config = resolved_hk();
+    let step = &config["hooks"]["pre-commit"]["steps"]["cargo-fmt"];
+    assert_eq!(step["glob"], "**/*.rs", "the step selects staged Rust only");
+    assert!(
+        step["workspace_indicator"].is_null(),
+        "one job over the staged files, not one per Cargo workspace: {step}"
+    );
+    assert_eq!(
+        step.get("check").and_then(command_text),
+        Some(staged_rustfmt(edition))
+    );
+    for key in ["check_list_files", "fix"] {
+        let command = step.get(key).and_then(command_text).unwrap_or_default();
+        assert!(
+            command.starts_with("rustfmt ")
+                && command.ends_with(" {{files}}")
+                && command.contains(&format!("--edition {edition} "))
+                && command.contains("--config skip_children=true"),
+            "cargo-fmt's {key} formats the staged files as `check` does: `{command}`"
+        );
+    }
+}
+
+/// The schema-bound TOML is linted at landing, every other TOML at the commit,
+/// and the two sets are exactly `.taplo.toml`'s schema bindings (CLOUD-2789).
+///
+/// `taplo lint batten.toml` is 110 ms p95 against its 512 KB schema, over the
+/// commit ceiling, so the default `taplo` step excludes the bound files and a
+/// `slow` `taplo-schema` step lints them where `ci:checks` (`hk check --all`)
+/// reaches it in `verify`. A binding added to `.taplo.toml` and not here would
+/// be linted at the commit again, or at no point at all if dropped from both.
+///
+/// Fails by: the commit step linting a bound file, the landing step losing
+/// `slow` or a bound file, or the list drifting from `.taplo.toml`.
+#[test]
+fn schema_bound_toml_is_linted_at_landing_and_the_rest_at_the_commit() {
+    let root = common::at_root(".");
+    let taplo: toml::Table = fs::read_to_string(root.join(".taplo.toml"))
+        .expect(".taplo.toml reads")
+        .parse()
+        .expect(".taplo.toml parses");
+    let mut bound: Vec<String> = taplo["rule"]
+        .as_array()
+        .expect(".taplo.toml declares rules")
+        .iter()
+        .filter(|rule| rule.get("schema").is_some())
+        .flat_map(|rule| {
+            rule["include"]
+                .as_array()
+                .expect("a schema rule includes files")
+                .iter()
+                .map(|glob| glob.as_str().expect("a glob").to_owned())
+        })
+        .collect();
+    bound.sort();
+    assert!(
+        bound.contains(&String::from("batten.toml")),
+        "the scan found the bindings this tree carries: {bound:?}"
+    );
+    let config = resolved_hk();
+    let steps = &config["hooks"]["pre-commit"]["steps"];
+    let listed = |value: &serde_json::Value| -> Vec<String> {
+        let mut globs: Vec<String> = value
+            .as_array()
+            .map(|globs| {
+                globs
+                    .iter()
+                    .filter_map(|glob| glob.as_str().map(str::to_owned))
+                    .collect()
+            })
+            .unwrap_or_default();
+        globs.sort();
+        globs
+    };
+    let commit = &steps["taplo"];
+    assert!(
+        commit["profiles"].is_null(),
+        "taplo still runs at the commit"
+    );
+    assert_eq!(
+        listed(&commit["exclude"]),
+        bound,
+        "and skips every bound file"
+    );
+    let landing = &steps["taplo-schema"];
+    assert_eq!(
+        listed(&landing["profiles"]),
+        ["slow"],
+        "the schema check runs where `hk check --all` reaches it"
+    );
+    assert_eq!(listed(&landing["glob"]), bound, "over every bound file");
+    assert_eq!(
+        landing.get("check").and_then(command_text),
+        commit.get("check").and_then(command_text),
+        "with the same lint the commit runs over the rest"
+    );
+}
+
+/// A staged `lib.rs` does not drag its UNSTAGED children in (CLOUD-2789).
+///
+/// rustfmt given a file recurses into every out-of-line `mod` it declares, so
+/// over the crate root it formats the whole crate: 2.5 s for this tree's
+/// `lib.rs`, and a verdict on files the commit does not contain. The step's
+/// `skip_children` is what stops it, and stable rustfmt honours it — asserted
+/// here against the pinned formatter, not assumed from its docs.
+///
+/// Fails by: `skip_children` dropped from the step, or the pinned rustfmt
+/// ignoring it (the unformatted child then fails the staged root's check).
+#[test]
+fn a_staged_crate_root_is_formatted_without_its_children() {
+    // `rustfmt` is a component of the `rust` pin, not a `[tools]` entry of its own.
+    let rustfmt = common::require_bin("rust", "rustfmt");
+    let dir = common::scratch("staged-rustfmt");
+    fs::write(dir.join("lib.rs"), "mod child;\n\nfn root() {}\n").expect("write lib.rs");
+    fs::write(dir.join("child.rs"), "fn   child( ) {}\n").expect("write child.rs");
+    let command = resolved_hk()["hooks"]["pre-commit"]["steps"]["cargo-fmt"]
+        .get("check")
+        .and_then(command_text)
+        .expect("cargo-fmt has a check");
+    let run = |file: &str| {
+        let argv: Vec<String> = command
+            .split_whitespace()
+            .skip(1)
+            .map(|word| word.replace("{{files}}", file))
+            .collect();
+        #[expect(
+            clippy::disallowed_types,
+            reason = "stays, and test-only: the subject is the pinned formatter's own verdict on a scratch file; a read-only `--check`"
+        )]
+        let mut process = std::process::Command::new(&rustfmt);
+        process.args(&argv).current_dir(&dir);
+        code(&process.streamed_output().expect("rustfmt runs"))
+    };
+    assert_eq!(run("lib.rs"), Some(0), "the staged root alone is formatted");
+    assert_eq!(
+        run("child.rs"),
+        Some(1),
+        "and the child really is unformatted, so the first answer means something"
+    );
+}
+
 /// Every nested Cargo workspace is outside the root clippy step (CLOUD-2051).
 ///
 /// The builtin forms one hk job per Cargo workspace, and the step's command,
@@ -75,7 +519,6 @@ fn step_excludes(pkl: &str, step: &str) -> Option<Vec<String>> {
 //
 // The declared mutation, in a plain comment because `hk.pkl` is no sweep route;
 // killed by hand:
-// MUTANT clippy-runs-per-workspace|s@^    exclude = List("fuzz/\*\*")$@@|every_nested_cargo_workspace_is_excluded_from_the_root_clippy_step
 #[test]
 fn every_nested_cargo_workspace_is_excluded_from_the_root_clippy_step() {
     let root = common::at_root(".");
@@ -117,7 +560,7 @@ fn every_nested_cargo_workspace_is_excluded_from_the_root_clippy_step() {
 /// drifted contract, and the two are deliberately different codes.
 #[test]
 fn the_committed_contract_is_the_one_the_binary_derives() {
-    let root = common::at_root(".");
+    let root = common::committed_repo_whole().to_path_buf();
     let output = common::run(&root, &["hk", "drift"]);
     assert_eq!(
         code(&output),
@@ -145,12 +588,12 @@ fn the_committed_contract_is_the_one_the_binary_derives() {
 /// leak into every other case in the binary.
 #[test]
 fn a_caller_suppressing_steps_does_not_drift_the_contract() {
-    let root = common::at_root(".");
+    let root = common::committed_repo_whole().to_path_buf();
     let output = common::batten()
         .args(["hk", "drift"])
         .current_dir(&root)
         .env(hk::CALLER_SKIP, "sbom-check,batten-check")
-        .output()
+        .streamed_output()
         .expect("run batten");
     assert_eq!(
         code(&output),
@@ -253,7 +696,7 @@ fn tracked_entries(dir: &Path) -> Vec<String> {
 /// effect moved would keep compiling.
 #[test]
 fn the_generator_is_a_write_and_the_gate_is_a_read() {
-    let root = common::at_root(".");
+    let root = common::committed_repo().to_path_buf();
     let output = common::run(&root, &["spec", "--format", "json"]);
     let spec: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("the spec is one JSON document");
@@ -298,8 +741,8 @@ fn the_generator_is_a_write_and_the_gate_is_a_read() {
 /// artifact rather than quoting either plan (non-negotiable rule 4).
 #[test]
 fn the_refusal_is_a_declared_class_with_a_route() {
-    let registry = batten::verdict::vendored();
-    let token = batten::verdict::Native::PlanReadStale.id();
+    let registry = batten::config_check::verdict::vendored();
+    let token = batten::error::Native::PlanReadStale.id();
     let row = registry
         .iter()
         .find(|declared| declared.id == token)
@@ -374,7 +817,7 @@ fn a_drifted_contract_exits_two_and_names_the_class() {
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains(batten::verdict::Native::PlanReadStale.id()),
+        stderr.contains(batten::error::Native::PlanReadStale.id()),
         "the refusal names its declared class: {stderr}"
     );
     assert!(

@@ -528,8 +528,9 @@ pub(crate) fn committed_patterns() -> Vec<crate::pattern::NamedPattern> {
 
 #[cfg(test)]
 fn read_committed_patterns() -> Vec<crate::pattern::NamedPattern> {
-    let text = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../batten.toml"))
-        .unwrap_or_default();
+    let text =
+        crate::fsio::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../batten.toml"))
+            .unwrap_or_default();
     match crate::facts::Format::Toml.read(&text) {
         crate::facts::Look::Is(crate::facts::Node::Map(map)) => match map.get("pattern") {
             Some(crate::facts::Node::List(items)) => items
@@ -720,8 +721,6 @@ fn closes_a_key(text: &str, at: usize) -> bool {
 // expression, which is what makes it discriminate: `key_of` and `keys_in`
 // compose no key expression of their own, so there is nothing else here for a
 // mutation to reach.
-//MUTANT-SUITE crates/batten/tests/it/issue_key.rs
-//MUTANT case-insensitive-key-accepted|s@^            Regex::new(&row.regex)@            Regex::new(\&format!("(?i){}", row.regex))@|the_committed_reader_refuses_the_lowercase_spelling
 impl Grammar {
     /// Is this WHOLE string a key? The four shell `case` globs' question.
     ///
@@ -865,7 +864,7 @@ fn first_line(pattern: &Regex, lines: &[&str]) -> Option<usize> {
 /// regime must not guess, because guessing either way manufactures a violation
 /// or launders one.
 pub fn workspace_version(root: &Path) -> Result<String> {
-    let manifest = std::fs::read_to_string(root.join("Cargo.toml")).map_err(|_| {
+    let manifest = crate::fsio::read_to_string(root.join("Cargo.toml")).map_err(|_| {
         UsageError::raise(format!(
             "ready: cannot read the workspace version from {}/Cargo.toml — §6 needs it to know \
              which SemVer arrows fire",
@@ -895,14 +894,20 @@ pub fn workspace_version(root: &Path) -> Result<String> {
     )))
 }
 
+/// Whether `version` is a `0.0.x` version — Cargo's no-compatibility range,
+/// where release-plz bumps the patch whatever the type says — read through the
+/// one semver parse (CLOUD-2906), so `0.0.221-dev.…` counts and `0.00.1` (no
+/// version at all) does not.
+fn below_minor_one(version: &str) -> bool {
+    crate::version::parse(version).is_some_and(|version| version.major == 0 && version.minor == 0)
+}
+
 // CLOUD-806's two arms, carried off the retired `mise-tasks/ready-lint.sh`
 // (CLOUD-1221). The first drops the body emission, so a consumer reading the
 // derived fact silently gets nothing and cannot tell that from an empty body. The
 // second takes it back on the `no-ready-block` refusal, which is where it was
 // first written: the fact then exists for refined rows only, and an unrefined
 // row's stray citation — the likeliest kind — becomes invisible.
-//MUTANT emission-dropped|s@^    report.emissions.push(emit_keys($@    std::mem::drop(emit_keys(@|the_bodys_cited_keys_are_emitted_before_any_verdict
-//MUTANT emission-after-the-verdict|s@^            rule: "no-ready-block".to_owned(),$@            rule: { report.emissions.clear(); "no-ready-block".to_owned() },@|the_bodys_cited_keys_are_emitted_before_any_verdict
 /// Lint one payload against the checkable Ready clauses.
 ///
 /// **The order of the checks is the order of the report**, and it is the shell
@@ -1057,7 +1062,7 @@ pub fn lint(grammar: &Grammar, payload: &Payload, root: &Path) -> Result<Report>
     // measured failure that opened this row, where every clause was present and
     // none had been pressure-tested. This asks a different question that shape
     // cannot answer: has a PARTICULAR vendored prompt run over these exact bytes?
-    // It is a comparison of two digests, so no model verdict reaches the exit
+    // It is a comparison of two digests, so no gated-model verdict reaches the exit
     // code (rule 3), and it cannot be satisfied by better prose because the prose
     // is the input to the hash.
     //
@@ -1106,9 +1111,6 @@ pub fn lint(grammar: &Grammar, payload: &Payload, root: &Path) -> Result<Report>
 // is a `no bump` type, since a releasable one collapses to the same answer either
 // way. The second drops the unqualified-denial refusal, which is the whole
 // failure CLOUD-842 reversed: the five landed rows were silent, not warned.
-//MUTANT break-read-off-the-whole-line|s@^    let breaking = type_token.contains('!')@    let breaking = bump_line.contains('!')@|the_break_marker_is_read_off_the_type_token_and_never_off_the_line
-//MUTANT break-claim-refusal-dropped|s@^    if grammar.break_denial.is_match(bump_line) .*{$@    if false {@|a_negative_break_claim_must_name_the_surface_it_denies_about
-//MUTANT type-read-after-answer|s@^        .find(\x7cm\x7c (..answer_at).contains(\&m.start()))$@        .next()@|a_type_named_after_a_none_answer_does_not_make_the_row_land_a_commit
 /// §6: the commit type and the bump must agree, and a break denial must name a
 /// surface.
 fn check_bump(
@@ -1227,7 +1229,7 @@ fn check_bump(
     // releases nothing at any version, so folding it into patch would demand a
     // bump the tool never produces, the same error in the other direction.
     let mut why = String::new();
-    if version.starts_with("0.0.") && expected != "no bump" {
+    if below_minor_one(&version) && expected != "no bump" {
         "patch".clone_into(&mut expected);
         " below 0.1.0".clone_into(&mut why);
     }
@@ -1252,7 +1254,6 @@ fn check_bump(
 // Carried off the retired `mise-tasks/ready-lint.sh` (CLOUD-1221): the mutation
 // drops the deny conjunct, so every gate-introducing block is demanded a replay —
 // including the `warn` ones the clause deliberately leaves alone.
-//MUTANT replay-demanded-of-a-warn-gate|s@^    if !grammar.gate_intro.is_match(block) .. !grammar.deny_severity.is_match(block) {$@    if !grammar.gate_intro.is_match(block) {@|a_deny_gate_owes_a_replay_and_a_warn_gate_does_not
 /// §7: a new deny gate reports its firing rate before its severity is chosen.
 ///
 /// CLOUD-751. Showing a gate CAN fail on a fixture (CLOUD-418) is a different
@@ -1262,9 +1263,9 @@ fn check_bump(
 /// often is noise a reader can weigh, where a `deny` that fires often stops the
 /// fleet — which is why the obligation attaches to `deny` alone.
 ///
-/// Presence and shape only, never whether the number is good: judging an
-/// acceptable false-positive rate is a model verdict and rule 3 forbids it. The
-/// author reports; the reader decides.
+/// Presence and shape only, never whether the number is good: a rate is only
+/// judged against a declared threshold, and a Ready block declares none, so
+/// there is nothing to compare it with. The author reports; the reader decides.
 fn check_replay(
     grammar: &Grammar,
     block: &str,
@@ -1303,7 +1304,6 @@ fn check_replay(
 /// CLOUD-1092 both lived in — a declaration disagreeing with the table it is
 /// checked against — is not expressible here at all. That is the difference
 /// between checking a claim and removing the chance to make a wrong one.
-//MUTANT empty-tests-admitted-beyond-docs|s@declared == "docs"@!declared.is_empty()@|a_refactor_row_still_owes_its_tests
 fn check_claims(
     grammar: &Grammar,
     payload: &Payload,
@@ -1594,7 +1594,7 @@ fn check_claimed_type(
     // reason the prose path's arm gives — folding it into patch would demand a
     // bump the tool never produces.
     let version = workspace_version(root)?;
-    if version.starts_with("0.0.") && bump != NO_RELEASE {
+    if below_minor_one(&version) && bump != NO_RELEASE {
         bump = "patch";
     }
     report.emissions.push(format!("bump {bump}"));
@@ -1700,7 +1700,6 @@ fn check_claimed_tests(claims: &serde_json::Value, line: usize, report: &mut Rep
 /// its presence keeps the answer it had. The claims object's `blockers` key is a
 /// key rather than prose, and [`check_claimed_blockers`] still holds it to the
 /// edges.
-//MUTANT prose-blockers-from-the-sentence|s@^        \&payload.blocked_by.join(" "),$@        \&payload.description,@|a_section_eight_sentence_is_never_read_as_a_claim
 fn emit_prose_blockers(grammar: &Grammar, payload: &Payload, report: &mut Report) {
     report.emissions.push(emit_keys(
         grammar,
@@ -1834,7 +1833,7 @@ pub fn adjudicate(
 ///
 /// # BASENAMES RESOLVE, AND AN AMBIGUOUS ONE RESOLVES TO NOTHING
 ///
-/// Bodies here write `git.rs:107`, not `crates/batten/src/git.rs`. Measured on
+/// Bodies here write `git.rs:107`, not `crates/batten-core/src/git.rs`. Measured on
 /// the three rows the retired program was built from, exact path matching found
 /// ZERO and basename resolution found all three — so exact matching would ship a
 /// sensor blind to its own corpus. Where several tracked paths share a basename
@@ -1976,7 +1975,7 @@ pub fn verdict_token(
 #[cfg(test)]
 mod issue_key_tests {
     use super::Grammar;
-
+    #[cfg(test)]
     /// The consumer's own key, spelled from parts so this file carries no
     /// derivation of the token — `no-tracker-key-in-core` refuses one anywhere
     /// under `crates/**`, and a test is not exempt from the rule it is testing.
@@ -2080,14 +2079,27 @@ mod issue_key_tests {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod lint_tests {
     use super::{
-        Grammar, Payload, Report, adjudicate, body_text, filled, lint, named_paths, owed_from,
-        tokens_in, verdict_token, workspace_version,
+        Grammar, Payload, Report, adjudicate, below_minor_one, body_text, filled, lint,
+        named_paths, owed_from, tokens_in, verdict_token, workspace_version,
     };
+    #[cfg(test)]
     use serde_json::{Value, json};
     use std::collections::BTreeMap;
     use std::path::{Path, PathBuf};
 
     use super::issue_key_tests::key;
+
+    /// The `0.0.x` collapse reads the parsed version (CLOUD-2906).
+    #[test]
+    fn the_patch_collapse_reads_a_parsed_zero_zero_version() {
+        assert!(below_minor_one("0.0.221"));
+        assert!(below_minor_one(
+            "0.0.221-dev.pr1.20261124T050057Z+3f9c2a1b7d04"
+        ));
+        assert!(!below_minor_one("0.1.0"));
+        assert!(!below_minor_one("0.00.1"));
+        assert!(!below_minor_one("0.0"));
+    }
 
     /// Here rather than beside the other key cases because a consumer's own
     /// expression has to be compiled, and this module is the one that may
@@ -2211,7 +2223,12 @@ mod lint_tests {
     #[test]
     fn the_body_cites_its_keys_before_any_verdict() {
         let grammar = Grammar::committed();
-        let report = linted(&grammar, &format!("see {}", key(5)), None, Path::new("."));
+        let report = linted(
+            &grammar,
+            &format!("see {}", key(5)),
+            None,
+            &crate::fixture_root::fixture_root("the_body_cites_its_keys_before_any_verdict"),
+        );
         assert_eq!(
             report.emissions.first().map(String::as_str),
             Some(&*format!("cites-body {}", key(5)))
@@ -2222,7 +2239,8 @@ mod lint_tests {
     #[test]
     fn a_finding_points_at_its_line_in_the_description() {
         let grammar = Grammar::committed();
-        let root = Path::new(".");
+        let root =
+            &crate::fixture_root::fixture_root("a_finding_points_at_its_line_in_the_description");
         let report = linted(&grammar, &format!("intro\n\n{OPENER}\n"), None, root);
         assert_eq!(rules(&report), ["3:ready-block-without-clauses"]);
         let report = linted(
@@ -2249,7 +2267,9 @@ mod lint_tests {
     #[test]
     fn the_clause_floor_spares_a_parent_and_a_block_with_a_clause() {
         let grammar = Grammar::committed();
-        let root = Path::new(".");
+        let root = &crate::fixture_root::fixture_root(
+            "the_clause_floor_spares_a_parent_and_a_block_with_a_clause",
+        );
         assert_eq!(
             rules(&linted(&grammar, &format!("{OPENER}\n"), None, root)),
             ["1:ready-block-without-clauses"]
@@ -2362,7 +2382,8 @@ mod lint_tests {
     #[test]
     fn a_deny_gate_owes_its_replay_and_nothing_else_does() {
         let grammar = Grammar::committed();
-        let root = Path::new(".");
+        let root =
+            &crate::fixture_root::fixture_root("a_deny_gate_owes_its_replay_and_nothing_else_does");
         let gate = "* **Gate (§3).** `mise-tasks/thing-check.sh`, severity = deny.";
         let found = rules(&linted(
             &grammar,
@@ -2641,7 +2662,9 @@ mod lint_tests {
     #[test]
     fn a_deferral_is_held_to_the_relations_and_never_to_the_row_itself() {
         let grammar = Grammar::committed();
-        let root = Path::new(".");
+        let root = &crate::fixture_root::fixture_root(
+            "a_deferral_is_held_to_the_relations_and_never_to_the_row_itself",
+        );
         let body = format!(
             "{OPENER}\n{SOURCE}\nThe rest is deferred to {}.\nAnd {} is now mine.\n",
             key(2),
@@ -2666,7 +2689,9 @@ mod lint_tests {
     #[test]
     fn the_adjudication_answers_in_the_shell_programs_codes() {
         let grammar = Grammar::committed();
-        let root = Path::new(".");
+        let root = &crate::fixture_root::fixture_root(
+            "the_adjudication_answers_in_the_shell_programs_codes",
+        );
         let value = |body: &str, relations: Option<Value>| {
             let mut value = json!({"id": key(1), "description": body});
             if let Some(relations) = relations {

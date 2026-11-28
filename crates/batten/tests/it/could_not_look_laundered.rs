@@ -26,7 +26,8 @@ use crate::common;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use batten::rules::{self, Rule};
+use batten::config_model::Rule;
+use batten::rules;
 
 /// The class the module raises, and the pointer every refusal carries.
 const LAUNDERED: &str = "gate run unsafe";

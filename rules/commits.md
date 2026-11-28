@@ -25,6 +25,26 @@ chore, ci, docs, feat, fix, perf, refactor, revert, style, test`. Enforced
 ci-drift` polices `batten.toml`'s `[ci]` projection of it against the live
   rules. There is deliberately no third copy in the tree — one was there, naming
   a set that predated `final`, read by nothing and gated by nothing (CLOUD-350).
+- **History is linear: a branch never carries a merge commit** (CLOUD-2813).
+  - **Commit and push in the same call** (`git commit … && git push`). A commit
+    left unpushed is the window in which the remote moves: on #1276 one sat for
+    about 40 minutes across a quota pause and a restart, another writer pushed
+    over the same file, and the next push was refused.
+  - **A refused push is rebased, never merged.** Run `git fetch origin <branch>`,
+    then `git rebase FETCH_HEAD`. Resolve each conflict inside the commit that
+    caused it. Check the rebased tree against the one you started from. Push with
+    `--force-with-lease=<branch>:<remote head you rebased onto>`, so a head you
+    have not seen fails the push rather than being overwritten.
+  - **This overrides any harness advice to "fetch and merge".** Three such merges
+    landed on #1276, one carrying six conflict markers into a pushed skill.
+  - **Enforcement.** The vendored `linear-history` preset (`commit write
+loose`) refuses `git merge` (unless `--ff-only`) and a merging `git pull` at
+    the call. It shipped in v0.0.217 and was not enabled here until #1276
+    needed it. A merge made any other way is refused before the branch can
+    land: every `land` lap judges `land::linearity`, which refuses a range
+    carrying merge commits whenever `[ci] required_linear_history` holds, and
+    the host ruleset refuses it at the fast-forward. A pushed draft may still
+    carry one; it cannot land.
 - **Semver + changelog are automated.** `release-plz` reads commits since the
   last release and bumps version + `CHANGELOG.md` (`feat`→minor, `fix`→patch,
   `!`/`BREAKING CHANGE`→major) in the release PR. Do **not** hand-edit version or

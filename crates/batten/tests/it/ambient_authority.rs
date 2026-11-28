@@ -207,7 +207,8 @@ fn bound_four_the_policy_authority_is_a_protected_path() {
     //
     // Fails by: dropping the authority from the protected set — the maximal
     // weakening, since it disarms every gate at once including this one.
-    let text = fs::read_to_string(at_root("batten.toml")).expect("read the authority");
+    let text = fs::read_to_string(common::committed_config_file("ambient_authority"))
+        .expect("read the authority");
     let Look::Is(config) = Format::Toml.read(&text) else {
         panic!("the authority did not parse");
     };
@@ -278,7 +279,7 @@ const WALL_CLOCK: &str = "SystemTime::now";
 /// Every other module is either the boundary — which MAY read a clock, and does —
 /// or downstream of the verdict.
 const EVALUATION_PATH: &[&str] = &[
-    "crates/batten/src/facts.rs",
+    "crates/batten-facts/src/facts.rs",
     "crates/batten/src/rules.rs",
     "crates/batten/src/policy.rs",
 ];

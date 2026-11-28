@@ -43,6 +43,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
+use batten::capture::StreamedChild as _;
 
 use std::path::PathBuf;
 
@@ -152,7 +153,7 @@ impl Bench {
             .expect("stdin is piped")
             .write_all(payload.as_bytes())
             .expect("write stdin");
-        let outcome = child.wait_with_output().expect("wait for batten");
+        let outcome = child.streamed_wait().expect("wait for batten");
         Door {
             out: stdout(&outcome),
             err: stderr(&outcome),
@@ -382,7 +383,7 @@ fn the_impersonation_detector_is_live_behind_this_row() {
 /// deletion that reads as a port. This is the case that reddens on it.
 #[test]
 fn this_repository_declares_the_names_its_guard_translates() {
-    let text = std::fs::read_to_string(common::at_root("batten.toml")).expect("the config");
+    let text = common::committed_config();
     let config: toml::Value = toml::from_str(&text).expect("batten.toml parses");
     let mcp = config.get("mcp").expect("an [mcp] table");
     let aliases: Vec<&str> = mcp
@@ -409,6 +410,38 @@ fn this_repository_declares_the_names_its_guard_translates() {
     }
 }
 
+/// THE REPOSITORY'S OWN ADDRESS RESOLVES THE LAUNCHER'S CURRENT WRAPPER (CLOUD-2789).
+///
+/// Measured 2026-11-23: the session launcher moved the toolbox upstream to
+/// `/v2/ccr-sessions/-/meta/mcp`, `batten.toml` still named `/v1/code/mcp/meta`,
+/// and the guard answered silence on every `mcp__claude-code-remote__*` call, so
+/// the host asked the owner for each one. Every case above runs its own fixture
+/// config, so none of them could see the committed address go stale.
+///
+/// Fails by: the committed `endpoint_contains` drifting from the wrapper shape
+/// the launcher writes, which leaves the committed allow untranslated.
+#[test]
+fn the_committed_address_resolves_the_launchers_wrapper() {
+    let dir = scratch("cad-launcher-wrapper");
+    write(
+        &dir,
+        "mcp-config.json",
+        r#"{"mcpServers":{"claude-code-remote":{"type":"http","url":"https://api.anthropic.com/v2/ccr-sessions/cse_X/mcp?mcp_server_id=c7e550e6-a682-5271-94e5-0cd7a03cbe1b&mcp_url=https%3A%2F%2Fapi.anthropic.com%2Fv2%2Fccr-sessions%2F-%2Fmeta%2Fmcp"}}}"#,
+    );
+    let config = dir.join("mcp-config.json");
+    let answer = stdout(&common::run(
+        common::committed_repo(),
+        &[
+            "mcp",
+            "grant",
+            "--config",
+            config.to_str().expect("utf-8 path"),
+            "mcp__claude-code-remote__send_message",
+        ],
+    ));
+    assert_eq!(answer.trim(), "allow Claude_Code_Remote", "{answer}");
+}
+
 #[test]
 fn a_name_the_guard_cannot_resolve_leaves_the_call_undecided() {
     // The load-bearing negative: a guard that refused everything would satisfy
@@ -433,4 +466,66 @@ fn a_non_mcp_tool_never_reaches_the_handler_at_all() {
     let answer = bench.door("Bash");
     assert!(!answer.out.contains(r#""deny""#), "{}", answer.out);
     assert!(answer.err.is_empty(), "{}", answer.err);
+}
+
+/// ONE CALL, EVERY SURFACE (CLOUD-2789): the committed guard judges a connector
+/// call made through `batten mcp call` on a shell exactly as it judges the
+/// direct call. A handler selected by the mediated name receives the mediated
+/// call (`tool_name`, `tool_input`), so the committed table's deny refuses it
+/// and its allow pre-approves it, while a plain shell call stays undecided.
+///
+/// Fails by: the handler receiving the host's shell payload, whose `tool_name`
+/// the guard cannot resolve, so the mediated route escapes the deny.
+#[test]
+fn the_committed_guard_judges_a_mediated_call_as_the_direct_one() {
+    use std::io::Write as _;
+
+    let bench = bench("cad-mediated");
+    let shell = |command: &str| {
+        let payload = serde_json::json!({
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Bash",
+            "tool_input": {"command": command},
+        })
+        .to_string();
+        let mut child = common::batten()
+            .current_dir(&bench.repo)
+            .args(["adjudicate", "--harness", "claude-code"])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .expect("the binary runs");
+        child
+            .stdin
+            .take()
+            .expect("stdin is piped")
+            .write_all(payload.as_bytes())
+            .expect("write stdin");
+        stdout(&child.streamed_wait().expect("wait for batten"))
+    };
+    let server = RESOLVABLE.trim_start_matches("mcp__");
+    let direct = bench.door(&format!("{RESOLVABLE}__archive_session"));
+    assert!(
+        direct.out.contains(r#""permissionDecision":"deny""#),
+        "the premise: the direct call is denied: {}",
+        direct.out
+    );
+    let denied = shell(&format!("batten mcp call {server} archive_session '{{}}'"));
+    assert!(
+        denied.contains(r#""permissionDecision":"deny""#)
+            && denied.contains("hook.handler.connector-allow-guard"),
+        "the mediated call is denied as the direct one is: {denied}"
+    );
+    let allowed = shell(&format!("batten mcp call {server} create_session '{{}}'"));
+    assert!(
+        allowed.contains(r#""permissionDecision":"allow""#),
+        "the mediated call is pre-approved as the direct one is: {allowed}"
+    );
+    // NEGATIVE CONTROL: a shell call mediating nothing is not the guard's.
+    let plain = shell("ls");
+    assert!(
+        !plain.contains("connector-allow-guard"),
+        "a plain shell call never reaches the guard: {plain}"
+    );
 }

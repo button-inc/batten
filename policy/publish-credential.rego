@@ -52,7 +52,7 @@ config_path := "release-plz.toml"
 release_workflow := ".github/workflows/release-plz.yml"
 
 config_lines := lines if {
-	lines := input.tree.lines[config_path]
+	lines = input.tree.lines[config_path]
 }
 
 # --- rule 1: no long-lived registry credential, anywhere in a workflow -------

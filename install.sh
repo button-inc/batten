@@ -20,13 +20,7 @@ aarch64 | arm64) arch=aarch64 ;;
 *) fail "no release for $os/$arch" 1 ;;
 esac
 case "$os" in
-Linux)
-	libc=gnu
-	for loader in /lib/ld-musl-*; do
-		[ -e "$loader" ] && libc=musl
-	done
-	target="$arch-unknown-linux-$libc"
-	;;
+Linux) target="$arch-unknown-linux-musl" ;;
 Darwin) target="$arch-apple-darwin" ;;
 *) fail "no release for $os/$arch" 1 ;;
 esac
@@ -42,7 +36,7 @@ get() {
 	esac
 }
 tag="${BATTEN_VERSION:-v0.0.222}"
-asset="batten-v${tag#v}-$target.tar.gz"
+asset="batten-$tag-$target.tar.gz"
 want=
 if [ -n "${BATTEN_VERSION:-}" ]; then
 	get "$base/releases/download/$tag/SHA256SUMS" "$tmp/SHA256SUMS" 1

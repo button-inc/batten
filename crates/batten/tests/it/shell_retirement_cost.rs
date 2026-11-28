@@ -83,8 +83,12 @@ const RUNS: usize = 3;
 const SAME_CLASS_BOUND: usize = 2;
 
 /// Below this, the index build is too small for the per-path term to be told
-/// apart from noise, and every bound would pass over nothing. Measured ~6.17M.
-const MEASURABLE_ALLOCATIONS: usize = 1_000_000;
+/// apart from noise, and every bound would pass over nothing. Measured ~6.17M on
+/// the interpreter; ~722k since `check` decides on bytecode (#1276), which
+/// builds the index in a ninth of the allocations. The unflattened mutation
+/// still re-walks the corpus once per path, ~0.72M each: six paths read ~2.6x
+/// one, above [`SAME_CLASS_BOUND`].
+const MEASURABLE_ALLOCATIONS: usize = 500_000;
 
 // THE WALL-CLOCK BOUND this case used to assert, six deletions against the
 // zero-deletion floor. No longer asserted (CLOUD-2022); kept as the record of why
@@ -253,7 +257,6 @@ fn arm(name: &str, count: usize) -> (Duration, usize) {
 /// `shell_retirement.rs` and one gate has one suite, so its kill is shown by hand;
 /// `\x7c` is GNU sed's spelling of the comprehension's bar, which the row's own
 /// field separator would otherwise swallow:
-// MUTANT arms-for-rescans-corpus|s@^arms_for(path) := object.get(arm_rows, path, set())$@arms_for(path) := {trim_space(line) \x7c some file, lines in input.tree.lines; startswith(file, "crates/batten/tests/"); some line in lines; some marker in arm_markers; startswith(trim_space(line), marker); split(trim_space(substring(trim_space(line), count(marker), -1)), " ")[0] == path}@|deleting_six_governed_paths_costs_a_flat_multiple_of_the_floor
 #[test]
 fn deleting_six_governed_paths_costs_a_flat_multiple_of_the_floor() {
     let (floor, floor_n) = arm("cost-zero", 0);

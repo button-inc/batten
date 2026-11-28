@@ -1,0 +1,234 @@
+name: dev-prerelease
+#MUTANT-SUITE crates/batten/tests/it/dist.rs
+#MUTANT dev-prerelease-unnamespaced|s@^          tag="dev/v.*$@          tag="v${version}"@|a_dev_prerelease_is_published_under_the_dev_namespace
+#MUTANT dev-prerelease-draft-unchecked|s@^              if \[ "$have" != "$want" \]; then$@              if false; then@|a_cancelled_runs_draft_is_published_not_stranded
+#MUTANT dev-prerelease-flagged|s@--draft=false --prerelease=false --latest=false$@--draft=false --prerelease --latest=false@|a_dev_publish_never_carries_the_flag_the_freeze_reads
+#MUTANT dev-prerelease-cancels-started|s@^  cancel-in-progress: false$@  cancel-in-progress: true@|a_second_dispatch_never_cancels_a_started_dev_publish
+#MUTANT dev-prerelease-on-push|s@^  workflow_dispatch:$@  pull_request:@|the_dev_publish_runs_only_when_dispatched
+#MUTANT dev-prerelease-unnumbered|s@^          BATTEN_BUILD_PR: ${{ inputs.pr }}$@          BATTEN_BUILD_PR: ""@|a_dispatched_build_carries_the_pull_requests_number
+#MUTANT dev-prerelease-unflag-widened|s@startswith("dev/")@startswith("")@|a_dev_release_already_flagged_is_unflagged_before_the_publish
+
+# workflow-shell: CLOUD-2903 naming the archive by the build's own identity and
+# publishing it are two bodies no verb owns yet; each reads `batten --version`
+# off the binary it built, so no name is re-derived from the manifest.
+
+# A DEV PRE-RELEASE OF A PULL REQUEST'S HEAD, CUT ON REQUEST BY MANUAL DISPATCH
+# (CLOUD-2903). The owner: "It was supposed to be a github action that can be
+# manually dispatched". Its one input is the pull request's number; nothing
+# else starts it, so no open, push or ready runs it. A branch pins the build
+# it publishes as a release (`engine = { release = "v<identity>" }`) so its own
+# sessions run on that build instead of compiling the tree. A DEV PIN NEVER
+# LANDS: `engine-pin-check` refuses it at land as it refuses a source pin, and
+# the branch pins a published release before it lands.
+#
+# DRAFTS ARE SERVED: a pull request that wants a build wants it while it is
+# still a draft. The two x86_64 Linux legs only — the hook engine's platforms
+# (musl, and the gnu twin a musl engine prefers) — so a build costs two legs,
+# never the release's seven.
+#
+# THE `dev/` TAG NAMESPACE: the tag is `dev/v<identity less its build
+# metadata>` (`engine::forge_tag`), outside `v*`, so no release reader —
+# `git::newest_version_tag`, the `release-tags` glob, the release guard's tag
+# ruleset, release-plz's `git_only` baseline — ever reads one as a release.
+# The release is created as a DRAFT and published as a non-latest PRE-RELEASE,
+# the shape `release ship other` holds every publish to.
+
+on:
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: "The number of the pull request whose head to build"
+        required: true
+        type: number
+
+permissions: {}
+
+# A CALLER'S `env:` DOES NOT REACH A CALLED WORKFLOW, and this one calls none;
+# the binding is the same as `dist.yml`'s so each job installs its list only.
+env:
+  # CUT ON REQUEST BY MANUAL DISPATCH, DRAFTS SERVED (CLOUD-2903): a run is
+  # one person asking for one build, and a started run finishes. `ci-hygiene`
+  # reads this declaration in place of a draft guard and a superseding group.
+  CI_SPEND_AUTHORISED: "cut on request by manual dispatch: one pull request head's engine build, drafts served; a dev pin never lands"
+  MISE_TASK_RUN_AUTO_INSTALL: "false"
+  MISE_EXEC_AUTO_INSTALL: "false"
+
+# One publication per pull request at a time, and A STARTED RUN FINISHES: a
+# second dispatch for the same pull request waits behind the first rather than
+# cancelling it. Each run builds and tags the head it resolved when it started
+# (`resolve`), so a late finish publishes exactly what it built.
+concurrency:
+  group: dev-prerelease-${{ inputs.pr }}
+  cancel-in-progress: false
+
+jobs:
+  resolve:
+    name: resolve pull request ${{ inputs.pr }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 2 # budget: grandfathered measured=2026-11-28
+    permissions:
+      pull-requests: read
+    outputs:
+      sha: ${{ steps.head.outputs.sha }}
+    steps:
+      # A fork's head is never published: its token cannot write here, and its
+      # code is not this repository's to ship.
+      - name: Resolve the pull request's head
+        id: head
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          PR: ${{ inputs.pr }}
+        run: |
+          set -euo pipefail
+          repo=$(gh pr view "$PR" --json headRepository,headRepositoryOwner --jq '.headRepositoryOwner.login + "/" + .headRepository.name')
+          if [ "$repo" != "$GH_REPO" ]; then
+            echo "::error:: pull request $PR's head is in $repo, a fork; a fork's head is never published" >&2
+            exit 1
+          fi
+          sha=$(gh pr view "$PR" --json headRefOid --jq '.headRefOid')
+          printf 'sha=%s\n' "$sha" >>"$GITHUB_OUTPUT"
+
+  build:
+    name: dev build (${{ matrix.target }})
+    needs: resolve
+    runs-on: ubuntu-latest
+    timeout-minutes: 53 # budget: p95=1045s x3 measured=2026-11-24
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [x86_64-unknown-linux-gnu, x86_64-unknown-linux-musl]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          # The HEAD `resolve` read, as `dist.yml`'s pull-request legs build
+          # it: the engine a pull request publishes is its head's, never a
+          # merge commit.
+          ref: ${{ needs.resolve.outputs.sha }}
+          persist-credentials: false
+      # cache: false, as `dist.yml`: a published build must not restore a
+      # shared cache.
+      - uses: jdx/mise-action@3c2e0cf82a5b2e5249f0d3635a4d83d0ae861518 # v4.2.5 (CLOUD-404 retry fix, now a release)
+        env:
+          MISE_LOCKFILE: "true"
+        with:
+          version: 2026.9.1
+          cache: false
+          install_args: rust aqua:axodotdev/cargo-dist zig github:rust-cross/cargo-zigbuild github:rust-secure-code/cargo-auditable
+      - name: Add the Rust target
+        env:
+          TARGET: ${{ matrix.target }}
+        run: mise run batten -- ci step --arg-env TARGET -- rustup target add
+      # A dispatched run's `GITHUB_REF` is the ref it was dispatched on, never
+      # `refs/pull/<N>`, so the number comes from the input: `build.rs` stamps
+      # a `pr<N>` identity from `BATTEN_BUILD_PR`. The release marker is unset,
+      # so it is never the release's.
+      - name: Build and archive
+        id: dist
+        shell: bash
+        env:
+          DIST_BUILD_TOOL: cargo-dist
+          DIST_TARGET: ${{ matrix.target }}
+          BATTEN_BUILD_PR: ${{ inputs.pr }}
+        run: mise run batten -- ci step --outputs --arg-env DIST_TARGET -- mise run dist --
+      - name: Name the archive by the build's identity
+        shell: bash
+        env:
+          ARCHIVE: ${{ steps.dist.outputs.archive }}
+          BINARY: ${{ steps.dist.outputs.binary }}
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          identity=$("$BINARY" --version)
+          identity=${identity#batten }
+          version=${identity%%+*}
+          mkdir -p dev
+          cp "$ARCHIVE" "dev/batten-v${version}-${TARGET}.tar.gz"
+          printf '%s\n' "$identity" >"dev/identity-${TARGET}"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: dev-${{ matrix.target }}
+          path: dev/
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 1
+
+  publish:
+    needs: [resolve, build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 2 # budget: p95=21s x3 measured=2026-11-24
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: dev-*
+          path: dev
+          merge-multiple: true
+      # A PUBLISHED DEV RELEASE IS NEVER FLAGGED A PRE-RELEASE (CLOUD-2954): the
+      # released engine's freeze (`release_state::read_flight`) reads a flagged,
+      # non-latest release ahead of `main` as one whose land is owed, and a dev
+      # release has no land, so it freezes every fast-forward. Unflagging is the
+      # one edit an immutable release still takes; nothing is deleted, no tag
+      # moves, no asset is touched. Idempotent: none flagged, it does nothing.
+      - name: Unflag every published dev pre-release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          gh release list --exclude-drafts --limit 1000 --json tagName,isPrerelease \
+            --jq '.[] | select(.isPrerelease) | select(.tagName | startswith("dev/")) | .tagName' |
+            while IFS= read -r tag; do
+              gh release edit "$tag" --prerelease=false --latest=false
+            done
+      - name: Publish the dev pre-release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          SHA: ${{ needs.resolve.outputs.sha }}
+        run: |
+          set -euo pipefail
+          cd dev
+          # Every leg built the same commit under the same ref, so they agree;
+          # a disagreement is two engines under one tag, and nothing ships.
+          identity=$(sort -u identity-* | tr -d '\n')
+          [ "$(sort -u identity-* | wc -l)" -eq 1 ]
+          version=${identity%%+*}
+          tag="dev/v${version}"
+          sha256sum batten-v*.tar.gz >SHA256SUMS
+          # One identity is one commit, so a release already under this tag is
+          # this head's. PUBLISHED, it is done. A DRAFT is an earlier run that
+          # `cancel-in-progress` stopped between create and publish: `gh release
+          # create` uploads every asset before it returns, so a draft carrying
+          # this run's asset names is complete and is published here, and a
+          # cancelled run never strands the tag as a draft
+          # `releases/download/dev/…` 404s on. One missing an asset is refused
+          # by name, never overwritten (`release ship other`: no clobbering
+          # upload outside the release guard).
+          state=$(gh release view "$tag" --json isDraft --jq '.isDraft' 2>/dev/null || echo absent)
+          case "$state" in
+            false)
+              exit 0
+              ;;
+            true)
+              have=$(gh release view "$tag" --json assets --jq '[.assets[].name] | sort | join(" ")')
+              want=$(printf '%s\n' batten-v*.tar.gz SHA256SUMS | sort | paste -sd ' ')
+              if [ "$have" != "$want" ]; then
+                echo "::error:: the draft $tag is incomplete ($have); discard it with \`batten release discard --tag $tag\` and re-run" >&2
+                exit 1
+              fi
+              ;;
+            *)
+              gh release create "$tag" --draft --prerelease --target "$SHA" \
+                --title "batten v${identity} (dev)" \
+                --notes "Pin: engine = { release = \"v${identity}\" }" \
+                batten-v*.tar.gz SHA256SUMS
+              ;;
+          esac
+          gh release edit "$tag" --draft=false --prerelease=false --latest=false

@@ -47,7 +47,8 @@ fn bash_payload(command: &str) -> String {
 }
 
 fn decision(command: &str) -> String {
-    let root = common::at_root(".");
+    // THE COMMITTED POLICY IN ITS OWN REPOSITORY (CLOUD-2904), not the checkout.
+    let root = common::committed_repo().to_path_buf();
     common::stdout(&common::run_with_stdin(
         &root,
         &["adjudicate", "--harness", "claude-code"],
@@ -207,6 +208,8 @@ fn a_merge_of_the_trunk_into_a_branch_is_refused() {
         "git pull origin main",
         "cd /tmp && git merge origin/main",
         "git -C /tmp pull",
+        // CLOUD-2354: directory `-c`, verb `merge`.
+        "git -C -c merge origin/main",
     ] {
         let out = linear_decision("linear-history-refused", command);
         assert!(
@@ -235,6 +238,80 @@ fn a_fast_forward_merge_and_a_rebasing_pull_are_admitted() {
         assert!(
             !out.contains("commit write loose"),
             "the merge module must admit `{command}`\n{out}"
+        );
+    }
+}
+
+/// The decision under a tree enabling only the `lease-asserted` preset: a
+/// FIXTURE for `linear_decision`'s reason (the pinned release does not ship it).
+fn lease_decision(fixture: &str, command: &str) -> String {
+    let dir = common::scratch_repo(fixture);
+    std::fs::write(
+        dir.join("batten.toml"),
+        "version = 1\n\n[[rule]]\nid = \"branch write unnamed\"\nkind = \"policy\"\n\
+         scope = \"mediated_call\"\npreset = \"lease-asserted\"\nseverity = \"deny\"\n",
+    )
+    .expect("write the fixture config");
+    common::stdout(&common::run_with_stdin(
+        &dir,
+        &["adjudicate", "--harness", "claude-code"],
+        &bash_payload(command),
+    ))
+}
+
+/// git-push(1): a lease naming no expected value, bare or `=<refname>` alone,
+/// "is trivially defeated" by a background fetch. The preset refuses both,
+/// through the compiled binary's resolution of the call.
+#[test]
+fn a_bare_leased_push_is_refused_by_the_preset() {
+    for command in [
+        "git push --force-with-lease origin main",
+        "git push --force-with-lease=main origin main",
+        "git fetch origin && git push --force-with-lease origin main",
+        "time git push --force-with-lease origin main",
+    ] {
+        let out = lease_decision("lease-asserted-refused", command);
+        assert!(
+            out.contains("\"deny\"") && out.contains("branch write unnamed"),
+            "the lease module must refuse `{command}`\n{out}"
+        );
+    }
+}
+
+/// The anti-vacuity half, and the `includes-unread` mutant's case: git's own
+/// remedy (`--force-if-includes`) and the asserted `<ref>:<sha>` form pass.
+#[test]
+fn a_lease_with_force_if_includes_is_allowed() {
+    for command in [
+        "git push --force-with-lease --force-if-includes origin main",
+        "git push --force-with-lease=refs/heads/main:abc123 origin main",
+        "git stash push",
+        "time hg push --force-with-lease",
+    ] {
+        let out = lease_decision("lease-asserted-admitted", command);
+        assert!(
+            !out.contains("branch write unnamed"),
+            "the lease module must admit `{command}`\n{out}"
+        );
+    }
+}
+
+/// THE PROGRAM ANCHOR, and the case `#MUTANT program-anchor-unread` reddens on
+/// the preset. `hg` above has no subcommand table, so `subcommand == "push"`
+/// already fails for it and dropping the anchor changes nothing there. A program
+/// the engine DOES resolve a subcommand for, whose subcommand is `push`, is the
+/// only shape the anchor alone keeps out.
+#[test]
+fn another_programs_push_subcommand_is_not_gits() {
+    for command in [
+        "cargo push --force-with-lease",
+        "gh push --force-with-lease",
+        "mise push --force-with-lease",
+    ] {
+        let out = lease_decision("lease-asserted-other-program", command);
+        assert!(
+            !out.contains("branch write unnamed"),
+            "the lease module must leave `{command}` alone\n{out}"
         );
     }
 }

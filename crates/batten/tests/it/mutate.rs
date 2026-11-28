@@ -111,6 +111,9 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
+// Only the unix cases capture a child, so only they need the adapter's trait.
+#[cfg(unix)]
+use batten::capture::Streamed as _;
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -128,8 +131,10 @@ use common::{stderr, stdout};
 /// (CLOUD-2160). The harness is suite-agnostic above `run_suite`: every verdict
 /// this file's decision table asserts is decided by `judge_row` over a
 /// `Selection`, which every arm produces.
-// Unix only, with `toy_repo`: the gate is a bash program the tier executes, and
-// off unix nothing reaches it (`-D warnings` refuses a const nothing reads).
+/// Where the toy repositories keep presets, as this repository's `[env]`
+/// declares its own: the crate names no preset directory (CLOUD-2711).
+const PRESETS: &str = "crates/batten/src/policy/presets";
+
 const TOY_GATE: &str = r#"#!/usr/bin/env bash
 #MISE description="Gate: the toy"
 #MUTANT-SUITE tests/toy.rs
@@ -144,8 +149,16 @@ exit 0
 ///
 /// `CARGO_MANIFEST_DIR` is the STAGED tree, because the sweep runs `cargo` there
 /// — so the tier executes the mutated gate, never the source tree's.
+///
+/// THROUGH `bash`, NOT THE FILE'S EXEC BIT, so the tier runs on every platform.
+/// The gate is a bash program, so bash is the subject's own dependency; what was
+/// unix-only was executing the file directly, which needs a mode bit and a
+/// shebang Windows has neither of. Every CI leg carries `bash` (Git for Windows
+/// on the `windows` runner), and the sweep applies a row in-process
+/// (`mutate::substitute`), so nothing else here needs a unix host.
 const GATE_HELPER: &str = r#"fn gate(input: &str) -> Option<i32> {
-    std::process::Command::new(concat!(env!("CARGO_MANIFEST_DIR"), "/mise-tasks/@GATE@"))
+    std::process::Command::new("bash")
+        .arg(concat!(env!("CARGO_MANIFEST_DIR"), "/mise-tasks/@GATE@"))
         .arg(input)
         .status()
         .expect("run the toy gate")
@@ -154,9 +167,7 @@ const GATE_HELPER: &str = r#"fn gate(input: &str) -> Option<i32> {
 "#;
 
 /// The mutation the toy suite catches: the gate stops refusing anything.
-// Unix only, with `toy_repo`: these describe the toy fixture, and off unix
-// nothing reaches it (`-D warnings` refuses a const nothing reads).
-const CAUGHT: &str = "#MUTANT limit-ignored|s/^LIMIT=10$/LIMIT=999/|over_the_limit";
+const CAUGHT: &str = "#MUTANT limit-ignored|s/^LIMIT=10$/LIMIT=999/|over_the_limit_is_refused";
 
 /// The package every toy carries, so `cargo test` has something to build.
 ///
@@ -206,8 +217,9 @@ fn runs(gate: &str) -> String {
     GATE_HELPER.replace("@GATE@", gate)
 }
 
-/// One libtest case. Its NAME is what a row's filter selects, so a row names a
-/// case by a substring of the function, as libtest matches it.
+/// One libtest case. Its NAME is what a row's filter selects: a row names a
+/// case by the whole function name (or its trailing `module::` path), never a
+/// substring of it.
 fn case(name: &str, body: &str) -> String {
     format!("\n#[test]\nfn {name}() {{\n    {body}\n}}\n")
 }
@@ -232,7 +244,7 @@ fn toy_suite(gate: &str, prefix: &str) -> String {
 
 /// A toy repository carrying one gate, one suite and the declared rows.
 ///
-/// Unix only: the gate is a bash program the tier executes.
+/// Portable: the tier runs the gate through `bash`, not its exec bit (`GATE_HELPER`).
 fn toy_repo(name: &str, rows: &[&str]) -> PathBuf {
     let root = toy(name);
     let mut gate = String::from(TOY_GATE);
@@ -249,21 +261,38 @@ fn toy_repo(name: &str, rows: &[&str]) -> PathBuf {
 
 /// Run a verb of `mutate` in `root` with the enforced set `gates`.
 fn run(root: &Path, verb: &str, gates: &str) -> (i32, String, String) {
+    run_with(root, verb, gates, &[])
+}
+
+/// [`run`], with `extra` variables for the sweep and every child it starts.
+fn run_with(
+    root: &Path,
+    verb: &str,
+    gates: &str,
+    extra: &[(&str, &Path)],
+) -> (i32, String, String) {
     let answer = common::batten()
         .args(["mutate", verb])
         .current_dir(root)
+        // A forge runner's own `$CI`, and the step cache's bypass, either of
+        // which turns the row record off (`step::bypassed`): a case that wants
+        // one names it in `extra`, so its verdict does not depend on where it ran.
+        .env_remove("CI")
+        .env_remove("BATTEN_STEP_RECEIPT_BYPASS")
+        .envs(extra.iter().copied())
         .env("MUTANT_GATES", gates)
         // Declared explicitly rather than inherited, so a case's verdict does not
         // depend on whether the runner happened to export the repository's own
         // `[env]` (CLOUD-1909). A toy with no manifest resolves no `task-` gate
         // either way.
         .env("MUTANT_TASKS", "mise.toml")
+        .env("MUTANT_PRESETS", PRESETS)
         // A PROFILE NO TOY DECLARES, as a consumer's `[env]` may export (this
         // repository's did under CI until CLOUD-2588), so every case whose Cargo
         // row reaches nextest proves an undeclared
         // inherited profile does not reach the sweep's nextest runs.
         .env("NEXTEST_PROFILE", "ci")
-        .output()
+        .streamed_output()
         .expect("run batten mutate");
     (
         answer.status.code().unwrap_or(-1),
@@ -296,7 +325,7 @@ fn a_malformed_shard_is_refused_before_the_sweep() {
         .env("MUTANT_GATES", "nope")
         .env("MUTANT_TASKS", "mise.toml")
         .env(batten::mutate::SHARD, "two/four")
-        .output()
+        .streamed_output()
         .expect("run batten mutate");
     let err = stderr(&answer);
     assert_eq!(answer.status.code(), Some(1), "the usage code: {err}");
@@ -304,11 +333,10 @@ fn a_malformed_shard_is_refused_before_the_sweep() {
 }
 
 /// The registered runner takes the shard the sweep already parsed (CLOUD-2541),
-/// so a malformed `$MUTANT_SHARD` under `MUTANT_RUNNER=cargo-mutants` is the one
-/// usage error. `shard_plan` once refused it a second time (`mutate: mutate:
-/// ...`, exit 3); the assertion on that text guards against its return. Fails
-/// by: the sweep's refusal dropped, which leaves nothing downstream able to
-/// refuse the value.
+/// so a malformed `$MUTANT_SHARD` under any `MUTANT_RUNNER` is the one usage
+/// error, refused before the runner is resolved. A second refusal downstream
+/// once printed `mutate: mutate: ...` at exit 3; the assertion on that text
+/// guards against its return. Fails by: the sweep's refusal dropped.
 #[test]
 fn a_malformed_shard_is_refused_before_the_registered_runner() {
     let root = toy("shard-malformed-registered");
@@ -321,7 +349,7 @@ fn a_malformed_shard_is_refused_before_the_registered_runner() {
         .env("MUTANT_RUNNER", "cargo-mutants")
         .env("MUTANT_CHANGED_SINCE", "HEAD")
         .env(batten::mutate::SHARD, "two/four")
-        .output()
+        .streamed_output()
         .expect("run batten mutate");
     let err = stderr(&answer);
     assert_eq!(answer.status.code(), Some(1), "the usage code: {err}");
@@ -345,8 +373,7 @@ fn a_malformed_shard_is_refused_before_the_registered_runner() {
 #[cfg(unix)]
 #[test]
 fn a_suite_that_hangs_is_ended_by_the_sweeps_own_bound() {
-    let note = common::scratch("mutate-hangs-note").join("pids");
-    let root = hung_toy("hangs", &note);
+    let (root, hung) = hung_toy("hangs");
 
     let answer = common::batten()
         .args(["mutate", "sweep"])
@@ -356,7 +383,7 @@ fn a_suite_that_hangs_is_ended_by_the_sweeps_own_bound() {
         // `cargo test`, whose freshness check is part of the bound even though
         // the build itself is paid beforehand under the build bound.
         .env("BATTEN_MUTATE_SUITE_TIMEOUT", "10")
-        .output()
+        .streamed_output()
         .expect("run batten mutate");
 
     // THE BOUND FIRED, READ FROM WHAT THE SWEEP RECORDED RATHER THAN FROM A
@@ -369,12 +396,11 @@ fn a_suite_that_hangs_is_ended_by_the_sweeps_own_bound() {
     // child alone left the test binary and its own child alive under init; two
     // were found 35 and 56 minutes after their runs, on the machine running
     // this suite. Both pids the hung case recorded must be gone.
-    let survivors = survivors_of(&note);
-    assert!(
-        survivors.is_empty(),
-        "the sweep ended its hung suite but left {survivors:?} running: the bound must end \
-         the suite's whole process group, not its direct child"
-    );
+    // WAITED ON AS AN EVENT (CLOUD-2789): the toy and its child each hold the
+    // `alive` fifo, so its end of file is both of them gone. One the bound
+    // left running holds it open, and this case hangs on it: the bound must
+    // end the suite's whole process group, not its direct child.
+    hung.ended();
     // AND WHAT IT REPORTS, WHICH THIS CASE USED TO DECLINE TO ASSERT
     // (CLOUD-1860). The declining comment read: *"what a killed suite reports is
     // the sweep's business and is covered by the decision table above."* It was
@@ -424,7 +450,7 @@ fn a_mutation_whose_sed_times_out_is_not_unappliable() {
         .env("MUTANT_GATES", "toy")
         .env("MUTANT_TASKS", "mise.toml")
         .env("PATH", path)
-        .output()
+        .streamed_output()
         .expect("run batten mutate");
     let out = stdout(&answer);
     assert_eq!(answer.status.code(), Some(0), "the row applied: {out}");
@@ -507,7 +533,11 @@ fn the_in_process_applier_matches_sed_on_every_declared_row() {
                 .arg(&copy)
                 .stdin(Stdio::null())
                 .stderr(Stdio::null())
-                .output()
+                .streamed_output_keeping(batten::capture::Keep {
+                    stdin: true,
+                    stdout: false,
+                    stderr: true,
+                })
                 .expect("`sed` is the oracle this case compares against");
             let sed = String::from_utf8_lossy(&out.stdout).into_owned();
             if batten::mutate::substitute(&text, &row.script).as_deref() != Some(sed.as_str()) {
@@ -608,8 +638,13 @@ fn numbered_patch(name: &str, lines: u32, changed: &[u32]) -> String {
 /// A MODULE'S OWN TEST IS RUN IN PROCESS, AS `policy test` RUNS IT (CLOUD-2255):
 /// the case a `.rego` row names in its own module is judged by that `test_`
 /// rule, under the committed config's registry, with no conftest spawned.
+///
+/// IN THIS PROCESS'S OWN STATE (CLOUD-2904): uncontained, the compile read the
+/// developer's policy cache, which whatever ran before had or had not filled,
+/// so one recording compiled the bundle and the next read it back.
 #[test]
 fn a_modules_own_test_is_run_in_process() {
+    common::scratch_state_root();
     let root = common::at_root("");
     assert_eq!(
         batten::policy_case(
@@ -687,32 +722,26 @@ fn a_mutation_row_applies_without_spawning() {
 fn a_signalled_sweep_takes_its_suite_with_it() {
     use std::os::unix::process::ExitStatusExt as _;
 
-    let note = common::scratch("mutate-signalled-note").join("pids");
-    let root = hung_toy("signalled", &note);
+    let (root, hung) = hung_toy("signalled");
     let mut sweep = common::batten()
         .args(["mutate", "sweep"])
         .current_dir(&root)
         .env("MUTANT_GATES", "toy")
         .env("MUTANT_TASKS", "mise.toml")
-        // Far past PATIENCE, so the bound cannot be what ends the suite here.
+        // Far past any run here, so the bound cannot be what ends the suite.
         .env("BATTEN_MUTATE_SUITE_TIMEOUT", "3000")
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .spawn()
         .expect("spawn batten mutate");
-    await_note(&note, &mut sweep);
+    hung.started();
 
     kill(sweep.id(), "TERM");
-    // Survivors are collected BEFORE anything is asserted, so a red run kills
-    // what it found rather than leaving it for the next one to trip over.
-    let status = await_exit(&mut sweep);
-    let survivors = survivors_of(&note);
-    assert!(
-        survivors.is_empty(),
-        "the sweep was TERMed but left {survivors:?} running: it must forward what it is \
-         sent to the suite's group"
-    );
-    let status = status.expect("the sweep must exit on its signal rather than wait out its suite");
+    // THE SWEEP'S EXIT AND ITS SUITE'S END ARE BOTH EVENTS (CLOUD-2789): a
+    // sweep that waits out its suite, or leaves the suite's group running
+    // rather than forwarding what it is sent, hangs this case.
+    let status = sweep.wait().expect("wait for the sweep");
+    hung.ended();
     assert_eq!(
         status.signal(),
         Some(15),
@@ -720,31 +749,73 @@ fn a_signalled_sweep_takes_its_suite_with_it() {
     );
 }
 
-/// How long a case waits for the hung toy to start: its cold build comes first.
-#[cfg(unix)]
-const BUILD_PATIENCE: std::time::Duration = std::time::Duration::from_secs(300);
+/// AN ORPHANED SWEEP ENDS, AND TAKES ITS SUITE (CLOUD-2854).
+///
+/// A capped `mutant:changed` lost its mise while `mutant:rust` ran on under
+/// init, holding the schema mirror's lock. Here the sweep runs under a shell
+/// that outlives the exec (`; :`), the shell is `SIGKILL`ed once the hung suite
+/// has started, and then neither the sweep nor anything its suite started may
+/// still run. The lock is an `flock`, so it drops with them.
+///
+/// Fails by: the parent watch never firing, so the sweep and its suite run on
+/// under init until the suite bound.
+#[cfg(target_os = "linux")]
+#[test]
+fn an_orphaned_sweep_ends_and_leaves_nothing_running() {
+    let (root, hung) = hung_toy("orphaned");
+    let body = format!("{} mutate sweep; :", env!("CARGO_BIN_EXE_batten"));
+    let mut shell = common::task_bash(&root, &body)
+        .env("MUTANT_GATES", "toy")
+        .env("MUTANT_TASKS", "mise.toml")
+        // Far past any run here, so the bound cannot be what ends the suite.
+        .env("BATTEN_MUTATE_SUITE_TIMEOUT", "3000")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("spawn the shell over batten mutate");
+    hung.started();
+    let children = format!("/proc/{0}/task/{0}/children", shell.id());
+    let sweep: u32 = fs::read_to_string(&children)
+        .expect("the shell's children")
+        .split_whitespace()
+        .next()
+        .and_then(|pid| pid.parse().ok())
+        .expect("the sweep runs under the shell");
 
-/// How long a case waits for a process to go or a sweep to exit. Either happens
-/// in milliseconds when the teardown works, so this bounds only a red run.
-#[cfg(unix)]
-const PATIENCE: std::time::Duration = std::time::Duration::from_secs(30);
+    kill(shell.id(), "KILL");
+    let _ = shell.wait();
+    // BOTH ENDS ARE EVENTS (CLOUD-2789): the sweep, no child of this case, by
+    // its pidfd, and the suite by the `alive` fifo's end. A parent watch that
+    // never fires leaves the sweep and its suite running, and this case hangs.
+    await_gone(sweep);
+    hung.ended();
+}
 
 /// A toy whose `over_the_limit_is_refused` case never returns, and leaves a
-/// process of its own: it spawns `sleep 3600`, writes its own pid and the
-/// sleep's into `note`, then sleeps an hour. `read` on a closed stdin would
-/// return, so the wait has to be one nothing external can satisfy.
+/// process of its own, with a [`Hung`] watching it. The case holds the `alive`
+/// fifo and hands it to the `sleep 3600` it spawns, writes its own pid and the
+/// sleep's into the `note` fifo, then sleeps an hour. `read` on a closed stdin
+/// would return, so the wait has to be one nothing external can satisfy.
 #[cfg(unix)]
-fn hung_toy(name: &str, note: &Path) -> PathBuf {
+fn hung_toy(name: &str) -> (PathBuf, Hung) {
+    let fifos = common::scratch(&format!("mutate-{name}-fifos"));
+    let (note_at, alive_at) = (fifos.join("pids"), fifos.join("alive"));
+    let hung = Hung::watch(&note_at, &alive_at);
     let root = toy(name);
     let mut gate = String::from(TOY_GATE);
     gate.push_str(CAUGHT);
     gate.push('\n');
     write_program(&root, "mise-tasks/toy.sh", &gate);
-    let note = note.display().to_string();
-    let hang = format!(
-        "let held = std::process::Command::new(\"sleep\").arg(\"3600\").spawn().expect(\"spawn \
-         the grandchild\");\n    std::fs::write({note:?}, format!(\"{{}} {{}}\", \
-         std::process::id(), held.id())).expect(\"write the note\");\n    \
+    let (note, alive) = (
+        note_at.display().to_string(),
+        alive_at.display().to_string(),
+    );
+    let body = format!(
+        "let alive = std::fs::OpenOptions::new().append(true).open({alive:?}).expect(\"hold \
+         the alive fifo\");\n    let held = std::process::Command::new(\"sh\").args([\"-c\", \
+         \"exec 3>>\\\"$0\\\"; exec sleep 3600\", {alive:?}]).spawn().expect(\"spawn the \
+         grandchild\");\n    std::fs::write({note:?}, format!(\"{{}} {{}}\", std::process::id(), \
+         held.id())).expect(\"write the note\");\n    let _held = alive;\n    \
          std::thread::sleep(std::time::Duration::from_secs(3600));"
     );
     write(
@@ -753,115 +824,91 @@ fn hung_toy(name: &str, note: &Path) -> PathBuf {
         &format!(
             "{}{}{}",
             runs("toy.sh"),
-            case("over_the_limit_is_refused", &hang),
+            case("over_the_limit_is_refused", &body),
             case("under_the_limit_passes", "assert!(gate(\"1\").is_some());"),
         ),
     );
     cargo_package(&root);
     track(&root);
-    root
+    (root, hung)
 }
 
-/// The pids a hung toy recorded — its test binary, then the process it spawned —
-/// that are still running once [`PATIENCE`] is spent. Each survivor is killed
-/// before this returns, so a red case never leaks what it found.
+/// What a hung toy says while it runs, each read off a fifo so a case waits
+/// on it as an event and never on a clock (CLOUD-2789): the two pids its case
+/// records once it has started, and the end of everything it started, which
+/// is the `alive` fifo's end of file once its last holder is gone.
 #[cfg(unix)]
-fn survivors_of(note: &Path) -> Vec<u32> {
-    let text = fs::read_to_string(note).expect("the hung case recorded its pids before it hung");
-    let pids: Vec<u32> = text
-        .split_whitespace()
-        .map(|pid| pid.parse().expect("a recorded pid"))
-        .collect();
-    assert_eq!(pids.len(), 2, "the test binary and its child: {text}");
-    let survivors: Vec<u32> = pids.into_iter().filter(|pid| !await_gone(*pid)).collect();
-    for pid in &survivors {
-        kill(*pid, "KILL");
-    }
-    survivors
+struct Hung {
+    pids: std::sync::mpsc::Receiver<Vec<u32>>,
+    gone: std::sync::mpsc::Receiver<()>,
 }
 
-/// Whether `pid` has gone: no such process, or a zombie whose reaping is its new
-/// parent's business. A container's pid 1 need not reap, and a zombie runs
-/// nothing, so counting one as alive would redden a case for its host.
+#[cfg(unix)]
+impl Hung {
+    /// Make both fifos and start reading them, before the toy can run.
+    fn watch(note: &Path, alive: &Path) -> Self {
+        fifo(note);
+        fifo(alive);
+        let (named, pids) = std::sync::mpsc::channel();
+        let note = note.to_path_buf();
+        std::thread::spawn(move || {
+            let text = fs::read_to_string(&note).expect("read the note fifo");
+            let _ = named.send(
+                text.split_whitespace()
+                    .map(|pid| pid.parse().expect("a recorded pid"))
+                    .collect(),
+            );
+        });
+        let (ended, gone) = std::sync::mpsc::channel();
+        let alive = alive.to_path_buf();
+        std::thread::spawn(move || {
+            let _ = fs::read_to_string(&alive);
+            let _ = ended.send(());
+        });
+        Self { pids, gone }
+    }
+
+    /// Block until the hung case has started, answering the two pids it
+    /// recorded: its test binary, then the process it spawned.
+    fn started(&self) -> Vec<u32> {
+        let pids = self.pids.recv().expect("the note's reader answers");
+        assert_eq!(pids.len(), 2, "the test binary and its child: {pids:?}");
+        pids
+    }
+
+    /// Block until everything the hung case started is gone.
+    fn ended(&self) {
+        self.gone.recv().expect("the alive fifo's reader answers");
+    }
+}
+
+/// A fifo at `path`.
 #[cfg(unix)]
 #[expect(
     clippy::disallowed_types,
-    reason = "stays, and test-only: `ps` is the POSIX way to ask for a process's state, and this suite runs on macOS where `/proc` is not an answer"
+    reason = "stays, and test-only: `mkfifo` is the POSIX way to make a fifo, and this suite runs on macOS, where rustix makes none"
 )]
-fn gone(pid: u32) -> bool {
-    let answer = std::process::Command::new("ps")
-        .args(["-o", "stat=", "-p", &pid.to_string()])
-        .output()
-        .expect("run ps");
-    let state = String::from_utf8_lossy(&answer.stdout);
-    let state = state.trim();
-    state.is_empty() || state.starts_with('Z')
+fn fifo(path: &Path) {
+    let made = std::process::Command::new("mkfifo")
+        .arg(path)
+        .status()
+        .expect("run mkfifo");
+    assert!(made.success(), "mkfifo {}", path.display());
 }
 
-/// Block until `pid` is [`gone`], reporting whether it got there in time.
-#[cfg(unix)]
-fn await_gone(pid: u32) -> bool {
-    let deadline = std::time::Instant::now() + PATIENCE;
-    while std::time::Instant::now() < deadline {
-        if gone(pid) {
-            return true;
-        }
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "the interval of a poll whose exit condition is `gone`, bounded by `PATIENCE` \
-                      — running out is what this reports as `false` (CLOUD-1177)"
-        )]
-        std::thread::sleep(std::time::Duration::from_millis(20));
-    }
-    false
-}
-
-/// Block until a hung case's `note` holds its two pids, failing if the sweep
-/// exits first or [`BUILD_PATIENCE`] runs out — and killing the sweep either way.
-#[cfg(unix)]
-fn await_note(note: &Path, sweep: &mut std::process::Child) {
-    let deadline = std::time::Instant::now() + BUILD_PATIENCE;
-    while std::time::Instant::now() < deadline {
-        if fs::read_to_string(note).is_ok_and(|text| text.split_whitespace().count() == 2) {
-            return;
-        }
-        if let Ok(Some(status)) = sweep.try_wait() {
-            panic!("the sweep exited {status:?} before its hung case started");
-        }
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "the interval of a poll whose exit condition is the note holding two pids, \
-                      bounded by `BUILD_PATIENCE` — past that this kills the sweep and panics \
-                      (CLOUD-1177)"
-        )]
-        std::thread::sleep(std::time::Duration::from_millis(20));
-    }
-    kill(sweep.id(), "KILL");
-    panic!(
-        "the hung case never recorded its pids in {}",
-        note.display()
-    );
-}
-
-/// Block until `child` exits, or kill it and answer `None` once [`PATIENCE`]
-/// runs out — never panicking, so the caller still collects what it left behind.
-#[cfg(unix)]
-fn await_exit(child: &mut std::process::Child) -> Option<std::process::ExitStatus> {
-    let deadline = std::time::Instant::now() + PATIENCE;
-    while std::time::Instant::now() < deadline {
-        if let Some(status) = child.try_wait().expect("poll the sweep") {
-            return Some(status);
-        }
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "the interval of a poll whose exit condition is the sweep exiting, bounded by \
-                      `PATIENCE` — past that this kills it and answers `None` (CLOUD-1177)"
-        )]
-        std::thread::sleep(std::time::Duration::from_millis(20));
-    }
-    kill(child.id(), "KILL");
-    let _ = child.wait();
-    None
+/// Block until `pid`, no child of this case, has exited: its pidfd reads ready
+/// then, a zombie included. One already reaped has no pidfd and is gone.
+#[cfg(target_os = "linux")]
+fn await_gone(pid: u32) {
+    let pid = rustix::process::Pid::from_raw(i32::try_from(pid).expect("a pid")).expect("a pid");
+    let Ok(pidfd) = rustix::process::pidfd_open(pid, rustix::process::PidfdFlags::empty()) else {
+        return;
+    };
+    let mut fds = [rustix::event::PollFd::new(
+        &pidfd,
+        rustix::event::PollFlags::IN,
+    )];
+    while let Err(rustix::io::Errno::INTR) = rustix::event::poll(&mut fds, None) {}
 }
 
 /// Send `signal` to `pid`, by name, best effort: the pid may already be gone.
@@ -904,7 +951,7 @@ fn a_filter_naming_no_case_is_still_a_filter_fault_and_not_a_timeout() {
         // made a warm `cargo test` on a loaded host the thing being measured
         // (CLOUD-2059).
         .env("BATTEN_MUTATE_SUITE_TIMEOUT", "120")
-        .output()
+        .streamed_output()
         .expect("run batten mutate");
     let code = answer.status.code().unwrap_or(-1);
     let out = stdout(&answer);
@@ -930,7 +977,10 @@ fn a_filter_naming_no_case_is_still_a_filter_fault_and_not_a_timeout() {
 /// reader running `b-limit` under `a`'s gate would then report it caught, which
 /// is the defect `a_task_gate_sweeps_only_its_own_block` exists to see. With no
 /// `b` tier, that reader's `b-limit` row names no case and the sweep exits 3.
-#[cfg(unix)]
+///
+/// COMPILED ON EVERY TARGET: `a_recorded_row_is_judged_again_under_ci` calls it
+/// behind a `cfg!` arm rather than an attribute, so a `#[cfg(unix)]` here left
+/// that case unresolvable off unix, and `cross-check`'s Windows pass failed.
 fn two_task_repo(name: &str) -> PathBuf {
     let root = toy(name);
     write(
@@ -998,28 +1048,39 @@ fn a_task_gate_sweeps_only_its_own_block() {
 /// THE SWEEP SAYS HOW FAR IT GOT (CLOUD-2253). On #1132 a sweep ran two hours,
 /// printed one line and was killed, so neither its row count nor any row's cost
 /// was known. The count comes before any row runs, then one line per row with its
-/// verdict and seconds, so a killed run still shows where it was.
-#[cfg(unix)]
+/// verdict and seconds, in declared order, so a killed run still shows where it
+/// was. TWO rows, so an order and a per-row line are both observable: one row
+/// would pass a runner that printed only the last row, or only `1/1`.
 #[test]
 fn a_sweep_reports_its_row_count_and_each_rows_time() {
-    let root = two_task_repo("task-progress");
-    let (code, out, err) = sweep(&root, "task-a");
-    assert_eq!(code, 0, "{out}{err}");
-    let count = err
-        .find("mutate sweep: 1 row(s) across 1 gate(s)")
-        .unwrap_or_else(|| panic!("the count line: {err}"));
-    let row = err
-        .find("mutate sweep: row 1/1 task-a ")
-        .unwrap_or_else(|| panic!("the row line: {err}"));
-    assert!(count < row, "the count precedes the first row: {err}");
-    let line = err
-        .get(row..)
-        .and_then(|rest| rest.lines().next())
-        .unwrap_or_default();
-    assert!(
-        line.contains(" caught ") && line.ends_with('s'),
-        "the row line carries its verdict and seconds: {line}"
+    let root = toy_repo(
+        "progress",
+        &[
+            CAUGHT,
+            "#MUTANT limit-lowered|s/^LIMIT=10$/LIMIT=0/|under_the_limit_passes",
+        ],
     );
+    let (code, out, err) = sweep(&root, "toy");
+    assert_eq!(code, 0, "{out}{err}");
+    let at = |needle: &str| {
+        err.find(needle)
+            .unwrap_or_else(|| panic!("{needle:?} in: {err}"))
+    };
+    let count = at("mutate sweep: 2 row(s) across 1 gate(s)");
+    let first = at("mutate sweep: row 1/2 toy limit-ignored ");
+    let second = at("mutate sweep: row 2/2 toy limit-lowered ");
+    assert!(count < first, "the count precedes the first row: {err}");
+    assert!(first < second, "the rows follow in order: {err}");
+    for row in [first, second] {
+        let line = err
+            .get(row..)
+            .and_then(|rest| rest.lines().next())
+            .unwrap_or_default();
+        assert!(
+            line.contains(" caught ") && line.ends_with('s'),
+            "the row line carries its verdict and seconds: {line}"
+        );
+    }
 }
 
 /// A ROW SEEN CAUGHT IS NOT RUN AGAIN WHILE NOTHING IT READS HAS CHANGED
@@ -1040,7 +1101,10 @@ fn a_caught_row_is_not_run_again_until_its_inputs_change() {
         err.contains("caught (recorded)"),
         "the second sweep skips the recorded row: {err}"
     );
-    assert!(out.contains("every one caught"), "{out}");
+    assert!(
+        out.contains("every one caught (1 recorded)"),
+        "the summary says how much of it was replayed: {out}"
+    );
 
     let manifest = root.join("mise.toml");
     let text = std::fs::read_to_string(&manifest).expect("read the manifest");
@@ -1050,6 +1114,31 @@ fn a_caught_row_is_not_run_again_until_its_inputs_change() {
         !err.contains("(recorded)"),
         "a changed source runs its row again: {err}"
     );
+}
+
+/// UNDER CI A RECORDED ROW IS JUDGED AGAIN (#1276), as `ChangePass::of` already
+/// refuses a whole-change pass there: a runner that keeps its workspace would
+/// otherwise answer a confirmation from a record. The first sweep runs without
+/// `$CI` and records the row; the second, under it, must run the row and say
+/// nothing was replayed. Fails by: the row replay reading the record whatever
+/// `step::bypassed` says.
+#[test]
+fn a_recorded_row_is_judged_again_under_ci() {
+    if !cfg!(unix) {
+        return;
+    }
+    let root = two_task_repo("task-recorded-ci");
+    let (code, out, err) = sweep(&root, "task-a");
+    assert_eq!(code, 0, "{out}{err}");
+
+    let (code, out, err) = run_with(&root, "sweep", "task-a", &[("CI", Path::new("true"))]);
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(
+        !err.contains("(recorded)"),
+        "under CI the row is judged, not replayed: {err}"
+    );
+    assert!(out.contains("every one caught"), "{out}");
+    assert!(!out.contains("recorded)"), "nothing replayed: {out}");
 }
 
 /// The census half: a block that declares rows and is absent from the set is
@@ -1083,7 +1172,7 @@ fn an_unnamed_manifest_resolves_no_task_gate() {
         .current_dir(&root)
         .env("MUTANT_GATES", "task-a")
         .env_remove("MUTANT_TASKS")
-        .output()
+        .streamed_output()
         .expect("run batten mutate");
     let out = stdout(&answer);
     assert_eq!(answer.status.code(), Some(3), "{out}");
@@ -1139,17 +1228,133 @@ fn a_mutation_its_suite_catches_is_a_pass() {
     );
 }
 
+/// A build script cargo reruns on EVERY build — it watches a path that does not
+/// exist — and that counts its runs into `$TOY_BUILD_COUNTER`.
+const ALWAYS_STALE_BUILD: &str = r#"fn main() {
+    println!("cargo:rerun-if-changed=no-such-path");
+    if let Some(path) = std::env::var_os("TOY_BUILD_COUNTER") {
+        use std::io::Write as _;
+        let mut counter = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+            .expect("open the counter");
+        writeln!(counter, "built").expect("count the build");
+    }
+}
+"#;
+
+/// ONE BUILD JUDGES EVERY ROW, whatever cargo's fingerprint says. Two rows over a
+/// non-Rust gate, in a package whose build script is stale on every build: the
+/// sweep builds once up front and each row runs the recorded binaries, so the
+/// script runs exactly once. Fails by: any row asking cargo to build, which reran
+/// this script per row — and the library with it, 75s a row in this repository's
+/// own sweep when a missing `rerun-if-changed` path did the same.
+#[test]
+fn a_row_runs_the_one_build_and_never_compiles() {
+    let root = toy_repo(
+        "one-build",
+        &[
+            CAUGHT,
+            "#MUTANT comparison-flipped|s/-le/-ge/|over_the_limit_is_refused",
+        ],
+    );
+    write(&root, "build.rs", ALWAYS_STALE_BUILD);
+    track(&root);
+    let counter = common::scratch("mutate-one-build-counter").join("builds");
+    let (code, out, err) = run_with(&root, "sweep", "toy", &[("TOY_BUILD_COUNTER", &counter)]);
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(out.contains("every one caught"), "{out}");
+    let builds = fs::read_to_string(&counter).unwrap_or_default();
+    assert_eq!(
+        builds.lines().count(),
+        1,
+        "the build script ran once per build; two rows must cost one build\n{err}"
+    );
+}
+
+/// A SUBJECT THE BUILD EMBEDS IS STILL JUDGED MUTATED. The case reads the gate
+/// through `include_str!`, so the recorded binaries carry the unmutated text and
+/// only a rebuild sees the row's mutation. Fails by: reusing the binaries for a
+/// subject cargo's dep-info names, which reads the mutant as surviving.
+#[test]
+fn a_row_whose_subject_the_build_embeds_is_rebuilt() {
+    let root = toy_repo(
+        "embedded-subject",
+        &["#MUTANT limit-embedded|s/^LIMIT=10$/LIMIT=999/|embedded_limit_is_ten"],
+    );
+    let suite = format!(
+        "{}{}",
+        toy_suite("toy.sh", ""),
+        case(
+            "embedded_limit_is_ten",
+            "assert!(include_str!(\"../mise-tasks/toy.sh\").contains(\"\\nLIMIT=10\\n\"));"
+        ),
+    );
+    write(&root, "tests/toy.rs", &suite);
+    track(&root);
+    let (code, out, err) = sweep(&root, "toy");
+    assert_eq!(
+        code, 0,
+        "an embedded subject's mutation must be caught\n{out}{err}"
+    );
+    assert!(out.contains("every one caught"), "{out}");
+}
+
+/// A REBUILT ROW LEAVES NO MUTANT BEHIND IN THE BINARIES A LATER ROW REUSES.
+/// `user`'s case reads `toy`'s gate through `include_str!`, so `toy`'s row
+/// rebuilds, and its mutated build overwrites the recorded binaries at the same
+/// paths. Gates are judged in name order, so `toy`'s row runs first; `user`'s
+/// subject is not embedded, so its row reuses them. Fails by: reusing a binary
+/// the previous row rebuilt mutated, which reads `user`'s clean case as
+/// `case-already-red`.
+#[test]
+fn a_row_after_a_rebuilt_row_reuses_clean_binaries() {
+    let root = toy_repo("dirty-reuse", &[CAUGHT]);
+    let gate = TOY_GATE
+        .replace("the toy", "the user")
+        .replace("tests/toy.rs", "tests/user.rs");
+    write_program(
+        &root,
+        "mise-tasks/user.sh",
+        &format!("{gate}#MUTANT user-limit|s/^LIMIT=10$/LIMIT=999/|user_refuses_ninety_nine\n"),
+    );
+    let suite = format!(
+        "{}{}{}",
+        runs("user.sh"),
+        case(
+            "user_refuses_ninety_nine",
+            "assert!(include_str!(\"../mise-tasks/toy.sh\").contains(\"\\nLIMIT=10\\n\"));\n    \
+             assert_eq!(gate(\"99\"), Some(1));"
+        ),
+        case("user_passes_one", "assert_eq!(gate(\"1\"), Some(0));"),
+    );
+    write(&root, "tests/user.rs", &suite);
+    track(&root);
+    let (code, out, err) = sweep(&root, "toy,user");
+    assert_eq!(code, 0, "a later row must reuse clean binaries\n{out}{err}");
+    assert!(out.contains("every one caught"), "{out}");
+}
+
 #[cfg(unix)]
 #[test]
 fn the_defect_a_mutation_the_suite_does_not_catch_fails() {
     // The mutation moves a line no case exercises, so the suite stays green.
     let root = toy_repo(
         "survivor",
-        &["#MUTANT unwatched|s/^exit 0$/exit 0 # unwatched/|over_the_limit"],
+        &["#MUTANT unwatched|s/^exit 0$/exit 0 # unwatched/|over_the_limit_is_refused"],
     );
-    let (code, out, _) = sweep(&root, "toy");
+    let (code, out, err) = sweep(&root, "toy");
     assert_eq!(code, 2, "{out}");
     assert!(out.contains("SURVIVED"), "{out}");
+    assert!(
+        err.contains("1 of 1 declared mutation(s) across 1 gate(s) survived"),
+        "a survivor is counted over the rows judged: {err}"
+    );
+    // A survivor is no row defect: the row applied, and named one case.
+    assert!(!err.contains("prove nothing as written"), "{err}");
+    // Nor a gate-level finding: the one gate declared the row that was judged.
+    assert!(!err.contains("declare no row"), "{err}");
 }
 
 #[cfg(unix)]
@@ -1165,17 +1370,46 @@ fn a_row_is_exactly_three_fields_and_a_fourth_is_refused_before_the_split() {
 
 #[cfg(unix)]
 #[test]
-fn a_filter_that_selects_the_whole_suite_names_no_case_like_one_that_selects_none() {
-    // `the_limit` is a substring of BOTH case names, so the row stops naming a
-    // case and redness under mutation could come from anywhere in the suite.
-    let root = toy_repo(
-        "wide-filter",
-        &["#MUTANT limit-ignored|s/^LIMIT=10$/LIMIT=999/|the_limit"],
+fn a_filter_that_selects_more_than_one_case_names_no_case_like_one_that_selects_none() {
+    // A second module carries a case of the same name, so the exact filter
+    // selects two and redness under mutation could come from either.
+    let root = toy_repo("wide-filter", &[CAUGHT]);
+    let suite = format!(
+        "{}\nmod again {{\n    use super::gate;\n{}}}\n",
+        toy_suite("toy.sh", ""),
+        case(
+            "over_the_limit_is_refused",
+            "assert_eq!(gate(\"99\"), Some(1));"
+        ),
     );
+    write(&root, "tests/toy.rs", &suite);
+    track(&root);
     let (code, out, _) = sweep(&root, "toy");
     assert_eq!(code, 2, "{out}");
     assert!(out.contains("filter-names-every-case"), "{out}");
     assert!(!out.contains("every one caught"), "{out}");
+}
+
+/// A SIBLING WHOSE NAME CONTAINS THE CASE'S IS NEVER CREDITED. `limit_case`
+/// does not see the mutation and `limit_case_over` does. Fails by: selecting by
+/// containment, which ran both and read the sibling's redness as the row's catch.
+#[test]
+fn a_case_is_selected_by_its_whole_name_and_a_longer_sibling_is_not_credited() {
+    let root = toy_repo(
+        "anchored-filter",
+        &["#MUTANT limit-ignored|s/^LIMIT=10$/LIMIT=999/|limit_case"],
+    );
+    let suite = format!(
+        "{}{}{}",
+        toy_suite("toy.sh", ""),
+        case("limit_case", "assert_eq!(gate(\"1\"), Some(0));"),
+        case("limit_case_over", "assert_eq!(gate(\"99\"), Some(1));"),
+    );
+    write(&root, "tests/toy.rs", &suite);
+    track(&root);
+    let (code, out, err) = sweep(&root, "toy");
+    assert_eq!(code, 2, "{out}{err}");
+    assert!(out.contains("SURVIVED (limit_case)"), "{out}{err}");
 }
 
 #[cfg(unix)]
@@ -1223,7 +1457,9 @@ fn the_tree_is_restored_between_rows_so_a_gate_is_judged_against_a_pristine_sibl
         &toy_suite("sibling.sh", "sibling_"),
     );
     let mut sibling = TOY_GATE.replace("tests/toy.rs", "tests/sibling.rs");
-    sibling.push_str("#MUTANT sibling-limit|s/^LIMIT=10$/LIMIT=999/|sibling_over_the_limit\n");
+    sibling.push_str(
+        "#MUTANT sibling-limit|s/^LIMIT=10$/LIMIT=999/|sibling_over_the_limit_is_refused\n",
+    );
     write_program(&root, "mise-tasks/sibling.sh", &sibling);
 
     // The mutation is `|`-free and anchored on a line carrying no `$`, so the
@@ -1237,7 +1473,7 @@ if [ "${DELEGATE}" = 1 ]; then
 	"$(dirname "$0")/sibling.sh" "${1:-0}" || exit 1
 fi
 exit 0
-#MUTANT composer-delegates|s@^DELEGATE=1$@DELEGATE=0@|composer_over_the_limit
+#MUTANT composer-delegates|s@^DELEGATE=1$@DELEGATE=0@|composer_over_the_limit_is_refused
 "#;
     write_program(&root, "mise-tasks/composer.sh", composer);
     write(
@@ -1261,12 +1497,16 @@ fn a_row_that_mutates_its_own_declaration_is_refused_not_reported_as_a_survivor(
     // run while reading as enforced coverage.
     let root = toy_repo(
         "self-mutating",
-        &["#MUTANT self|s/MUTANT self/MUTANT other/|over_the_limit"],
+        &["#MUTANT self|s/MUTANT self/MUTANT other/|over_the_limit_is_refused"],
     );
-    let (code, out, _) = sweep(&root, "toy");
+    let (code, out, err) = sweep(&root, "toy");
     assert_eq!(code, 2, "{out}");
     assert!(out.contains("self-mutating-row"), "{out}");
     assert!(!out.contains("SURVIVED"), "{out}");
+    assert!(
+        err.contains("1 declared row(s) prove nothing as written") && !err.contains("survived"),
+        "a row defect is counted apart from survivors: {err}"
+    );
 }
 
 #[cfg(unix)]
@@ -1304,13 +1544,71 @@ fn the_copy_is_a_repository_so_a_suite_that_resolves_its_own_root_answers_about_
     assert_eq!(code, 0, "{out}{err}");
 }
 
+/// The tier [`a_suite_reading_the_index_judges_the_mutant`] runs: the gate's
+/// STAGED bytes, `git show :path`, as a gate judging the committed rule reads
+/// them, never the checkout's. It reads them in Rust rather than running them
+/// through a shell, so the case runs on every target `cross-check` builds.
+const INDEX_GATE_HELPER: &str = r#"fn indexed() -> String {
+    let shown = std::process::Command::new("git")
+        .args(["show", ":mise-tasks/toy.sh"])
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .output()
+        .expect("read the toy gate from the index");
+    String::from_utf8(shown.stdout).expect("the toy gate is UTF-8")
+}
+"#;
+
+#[test]
+fn a_suite_reading_the_index_judges_the_mutant() {
+    // CLOUD-2789: a manifest's `settings-unlocked` row survived because the
+    // mutant reached the staged checkout and not its index, which is what
+    // `batten check` reads for a committed rule. A suite that reads the index
+    // must see the mutant: `limit-ignored` turns the staged `LIMIT=10` into
+    // `LIMIT=999`, and a mutant left in the working copy alone survives here.
+    // The control case reads the index too, so a restore that left it mutated
+    // would read as `case-already-red` on the next row.
+    let root = toy("index");
+    let mut gate = String::from(TOY_GATE);
+    gate.push_str(CAUGHT);
+    gate.push('\n');
+    write_program(&root, "mise-tasks/toy.sh", &gate);
+    write(
+        &root,
+        "tests/toy.rs",
+        &format!(
+            "{}{}{}",
+            INDEX_GATE_HELPER,
+            case(
+                "over_the_limit_is_refused",
+                "assert!(indexed().contains(\"\\nLIMIT=10\\n\"));"
+            ),
+            case(
+                "under_the_limit_passes",
+                "assert!(indexed().contains(\"#MUTANT limit-ignored\"));"
+            ),
+        ),
+    );
+    cargo_package(&root);
+    track(&root);
+    let (code, out, err) = sweep(&root, "toy");
+    assert!(!out.contains("SURVIVED"), "{out}{err}");
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(out.contains("every one caught"), "{out}");
+}
+
 #[cfg(unix)]
 #[test]
 fn anti_vacuity_a_listed_gate_with_no_declaration_fails_rather_than_being_skipped() {
     let root = toy_repo("no-declaration", &[]);
-    let (code, out, _) = sweep(&root, "toy");
+    let (code, out, err) = sweep(&root, "toy");
     assert_eq!(code, 2, "{out}");
     assert!(out.contains("no-mutant-declared"), "{out}");
+    // #1276: this read `1 of 0 declared mutation(s) … were not caught`, a
+    // coverage verdict over a denominator of zero.
+    assert!(
+        err.contains("1 gate(s) declare no row this sweep judges") && !err.contains(" of 0 "),
+        "a gate-level finding is counted apart from the rows: {err}"
+    );
 }
 
 #[cfg(unix)]
@@ -1331,11 +1629,88 @@ fn anti_vacuity_a_filter_naming_no_case_is_not_a_pass() {
 fn anti_vacuity_a_mutation_that_changes_nothing_is_not_a_pass() {
     let root = toy_repo(
         "inert",
-        &["#MUTANT inert|s/^NOTHING_MATCHES_THIS$/x/|over_the_limit"],
+        &["#MUTANT inert|s/^NOTHING_MATCHES_THIS$/x/|over_the_limit_is_refused"],
     );
-    let (code, out, _) = sweep(&root, "toy");
+    let (code, out, err) = sweep(&root, "toy");
     assert_eq!(code, 2, "{out}");
     assert!(out.contains("inert-mutation"), "{out}");
+    assert!(
+        err.contains("1 declared row(s) prove nothing as written") && !err.contains("survived"),
+        "an inert row is a row defect, not a survivor: {err}"
+    );
+}
+
+/// A ROW IN NEXTEST'S OWN CONFIG IS JUDGED BY ITS CASE, NOT BY THE HARNESS IT
+/// BREAKS (#1276). The row makes `.config/nextest.toml` unreadable to nextest,
+/// and its case reads that file as data. Run against the mutated config,
+/// nextest stops before it selects a case and the row cannot be looked at;
+/// handed the unmutated copy with `--config-file`, the harness runs and the
+/// case reddens. Fails by: the suite run under the config it was mutating.
+#[test]
+fn a_row_in_the_nextest_config_runs_under_an_unmutated_copy() {
+    if !cfg!(unix) {
+        return;
+    }
+    let root = toy("nextest-config-row");
+    write(
+        &root,
+        ".config/nextest.toml",
+        "#MUTANT-SUITE tests/config.rs\n\
+         #MUTANT timeout-unreadable|s/^slow-timeout = \"60s\"$/slow-timeout = \"never\"/|\
+         the_config_keeps_its_timeout\n\
+         [profile.default]\nslow-timeout = \"60s\"\n",
+    );
+    write(
+        &root,
+        "tests/config.rs",
+        &format!(
+            "{}{}",
+            case(
+                "the_config_keeps_its_timeout",
+                "let text = std::fs::read_to_string(concat!(env!(\"CARGO_MANIFEST_DIR\"), \
+                 \"/.config/nextest.toml\")).expect(\"the config\");\n    \
+                 assert!(text.lines().any(|line| line == \"slow-timeout = \\\"60s\\\"\"), \
+                 \"{text}\");"
+            ),
+            case("a_second_case_keeps_the_filter_honest", ""),
+        ),
+    );
+    cargo_package(&root);
+    track(&root);
+    let (code, out, err) = sweep(&root, ".config/nextest.toml");
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(out.contains("every one caught"), "{out}{err}");
+}
+
+/// A ROW THAT PROVES NOTHING COSTS NO SUITE RUN (#1276): the mutation is
+/// applied and diffed in memory before the clean run, so an inert or
+/// self-mutating row is refused as such even where its case filter names
+/// nothing. Fails by: the shape read only after the clean run, so a suite ran
+/// for a row that could prove nothing, and these rows answered
+/// `names-no-case` from that run instead.
+#[test]
+fn a_row_that_proves_nothing_is_refused_before_its_suite_runs() {
+    if !cfg!(unix) {
+        return;
+    }
+    for (name, row, verdict) in [
+        (
+            "inert-first",
+            "#MUTANT inert|s/^NOTHING_MATCHES_THIS$/x/|no_case_is_named_this",
+            "toy/inert inert-mutation",
+        ),
+        (
+            "self-first",
+            "#MUTANT self|s/MUTANT self/MUTANT other/|no_case_is_named_this",
+            "toy/self self-mutating-row",
+        ),
+    ] {
+        let root = toy_repo(name, &[row]);
+        let (code, out, err) = sweep(&root, "toy");
+        assert_eq!(code, 2, "{out}{err}");
+        assert!(out.contains(verdict), "{out}");
+        assert!(!out.contains("names-no-case"), "no suite ran: {out}");
+    }
 }
 
 #[cfg(unix)]
@@ -1387,7 +1762,7 @@ fn a_name_resolving_to_nothing_is_no_such_gate() {
 fn pointer_never_payload_the_report_carries_no_line_of_the_mutated_source() {
     let root = toy_repo(
         "pointer",
-        &["#MUTANT leak|s/^exit 0$/SECRETMARKER=1/|over_the_limit"],
+        &["#MUTANT leak|s/^exit 0$/SECRETMARKER=1/|over_the_limit_is_refused"],
     );
     let (_, out, err) = sweep(&root, "toy");
     assert!(!out.contains("SECRETMARKER"), "{out}");
@@ -1436,7 +1811,8 @@ fn an_uncommitted_case_is_still_covered_because_the_working_tree_is_the_subject(
 /// A row `other`'s suite cannot catch: dropping `pipefail` changes nothing the
 /// suite observes. So the sweep exits non-zero exactly when `other` is swept,
 /// which is what lets a case tell "narrowed" from "swept everything and passed".
-const OTHER_SURVIVES: &str = "#MUTANT pipefail-dropped|s/^set -uo pipefail$/set -u/|other_refuses";
+const OTHER_SURVIVES: &str =
+    "#MUTANT pipefail-dropped|s/^set -uo pipefail$/set -u/|other_refuses_ninety_nine";
 
 /// `toy_repo` plus a second gate, `other`, whose one row survives, committed as
 /// the base a change is measured against.
@@ -1472,7 +1848,6 @@ fn other_suite(tail: &str) -> String {
 }
 
 /// Sweep `gates` narrowed to what changed since `base`.
-#[cfg(unix)]
 fn sweep_since(root: &Path, gates: &str, base: &str) -> (i32, String, String) {
     // THE INHERITED ENVIRONMENT, as before CLOUD-2588: these cases run under a
     // CI leg's own `$CI`, which is where #1209's class showed. Only the
@@ -1489,18 +1864,168 @@ fn narrowed_sweep(root: &Path, gates: &str, base: &str) -> common::Batten {
         .current_dir(root)
         .env("MUTANT_GATES", gates)
         .env("MUTANT_CHANGED_SINCE", base)
-        .env("MUTANT_TASKS", "mise.toml");
+        .env("MUTANT_TASKS", "mise.toml")
+        .env("MUTANT_PRESETS", PRESETS);
     command
 }
 
 /// Run `command` to its exit, as `(code, stdout, stderr)`.
 fn answered(command: &mut common::Batten) -> (i32, String, String) {
-    let answer = command.output().expect("run batten mutate");
+    let answer = command.streamed_output().expect("run batten mutate");
     (
         answer.status.code().unwrap_or(-1),
         stdout(&answer),
         stderr(&answer),
     )
+}
+
+/// `two_gate_repo` with the enforced set committed as `before` in `path`, then
+/// rewritten to `after` and left uncommitted: a change that enrolls a gate and
+/// touches none of its sources or suites.
+fn enrolling(name: &str, path: &str, before: &str, after: &str) -> PathBuf {
+    let root = two_gate_repo(name);
+    write(&root, path, before);
+    track(&root);
+    common::git_in(&root, &["commit", "-m", "enroll toy"]);
+    write(&root, path, after);
+    root
+}
+
+/// A GATE ENROLLED SINCE THE BASE IS SWEPT (#1276): `other` joins the set the
+/// task manifest declares, and nothing of `other`'s changed. Fails by: the
+/// narrowing reading sources and suites alone, so the change answered "no
+/// enforced gate's source or suite changed" and the new gate's survivor was
+/// never reached.
+#[test]
+fn a_gate_enrolled_in_the_manifest_since_the_base_is_swept() {
+    if !cfg!(unix) {
+        return;
+    }
+    let root = enrolling(
+        "since-enrolled-env",
+        "mise.toml",
+        "[env]\nMUTANT_GATES = \"toy\"\n",
+        "[env]\nMUTANT_GATES = \"toy,other\"\n",
+    );
+    let (code, out, err) = sweep_since(&root, "toy,other", "HEAD");
+    assert_ne!(code, 0, "{out}{err}");
+    assert!(
+        out.contains("other/pipefail-dropped SURVIVED"),
+        "{out}{err}"
+    );
+}
+
+/// The committed table's arm of the same: `other` joins `[mutate].gates`.
+#[test]
+fn a_gate_enrolled_in_the_committed_table_since_the_base_is_swept() {
+    if !cfg!(unix) {
+        return;
+    }
+    let root = enrolling(
+        "since-enrolled-table",
+        "batten.toml",
+        "version = 1\n\n[mutate]\ngates = [\"toy\"]\n",
+        "version = 1\n\n[mutate]\ngates = [\"toy\", \"other\"]\n",
+    );
+    let (code, out, err) = sweep_since(&root, "", "HEAD");
+    assert_ne!(code, 0, "{out}{err}");
+    assert!(
+        out.contains("other/pipefail-dropped SURVIVED"),
+        "{out}{err}"
+    );
+}
+
+/// The glob arm of the same: a glob newly written in the manifest enrolls the
+/// gate whose source it matches, though no gate's NAME grew. Fails by: a new
+/// glob never read, so `other` was not swept and the change looked inert.
+#[test]
+fn a_gate_enrolled_by_a_new_glob_since_the_base_is_swept() {
+    if !cfg!(unix) {
+        return;
+    }
+    let root = enrolling(
+        "since-enrolled-glob",
+        "mise.toml",
+        "[env]\nMUTANT_GATES = \"toy,other\"\n",
+        "[env]\nMUTANT_GATES = \"toy,other\"\n# mise-tasks/oth*.sh\n",
+    );
+    let (code, out, err) = sweep_since(&root, "toy,other", "HEAD");
+    assert_ne!(code, 0, "{out}{err}");
+    assert!(
+        out.contains("other/pipefail-dropped SURVIVED"),
+        "{out}{err}"
+    );
+}
+
+/// `toy`'s cases moved out of its declared suite into a module of the same
+/// target, as a `tests/<dir>/main.rs` layout has them: libtest selects a case
+/// wherever it compiled, so the case file is not the declared one. Committed.
+fn split_suite_repo(name: &str) -> PathBuf {
+    let root = toy(name);
+    let gate = TOY_GATE.replace("tests/toy.rs", "tests/toy/main.rs");
+    write_program(&root, "mise-tasks/toy.sh", &format!("{gate}{CAUGHT}\n"));
+    write(
+        &root,
+        "tests/toy/main.rs",
+        &format!("{}mod cases;\n", runs("toy.sh")),
+    );
+    write(&root, "tests/toy/cases.rs", &split_cases(true));
+    cargo_package(&root);
+    track(&root);
+    common::git_in(&root, &["commit", "-m", "base"]);
+    root
+}
+
+/// The module holding `toy`'s cases: the over-the-limit case asserts the
+/// refusal where `strict`, and only that the gate ran where not, so the row's
+/// mutation survives it.
+fn split_cases(strict: bool) -> String {
+    let over = if strict {
+        "assert_eq!(gate(\"99\"), Some(1));"
+    } else {
+        "assert!(gate(\"99\").is_some());"
+    };
+    format!(
+        "use super::gate;\n{}{}",
+        case("over_the_limit_is_refused", over),
+        case(
+            "under_the_limit_passes",
+            "assert_eq!(gate(\"1\"), Some(0));"
+        ),
+    )
+}
+
+/// A CASE OUTSIDE ITS DECLARED SUITE IS PART OF WHAT A CHANGE CAN MOVE
+/// (#1276): weakening the case file touches the gate. Fails by: the touch set
+/// reading the declared suite's path alone, so the weakened case answered "no
+/// enforced gate's source or suite changed".
+#[test]
+fn a_weakened_case_outside_its_suite_touches_the_gate() {
+    if !cfg!(unix) {
+        return;
+    }
+    let root = split_suite_repo("since-case-file");
+    write(&root, "tests/toy/cases.rs", &split_cases(false));
+    let (code, out, err) = sweep_since(&root, "toy", "HEAD");
+    assert_ne!(code, 0, "{out}{err}");
+    assert!(out.contains("toy/limit-ignored SURVIVED"), "{out}{err}");
+}
+
+/// And it is part of the row's key, so a recorded catch is not replayed over a
+/// case weakened since. Fails by: the key reading the declared suite alone.
+#[test]
+fn a_weakened_case_outside_its_suite_runs_its_row_again() {
+    if !cfg!(unix) {
+        return;
+    }
+    let root = split_suite_repo("recorded-case-file");
+    let (code, out, err) = sweep(&root, "toy");
+    assert_eq!(code, 0, "{out}{err}");
+    write(&root, "tests/toy/cases.rs", &split_cases(false));
+    let (code, out, err) = sweep(&root, "toy");
+    assert_ne!(code, 0, "{out}{err}");
+    assert!(!err.contains("(recorded)"), "{err}");
+    assert!(out.contains("toy/limit-ignored SURVIVED"), "{out}{err}");
 }
 
 /// `toy`'s gate, edited: the one change most cases below judge.
@@ -1542,10 +2067,26 @@ fn a_change_to_one_gate_sweeps_only_that_gate() {
 #[test]
 fn a_change_to_a_suite_sweeps_its_gate() {
     let root = two_gate_repo("since-suite");
-    write(&root, "tests/other.rs", &other_suite("// edited\n"));
+    write(&root, "tests/other.rs", &other_suite("fn helper() {}\n"));
     let (code, out, err) = sweep_since(&root, "toy,other", "HEAD");
     assert_ne!(code, 0, "{out}{err}");
     assert!(out.contains("other/pipefail-dropped SURVIVED"), "{out}");
+}
+
+/// A COMMENT CANNOT WEAKEN A SUITE, so a comment-only edit to one touches no
+/// gate. Fails by: the suite arm reading raw bytes, which re-swept every gate
+/// naming a suite whose comments moved (134 rows on #1276, from deleting
+/// markers).
+#[test]
+fn a_comment_edit_to_a_suite_sweeps_nothing() {
+    let root = two_gate_repo("since-suite-comment");
+    write(&root, "tests/other.rs", &other_suite("// a comment\n"));
+    let (code, out, err) = sweep_since(&root, "toy,other", "HEAD");
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(
+        out.contains("no enforced gate's source or suite changed since HEAD"),
+        "{out}{err}"
+    );
 }
 
 /// Fails by: only a source's FIRST `MUTANT-SUITE` counting as its suite, so a
@@ -1569,7 +2110,7 @@ fn a_change_to_a_sources_second_suite_sweeps_its_gate() {
     write(
         &root,
         "tests/extra.rs",
-        "#[test]\nfn extra_holds() {}\n// edited\n",
+        "#[test]\nfn extra_holds() {}\nfn helper() {}\n",
     );
     let (code, out, err) = sweep_since(&root, "toy,other", "HEAD");
     assert_ne!(code, 0, "{out}{err}");
@@ -1683,57 +2224,33 @@ fn a_change_whose_patch_moved_is_swept_again() {
     assert!(out.contains("every one caught"), "{out}");
 }
 
+/// A COMMENT EDIT TO A ROW'S SUITE KEEPS THE ROW'S CATCH: its key carries the
+/// suite's code, and a comment cannot weaken it. Fails by: the suite keyed by
+/// its raw bytes, so every recorded row re-ran after a comment moved.
+#[test]
+fn a_comment_edit_to_a_suite_keeps_its_rows_caught() {
+    if !cfg!(unix) {
+        return;
+    }
+    let root = passed_change("pass-suite-comment");
+    let suite = format!("{}// a comment\n", toy_suite("toy.sh", ""));
+    write(&root, "tests/toy.rs", &suite);
+    let (code, out, err) = sweep_since_with(&root, "toy,other", "HEAD", &[]);
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(err.contains("caught (recorded)"), "{out}{err}");
+}
+
 /// The base moved a row's SUITE under an unchanged patch, as a rebase does:
-/// the rows' keys carry the suite's bytes, so the change runs again.
+/// the rows' keys carry the suite's code, so the change runs again.
 #[test]
 fn a_change_whose_suite_moved_under_it_is_swept_again() {
     if !cfg!(unix) {
         return;
     }
     let root = passed_change("pass-suite-moved");
-    let suite = format!("{}// moved on the base\n", toy_suite("toy.sh", ""));
+    let suite = format!("{}fn moved_on_the_base() {{}}\n", toy_suite("toy.sh", ""));
     write(&root, "tests/toy.rs", &suite);
     common::git_in(&root, &["add", "tests/toy.rs"]);
-    common::git_in(&root, &["commit", "-m", "the base moves the suite"]);
-    let (code, out, err) = sweep_since_with(&root, "toy,other", "HEAD", &[]);
-    assert_eq!(code, 0, "{out}{err}");
-    assert!(!out.contains(NOT_RUN_AGAIN), "{out}");
-}
-
-/// The base moved a suite a changed SOURCE declares, under an unchanged patch:
-/// that suite is the scope cargo-mutants runs over the source, so the key
-/// carries its bytes and the change runs again.
-#[test]
-fn a_change_whose_declared_suite_moved_under_it_is_swept_again() {
-    if !cfg!(unix) {
-        return;
-    }
-    let root = ignoring_target("pass-declared-suite");
-    write(
-        &root,
-        "src/extra.rs",
-        "//MUTANT-SUITE tests/extra_suite.rs\n",
-    );
-    write(
-        &root,
-        "tests/extra_suite.rs",
-        "#[test]\nfn extra_holds() {}\n",
-    );
-    track(&root);
-    common::git_in(&root, &["commit", "-m", "a source and its suite"]);
-    edit_toy(&root);
-    write(
-        &root,
-        "src/extra.rs",
-        "//MUTANT-SUITE tests/extra_suite.rs\n// edited\n",
-    );
-    sweep_recorded(&root);
-    write(
-        &root,
-        "tests/extra_suite.rs",
-        "#[test]\nfn extra_holds() {}\n// moved on the base\n",
-    );
-    common::git_in(&root, &["add", "tests/extra_suite.rs"]);
     common::git_in(&root, &["commit", "-m", "the base moves the suite"]);
     let (code, out, err) = sweep_since_with(&root, "toy,other", "HEAD", &[]);
     assert_eq!(code, 0, "{out}{err}");
@@ -1834,7 +2351,7 @@ fn a_failing_change_is_never_recorded() {
         return;
     }
     let root = ignoring_target("pass-failing");
-    write(&root, "tests/other.rs", &other_suite("// edited\n"));
+    write(&root, "tests/other.rs", &other_suite("fn helper() {}\n"));
     for _ in 0..2 {
         let (code, out, err) = sweep_since_with(&root, "toy,other", "HEAD", &[]);
         assert_ne!(code, 0, "{out}{err}");
@@ -1884,7 +2401,7 @@ fn sweep_registered(
         Some(runner) => command.env("MUTANT_RUNNER", runner),
         None => command.env_remove("MUTANT_RUNNER"),
     };
-    let answer = command.output().expect("run batten mutate");
+    let answer = command.streamed_output().expect("run batten mutate");
     (
         answer.status.code().unwrap_or(-1),
         stdout(&answer),
@@ -1892,18 +2409,17 @@ fn sweep_registered(
     )
 }
 
-/// The Rust gate both cases below change: one row that can never apply, so a
-/// sweep that reaches it with the declared runner fails.
+/// A changed Rust source beside the two toy gates: no gate names it, so only a
+/// registered runner's ownership decides who judges it.
 fn rust_gate_repo(name: &str) -> PathBuf {
     let root = two_gate_repo(name);
-    let rusty = "//MUTANT-SUITE tests/other.rs\n//MUTANT never-applies|s@^absent$@gone@|no_case\n";
-    write(&root, "crates/batten/src/rusty.rs", rusty);
+    write(&root, "crates/batten/src/rusty.rs", "fn rusty() {}\n");
     track(&root);
-    common::git_in(&root, &["commit", "-m", "rust gate"]);
+    common::git_in(&root, &["commit", "-m", "rust source"]);
     write(
         &root,
         "crates/batten/src/rusty.rs",
-        &format!("{rusty}// edited\n"),
+        "fn rusty() {}\n// edited\n",
     );
     root
 }
@@ -1921,18 +2437,16 @@ fn a_change_to_a_rust_gate_is_judged_by_its_registered_runner() {
     let root = rust_gate_repo("since-rust");
     let (code, out, err) = sweep_registered(
         &root,
-        "toy,other,engine-rusty",
+        "toy,other",
         "HEAD",
         "cargo-mutants=crates/**/*.rs",
         None,
     );
     assert!(
-        out.contains("1 changed source(s) owned by cargo-mutants"),
+        out.contains(
+            "1 changed source(s) owned by cargo-mutants — judged by `cargo mutants --in-diff`"
+        ),
         "{out}{err}"
-    );
-    assert!(
-        !out.contains("never-applies"),
-        "the declared runner reached a row cargo-mutants owns: {out}"
     );
     assert_eq!(code, 0, "{out}{err}");
     assert!(
@@ -1941,50 +2455,300 @@ fn a_change_to_a_rust_gate_is_judged_by_its_registered_runner() {
     );
 }
 
-/// With no runner registered, the declared runner owns every source, Rust
-/// included, so the same change reaches the row and its failure is reported.
+/// cargo-mutants runs as itself (`cargo mutants --in-diff`), so naming it as
+/// the runner this verb spawns is a usage error, never a sweep that quietly
+/// judged nothing or a probe for a program the verb will not run.
 #[test]
-fn a_rust_gate_with_no_registered_runner_is_swept_by_the_declared_one() {
-    // THE TOY GATES ARE `sh` SCRIPTS: off unix there is no gate to sweep, and
-    // the case compiles everywhere so the other target type-checks it.
-    if !cfg!(unix) {
-        return;
-    }
-    let root = rust_gate_repo("since-rust-declared");
-    let (code, out, err) = sweep_registered(&root, "toy,other,engine-rusty", "HEAD", "", None);
-    assert_ne!(code, 0, "{out}{err}");
-    assert!(out.contains("engine-rusty/never-applies"), "{out}{err}");
-}
-
-/// The registered runner, asked to run where its program does not resolve, is
-/// could-not-look (`runner-absent`, exit 3) and never every mutant caught.
-/// `PATH` holds only the directory of the `cargo` running this suite, which
-/// carries no `cargo-mutants`, so the case does not depend on what the host
-/// installed.
-#[test]
-fn a_registered_runner_that_does_not_resolve_cannot_look() {
+fn cargo_mutants_is_never_spawned_by_the_sweep() {
     // THE TOY GATES ARE `sh` SCRIPTS: off unix there is no gate to sweep, and
     // the case compiles everywhere so the other target type-checks it.
     if !cfg!(unix) {
         return;
     }
     let root = rust_gate_repo("since-rust-runner");
-    let cargo = PathBuf::from(env!("CARGO"));
-    let only_cargo = cargo.parent().expect("cargo lives in a directory");
     let answer = common::batten()
         .args(["mutate", "sweep"])
         .current_dir(&root)
-        .env("PATH", only_cargo)
-        .env("MUTANT_GATES", "toy,other,engine-rusty")
+        .env("MUTANT_GATES", "toy,other")
         .env("MUTANT_CHANGED_SINCE", "HEAD")
         .env("MUTANT_TASKS", "mise.toml")
         .env("MUTANT_RUNNERS", "cargo-mutants=crates/**/*.rs")
         .env("MUTANT_RUNNER", "cargo-mutants")
-        .output()
+        .streamed_output()
         .expect("run batten mutate");
     let (out, err) = (stdout(&answer), stderr(&answer));
-    assert_eq!(answer.status.code(), Some(3), "{out}{err}");
-    assert!(out.contains("cargo-mutants runner-absent"), "{out}{err}");
+    assert_eq!(answer.status.code(), Some(1), "the usage code: {out}{err}");
+    assert!(err.contains("runs as itself"), "{out}{err}");
+    assert!(!out.contains("runner-absent"), "{out}{err}");
+}
+
+/// `batten mutate cargo` in this repository's toy tree, with `env` set.
+fn mutate_cargo(root: &Path, env: &[(&str, &str)]) -> (Option<i32>, String, String) {
+    let mut command = common::batten();
+    command
+        .args(["mutate", "cargo"])
+        .current_dir(root)
+        .env("MUTANT_RUNNERS", "cargo-mutants=**/*.rs");
+    for (name, value) in env {
+        command.env(name, value);
+    }
+    let answer = command.streamed_output().expect("run batten mutate cargo");
+    (answer.status.code(), stdout(&answer), stderr(&answer))
+}
+
+/// THE WHOLE WORKSPACE NEEDS NO BASE (CLOUD-2849): `MUTANT_WHOLE_TREE` alone
+/// passes the base check and writes no change, so the run goes on to fetch
+/// the runner that lists `--workspace`. The toy tree provisions none, so that
+/// is where it stops. Fails by: the whole-tree run refused for naming no base,
+/// which is how the schedule lost its Rust proof, or narrowed to a change.
+#[test]
+fn a_whole_tree_run_needs_no_base_and_lists_no_change() {
+    let root = rust_gate_repo("whole-tree-no-base");
+    let (code, out, err) = mutate_cargo(&root, &[("MUTANT_WHOLE_TREE", "1")]);
+    assert!(!err.contains("names no base"), "{out}{err}");
+    assert!(!out.contains("changed since"), "{out}{err}");
+    assert!(
+        err.contains("no [[provision]] row ships cargo-mutants"),
+        "the run reached the runner: {code:?} {out}{err}"
+    );
+    assert!(
+        out.contains("cargo-mutants runner-absent"),
+        "the unfetched runner is named: {out}{err}"
+    );
+    // nextest answers on this suite's PATH, so the probe names nothing.
+    assert!(!out.contains("cargo-nextest runner-absent"), "{out}{err}");
+}
+
+/// RUNNER FIRST (CLOUD-2881): a Cargo sweep where `cargo nextest` does not
+/// answer is `cargo-nextest runner-absent`, exit 3, before any mutant is
+/// listed or the schema is built — the build it used to start first cost 7-20
+/// minutes before the first judging run found nextest missing. `PATH` holds
+/// only the directory of the `cargo` running this suite, and `CARGO_HOME` is
+/// empty, as in `a_declared_cargo_row_without_nextest_reads_one_runner_absent`.
+/// Fails by: the probe dropped or moved after the listing, so no
+/// `cargo-nextest runner-absent` is said.
+#[test]
+fn a_cargo_sweep_without_nextest_refuses_before_it_builds() {
+    let root = rust_gate_repo("cargo-sweep-no-nextest");
+    let cargo = PathBuf::from(env!("CARGO"));
+    let only_cargo = cargo.parent().expect("cargo lives in a directory");
+    assert!(
+        !only_cargo.join("cargo-nextest").exists(),
+        "this case needs a cargo directory without nextest"
+    );
+    let home = common::scratch("cargo-sweep-no-nextest-cargo-home");
+    let (code, out, err) = mutate_cargo(
+        &root,
+        &[
+            ("MUTANT_WHOLE_TREE", "1"),
+            ("PATH", &only_cargo.to_string_lossy()),
+            ("CARGO_HOME", &home.to_string_lossy()),
+        ],
+    );
+    assert_eq!(code, Some(3), "{out}{err}");
+    assert_eq!(
+        out.matches("cargo-nextest runner-absent").count(),
+        1,
+        "{out}{err}"
+    );
+    assert!(
+        !out.contains("mutant(s) of"),
+        "nothing was listed: {out}{err}"
+    );
+}
+
+/// [`rust_gate_repo`] with cargo-mutants provisioned, so only nextest can be
+/// the missing runner.
+fn provisioned_rust_gate_repo(name: &str) -> PathBuf {
+    let root = rust_gate_repo(name);
+    // The toy repository carries no config of its own; this is its whole one.
+    write(
+        &root,
+        "batten.toml",
+        &format!("version = 1\n{}", crate::step_journal::MUTANTS_PROVISION),
+    );
+    root
+}
+
+/// `PATH` holding only the `cargo` running this suite, and an empty
+/// `CARGO_HOME`: a host where `cargo nextest` does not answer.
+fn without_nextest(name: &str) -> (String, String) {
+    let cargo = PathBuf::from(env!("CARGO"));
+    let only_cargo = cargo.parent().expect("cargo lives in a directory");
+    assert!(
+        !only_cargo.join("cargo-nextest").exists(),
+        "this case needs a cargo directory without nextest"
+    );
+    let home = common::scratch(name);
+    (
+        only_cargo.to_string_lossy().into_owned(),
+        home.to_string_lossy().into_owned(),
+    )
+}
+
+/// RUNNER FIRST WITH THE OTHER RUNNER PRESENT (CLOUD-2881): cargo-mutants
+/// provisioned and nextest missing is `cargo-nextest runner-absent`, exit 3,
+/// and cargo-mutants is never asked to list. Fails by: the early return
+/// deleted or moved below `list_mutants`, so the run lists every mutant and
+/// pays the schema build before any judging run finds nextest gone.
+#[test]
+fn a_provisioned_sweep_without_nextest_refuses_before_it_lists() {
+    let root = provisioned_rust_gate_repo("cargo-sweep-provisioned-no-nextest");
+    let (path, home) = without_nextest("cargo-sweep-provisioned-no-nextest-home");
+    let (code, out, err) = mutate_cargo(
+        &root,
+        &[
+            ("MUTANT_WHOLE_TREE", "1"),
+            ("PATH", &path),
+            ("CARGO_HOME", &home),
+        ],
+    );
+    assert_eq!(code, Some(3), "{out}{err}");
+    assert_eq!(
+        out.matches("cargo-nextest runner-absent").count(),
+        1,
+        "{out}{err}"
+    );
+    assert!(
+        !out.contains("cargo-mutants runner-absent"),
+        "provisioned: {out}{err}"
+    );
+    assert!(
+        !out.contains("mutant(s) of"),
+        "nothing was listed: {out}{err}"
+    );
+}
+
+/// THE REACH SEED ASKS TOO (CLOUD-2881): the detached seed lists and builds the
+/// schema like the sweep, so nextest missing is could-not-look before it lists.
+/// Fails by: the seed fetching cargo-mutants and listing with no probe.
+#[test]
+fn a_reach_seed_without_nextest_refuses_before_it_lists() {
+    let root = provisioned_rust_gate_repo("cargo-seed-no-nextest");
+    let (path, home) = without_nextest("cargo-seed-no-nextest-home");
+    let (code, out, err) = mutate_cargo(
+        &root,
+        &[
+            (batten::mutate::resume::SEED_ENV, "1"),
+            ("MUTANT_PHASE", "reach"),
+            ("PATH", &path),
+            ("CARGO_HOME", &home),
+        ],
+    );
+    assert_eq!(code, Some(3), "{out}{err}");
+    assert_eq!(
+        out.matches("cargo-nextest runner-absent").count(),
+        1,
+        "{out}{err}"
+    );
+    assert!(
+        !out.contains("reach seed over"),
+        "nothing was listed: {out}{err}"
+    );
+}
+
+/// A CHANGE OR THE WHOLE WORKSPACE, NEVER BOTH (CLOUD-2849): a schedule that
+/// inherited a base would judge one diff while reporting a whole-tree sweep.
+/// Fails by: the base winning in silence, or the refusal not naming both.
+#[test]
+fn a_base_beside_the_whole_tree_is_a_usage_error() {
+    let root = rust_gate_repo("whole-tree-and-base");
+    let (code, out, err) = mutate_cargo(
+        &root,
+        &[("MUTANT_WHOLE_TREE", "1"), ("MUTANT_CHANGED_SINCE", "HEAD")],
+    );
+    assert_eq!(
+        code,
+        Some(batten::exit::ExitCode::Usage.code()),
+        "{out}{err}"
+    );
+    assert!(
+        err.contains("MUTANT_WHOLE_TREE") && err.contains("MUTANT_CHANGED_SINCE"),
+        "{out}{err}"
+    );
+    assert!(
+        !err.contains("[[provision]]"),
+        "nothing was fetched: {out}{err}"
+    );
+    let (code, out, err) = mutate_cargo(&root, &[]);
+    assert_eq!(
+        code,
+        Some(batten::exit::ExitCode::Usage.code()),
+        "{out}{err}"
+    );
+    assert!(
+        err.contains("names no base"),
+        "neither is today's refusal: {out}{err}"
+    );
+}
+
+/// A RUST ROW IS REFUSED, NEVER PASSED OVER (CLOUD-2253): a gate named by a
+/// `.rs` path whose row cargo-mutants' registry owns is `runner-owned` in both
+/// the sweep and the census. Fails by: the row filtered out in silence, which is
+/// how 868 hand-written Rust rows read as coverage.
+#[test]
+fn a_row_in_a_source_cargo_mutants_owns_is_refused() {
+    if !cfg!(unix) {
+        return;
+    }
+    let root = two_gate_repo("runner-owned-row");
+    let rust = [
+        "//MUTANT-SUITE tests/other.rs",
+        "//MUTANT ignored|s@^fn a@fn b@|other_keeps_its_limit",
+        "fn a() {}",
+        "",
+    ]
+    .join("\n");
+    write(&root, "src/owned.rs", &rust);
+    track(&root);
+    for verb in ["sweep", "census"] {
+        let answer = common::batten()
+            .args(["mutate", verb])
+            .current_dir(&root)
+            .env("MUTANT_GATES", "toy,other,src/owned.rs")
+            .env("MUTANT_TASKS", "mise.toml")
+            .env("MUTANT_RUNNERS", "cargo-mutants=**/*.rs")
+            .streamed_output()
+            .expect("run batten mutate");
+        let (out, err) = (stdout(&answer), stderr(&answer));
+        assert_eq!(answer.status.code(), Some(2), "{verb}: {out}{err}");
+        assert!(out.contains("runner-owned"), "{verb}: {out}{err}");
+    }
+}
+
+/// A REGISTERED RUNNER THAT DOES NOT RESOLVE CANNOT LOOK: a `command` runner
+/// whose program is not there is `command runner-absent`, exit 3, before
+/// anything spawns, and never every source caught. Fails by: the
+/// `mutate::unresolvable` probe dropped from the registered path, which leaves
+/// a spawn error with no `runner-absent` naming the runner, or its exit read
+/// as a verdict.
+///
+/// Carries `main`'s `a_registered_runner_that_does_not_resolve_cannot_look`,
+/// whose runner (cargo-mutants through this verb) is a usage error since
+/// CLOUD-2253; `command` is the registered runner the verb still spawns.
+#[test]
+fn a_command_runner_that_does_not_resolve_cannot_look() {
+    // THE TOY GATES ARE `sh` SCRIPTS: off unix there is no gate to sweep, and
+    // the case compiles everywhere so the other target type-checks it.
+    if !cfg!(unix) {
+        return;
+    }
+    let root = rust_gate_repo("command-unresolved");
+    write(
+        &root,
+        "batten.toml",
+        "version = 1\n\n[mutate]\ncommand = [\"./no-such-runner.sh\"]\n",
+    );
+    let (code, out, err) = sweep_registered(
+        &root,
+        "toy,other",
+        "HEAD",
+        "command=crates/**/*.rs",
+        Some("command"),
+    );
+    assert_eq!(code, 3, "{out}{err}");
+    assert!(out.contains("command runner-absent"), "{out}{err}");
+    assert!(!out.contains("every one caught"), "{out}{err}");
 }
 
 /// A `command` runner (CLOUD-2211) over the changed Rust gate: `[mutate]
@@ -2003,7 +2767,7 @@ fn sweep_command(name: &str, code: i32) -> (PathBuf, i32, String, String) {
     );
     let (status, out, err) = sweep_registered(
         &root,
-        "toy,other,engine-rusty",
+        "toy,other",
         "HEAD",
         "command=crates/**/*.rs",
         Some("command"),
@@ -2070,38 +2834,13 @@ fn a_command_entry_without_a_declared_argv_is_refused() {
     let root = rust_gate_repo("command-undeclared");
     let (code, out, err) = sweep_registered(
         &root,
-        "toy,other,engine-rusty",
+        "toy,other",
         "HEAD",
         "command=crates/**/*.rs",
         Some("command"),
     );
     assert_eq!(code, 1, "{out}{err}");
     assert!(err.contains("[mutate] command"), "{err}");
-}
-
-/// A WHOLE sweep with a runner registered still leaves that runner's rows alone:
-/// no change narrows anything here, so only the row filter keeps the declared
-/// runner off the Rust row it cannot apply.
-#[test]
-fn a_registered_runners_rows_are_never_swept_by_the_declared_runner() {
-    // THE TOY GATES ARE `sh` SCRIPTS: off unix there is no gate to sweep, and
-    // the case compiles everywhere so the other target type-checks it.
-    if !cfg!(unix) {
-        return;
-    }
-    let root = rust_gate_repo("whole-rust-registered");
-    let answer = common::batten()
-        .args(["mutate", "sweep"])
-        .current_dir(&root)
-        .env("MUTANT_GATES", "toy,engine-rusty")
-        .env_remove("MUTANT_CHANGED_SINCE")
-        .env("MUTANT_TASKS", "mise.toml")
-        .env("MUTANT_RUNNERS", "cargo-mutants=crates/**/*.rs")
-        .env_remove("MUTANT_RUNNER")
-        .output()
-        .expect("run batten mutate");
-    let out = stdout(&answer);
-    assert!(!out.contains("never-applies"), "{out}{}", stderr(&answer));
 }
 
 /// An id no runner carries is a usage error, never an empty registry.
@@ -2152,12 +2891,12 @@ fn an_unresolvable_base_sweeps_every_gate() {
 #[test]
 fn a_deleted_preset_module_sweeps_its_gate() {
     let root = toy_repo("since-preset-delete", &[CAUGHT]);
-    let dir = "crates/batten/src/policy/presets/demo";
+    let dir = format!("{PRESETS}/demo");
     write(
         &root,
         &format!("{dir}/a.rego"),
         "#MUTANT-SUITE tests/preset.rs\n\
-         #MUTANT package-renamed|s/^package batten.demo$/package batten.demo2/|preset_passes\n\
+         #MUTANT package-renamed|s/^package batten.demo$/package batten.demo2/|preset_passes_always\n\
          package batten.demo\n",
     );
     write(&root, &format!("{dir}/b.rego"), "package batten.demo\n");
@@ -2176,6 +2915,262 @@ fn a_deleted_preset_module_sweeps_its_gate() {
     let (code, out, err) = sweep_since(&root, "toy,demo", "HEAD");
     assert_ne!(code, 0, "{out}{err}");
     assert!(out.contains("demo/package-renamed SURVIVED"), "{out}");
+}
+
+/// A PRESET A TEST TARGET EMBEDS IS NEVER JUDGED THROUGH THE OVERLAY. The
+/// overlay reaches only the readers built to consult it; this case
+/// `include_str!`s the module itself, so a mutated copy in the overlay is
+/// invisible to it. Fails by: writing the mutation to the overlay and reusing
+/// the binaries, which reads a mutation the case would catch as SURVIVED.
+#[test]
+fn a_preset_a_test_embeds_is_mutated_in_place_and_rebuilt() {
+    let root = toy("overlay-embedded");
+    write(
+        &root,
+        "Cargo.toml",
+        &format!("{TOY_MANIFEST}\n[features]\noverlay = []\n"),
+    );
+    write(&root, "src/lib.rs", "");
+    write(
+        &root,
+        &format!("{PRESETS}/demo/a.rego"),
+        "#MUTANT-SUITE tests/preset.rs\n\
+         #MUTANT limit-moved|s/^limit := 10$/limit := 99/|demo_limit_is_ten\n\
+         package batten.demo\n\
+         \n\
+         limit := 10\n",
+    );
+    write(
+        &root,
+        "tests/preset.rs",
+        &format!(
+            "{}{}",
+            case(
+                "demo_limit_is_ten",
+                &format!(
+                    "assert!(include_str!(\"../{PRESETS}/demo/a.rego\").contains(\"\\nlimit := 10\\n\"));"
+                ),
+            ),
+            case("demo_other_case", "assert!(true);"),
+        ),
+    );
+    track(&root);
+    let (code, out, err) = run_with(
+        &root,
+        "sweep",
+        "demo",
+        &[
+            ("MUTANT_OVERLAY_ENV", Path::new("TOY_OVERLAY")),
+            ("MUTANT_OVERLAY_FEATURES", Path::new("overlay")),
+        ],
+    );
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(out.contains("every one caught"), "{out}{err}");
+}
+
+/// A toy preset row whose suite reads its module through the overlay, the way
+/// `PresetModuleExt::text` does: the mutated copy at `$TOY_OVERLAY/<looked>`
+/// where one reads, leaving the receipt the sweep requires beside it, else the
+/// staged module. `looked` is the overlay path the reader consults.
+fn overlay_reader_toy(name: &str, looked: &str) -> PathBuf {
+    let root = toy(name);
+    write(
+        &root,
+        "Cargo.toml",
+        &format!("{TOY_MANIFEST}\n[features]\noverlay = []\n"),
+    );
+    write(&root, "src/lib.rs", "");
+    write(
+        &root,
+        &format!("{PRESETS}/demo/a.rego"),
+        "#MUTANT-SUITE tests/preset.rs\n\
+         #MUTANT limit-moved|s/^limit := 10$/limit := 99/|demo_limit_is_ten\n\
+         package batten.demo\n\
+         \n\
+         limit := 10\n",
+    );
+    let reader = format!(
+        "fn module() -> String {{\n\
+         \x20   if let Ok(dir) = std::env::var(\"TOY_OVERLAY\") {{\n\
+         \x20       let copy = std::path::Path::new(&dir).join({looked:?});\n\
+         \x20       if let Ok(text) = std::fs::read_to_string(&copy) {{\n\
+         \x20           let mut receipt = copy.into_os_string();\n\
+         \x20           receipt.push({read:?});\n\
+         \x20           std::fs::write(receipt, \"\").expect(\"leave the receipt\");\n\
+         \x20           return text;\n\
+         \x20       }}\n\
+         \x20   }}\n\
+         \x20   std::fs::read_to_string(concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/{PRESETS}/demo/a.rego\"))\n\
+         \x20       .expect(\"the staged module\")\n\
+         }}\n",
+        read = batten::preset::OVERLAY_READ,
+    );
+    write(
+        &root,
+        "tests/preset.rs",
+        &format!(
+            "{reader}{}{}",
+            case(
+                "demo_limit_is_ten",
+                "assert!(module().contains(\"\\nlimit := 10\\n\"));"
+            ),
+            case("demo_other_case", "assert!(true);"),
+        ),
+    );
+    track(&root);
+    root
+}
+
+/// A toy crate that EMBEDS a library module outside the presets
+/// (`lib/r.rego`), read the way `preset::library_text` reads it: under the
+/// `overlay` feature the mutated copy at `$TOY_OVERLAY/lib/r.rego`, receipted,
+/// else the `include_str!`'d text. `rows` rows all name one case, which counts
+/// its runs into `$TOY_RUN_COUNTER`; the build script counts builds into
+/// `$TOY_BUILD_COUNTER`.
+fn embedded_library_toy(name: &str, rows: usize) -> PathBuf {
+    use std::fmt::Write as _;
+    let root = toy(name);
+    write(
+        &root,
+        "Cargo.toml",
+        &format!("{TOY_MANIFEST}\n[features]\noverlay = []\n"),
+    );
+    write(&root, "build.rs", ALWAYS_STALE_BUILD);
+    let mut module = String::from("#MUTANT-SUITE tests/library.rs\n");
+    for row in 0..rows {
+        writeln!(
+            module,
+            "#MUTANT limit-moved-{row}|s/^limit := 10$/limit := {}/|library_limit_is_ten",
+            90 + row
+        )
+        .expect("a String takes every write");
+    }
+    module.push_str("package batten.library\n\nlimit := 10\n");
+    write(&root, "lib/r.rego", &module);
+    write(
+        &root,
+        "src/lib.rs",
+        &format!(
+            "pub fn module() -> String {{\n\
+             \x20   #[cfg(feature = \"overlay\")]\n\
+             \x20   if let Ok(dir) = std::env::var(\"TOY_OVERLAY\") {{\n\
+             \x20       let copy = std::path::Path::new(&dir).join(\"lib/r.rego\");\n\
+             \x20       if let Ok(text) = std::fs::read_to_string(&copy) {{\n\
+             \x20           let mut receipt = copy.into_os_string();\n\
+             \x20           receipt.push({read:?});\n\
+             \x20           std::fs::write(receipt, \"\").expect(\"leave the receipt\");\n\
+             \x20           return text;\n\
+             \x20       }}\n\
+             \x20   }}\n\
+             \x20   include_str!(\"../lib/r.rego\").to_owned()\n\
+             }}\n",
+            read = batten::preset::OVERLAY_READ,
+        ),
+    );
+    let count = "if let Some(path) = std::env::var_os(\"TOY_RUN_COUNTER\") {\n\
+         \x20       use std::io::Write as _;\n\
+         \x20       let mut counter = std::fs::OpenOptions::new().create(true).append(true)\n\
+         \x20           .open(path).expect(\"open the counter\");\n\
+         \x20       writeln!(counter, \"ran\").expect(\"count the run\");\n\
+         \x20   }\n\
+         \x20   assert!(toy::module().contains(\"\\nlimit := 10\\n\"));";
+    write(
+        &root,
+        "tests/library.rs",
+        &format!(
+            "{}{}",
+            case("library_limit_is_ten", count),
+            case("library_other_case", "assert!(true);"),
+        ),
+    );
+    track(&root);
+    root
+}
+
+/// A SWEEP OF N ROWS OVER AN EMBEDDED LIBRARY BUILDS AT MOST TWICE AND RUNS
+/// EACH CASE'S UNMUTATED CONTROL ONCE (CLOUD-2253). The library is a build
+/// input, so before the overlay reached it every row rebuilt the crate twice
+/// (its mutant, then the clean binaries the next row reuses), and every row
+/// re-ran the same unmutated control: on #1276's 54 library rows, 108 rebuilds
+/// and 108 suite runs. Declared as an overlay root, the one build reads each
+/// row's mutated copy, and the control is keyed by case and unmutated tree.
+///
+/// Fails by: the library row rebuilt per row, a control re-run per row, or
+/// any row judged on the unmutated module (`every one caught` lost).
+#[test]
+fn an_embedded_library_sweep_builds_once_and_runs_each_control_once() {
+    const ROWS: usize = 3;
+    let root = embedded_library_toy("library-overlay", ROWS);
+    let counters = common::scratch("mutate-library-overlay-counters");
+    let (builds, runs) = (counters.join("builds"), counters.join("runs"));
+    let (code, out, err) = run_with(
+        &root,
+        "sweep",
+        "lib/r.rego",
+        &[
+            ("MUTANT_OVERLAY_ENV", Path::new("TOY_OVERLAY")),
+            ("MUTANT_OVERLAY_FEATURES", Path::new("overlay")),
+            ("MUTANT_OVERLAY_ROOTS", Path::new("lib")),
+            ("TOY_BUILD_COUNTER", &builds),
+            ("TOY_RUN_COUNTER", &runs),
+        ],
+    );
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(out.contains("every one caught"), "{out}{err}");
+    let count = |path: &Path| fs::read_to_string(path).unwrap_or_default().lines().count();
+    assert!(
+        count(&builds) <= 2,
+        "{} builds for {ROWS} embedded rows\n{err}",
+        count(&builds)
+    );
+    assert_eq!(
+        count(&runs),
+        1 + ROWS,
+        "one control, then one mutant per row\n{err}"
+    );
+}
+
+/// The sweep of [`overlay_reader_toy`]'s one row, with the overlay declared.
+fn overlay_sweep(root: &Path) -> (i32, String, String) {
+    run_with(
+        root,
+        "sweep",
+        "demo",
+        &[
+            ("MUTANT_OVERLAY_ENV", Path::new("TOY_OVERLAY")),
+            ("MUTANT_OVERLAY_FEATURES", Path::new("overlay")),
+        ],
+    )
+}
+
+/// A SUITE THAT READ THE MUTATED COPY IS JUDGED AS IT ALWAYS WAS (CLOUD-2839).
+/// The reader found the copy and left its receipt, so the red run is a catch.
+/// Fails by: requiring a receipt the protocol does not name, which would read
+/// every overlay row as unjudged.
+#[test]
+fn a_suite_that_read_the_overlay_copy_is_judged() {
+    let root = overlay_reader_toy("overlay-read", "demo/a.rego");
+    let (code, out, err) = overlay_sweep(&root);
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(out.contains("every one caught"), "{out}{err}");
+}
+
+/// A SUITE THAT NEVER READ THE MUTATED COPY JUDGED UNMUTATED CODE, SO ITS GREEN
+/// RUN IS NO SURVIVOR (CLOUD-2839). With the variable set and the copy absent
+/// where the reader looks, the reader falls back to the embedded module, as
+/// `PresetModuleExt::text` once did in silence. That is could-not-look, exit 3,
+/// never a coverage gap. Fails by: reading the green run as `SURVIVED`, the
+/// verdict CLOUD-2836's one-off survivor carried.
+#[test]
+fn a_suite_that_never_read_the_overlay_copy_is_unjudged() {
+    let root = overlay_reader_toy("overlay-unread", "demo/absent.rego");
+    let (code, out, err) = overlay_sweep(&root);
+    assert_eq!(code, 3, "{out}{err}");
+    assert!(
+        out.contains("demo/limit-moved overlay-unread"),
+        "{out}{err}"
+    );
+    assert!(!out.contains("SURVIVED"), "{out}{err}");
 }
 
 #[cfg(unix)]
@@ -2311,7 +3306,7 @@ fn a_declared_profile_keeps_its_setup_scripts_and_none_of_its_verdict_settings()
         .env("NEXTEST_PROFILE", "ci")
         .env("NEXTEST_RETRIES", "3")
         .env("NEXTEST_STATUS_LEVEL", "none")
-        .output()
+        .streamed_output()
         .expect("run batten mutate");
     let (out, err) = (stdout(&answer), stderr(&answer));
     assert_eq!(answer.status.code(), Some(0), "{out}{err}");
@@ -2342,7 +3337,7 @@ fn a_declared_cargo_row_without_nextest_reads_one_runner_absent() {
         )
         .env("MUTANT_GATES", "toy")
         .env("MUTANT_TASKS", "mise.toml")
-        .output()
+        .streamed_output()
         .expect("run batten mutate");
     let (out, err) = (stdout(&answer), stderr(&answer));
     assert_eq!(answer.status.code(), Some(3), "{out}{err}");
@@ -2536,7 +3531,7 @@ fn sweep_with(root: &Path, gate: &str, bin: &Path) -> (i32, String, String) {
             "PATH",
             std::env::join_paths(entries).expect("join the stub onto PATH"),
         )
-        .output()
+        .streamed_output()
         .expect("run batten mutate");
     (
         answer.status.code().unwrap_or(-1),
@@ -2790,6 +3785,16 @@ fn an_errored_conftest_run_is_could_not_look() {
 #[test]
 fn a_pytest_mutant_its_case_fails_on_is_caught() {
     assert_caught(&PYTEST);
+    // A suite of ONE case: its filter selects every case there is, and that
+    // is still the case the row names. Fails by: a lone case's filter read as
+    // `filter-names-every-case`, which only a suite of two or more can be.
+    let alone = Native {
+        suite_body: "from limit import LIMIT\n\n\ndef test_limit_is_ten():\n    assert LIMIT == 10\n",
+        ..PYTEST
+    };
+    let (code, out, err) = native_sweep(&alone, Mutant::Kill, "alone");
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(out.contains("every one caught"), "{out}");
 }
 
 #[cfg(unix)]
@@ -2885,7 +3890,7 @@ fn a_harness_missing_from_path_did_not_run_and_the_sweep_still_reports() {
         .current_dir(&root)
         .env("MUTANT_GATES", TOFU.subject)
         .env("PATH", &empty)
-        .output()
+        .streamed_output()
         .expect("run batten mutate");
     let out = stdout(&answer);
     assert_eq!(answer.status.code(), Some(3), "{out}{}", stderr(&answer));
@@ -2969,6 +3974,31 @@ fn a_policy_module_is_censused_unconditionally_so_a_migration_cannot_shrink_the_
     assert!(out.contains("policy/some-rule.rego uncovered"), "{out}");
 }
 
+/// THE PRESET DIRECTORY IS THE CONSUMER'S (CLOUD-2711): a preset outside the one
+/// `MUTANT_PRESETS` declares is no subject at all. Fails by: the crate naming its
+/// own preset directory again, which censused this repository's layout in
+/// every consumer.
+#[test]
+fn a_preset_outside_the_declared_directory_is_no_subject() {
+    let root = toy("census-preset-elsewhere");
+    write(
+        &root,
+        &format!("{PRESETS}/some-preset/rule.rego"),
+        "package batten.some_preset\n",
+    );
+    track(&root);
+    let answer = common::batten()
+        .args(["mutate", "census"])
+        .current_dir(&root)
+        .env("MUTANT_GATES", "nothing")
+        .env("MUTANT_TASKS", "mise.toml")
+        .env("MUTANT_PRESETS", "presets")
+        .streamed_output()
+        .expect("run batten mutate");
+    let out = stdout(&answer);
+    assert!(!out.contains("some-preset"), "{out}");
+}
+
 #[test]
 fn a_preset_is_censused_too_so_the_one_class_a_pattern_row_cannot_reach_is_visible() {
     // CLOUD-1267's widening, and it is the census half of the same hole: a
@@ -2977,7 +4007,7 @@ fn a_preset_is_censused_too_so_the_one_class_a_pattern_row_cannot_reach_is_visib
     let root = toy("census-preset");
     write(
         &root,
-        "crates/batten/src/policy/presets/some-preset/rule.rego",
+        &format!("{PRESETS}/some-preset/rule.rego"),
         "package batten.some_preset\n",
     );
     track(&root);
@@ -3108,6 +4138,30 @@ fn an_exemption_with_no_reason_is_unfiled_as_well() {
     assert!(out.contains("exempt-unfiled"), "{out}");
 }
 
+/// Fails by: an exemption on a file that still declares rows read as a closed
+/// census, so those rows were never swept. Measured on this repository:
+/// `policy/connector-not-granted.rego` carried a `write-grant-refused` row under
+/// a stale `#MUTANT-EXEMPT`, outside the set, and no sweep ever applied it.
+#[test]
+fn an_exemption_over_declared_rows_is_refused_because_the_rows_never_run() {
+    let root = toy("census-exempt-rows");
+    write(
+        &root,
+        "policy/some-rule.rego",
+        "package batten.some_rule\n\
+         #MUTANT-EXEMPT CLOUD-931|a reason that went stale\n\
+         #MUTANT live|s@^deny if input.bad$@deny if false@|test_x\n\
+         deny if input.bad\n",
+    );
+    track(&root);
+    let (code, out, _) = census(&root, "nothing");
+    assert_eq!(code, 2, "{out}");
+    assert!(
+        out.contains("policy/some-rule.rego exempt-with-rows"),
+        "{out}"
+    );
+}
+
 #[test]
 fn declared_and_exempt_is_refused_because_the_reason_would_be_a_dead_letter() {
     let root = toy("census-both");
@@ -3211,7 +4265,7 @@ fn consumer_census(root: &Path, gates: Option<&str>) -> (i32, String, String) {
     };
     let answer = command
         .env_remove("MUTANT_TASKS")
-        .output()
+        .streamed_output()
         .expect("run batten mutate");
     (
         answer.status.code().unwrap_or(-1),
@@ -3313,15 +4367,48 @@ fn this_repositorys_own_census_is_closed() {
     // What makes every fixture above evidence about THIS repository. A tree
     // whose census is open is a gate covered by nothing stronger than "its suite
     // is green", which CLOUD-418 measured as insufficient four times.
-    let root = common::at_root(".")
+    //
+    // THE SET IS THE COMMITTED `[mutate]` TABLE, run with `$MUTANT_GATES`
+    // unset (CLOUD-2010). Read from the variable, the census had no table, so
+    // its declaration arm never ran and the file-path gates (`action.yml`,
+    // `hk.pkl`, the workflows) were swept but never censused: a new file with
+    // rows that nobody enrolled read as nothing rather than `uncovered`.
+    let root = common::committed_repo_whole()
+        .to_path_buf()
         .canonicalize()
         .expect("this checkout is where the manifest says it is");
-    let set = fs::read_to_string(root.join("mise.toml")).expect("the manifest reads");
-    let declared = set
-        .lines()
-        .find_map(|line| line.strip_prefix("MUTANT_GATES = \""))
-        .and_then(|rest| rest.strip_suffix('"'))
-        .expect("the manifest declares the enforced set");
-    let (code, out, err) = census(&root, declared);
+    let config: toml::Table = fs::read_to_string(root.join("batten.toml"))
+        .expect("the authority reads")
+        .parse()
+        .expect("the authority parses");
+    let gates = config
+        .get("mutate")
+        .and_then(|table| table.get("gates"))
+        .and_then(toml::Value::as_array)
+        .expect("the committed authority declares `[mutate] gates`");
+    assert!(
+        gates.iter().any(|gate| gate.as_str() == Some("action.yml")),
+        "the file-path gates are in the committed set"
+    );
+    let manifest = fs::read_to_string(root.join("mise.toml")).expect("the manifest reads");
+    assert!(
+        !manifest
+            .lines()
+            .any(|line| line.starts_with("MUTANT_GATES =")),
+        "one committed authority: the manifest no longer restates the set"
+    );
+    let answer = common::batten()
+        .args(["mutate", "census"])
+        .current_dir(&root)
+        .env_remove("MUTANT_GATES")
+        .env("MUTANT_TASKS", "mise.toml")
+        .env("MUTANT_PRESETS", "crates/batten/src/policy/presets")
+        .streamed_output()
+        .expect("run batten mutate");
+    let (code, out, err) = (
+        answer.status.code().unwrap_or(-1),
+        stdout(&answer),
+        stderr(&answer),
+    );
     assert_eq!(code, 0, "{out}{err}");
 }

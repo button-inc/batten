@@ -77,232 +77,25 @@
 use std::path::Path;
 
 use crate::Result;
-use crate::error::UsageError;
-use crate::facts::{Format, Look, Node, TOKEN_MAX};
+use crate::config_check::mcp::Part;
+use crate::config_check::mcp::escapes;
+use crate::config_check::mcp::parts;
+#[cfg(test)]
+use crate::config_check::mcp::placeholders;
+#[cfg(test)]
+use crate::config_check::mcp::validate;
+#[cfg(test)]
+use crate::config_check::mcp::validate_credential;
+use crate::config_model::Base;
+use crate::config_model::McpConfig;
+use crate::config_model::McpCredential as Credential;
+use crate::config_model::McpSource as Source;
+#[cfg(test)]
+use crate::config_model::authorization;
+use crate::facts::{Format, Look, Node};
 
-/// The `[mcp]` table: where the wiring lives, and what to return instead of a
-/// payload.
-#[derive(
-    Debug, Clone, Default, PartialEq, Eq, serde::Deserialize, serde::Serialize, schemars::JsonSchema,
-)]
-#[serde(deny_unknown_fields)]
-pub struct McpConfig {
-    /// Where a harness keeps its MCP wiring, in precedence order.
-    ///
-    /// A LIST rather than one row because one repository is worked in from
-    /// several harnesses, and each keeps its wiring somewhere else. The first row
-    /// that resolves a server wins, so the order is a statement about which
-    /// harness to believe when two are installed.
-    #[serde(default, rename = "source", skip_serializing_if = "Vec::is_empty")]
-    pub sources: Vec<Source>,
-    /// What to return instead of a method's full response.
-    ///
-    /// A method with no row here is dispatched and returned whole.
-    #[serde(default, rename = "result", skip_serializing_if = "Vec::is_empty")]
-    pub results: Vec<ResultRow>,
-    /// Server names whose committed permission rules apply under WHATEVER key the
-    /// host exposes the server as this session (CLOUD-191, CLOUD-843).
-    ///
-    /// Each is a name some `[[mcp.source]]` row's `endpoint_contains` declares,
-    /// because the endpoint is the only thing that identifies a renamed server:
-    /// `mcp grant` finds the exposed key's endpoint, matches it to one of these
-    /// names, and applies the committed `permissions` rules written for that name.
-    /// `mcp posture` reads the same list for the grants a connector would still
-    /// prompt for.
-    ///
-    /// **A LIST, and deliberately not every `endpoint_contains` name.** A name here
-    /// turns a committed allow rule into a pre-approval under a key nobody
-    /// committed. A server the host authorises at its own connector layer must not
-    /// be translated, or the translation grants what the host did not — so the
-    /// consumer states which servers its permission file governs, rather than the
-    /// engine inferring it from a selector written for dispatch.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub permission_aliases: Vec<String>,
-}
-
-/// One `[[mcp.source]]` row: a file that carries a server's transport, endpoint
-/// and headers.
-///
-/// The shape is [`crate::facts::Rooted`]'s deliberately — same three-part bound,
-/// same reason — with a `node` because a wiring file holds every server the
-/// harness knows and the row has to say which subtree is the server map.
-#[derive(
-    Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize, schemars::JsonSchema,
-)]
-#[serde(deny_unknown_fields)]
-pub struct Source {
-    /// The key this source is named by in a report.
-    ///
-    /// The id and never the resolved path: a resolved path is a machine's home
-    /// directory, and non-negotiable rule 4 keeps one out of every finding.
-    pub id: String,
-    /// The NAME of the environment variable holding the directory `path`
-    /// resolves beneath, or absent for a path relative to the repository root.
-    ///
-    /// A name, never a value, and never a directory this crate knows. Unset or
-    /// empty on this machine is could-not-look, never an absent file: "this host
-    /// does not have that root" and "the file is not there" are different
-    /// answers.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub root: Option<String>,
-    /// A base this crate knows how to name without an operator's help.
-    ///
-    /// Mutually exclusive with `root`, and refused at load if both appear. Absent
-    /// with `root` absent is the repository root, exactly as before.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub base: Option<Base>,
-    /// The path beneath that root.
-    ///
-    /// Relative and downward — an absolute path or a `..` component is refused at
-    /// load, so a declaration cannot walk back out of the root it named.
-    ///
-    /// # `${VAR}` expands, and that is what makes a per-session file nameable
-    ///
-    /// A launcher that mints its wiring per session writes it under a name
-    /// carrying the session id, so the FILENAME is not writable in advance even
-    /// where the directory is. A row spells the id where it appears:
-    ///
-    /// ```text
-    /// path = "mcp-config-${CLAUDE_CODE_REMOTE_SESSION_ID}.json"
-    /// ```
-    ///
-    /// **Expansion is not a glob, and the difference is the whole reason this is
-    /// allowed where a glob was declined (CLOUD-1251).** A glob's three fatal
-    /// objections were that the match count is not one, that the engine would have
-    /// to walk a filesystem, and that a row's id cannot be authored for a name
-    /// that does not exist yet. Expansion has none of them: the result is exactly
-    /// one path, the engine expands a variable rather than looking around, and the
-    /// id is the row's own. `[[rule.external]]`'s discipline is unchanged — *the
-    /// engine expands a variable; it does not scan*.
-    ///
-    /// Only `${NAME}` is a placeholder. A bare `$NAME` is a literal, because a
-    /// path is allowed to contain a `$` and guessing where such a name ends is how
-    /// one spelling becomes two.
-    pub path: String,
-    /// Where the server map sits inside the parsed document, in [`Node::at`]'s
-    /// spelling. An empty string is the document itself.
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub node: String,
-    /// Server names this source resolves by ENDPOINT rather than by map key.
-    ///
-    /// Keyed by the name a caller types, valued by a substring the entry's
-    /// endpoint must carry.
-    ///
-    /// **A launcher that mints its server key per registration episode leaves
-    /// that key unwritable in advance** (CLOUD-1264). CLOUD-178 measured one
-    /// connector exposed as three different tool prefixes across episodes;
-    /// [`crate::rules::selects_tool_name`] absorbs that for a RULE, by matching a
-    /// `__`-delimited segment. Dispatch has no such analogue — the key IS the
-    /// name — so a row naming one episode's key resolves nothing in the next, and
-    /// a remedy citing it is a command that cannot run. Measured 2026-09-02: the
-    /// same connector was keyed `Linear` in one container and by a UUID in
-    /// another, at the same address.
-    ///
-    /// The ADDRESS is what does not move, which is why the selector is over the
-    /// endpoint and not over anything else the entry carries.
-    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
-    pub endpoint_contains: std::collections::BTreeMap<String, String>,
-    /// The credential this source's servers authenticate with, if they need one.
-    ///
-    /// **Absent is the default and it is byte-identical to no credential at all**
-    /// — a wiring file whose headers already authenticate needs nothing here, and
-    /// adding this key must not change what such a source does.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub credential: Option<Credential>,
-}
-
-/// A directory the crate can name on its own, for a source whose file does not
-/// live under the repository or under a directory an operator exports.
-///
-/// A closed set of ONE, deliberately. Every member has to be a location the
-/// platform itself defines, because the alternative is this crate learning a
-/// harness's layout — non-negotiable rule 1's violation — and because a member
-/// nobody can predict is a scan wearing an enum's clothes.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize, serde::Serialize, schemars::JsonSchema,
-)]
-#[serde(rename_all = "lowercase")]
-pub enum Base {
-    /// The OS temporary directory, as the platform defines it.
-    ///
-    /// **Named rather than spelled `/tmp`**, which is what keeps it portable and
-    /// keeps a literal path out of a config. It is where a launcher that mints a
-    /// per-session file puts it, and the one location an operator has no variable
-    /// for — `TMPDIR` is unset on a great many hosts, so a row naming it as a
-    /// `root` silently does not resolve there.
-    Temp,
-}
-
-/// One `[mcp.source.credential]` table: WHICH credential a source spends, never
-/// the credential (CLOUD-1261).
-///
-/// # The whole point is the indirection
-///
-/// `batten.toml` is committed, so a value here would be a secret in git. What a
-/// row carries is a **name**: the name of an environment variable, or the name of
-/// an environment variable whose value is a path. That is `[[rule.external]]`'s
-/// root discipline applied to key material — *the engine expands a variable; it
-/// does not scan* — and it is what lets a public config say "this server needs
-/// the operator's token" without saying what the token is.
-///
-/// # Every resolved value is a [`Secret`], which has no route to a `String`
-///
-/// The negative half is the load-bearing one, so it is enforced by type rather
-/// than by remembering to redact: [`Secret`] has no `Display`, its `Debug` prints
-/// a fixed marker, and the only thing that consumes it is the header list handed
-/// to the transport. A failure path cannot render it because there is no method
-/// that would.
-#[derive(
-    Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize, schemars::JsonSchema,
-)]
-#[serde(deny_unknown_fields)]
-pub struct Credential {
-    /// The header the credential is sent in.
-    ///
-    /// Declared rather than assumed: `Authorization` is the common answer and the
-    /// default, but a session-scoped endpoint may want its own name, and guessing
-    /// one produces a 401 that says nothing about why.
-    #[serde(default = "authorization")]
-    pub header: String,
-    /// The scheme prefixed to the value, space-separated. Empty sends the value
-    /// alone, which is what a bare token header wants.
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub scheme: String,
-    /// The NAME of an environment variable holding the credential itself.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub env: Option<String>,
-    /// The NAME of an environment variable holding the PATH of a file that holds
-    /// the credential.
-    ///
-    /// The two-hop spelling is deliberate and it is the one a harness actually
-    /// offers: a launcher that mints a per-session token writes it to a file and
-    /// exports the path, so the path is not writable in advance while the variable
-    /// name is.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub file_from: Option<String>,
-    /// The NAME of a key in the server's own wiring entry whose value is a
-    /// command that prints the request headers as a JSON object.
-    ///
-    /// Claude Code's spelling is `headersHelper`: a local `~/.claude.json` entry
-    /// for an HTTP server authenticates by running it (measured 2026-10-25, the
-    /// GitHub server's helper prints `{"Authorization":"Bearer …"}` from `gh auth
-    /// token`), and carries no static `headers` at all, so a row with neither
-    /// `env` nor `file_from` dispatched unauthenticated and got a 401. The row
-    /// names the KEY, never the command: the command lives in the wiring file
-    /// the source names (the operator's own, for a home-rooted source; a
-    /// repo-relative source trusts that file as much as this config), and only
-    /// the `header` this row names is taken from what it prints. That value is
-    /// usually finished (`Bearer …`), so `scheme` stays empty for such a helper.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub helper: Option<String>,
-}
-
-/// The default header a credential is sent in.
-fn authorization() -> String {
-    "Authorization".to_owned()
-}
-
-impl Credential {
+/// `Credential` behaviour that belongs to this module's layer, not the type's (CLOUD-2793).
+pub(crate) trait CredentialExt: Sized {
     /// The header name and finished value this row sends a resolved value as.
     ///
     /// **A method rather than a closure inside [`credential`]**, so the scheme
@@ -310,6 +103,10 @@ impl Credential {
     /// forbids `unsafe`, `std::env::set_var` is `unsafe`, and a test that cannot
     /// arrange its own premise ends up asserting the resolution path instead of
     /// the formatting one it means to.
+    fn sent(&self, value: &str) -> (String, Secret);
+}
+
+impl CredentialExt for Credential {
     fn sent(&self, value: &str) -> (String, Secret) {
         (
             self.header.clone(),
@@ -335,7 +132,6 @@ impl Credential {
 /// operator's wiring) and never a byte of what it printed: an absent or
 /// non-text key, a command that will not start or exits non-zero, output that
 /// is not a JSON object, and an object without the header or with it empty.
-//MUTANT helper-exit-unread|s@^    if code != 0 {$@    if code == 0 {@|a_helper_s_printed_header_is_the_credential_sent
 fn helped(
     row: &Credential,
     id: &str,
@@ -494,7 +290,7 @@ fn credential(source: &Source, entry: &Node, root: &Path) -> Result<Option<(Stri
     // POINTER-ONLY IN THE REFUSAL: the io error carries the path it tried, which
     // is an absolute path on somebody's machine, so it is dropped rather than
     // formatted. What a reader needs is which variable to fix.
-    let value = std::fs::read_to_string(std::path::PathBuf::from(at))
+    let value = crate::fsio::read_to_string(std::path::PathBuf::from(at))
         .map_err(|_| {
             anyhow::anyhow!("mcp: source {id}'s credential file, named by {name}, will not read")
         })?
@@ -506,290 +302,6 @@ fn credential(source: &Source, entry: &Node, root: &Path) -> Result<Option<(Stri
         ));
     }
     Ok(Some(row.sent(&value)))
-}
-
-/// One `[[mcp.result]]` row: what to hand back instead of a method's response.
-#[derive(
-    Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize, schemars::JsonSchema,
-)]
-#[serde(deny_unknown_fields)]
-pub struct ResultRow {
-    /// The method this row reduces. The consumer's vocabulary, matched exactly.
-    pub method: String,
-    /// What to make of the response.
-    pub reduce: Reduce,
-    /// The fields kept, in the order they are written.
-    ///
-    /// Top-level keys of the payload the row's `node` reaches. A declared field
-    /// the payload does not carry is ABSENT from the reduction rather than
-    /// present and null: "the row does not have this" and "the reduction dropped
-    /// it" are different answers.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub fields: Vec<String>,
-    /// Where the payload sits inside the JSON-RPC result, in [`Node::at`]'s
-    /// spelling. An empty string is the result itself.
-    ///
-    /// Declared rather than known, because how a server frames a payload is the
-    /// server's business and this crate holds no opinion about it.
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub node: String,
-    /// Whether the node's scalar text is itself a document to parse.
-    ///
-    /// A server that frames its payload as text carrying JSON is common and is
-    /// not something the engine may assume: a row says so, and a row that says so
-    /// wrongly gets could-not-look rather than a reduction over the wrong tree.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub embedded: bool,
-}
-
-/// How a [`ResultRow`] turns a response into something rule 4 permits.
-///
-/// A closed set rather than an expression language, for
-/// [`crate::facts::Reduction`]'s reason exactly: every member is bounded by
-/// construction, so no row can declare a reduction that yields the payload back.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize, serde::Serialize, schemars::JsonSchema,
-)]
-#[serde(rename_all = "lowercase")]
-pub enum Reduce {
-    /// The declared fields, with their values passed through as the payload
-    /// carries them.
-    ///
-    /// The read-side answer. What bounds it is the DECLARATION — a field nobody
-    /// named never leaves the store — so a consumer choosing its own field set is
-    /// choosing its own cost.
-    Project,
-    /// The declared fields, each held to a bounded SCALAR.
-    ///
-    /// The write-side answer (CLOUD-1122), and it differs from [`Reduce::Project`]
-    /// in KIND rather than in degree: a field whose value runs past [`TOKEN_MAX`],
-    /// or is a container rather than a scalar, is **absent** rather than
-    /// truncated, because a prefix of somebody's issue body is still their issue
-    /// body. So this arm structurally cannot echo a body however the row is
-    /// written, where `project` leaves that to the declaration.
-    ///
-    /// # Why the bound is length and not [`crate::facts::Reduction::Token`]'s
-    ///
-    /// That reduction additionally refuses any value carrying whitespace, and it
-    /// is right to: its product reaches the POLICY INPUT, where a module could
-    /// lift a sentence into a `subjects` pointer, so "is this already a token"
-    /// is the question worth asking. This arm's product reaches the CALLER, and
-    /// the thing being kept out is a 15k-character description — which the length
-    /// bound stops on its own.
-    ///
-    /// Copying the whitespace clause across was this row's own near-miss,
-    /// measured before it shipped: `save_issue` answers `status = "In Progress"`,
-    /// so the arm would have silently dropped the one field CLOUD-1122 names in
-    /// its remedy — `{id, status, handle}` — while every test still passed. A
-    /// bound borrowed from a surface with a different threat model is how a
-    /// reduction quietly stops answering the question it was built for.
-    Acknowledge,
-    /// [`Reduce::Project`], applied to EVERY element of an array node.
-    ///
-    /// The list-side answer (CLOUD-1380). The other two arms do one flat
-    /// field-pick against the node a row names, so a response whose payload is an
-    /// array of objects is unreducible by either: naming the array as `node` makes
-    /// every field lookup miss, and leaving `node` at the root keeps the array
-    /// whole and reduces nothing. Measured before this arm existed, a
-    /// `list_issues` call reported `undeclared` and **emitted 20,366 bytes against
-    /// 17,313 stored** — more out than in, because an undeclared result is handed
-    /// back re-serialised rather than reduced.
-    ///
-    /// `node` names the array and the declared `fields` are read from each
-    /// element, so one row describes both halves and no second field vocabulary
-    /// appears. The projected elements come back under the array's own key, which
-    /// is what lets a consumer read the reduction by the path it reads the
-    /// response by.
-    ///
-    /// # Its bound is a different KIND from the other two, stated rather than
-    /// absorbed
-    ///
-    /// `project` and `acknowledge` are bounded by the DECLARATION alone: a field
-    /// nobody named never leaves the store, so the reduction's size is fixed
-    /// whatever the payload holds. This arm is bounded per element by the
-    /// declaration and **in count by the page the caller asked for** — a function
-    /// of the request rather than of the response. That is weaker than the other
-    /// two, and it is the enum's contract met rather than dodged: no row can
-    /// declare a reduction that yields the payload back, but a caller asking for a
-    /// thousand rows does get a thousand projected rows.
-    ///
-    /// Which is why the scalar siblings are carried and containers are not:
-    /// `hasNextPage` and `cursor` are what make the page size a thing the caller
-    /// controls, so dropping them would leave paging unanswerable — the reduction
-    /// would satisfy every size predicate by destroying the one mechanism that
-    /// bounds it. A container sibling is refused for [`Reduce::Acknowledge`]'s
-    /// reason exactly: a shape whose size the caller did not bound.
-    Each,
-}
-
-/// Refuse a `[mcp.source.credential]` row that cannot mean one thing.
-///
-/// **At LOAD rather than at dispatch**, for the reason every other shape rule
-/// here is: a row naming neither source names nothing, and a row naming both is
-/// two answers to one question. Either would resolve to no header and dispatch an
-/// unauthenticated call that reads as the server refusing — a dead gate wearing a
-/// 401's clothes.
-///
-/// # Errors
-///
-/// A [`UsageError`] (→ exit `1`) naming the source id and which key is at fault.
-/// **Never a variable's VALUE** — the names are config and the values are not.
-fn validate_credential(source: &Source) -> Result<()> {
-    let Some(row) = &source.credential else {
-        return Ok(());
-    };
-    let id = &source.id;
-    if row.header.trim().is_empty() {
-        return Err(UsageError::raise(format!(
-            "mcp: source {id:?} declares a credential with an empty `header`; a credential with \
-             nowhere to go is a call that authenticates with nothing"
-        )));
-    }
-    let named: Vec<&String> = [&row.env, &row.file_from, &row.helper]
-        .into_iter()
-        .flatten()
-        .collect();
-    match named.as_slice() {
-        [] => Err(UsageError::raise(format!(
-            "mcp: source {id:?} declares a credential naming none of `env`, `file_from` or \
-             `helper`; a row that names nothing resolves to nothing and would dispatch \
-             unauthenticated"
-        ))),
-        [_, _, ..] => Err(UsageError::raise(format!(
-            "mcp: source {id:?} declares a credential naming more than one of `env`, `file_from` \
-             and `helper`; one row names one source, or which one the engine spends depends on \
-             the order it reads them"
-        ))),
-        [name] if name.trim().is_empty() => Err(UsageError::raise(format!(
-            "mcp: source {id:?} declares a credential naming an empty variable or key; it is a \
-             NAME, never a value"
-        ))),
-        _ => Ok(()),
-    }
-}
-
-/// Refuse a malformed `[mcp]` table at load.
-///
-/// At load rather than at dispatch, for the reason house style §8 gives: a config
-/// fault must be reported by `config lint` and `doctor` rather than discovered by
-/// the one call that needed it.
-///
-/// # Errors
-///
-/// [`UsageError`] (→ exit `1`) for an empty or duplicated id, an empty root name,
-/// a path that would escape its root, a duplicated method, a field list that does
-/// not match the reduction it is written for, or a credential row naming neither
-/// variable or both.
-pub fn validate(config: &McpConfig) -> Result<()> {
-    let mut seen: Vec<&str> = Vec::new();
-    for source in &config.sources {
-        if source.id.trim().is_empty() {
-            return Err(UsageError::raise(
-                "mcp: a `[[mcp.source]]` row needs a non-empty `id`; it is the only name a report \
-                 may carry, because the resolved path is a machine's home directory",
-            ));
-        }
-        if source
-            .root
-            .as_ref()
-            .is_some_and(|root| root.trim().is_empty())
-        {
-            return Err(UsageError::raise(format!(
-                "mcp: source {:?} declares an empty `root`; it is the NAME of an environment \
-                 variable, and an empty one would resolve the path against the process's working \
-                 directory. Omit the key for a repository-relative path",
-                source.id
-            )));
-        }
-        if source.base.is_some() && source.root.is_some() {
-            return Err(UsageError::raise(format!(
-                "mcp: source {:?} declares both `base` and `root`; one row has one base, or which \
-                 directory the path resolves beneath depends on the order they are read",
-                source.id
-            )));
-        }
-        if escapes(&source.path) {
-            return Err(UsageError::raise(format!(
-                "mcp: source {:?} needs a `path` that is relative and stays beneath its root; an \
-                 absolute path or a `..` component would read outside the root the row declared",
-                source.id
-            )));
-        }
-        // THE PLACEHOLDER'S SYNTAX AT LOAD, its VALUE at dispatch. A malformed
-        // `${` is the author's typo and belongs to `config lint`; what a variable
-        // happens to hold on this host is not knowable here, which is why
-        // `escapes` runs a second time over the expanded path.
-        if let Err(err) = placeholders(&source.path) {
-            return Err(UsageError::raise(format!(
-                "mcp: source {:?} has an unusable `path`: {err}",
-                source.id
-            )));
-        }
-        if seen.contains(&source.id.as_str()) {
-            return Err(UsageError::raise(format!(
-                "mcp: source id {:?} is declared twice; one id names one file, or which file the \
-                 engine reads depends on row order",
-                source.id
-            )));
-        }
-        validate_endpoint_selectors(source)?;
-        validate_credential(source)?;
-        seen.push(&source.id);
-    }
-    // A PERMISSION ALIAS NO SELECTOR DECLARES CAN NEVER RESOLVE, so it would read
-    // as a governed server while translating nothing — refused here rather than
-    // discovered as a prompt that never went away.
-    for alias in &config.permission_aliases {
-        if !config
-            .sources
-            .iter()
-            .any(|source| source.endpoint_contains.contains_key(alias))
-        {
-            return Err(UsageError::raise(format!(
-                "mcp: `permission_aliases` names {alias:?}, which no `[[mcp.source]]` row's \
-                 `endpoint_contains` declares; the endpoint is the only thing that identifies a \
-                 renamed server, so this name could never be resolved"
-            )));
-        }
-    }
-
-    let mut methods: Vec<&str> = Vec::new();
-    for row in &config.results {
-        if row.method.trim().is_empty() {
-            return Err(UsageError::raise(
-                "mcp: a `[[mcp.result]]` row needs a non-empty `method`; it is what selects the \
-                 reduction, and an empty one would select nothing while reading as coverage",
-            ));
-        }
-        if methods.contains(&row.method.as_str()) {
-            return Err(UsageError::raise(format!(
-                "mcp: method {:?} carries two `[[mcp.result]]` rows; which reduction applies would \
-                 depend on row order",
-                row.method
-            )));
-        }
-        methods.push(&row.method);
-        // A REDUCTION OVER NO FIELDS IS NOT A NARROWER ANSWER, it is an empty
-        // one — and an empty object handed back where a payload was expected is
-        // the silent-filter failure this whole family is built to avoid. Refused
-        // at load rather than discovered by the caller that got `{}`.
-        if row.fields.is_empty() {
-            return Err(UsageError::raise(format!(
-                "mcp: method {:?} declares no `fields`, so its reduction would be empty — which is \
-                 a dropped payload wearing the costume of a projection. Name the fields the \
-                 caller needs",
-                row.method
-            )));
-        }
-        if let Some(blank) = row.fields.iter().find(|field| field.trim().is_empty()) {
-            return Err(UsageError::raise(format!(
-                "mcp: method {:?} declares an empty field name ({blank:?}); a field that names \
-                 nothing can never be found and reads as a projection that dropped it",
-                row.method
-            )));
-        }
-    }
-    Ok(())
 }
 
 /// Expand every `${NAME}` in `path` from the environment.
@@ -821,109 +333,6 @@ fn expand(path: &str) -> Result<Option<String>> {
         }
     }
     Ok(Some(out))
-}
-
-/// One piece of a declared path: text as written, or a variable to expand.
-enum Part<'a> {
-    /// Text that reaches the resolved path unchanged.
-    Literal(&'a str),
-    /// A `${NAME}` placeholder, by name.
-    Variable(&'a str),
-}
-
-/// Check a declared path's placeholder SYNTAX, touching no environment.
-///
-/// The load-time half of [`expand`], and it is a separate entry point rather than
-/// a flag because the two questions have different homes: a malformed `${` is the
-/// author's typo and `config lint` must report it on every host, while what a
-/// variable holds is knowable only where the call is made.
-///
-/// # Errors
-///
-/// As [`parts`].
-fn placeholders(path: &str) -> Result<()> {
-    parts(path).map(|_| ())
-}
-
-/// Split a declared path into literals and `${NAME}` placeholders.
-///
-/// # Errors
-///
-/// A [`UsageError`] (→ exit `1`) for an unclosed `${`, or a name that is not
-/// `[A-Za-z_][A-Za-z0-9_]*`. Reading either as a literal would resolve a path
-/// nobody wrote, which is the failure this refuses rather than tolerates.
-fn parts(path: &str) -> Result<Vec<Part<'_>>> {
-    let mut found = Vec::new();
-    let mut rest = path;
-    while let Some(open) = rest.find("${") {
-        if open > 0 {
-            found.push(Part::Literal(&rest[..open]));
-        }
-        let after = &rest[open + 2..];
-        let close = after.find('}').ok_or_else(|| {
-            UsageError::raise(format!(
-                "path {path:?} opens `${{` and never closes it; a placeholder that does not end \
-                 cannot name a variable"
-            ))
-        })?;
-        let name = &after[..close];
-        if !name
-            .chars()
-            .next()
-            .is_some_and(|first| first.is_ascii_alphabetic() || first == '_')
-            || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
-        {
-            return Err(UsageError::raise(format!(
-                "path {path:?} names {name:?}, which is not an environment variable name"
-            )));
-        }
-        found.push(Part::Variable(name));
-        rest = &after[close + 1..];
-    }
-    if !rest.is_empty() {
-        found.push(Part::Literal(rest));
-    }
-    Ok(found)
-}
-
-/// Whether a declared path would leave the root it is resolved beneath.
-///
-/// [`crate::facts::Rooted::escapes`]'s predicate, and it is spelled here rather
-/// than borrowed because the two families' rows are different types and sharing
-/// the check would mean sharing the type. The rule is the same one: rooted, or
-/// any upward component.
-///
-/// **Run TWICE since CLOUD-1251's expansion landed**: once at load over the
-/// literal, and again over the EXPANDED path, because a variable's value is
-/// runtime input. A row spelling `${ID}.json` passes the load-time check whatever
-/// `ID` turns out to hold, so an `ID` of `../../etc` would otherwise walk out of
-/// the base the row declared — the one place this feature could have become a
-/// file-read primitive.
-///
-/// # `is_absolute` IS THE WRONG QUESTION, and it is wrong in the dangerous
-/// direction
-///
-/// `Path::is_absolute` is platform-dependent, and on Windows it answers **false**
-/// for `/etc/passwd`: that path has a root but no drive prefix, which Rust calls
-/// relative. `Path::join` does not agree — `base.join("/etc/passwd")` there
-/// discards the base's own path and yields `C:\etc\passwd`, outside the root the
-/// row declared. So the predicate would have admitted exactly the declaration it
-/// exists to refuse, on one platform, silently.
-///
-/// Measured rather than reasoned: this shipped, `mise run verify` passed —
-/// `cross-check` TYPE-checks the Windows target and never runs a test there — and
-/// the Windows job in CI is what went red. Enumerating the components asks the
-/// portable question instead: a prefix, a root, or an upward step, any of which
-/// leaves the declared root on every platform.
-fn escapes(path: &str) -> bool {
-    Path::new(path).components().any(|part| {
-        matches!(
-            part,
-            std::path::Component::Prefix(_)
-                | std::path::Component::RootDir
-                | std::path::Component::ParentDir
-        )
-    })
 }
 
 /// A server's transport, endpoint and headers, as a declared source resolved
@@ -1163,8 +572,6 @@ pub(crate) fn percent_decoded(text: &str) -> String {
 /// nothing. This is the retired resolver's exact comparison of the wrapped
 /// upstream, without spelling the parameter a host wraps it in (non-negotiable
 /// rule 1): ANY parameter's value may be the address.
-//MUTANT upstream-prefix-accepted|s@^        if bare_address(&address) == want {$@        if bare_address(\&address).starts_with(want) {@|a_url_that_extends_the_governed_upstream_resolves_to_silence
-//MUTANT upstream-param-unread|s@^    for address in std::iter::once(endpoint.to_owned()).chain(query_values(endpoint)) {$@    for address in std::iter::once(endpoint.to_owned()) {@|a_committed_allow_and_deny_reach_the_toolbox_under_a_flipped_name
 pub(crate) fn endpoint_names(endpoint: &str, needle: &str) -> bool {
     let want = bare_address(needle);
     if want.is_empty() {
@@ -1230,37 +637,6 @@ fn by_endpoint<'a>(map: &'a Node, needle: &str) -> Matched<'a> {
         (1, Some(entry)) => Matched::One(entry),
         _ => Matched::Many(count),
     }
-}
-
-/// Refuse an `endpoint_contains` map that cannot mean one thing.
-///
-/// Split out of [`validate`] rather than inlined: the two refusals below are one
-/// question about one key, and the enclosing loop already carries five others.
-fn validate_endpoint_selectors(source: &Source) -> Result<()> {
-    for (name, needle) in &source.endpoint_contains {
-        if name.trim().is_empty() {
-            return Err(UsageError::raise(format!(
-                "mcp: source {:?} declares an `endpoint_contains` entry with a blank name; it \
-                 is what a caller types, and an empty one names nothing while reading as \
-                 coverage",
-                source.id
-            )));
-        }
-        // AN EMPTY NEEDLE IS THE ONE THAT MUST BE REFUSED AT LOAD. `contains`
-        // is true of every string for an empty pattern, so the selector would
-        // match the entire server map and turn the row into first-wins over
-        // everything — the precise failure `Ambiguous` exists to prevent,
-        // tripped on every call rather than reported once here.
-        if needle.trim().is_empty() {
-            return Err(UsageError::raise(format!(
-                "mcp: source {:?} maps {name:?} to an empty endpoint substring; every address \
-                 contains it, so the name would select whichever server the wiring file \
-                 happens to list first",
-                source.id
-            )));
-        }
-    }
-    Ok(())
 }
 
 /// Resolve one server's wiring out of the declared sources.
@@ -1393,7 +769,7 @@ pub(crate) fn server_map(
         };
         path
     };
-    let Ok(text) = std::fs::read_to_string(path) else {
+    let Ok(text) = crate::fsio::read_to_string(path) else {
         return Ok(None);
     };
     // A FILE THAT EXISTS AND WILL NOT PARSE STOPS THE SEARCH. Falling through
@@ -1677,9 +1053,6 @@ pub fn bound_in(
 /// `mutate` runs a Rust suite as `cargo test -- <case>` across every target, so a
 /// row here reddens the posture case it names although this file's declared
 /// suite is the dispatch tier.
-//MUTANT allow-check-ignores-policy|s@^            (!posture.is_empty() && posture != ALWAYS_ALLOW).then_some@            (!posture.is_empty()).then_some@|an_allow_rule_whose_tool_the_connector_allows_passes
-//MUTANT bare-rule-unread|s@^        if is_bare_server_rule(rule, server) {$@        if false {@|a_bare_server_rule_counts_once_when_any_tool_asks
-//MUTANT bare-rule-over-allowed-counted|s@^            if !asking.is_empty() {$@            if true {@|a_bare_server_rule_counts_once_when_any_tool_asks
 fn unenforceable_in(
     settings: &[std::path::PathBuf],
     server: &str,
@@ -1701,7 +1074,7 @@ fn unenforceable_in(
         .collect();
     let mut rules = std::collections::BTreeSet::new();
     for path in settings {
-        let Ok(text) = std::fs::read_to_string(path) else {
+        let Ok(text) = crate::fsio::read_to_string(path) else {
             continue;
         };
         let Ok(document) = crate::rules::parse_node(Format::Json, &text) else {
@@ -1763,7 +1136,7 @@ fn granted_in(settings: &[std::path::PathBuf], server: &str, declared: &[String]
     let prefix = format!("mcp__{server}");
     let mut looked = false;
     for path in settings {
-        let Ok(text) = std::fs::read_to_string(path) else {
+        let Ok(text) = crate::fsio::read_to_string(path) else {
             continue;
         };
         let Ok(document) = crate::rules::parse_node(Format::Json, &text) else {
@@ -1795,10 +1168,49 @@ fn granted_in(settings: &[std::path::PathBuf], server: &str, declared: &[String]
     looked.then_some(false)
 }
 
-/// The reduction a method's row declares, or `None` where no row declares one.
-#[must_use]
-pub fn row_for<'a>(config: &'a McpConfig, method: &str) -> Option<&'a ResultRow> {
-    config.results.iter().find(|row| row.method == method)
+/// What `batten mcp call` writes for one dispatched result: the stdout
+/// document, the stderr lines, and the exit code.
+///
+/// A pure function of the result, so a case can drive the verb's whole answer
+/// without a listener; the verb writes these and adds nothing of its own.
+///
+/// # The server's whole answer, never a reduction of it (CLOUD-2956)
+///
+/// Stdout is the payload exactly as the capture store holds it, so the verb's
+/// output pipes into `jq` with every field the server sent. Bounding what reaches
+/// an agent's context is the hooks' job alone: they see every tool call, this
+/// verb's included, and a second reducer here ran where no hook could see what it
+/// dropped, for callers that are programs with no context to protect.
+#[derive(Debug)]
+pub struct Report {
+    /// The document printed on stdout, without its trailing newline.
+    pub stdout: String,
+    /// The lines printed on stderr, in order.
+    pub stderr: Vec<String>,
+    /// The code the verb returns.
+    pub exit: crate::exit::ExitCode,
+}
+
+/// Decide [`Report`] for one dispatched result.
+///
+/// # Errors
+///
+/// Only when the payload cannot be serialized.
+pub fn report(
+    result: &serde_json::Value,
+    method: &str,
+    source: &str,
+    handle: &str,
+) -> Result<Report> {
+    let payload = payload(result);
+    // `to_string` writes the bytes `to_vec` writes, which is what the store holds.
+    let stdout = serde_json::to_string(&payload.value)?;
+    let outcome = outcome(result, method, source, handle);
+    Ok(Report {
+        stdout,
+        stderr: outcome.failure.into_iter().collect(),
+        exit: outcome.exit,
+    })
 }
 
 /// A dispatched result with the protocol's own framing taken off.
@@ -1815,9 +1227,6 @@ pub struct Payload {
     pub unwrapped: bool,
 }
 
-//MUTANT-SUITE crates/batten/tests/it/mcp_dispatch.rs
-//MUTANT is-error-result-projected|s@== Some(true)@== Some(false)@|a_tool_level_error_result_exits_non_zero_and_names_the_method
-
 /// What a caller must do with a `tools/call` result, decided **before** any
 /// reduction runs.
 ///
@@ -1828,8 +1237,6 @@ pub struct Payload {
 /// together is what makes a case able to check both.
 #[derive(Debug)]
 pub struct Outcome {
-    /// Whether a declared [`ResultRow`] may be applied to this result at all.
-    pub projectable: bool,
     /// The code the verb returns.
     pub exit: crate::exit::ExitCode,
     /// The pointer-only failure line, when there is a failure to report.
@@ -1845,29 +1252,9 @@ pub struct Outcome {
 /// from — and it is the only thing about the response that reaches the line.
 /// Rule 4: a check over sensitive content emits a pointer, never the content.
 #[must_use]
-pub fn outcome(
-    result: &serde_json::Value,
-    payload: &Payload,
-    method: &str,
-    source: &str,
-    handle: &str,
-) -> Outcome {
-    // A FAILED CALL AND AN UNRECOGNISED FRAME ARE BOTH UNPROJECTABLE, for one
-    // reason: `Reduce::Project` is a flat field-pick over the expected SUCCESS
-    // shape, so applying it to any other document does not narrow an answer, it
-    // manufactures one. Measured 2026-09-08, both halves — a tool-level failure
-    // projected to `{}`, indistinguishable from a write that changed nothing;
-    // and a not-found body projected to `{"status": 400}`, where `status` is the
-    // same key `get_issue`'s success projection uses for the BOARD STATE.
-    //
-    // `payload.unwrapped` is the second half and is why this is not `isError`
-    // alone. `tools/call` answers with `content` blocks; a document carrying
-    // neither those nor `structuredContent` is not the shape any row was written
-    // against, and [`payload`] has ALREADY decided that question. So this reads
-    // the protocol rather than guessing a tracker's schema.
+pub fn outcome(result: &serde_json::Value, method: &str, source: &str, handle: &str) -> Outcome {
     let failed = failed(result);
     Outcome {
-        projectable: !failed && payload.unwrapped,
         // `Usage` because the fault is in the invocation the caller composed and
         // no policy was violated — a `2` would tell every harness with a pre-tool
         // hook that policy REFUSED a call the server merely rejected. Not
@@ -1898,15 +1285,6 @@ pub fn outcome(
 /// `result` is ABSENT — so it is structurally unreachable here whatever the tool
 /// answered. CLOUD-1403 fixed the transport half; this is the other one, and
 /// neither subsumes the other.
-///
-/// # Why the caller must consult this BEFORE reducing
-///
-/// A [`ResultRow`] projection is a flat field-pick over the expected success
-/// shape. An error result has a different shape entirely — `content`/`isError`,
-/// not the entity's fields — so projecting one yields nothing, and "yields
-/// nothing" is precisely what a caller cannot tell apart from a write that
-/// changed nothing. Measured 2026-09-08: a `save_issue` with an undeclared
-/// argument emitted `{}` at exit 0 with the row unmodified.
 ///
 /// # Strictly `true`, never merely present
 ///
@@ -1977,200 +1355,6 @@ pub fn payload(result: &serde_json::Value) -> Payload {
             unwrapped: false,
         },
     }
-}
-
-/// Apply a row's reduction to a payload [`payload`] has already unframed.
-///
-/// **A row that cannot find its payload yields `None`**, which the caller reports
-/// as could-not-look and answers by passing the response through whole. That is
-/// the fail-open-loudly half: a reduction that silently emitted `{}` over a node
-/// it never reached would be a correctness disaster rather than a saving, because
-/// an empty projection and a genuinely empty row are byte-identical on the
-/// decision surface.
-///
-/// The row's `node` and `embedded` are applied INSIDE the unframed payload, so
-/// they are an override for a server whose shape [`payload`] did not recognise
-/// rather than the ordinary route. Left at their defaults — an empty `node` and
-/// `embedded` false — the payload itself is what the fields are read from.
-#[must_use]
-pub fn reduce(
-    row: &ResultRow,
-    payload: &serde_json::Value,
-) -> Option<serde_json::Map<String, serde_json::Value>> {
-    // Through the one parse (CLOUD-849), which is also what keeps the canonical
-    // tree the authority here rather than `serde_json`'s value type: a node path
-    // means the same thing in this family as in every declared-read family.
-    let document = crate::rules::parse_node(Format::Json, &payload.to_string()).ok()?;
-    let Look::Is(at) = document.at(&row.node) else {
-        return None;
-    };
-    // A SECOND PARSE ONLY WHERE A ROW ASKED FOR ONE. Guessing that a scalar is a
-    // document is how a reduction ends up reading a tree the server never sent.
-    let owned;
-    let payload = if row.embedded {
-        let text = at.scalar()?;
-        owned = crate::rules::parse_node(Format::Json, &text).ok()?;
-        &owned
-    } else {
-        at
-    };
-
-    // THE ARRAY ARM RETURNS EARLY, because its subject is the node's ELEMENTS
-    // where every other arm's is the node itself. Folding it into the field loop
-    // below would mean iterating fields at the top and elements underneath, which
-    // is the same projection written twice.
-    if row.reduce == Reduce::Each {
-        return each(row, payload, &document);
-    }
-
-    let mut kept = serde_json::Map::new();
-    for field in &row.fields {
-        let Look::Is(node) = payload.at(field) else {
-            // ABSENT RATHER THAN NULL. "the payload does not carry this" and
-            // "the reduction dropped it" are different answers, and a caller
-            // acts on the second.
-            continue;
-        };
-        match row.reduce {
-            Reduce::Project => {
-                kept.insert(field.clone(), node.to_json());
-            }
-            Reduce::Acknowledge => {
-                // REFUSED RATHER THAN TRUNCATED, and this is the line that makes
-                // the write-side arm differ in kind rather than in degree. A
-                // container is refused with it: a list or a map is a shape whose
-                // size the caller did not bound, and `scalar` returning `None` is
-                // exactly that answer.
-                let Some(text) = node.scalar() else { continue };
-                if text.is_empty() || text.len() > TOKEN_MAX {
-                    continue;
-                }
-                kept.insert(field.clone(), serde_json::Value::String(text));
-            }
-            // UNREACHABLE — the array arm returned before this loop. Keeping
-            // nothing rather than panicking: library code may not panic on a
-            // reachable path, and an impossible branch that drops the field is
-            // the safe direction if this ever stops being impossible.
-            Reduce::Each => {}
-        }
-    }
-    Some(kept)
-}
-
-/// [`Reduce::Each`]: the declared fields projected over every element of `at`.
-///
-/// **A node that is not a list yields `None`**, which the caller reports as
-/// could-not-look and answers by passing the response through whole. That is the
-/// same fail-open-loudly posture [`reduce`] documents, and it matters more here:
-/// a row whose `node` names a map would otherwise reduce to an empty array, and
-/// an empty page is a perfectly ordinary answer — so the broken row and the
-/// genuinely empty search would be byte-identical on the decision surface.
-///
-/// The projected elements come back under the array's own final path segment, so
-/// a row declaring `node = "issues"` answers under `issues`. A row whose `node`
-/// is empty — the payload IS the array — has no key to borrow and answers under
-/// [`ITEMS`], because inventing a name from nothing is worse than declaring one.
-fn each(
-    row: &ResultRow,
-    at: &Node,
-    document: &Node,
-) -> Option<serde_json::Map<String, serde_json::Value>> {
-    let Node::List(items) = at else {
-        return None;
-    };
-    let projected = items
-        .iter()
-        .map(|item| {
-            let mut kept = serde_json::Map::new();
-            for field in &row.fields {
-                // ABSENT RATHER THAN NULL, per element, which is the same
-                // contract `reduce` holds for a whole payload — so a caller
-                // reading one projected element cannot tell whether it came from
-                // here or from a `project` row over a single result.
-                if let Look::Is(node) = item.at(field) {
-                    kept.insert(field.clone(), node.to_json());
-                }
-            }
-            serde_json::Value::Object(kept)
-        })
-        .collect();
-
-    let mut out = serde_json::Map::new();
-    out.insert(items_key(&row.node), serde_json::Value::Array(projected));
-
-    // THE SCALAR SIBLINGS, from the array's PARENT rather than from the array.
-    // Paging lives beside the page — `{cursor, hasNextPage, issues: [...]}` — so
-    // a reduction that returned only the projected array would answer the search
-    // and lose the means to ask for the rest of it.
-    //
-    // Read from `document` rather than from `at`, and only where the row named a
-    // node inside it: `embedded` re-parses a scalar into a tree of its own, whose
-    // parent is not addressable from here, and a row whose `node` is empty has no
-    // parent at all. Both answer no siblings rather than a guess.
-    if !row.embedded && !row.node.is_empty() {
-        let parent = row.node.rsplit_once('.').map_or("", |(head, _)| head);
-        if let Look::Is(Node::Map(map)) = document.at(parent) {
-            for (key, node) in map {
-                // Scalars only, and bounded, for `Reduce::Acknowledge`'s reason:
-                // a container beside the page is a shape whose size the caller
-                // did not bound, and this arm has no declaration covering it —
-                // the row's `fields` describe an ELEMENT, not the envelope.
-                // AND THE KEY MUST BE ONE THIS CRATE DECLARES. Bounded and scalar
-                // is a size test, not an authorization: the row's `fields`
-                // describe an ELEMENT, so nothing here declares the envelope, and
-                // a server is free to put `account_email` beside its page. Emitting
-                // it would put an undeclared value into output on the strength of
-                // its LENGTH — non-negotiable rule 4 decided by a byte count.
-                //
-                // A closed list rather than a heuristic, for `AddressDomain`'s
-                // reason: what crosses is then a reviewable set instead of whatever
-                // the server happened to send. A paging key nobody listed is a row
-                // to add here, in a diff, not a silent emission.
-                if !PAGING_KEYS.contains(&key.as_str()) {
-                    continue;
-                }
-                let Some(text) = node.scalar() else { continue };
-                if text.is_empty() || text.len() > TOKEN_MAX {
-                    continue;
-                }
-                out.insert(key.clone(), node.to_json());
-            }
-        }
-    }
-    Some(out)
-}
-
-/// The envelope keys a [`Reduce::Each`] reduction may carry beside its page.
-///
-/// **The whole envelope allowlist, and it is deliberately short.** A row's
-/// `fields` declare an ELEMENT, so nothing in a consumer's config authorizes an
-/// envelope key; without this list the arm emitted every bounded scalar sitting
-/// beside the array, which decides what leaves the process by its byte length.
-/// These are the paging spellings the surveyed connectors use — the means to ask
-/// for the rest of a page, which is the only reason the siblings are read at all.
-///
-/// Adding a key is a diff, which is the point.
-const PAGING_KEYS: &[&str] = &[
-    "cursor",
-    "endCursor",
-    "hasNextPage",
-    "hasPreviousPage",
-    "nextCursor",
-    "startCursor",
-    "total",
-    "totalCount",
-];
-
-/// The key a [`Reduce::Each`] row's projected elements come back under when its
-/// `node` names no path.
-const ITEMS: &str = "items";
-
-/// The final segment of `node`, or [`ITEMS`] where it names nothing.
-fn items_key(node: &str) -> String {
-    node.rsplit('.')
-        .find(|segment| !segment.is_empty())
-        .unwrap_or(ITEMS)
-        .to_owned()
 }
 
 /// The JSON-RPC version every request carries.
@@ -2250,9 +1434,6 @@ const SPAWN_LEDGER: &str = "batten-mcp-spawns";
 // (CLOUD-2193), so both `mcp_spawn.rs` declarations in this file are needed:
 // without either, the rows under it are judged against a file that lacks
 // their cases.
-//MUTANT-SUITE crates/batten/tests/it/mcp_spawn.rs
-//MUTANT spawn-record-never-written|s@^    drop(crate::durable::append(&ledger, &line));$@    drop((\&ledger, \&line));@|a_launch_appends_one_record_naming_the_server_and_becomes_the_launch_line
-//MUTANT spawn-siblings-always-zero|s@now - \*stamp <= SPAWN_WINDOW@false@|a_launch_inside_the_window_counts_the_earlier_one_as_a_sibling
 
 /// Where the checkout at `root` keeps its spawn ledger, or `None` outside one.
 ///
@@ -2296,7 +1477,7 @@ fn spawn_record(
     // reads. So this is a launch that records nothing and still launches.
     let git_dir = crate::git::git_dir(root).ok()?;
     let ledger = git_dir.join(SPAWN_LEDGER);
-    let load = std::fs::read_to_string("/proc/loadavg")
+    let load = crate::fsio::read_to_string("/proc/loadavg")
         .ok()
         .and_then(|text| text.split_whitespace().next().map(str::to_owned))
         .unwrap_or_else(|| String::from("?"));
@@ -2320,7 +1501,7 @@ fn spawn_record(
 /// backwards on resume, and a negative age counted as a sibling would inflate
 /// exactly the field the hypothesis reads.
 fn siblings_within(ledger: &Path, now: u64) -> usize {
-    let Ok(text) = std::fs::read_to_string(ledger) else {
+    let Ok(text) = crate::fsio::read_to_string(ledger) else {
         return 0;
     };
     text.lines()
@@ -2362,9 +1543,6 @@ pub const EXEC_FAILED: &str = "exec-failed";
 /// Read from the LAST field, where [`SpawnRecord::exec_failed`] appends the
 /// marker to its launch line, so a field added to the launch record later
 /// cannot move the marker out from under this reader.
-//MUTANT-SUITE crates/batten/src/mcp.rs
-//MUTANT exec-failure-read-by-position|s@^    line.rsplit('\\t').next() == Some(EXEC_FAILED)$@    line.split('\\t').nth(5) == Some(EXEC_FAILED)@|a_failure_record_is_named_by_its_last_field_wherever_that_falls
-//MUTANT exec-failure-read-unbounded|s@^    line.rsplit('\\t').next() == Some(EXEC_FAILED)$@    line.ends_with(EXEC_FAILED)@|a_failure_record_is_named_by_its_last_field_wherever_that_falls
 #[must_use]
 pub fn is_exec_failure(line: &str) -> bool {
     line.rsplit('\t').next() == Some(EXEC_FAILED)
@@ -2377,8 +1555,6 @@ pub struct SpawnRecord {
     line: String,
 }
 
-//MUTANT-SUITE crates/batten/tests/it/mcp_spawn.rs
-//MUTANT exec-failure-unrecorded|s@^        drop(crate::durable::append(\&self.ledger, \&failed));$@        drop((self.ledger, failed));@|a_launch_that_cannot_exec_is_recorded_as_failed
 impl SpawnRecord {
     /// Append that the launch line could not be exec'd (CLOUD-2327): this
     /// launch's record again, then [`EXEC_FAILED`].
@@ -2578,8 +1754,8 @@ fn post_all(
 /// and "SHOULD be limited to a concise single sentence". One sentence is a
 /// pointer; the structured value beside it is the payload rule 4 refuses.
 ///
-/// Bounded on both axes anyway, because a SHOULD is not a guarantee: the first
-/// line only, and [`REFUSAL_MESSAGE_BOUND`] bytes of it.
+/// The message travels whole: a SHOULD is not a guarantee, and bounding what
+/// reaches a context is the hooks' job (CLOUD-2956).
 ///
 /// The measured cost of the old shape: a `-32003` with no message was the entire
 /// diagnosis available for a refused write, and the identical call through the
@@ -2633,38 +1809,17 @@ pub fn envelope(response: &crate::fetch::Response, method: &str) -> Result<serde
     })
 }
 
-/// How much of a JSON-RPC `message` a refusal carries (CLOUD-1403).
+/// A server's refusal message, whole (CLOUD-2956).
 ///
-/// JSON-RPC 2.0 §5.1 says the message "SHOULD be limited to a concise single
-/// sentence", and a SHOULD is not a guarantee — a server is free to answer with a
-/// stack trace, and a gate that echoed one back would be republishing whatever
-/// that was. So the relay is bounded here rather than trusted there.
-pub const REFUSAL_MESSAGE_BOUND: usize = 200;
-
-/// One line of a server's refusal message, bounded.
-///
-/// The FIRST line, because a multi-line body is the shape §5.1 asks servers not
-/// to send and the one a trace arrives as; and [`REFUSAL_MESSAGE_BOUND`] bytes of
-/// it, cut on a character boundary so the result is always renderable.
-///
-/// Truncation is MARKED. A silently cut message reads as a complete sentence that
-/// happens to end oddly, and a reader cannot tell the server's own wording from
-/// this function's edit — which is the same class of unreadable answer the whole
-/// row is about.
+/// The text the server wrote, trimmed; `no message` when it wrote none. It was
+/// once cut to its first line and 200 bytes, which corrupted the verb's answer for
+/// every caller; bounding what reaches a context is the hooks' job alone.
 fn refusal_message(text: &str) -> String {
-    let line = text.lines().next().unwrap_or_default().trim();
-    if line.is_empty() {
+    let text = text.trim();
+    if text.is_empty() {
         return "no message".to_owned();
     }
-    if line.len() <= REFUSAL_MESSAGE_BOUND {
-        return line.to_owned();
-    }
-    // No floor is needed: offset 0 is always a character boundary.
-    let mut cut = REFUSAL_MESSAGE_BOUND;
-    while !line.is_char_boundary(cut) {
-        cut -= 1;
-    }
-    format!("{}…", &line[..cut])
+    text.to_owned()
 }
 
 /// The authentication SCHEME a refusal challenges with, if it names one.
@@ -2721,7 +1876,7 @@ fn frame(text: &str) -> String {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
-
+    #[cfg(test)]
     /// A remote answering the handshake with `session` and the notification
     /// with `acknowledged`, recording the session header each call carried.
     fn serving_mcp(
@@ -2881,16 +2036,6 @@ mod tests {
         assert!(!is_exec_failure("1\tserena\t2\t0.1\t0\tnot-exec-failed"));
     }
 
-    fn row(reduce: Reduce, fields: &[&str]) -> ResultRow {
-        ResultRow {
-            method: "m".to_owned(),
-            reduce,
-            fields: fields.iter().map(|f| (*f).to_owned()).collect(),
-            node: String::new(),
-            embedded: false,
-        }
-    }
-
     fn source_with(credential: Option<Credential>) -> Source {
         Source {
             endpoint_contains: std::collections::BTreeMap::new(),
@@ -2962,36 +2107,14 @@ mod tests {
     }
 
     #[test]
-    fn a_multi_line_message_is_cut_to_its_first_line() {
-        // A stack trace is what a server sends when it ignores the SHOULD, and
-        // relaying the whole of one is the payload rule 4 refuses.
-        assert_eq!(
-            refusal_message("bad request\n  at Foo.bar (/srv/app/foo.js:12)\n  at Baz"),
-            "bad request"
+    fn a_multi_line_or_long_message_travels_whole() {
+        // CLOUD-2956: the server's error is relayed whole; bounding what reaches
+        // a context is the hooks' job, never this verb's.
+        let text = format!(
+            "bad request\n  at Foo.bar (/srv/app/foo.js:12)\n{}",
+            "é".repeat(300)
         );
-    }
-
-    #[test]
-    fn an_over_long_message_is_cut_and_the_cut_is_marked() {
-        // MARKED, because a silently truncated sentence reads as the server's own
-        // wording and a reader cannot tell it from this function's edit.
-        let long = "x".repeat(REFUSAL_MESSAGE_BOUND + 50);
-        let cut = refusal_message(&long);
-        assert!(cut.ends_with('…'), "the cut is marked: {cut}");
-        assert_eq!(
-            cut.chars().filter(|c| *c == 'x').count(),
-            REFUSAL_MESSAGE_BOUND
-        );
-    }
-
-    #[test]
-    fn a_cut_lands_on_a_character_boundary() {
-        // Shown able to fail in the direction that would panic: a naive slice at
-        // a fixed byte offset splits a multi-byte character. The input is chosen
-        // so the cut falls mid-character.
-        let text = "é".repeat(REFUSAL_MESSAGE_BOUND);
-        let cut = refusal_message(&text);
-        assert!(cut.ends_with('…'), "the cut is marked: {cut}");
+        assert_eq!(refusal_message(&text), text);
     }
 
     #[test]
@@ -3228,117 +2351,6 @@ mod tests {
     }
 
     #[test]
-    fn a_projection_keeps_the_declared_fields_and_nothing_else() {
-        // The allow half. Without it every case below is satisfied by a
-        // reduction that returns nothing, which would gate nothing and save
-        // everything by dropping the answer.
-        let result = serde_json::json!({"id": "K-1", "body": "a long prose body", "n": 3});
-        let kept = reduce(&row(Reduce::Project, &["id", "n"]), &result).unwrap();
-        assert_eq!(kept.get("id"), Some(&serde_json::json!("K-1")));
-        assert_eq!(kept.get("n"), Some(&serde_json::json!(3)));
-        assert!(
-            !kept.contains_key("body"),
-            "a field no row declared must never leave the store"
-        );
-    }
-
-    #[test]
-    fn an_undeclared_field_is_absent_rather_than_null() {
-        // "the payload does not carry this" and "the reduction dropped it" are
-        // different answers, and a caller acts on the second.
-        let kept = reduce(
-            &row(Reduce::Project, &["missing"]),
-            &serde_json::json!({"id": "K"}),
-        )
-        .unwrap();
-        assert!(kept.is_empty(), "an absent field contributes no key at all");
-    }
-
-    #[test]
-    fn acknowledge_refuses_a_body_rather_than_truncating_it() {
-        // THE DIFFERENCE IN KIND from `project`, and the whole of CLOUD-1122's
-        // rule-4 guarantee: a prefix of somebody's issue body is still their
-        // issue body, so the arm refuses rather than shortens.
-        let long = "x".repeat(TOKEN_MAX + 1);
-        let result = serde_json::json!({
-            "id": "K-1",
-            "status": "In Progress",
-            "labels": ["a", "b"],
-            "description": long,
-        });
-        let kept = reduce(
-            &row(
-                Reduce::Acknowledge,
-                &["id", "status", "labels", "description"],
-            ),
-            &result,
-        )
-        .unwrap();
-        assert_eq!(kept.get("id"), Some(&serde_json::json!("K-1")));
-        assert!(
-            !kept.contains_key("description"),
-            "an over-long value is refused, never truncated"
-        );
-        assert!(
-            !kept.contains_key("labels"),
-            "a container is a shape whose size the caller did not bound"
-        );
-
-        // THE NEAR-MISS THIS ROW ALMOST SHIPPED, pinned so it cannot come back.
-        // An earlier draft copied `facts::Reduction::Token`'s whitespace clause
-        // across, which is right for the POLICY INPUT it serves and wrong here:
-        // `save_issue` answers `status = "In Progress"`, so the arm would have
-        // silently dropped the one field CLOUD-1122's remedy names — `{id,
-        // status, handle}` — with every test still green.
-        assert_eq!(
-            kept.get("status"),
-            Some(&serde_json::json!("In Progress")),
-            "a short status name is what the caller asked for, not prose to refuse"
-        );
-
-        // The same field set under `project` DOES carry the body, which is what
-        // makes the refusals above a statement about the arm rather than about
-        // the payload.
-        let wide = reduce(
-            &row(Reduce::Project, &["id", "labels", "description"]),
-            &result,
-        )
-        .unwrap();
-        assert!(wide.contains_key("description") && wide.contains_key("labels"));
-    }
-
-    #[test]
-    fn a_node_the_row_cannot_reach_is_could_not_look_rather_than_an_empty_reduction() {
-        // The fail-open-loudly half. An empty projection and a genuinely empty
-        // row are byte-identical on the decision surface, so the unreachable
-        // node must not answer with `{}`.
-        let mut unreachable = row(Reduce::Project, &["id"]);
-        unreachable.node = "nowhere.at.all".to_owned();
-        assert_eq!(reduce(&unreachable, &serde_json::json!({"id": "K"})), None);
-
-        // And an `embedded` row over a node that is not a document, which is the
-        // same answer arrived at down a different path.
-        let mut mistaken = row(Reduce::Project, &["id"]);
-        mistaken.embedded = true;
-        assert_eq!(reduce(&mistaken, &serde_json::json!({"id": "K"})), None);
-    }
-
-    #[test]
-    fn an_embedded_payload_is_parsed_only_where_a_row_asked() {
-        // The OVERRIDE route, for a server whose framing `payload` does not
-        // recognise. It reaches inside a document `payload` handed back whole.
-        let odd = serde_json::json!({
-            "envelope": {"blob": r#"{"id":"K-1","body":"prose"}"#},
-        });
-        let mut declared = row(Reduce::Project, &["id"]);
-        declared.node = "envelope.blob".to_owned();
-        declared.embedded = true;
-        let kept = reduce(&declared, &odd).unwrap();
-        assert_eq!(kept.get("id"), Some(&serde_json::json!("K-1")));
-        assert!(!kept.contains_key("body"));
-    }
-
-    #[test]
     fn the_protocols_own_framing_comes_off_without_a_row_asking() {
         // READING THE PROTOCOL, not guessing a schema: `tools/call` is specified
         // to answer with content blocks, so an ordinary row needs no override —
@@ -3462,27 +2474,18 @@ mod tests {
     }
 
     #[test]
-    fn a_reduction_over_no_fields_is_refused_at_load() {
-        // An empty projection is a dropped payload wearing the costume of a
-        // narrower answer, and it is refused where a config fault belongs.
-        let mut config = McpConfig::default();
-        config.results.push(ResultRow {
-            method: "m".to_owned(),
-            reduce: Reduce::Project,
-            fields: Vec::new(),
-            node: String::new(),
-            embedded: false,
-        });
-        assert!(validate(&config).is_err());
-    }
-
-    #[test]
     fn an_undeclared_source_set_and_an_unmatched_server_answer_differently() {
         // Non-negotiable: "nowhere to look" and "looked and did not find" are
         // different facts about the world.
         let empty = McpConfig::default();
         assert_eq!(
-            wiring(&empty, Path::new("."), "anything"),
+            wiring(
+                &empty,
+                &crate::fixture_root::fixture_root(
+                    "an_undeclared_source_set_and_an_unmatched_server_answer_differently"
+                ),
+                "anything"
+            ),
             Err(Unresolved::Undeclared)
         );
 
@@ -3497,7 +2500,13 @@ mod tests {
             credential: None,
         });
         assert_eq!(
-            wiring(&declared, Path::new("."), "anything"),
+            wiring(
+                &declared,
+                &crate::fixture_root::fixture_root(
+                    "an_undeclared_source_set_and_an_unmatched_server_answer_differently"
+                ),
+                "anything"
+            ),
             Err(Unresolved::NotFound {
                 tried: vec!["nowhere".to_owned()]
             })
@@ -3823,7 +2832,11 @@ mod tests {
     /// otherwise than [`wiring`] does.
     #[test]
     fn a_server_answers_without_its_helper_being_run() {
-        assert!(!answers(&McpConfig::default(), Path::new("."), "srv"));
+        assert!(!answers(
+            &McpConfig::default(),
+            &crate::fixture_root::fixture_root("a_server_answers_without_its_helper_being_run"),
+            "srv"
+        ));
         let dir = scratch("answers-no-helper");
         let ran = dir.join("ran");
         std::fs::write(
@@ -3861,7 +2874,10 @@ mod tests {
         let mut source = source_with(None);
         source.root = Some("PATH".to_owned());
         assert_eq!(
-            resolved_path(&source, Path::new(".")),
+            resolved_path(
+                &source,
+                &crate::fixture_root::fixture_root("a_set_root_resolves_the_path_beneath_it")
+            ),
             Ok(Some(std::path::PathBuf::from(path).join("w.json")))
         );
     }
@@ -4001,89 +3017,6 @@ mod tests {
         );
     }
 
-    /// Fails by: a method's row not found, or another method's returned.
-    #[test]
-    fn a_method_s_row_is_its_own() {
-        let mut config = McpConfig::default();
-        for method in ["first", "second"] {
-            let mut declared = row(Reduce::Project, &["id"]);
-            declared.method = method.to_owned();
-            config.results.push(declared);
-        }
-        assert_eq!(
-            row_for(&config, "second").map(|row| row.method.as_str()),
-            Some("second")
-        );
-        assert_eq!(row_for(&config, "third"), None);
-    }
-
-    /// Fails by: a value of exactly the bound refused.
-    #[test]
-    fn acknowledge_keeps_a_value_of_exactly_the_bound() {
-        let edge = "x".repeat(TOKEN_MAX);
-        let kept = reduce(
-            &row(Reduce::Acknowledge, &["id"]),
-            &serde_json::json!({ "id": edge }),
-        )
-        .unwrap();
-        assert_eq!(kept.get("id"), Some(&serde_json::json!(edge)));
-    }
-
-    /// Fails by: the elements, their key, or a paging sibling dropped; an
-    /// undeclared, empty, over-long or container sibling emitted; or one at
-    /// exactly the bound refused.
-    #[test]
-    fn each_projects_every_element_and_only_the_bounded_paging_siblings() {
-        let edge = "c".repeat(TOKEN_MAX);
-        let result = serde_json::json!({"page": {
-            "issues": [{"id": "A", "body": "prose"}, {"id": "B"}],
-            "hasNextPage": true,
-            "cursor": "c1",
-            "nextCursor": edge,
-            "endCursor": "e".repeat(TOKEN_MAX + 1),
-            "total": "",
-            "startCursor": {"nested": 1},
-            "account_email": "someone@example.invalid",
-        }});
-        let mut each = row(Reduce::Each, &["id"]);
-        each.node = "page.issues".to_owned();
-        let reduced = reduce(&each, &result).unwrap();
-        assert_eq!(
-            serde_json::Value::Object(reduced),
-            serde_json::json!({
-                "issues": [{"id": "A"}, {"id": "B"}],
-                "hasNextPage": true,
-                "cursor": "c1",
-                "nextCursor": edge,
-            })
-        );
-    }
-
-    /// Fails by: siblings read beside an embedded document, which has no parent
-    /// here.
-    #[test]
-    fn each_over_an_embedded_document_reads_no_siblings() {
-        let result = serde_json::json!({
-            "blob": r#"[{"id": "A"}]"#,
-            "cursor": "c1",
-        });
-        let mut each = row(Reduce::Each, &["id"]);
-        each.node = "blob".to_owned();
-        each.embedded = true;
-        assert_eq!(
-            serde_json::Value::Object(reduce(&each, &result).unwrap()),
-            serde_json::json!({"blob": [{"id": "A"}]})
-        );
-    }
-
-    /// Fails by: the key a projection answers under misread.
-    #[test]
-    fn a_projection_answers_under_its_node_s_last_segment() {
-        assert_eq!(items_key("page.issues"), "issues");
-        assert_eq!(items_key("issues."), "issues");
-        assert_eq!(items_key(""), ITEMS);
-    }
-
     /// Fails by: the ledger named somewhere other than the checkout's git dir.
     #[test]
     fn the_spawn_ledger_lives_in_the_git_dir() {
@@ -4094,18 +3027,6 @@ mod tests {
             ledger.ends_with(Path::new(".git").join(SPAWN_LEDGER)),
             "{}",
             ledger.display()
-        );
-    }
-
-    /// Fails by: a cut that lands mid-character, or one that moves the wrong
-    /// way. One ASCII byte first puts the bound inside a two-byte character.
-    #[test]
-    fn a_cut_backs_off_to_the_boundary_before_the_bound() {
-        let text = format!("a{}", "é".repeat(REFUSAL_MESSAGE_BOUND));
-        let cut = refusal_message(&text);
-        assert_eq!(
-            cut,
-            format!("a{}…", "é".repeat((REFUSAL_MESSAGE_BOUND - 2) / 2))
         );
     }
 

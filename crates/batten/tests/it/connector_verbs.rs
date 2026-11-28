@@ -76,7 +76,7 @@ use common::{Fixture, run, run_with_stdin, stderr};
 
 /// This repository's own rows, as committed — never a fixture rewriting them.
 fn repo(name: &str) -> PathBuf {
-    let staged = Fixture::new(name).config(include_str!("../../../../batten.toml"));
+    let staged = Fixture::new(name).config(&common::committed_config());
     let modules = staged.path().join("policy");
     std::fs::create_dir_all(&modules).expect("the fixture's policy directory is creatable");
     let committed = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -239,4 +239,25 @@ fn each_refusal_names_its_own_remedy() {
             "{verb}'s refusal must reach its own remedy ({remedy}), got: {explained_text}"
         );
     }
+}
+
+/// `batten policy tools` names every `mediated_call` row's `tool` from the
+/// committed config — the fact the guard's `--covers` used to restate.
+///
+/// Fails by: the scope filter inverted, which lists the tools of every row
+/// that is NOT a mediated call and drops the three decided verbs.
+#[test]
+fn policy_tools_names_every_mediated_selector() {
+    let dir = repo("connector-verbs-policy-tools");
+    let output = run(&dir, &["policy", "tools"]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let said = String::from_utf8_lossy(&output.stdout).into_owned();
+    let names: Vec<&str> = said.lines().collect();
+    for (verb, _) in DECIDED {
+        assert!(names.contains(verb), "{verb} missing: {said}");
+    }
+    let mut sorted = names.clone();
+    sorted.sort_unstable();
+    sorted.dedup();
+    assert_eq!(names, sorted, "one sorted, deduplicated list");
 }

@@ -41,9 +41,6 @@ pub enum Step {
 /// # Errors
 ///
 /// The refusal pointer, for a published release.
-//MUTANT-SUITE crates/batten/tests/it/release_verify.rs
-//MUTANT discard-deletes-published|s@^        Found::Published => Err(PUBLISHED.to_owned()),$@        Found::Published => Ok(vec![Step::DeleteTag]),@|discard_refuses_a_published_release
-//MUTANT discard-deletes-orphan-tag|s@^        Found::Absent => Ok(Vec::new()),$@        Found::Absent => Ok(vec![Step::DeleteTag]),@|discard_leaves_an_orphan_tag_alone
 pub fn discard(found: &Found) -> Result<Vec<Step>, String> {
     const PUBLISHED: &str = "it is published; a published release is never discarded";
     match found {
@@ -76,7 +73,6 @@ pub enum Relation {
     Absent,
 }
 
-//MUTANT identical-read-as-behind|s@^            Some((true, true)) => Self::Identical,$@            Some((true, true)) => Self::MainBehind,@|both_producers_agree_on_every_relation
 impl Relation {
     /// The forge's `compare/{main}...{commit}` status, or `None` for one it
     /// does not define. `ahead` and `behind` are the commit's, against `main`.
@@ -131,7 +127,6 @@ pub struct Flight {
 }
 
 /// Whether a release is in flight, naming it and the arm that holds, or `None`.
-//MUTANT freeze-ignores-pending-land|s@^        if pending.relation != Relation::MainBehind {$@        if true {@|a_pending_land_is_in_flight_until_its_hold_expires
 #[must_use]
 pub fn in_flight(flight: &Flight) -> Option<String> {
     if let Some(run) = &flight.active_run {
@@ -246,8 +241,6 @@ pub enum CutOrLand {
 /// open draft's target is landed; any other head is cut as before, which is what
 /// keeps the bake from looping — its own CI completing on the release branch
 /// would otherwise discard the draft it was baked from.
-//MUTANT-SUITE crates/batten/tests/it/release_verify.rs
-//MUTANT baked-head-recut|s@^    if draft_target.is_some_and(\x7ctarget\x7c baked_onto(head, target, tag, sums)) {$@    if false {@|cut_or_land_lands_a_baked_head_and_cuts_any_other
 #[must_use]
 pub fn cut_or_land(draft_target: Option<&str>, head: &Head, tag: &str, sums: &str) -> CutOrLand {
     if draft_target.is_some_and(|target| baked_onto(head, target, tag, sums)) {
@@ -305,8 +298,6 @@ fn full_sha(text: &str) -> bool {
 /// `sha` is A itself or A's bake (CLOUD-2287): the bake commits only the
 /// install lock and the script rendered from it, so A's pin, version and
 /// relation to `main` are the release's.
-//MUTANT baked-head-refused|s@^            let baked = is_baked(facts, target);$@            let baked = false;@|a_baked_head_of_the_drafts_target_is_draft_ok
-//MUTANT land-state-resume-as-burned|s@^                (true, Relation::MainBehind) => LandState::ResumeAtD,$@                (true, Relation::MainBehind) => LandState::Burned,@|land_state_resumes_a_published_release_main_is_behind
 #[must_use]
 pub fn land_state(facts: &LandFacts) -> LandState {
     match &facts.read {
@@ -320,14 +311,29 @@ pub fn land_state(facts: &LandFacts) -> LandState {
             }
         }
         Read::Draft { target } => {
-            let version = facts.tag.trim_start_matches('v');
+            // PARSED IDENTITY (CLOUD-2906): the pin and version at the target are
+            // the tag's own, build metadata included; text that only looks equal
+            // is not.
+            let tag = crate::version::Tag::parse(&facts.tag);
+            let version = tag
+                .as_ref()
+                .map_or_else(String::new, |tag| tag.version.to_string());
+            let pinned = facts
+                .pin_at_target
+                .as_deref()
+                .and_then(crate::version::Tag::parse);
+            let at_target = facts
+                .version_at_target
+                .as_deref()
+                .and_then(crate::version::parse);
             let baked = is_baked(facts, target);
             if !full_sha(target) || (*target != facts.sha && !baked) {
                 LandState::DraftBad(format!("its target {target} is not {}", facts.sha))
             } else if facts.tag_ref.as_ref().is_some_and(|at| at != target) {
                 LandState::DraftBad(format!("refs/tags/{} is at another commit", facts.tag))
-            } else if facts.pin_at_target.as_deref() != Some(facts.tag.as_str())
-                || facts.version_at_target.as_deref() != Some(version)
+            } else if tag.is_none()
+                || pinned != tag
+                || at_target.as_ref() != tag.as_ref().map(|tag| &tag.version)
             {
                 LandState::DraftBad(format!(
                     "the pin and version at {target} are not {} and {version}",
@@ -349,7 +355,6 @@ pub fn land_state(facts: &LandFacts) -> LandState {
 /// # Errors
 ///
 /// The refusal pointer.
-//MUTANT published-release-overwritten|s@^        Read::Published { .. } => Err(PUBLISHED.to_owned()),$@        Read::Published { .. } => Ok(()),@|guard_refuses_a_published_release_and_a_foreign_draft
 pub fn guard(read: &Read, sha: &str) -> Result<(), String> {
     const PUBLISHED: &str = "it is published, and a published release's assets are never replaced";
     match read {
@@ -372,7 +377,6 @@ pub enum Unusable {
 /// Whether vX is unusable: burned, or a stray tag.
 ///
 /// `reachable` is whether `main` reaches a published release's tag commit.
-//MUTANT stray-tag-not-unusable|s@^        Found::Absent if tag_exists => Some(Unusable::StrayTag),$@        Found::Absent if false => Some(Unusable::StrayTag),@|a_stray_tag_is_unusable
 #[must_use]
 pub fn unusable(found: &Found, reachable: bool, tag_exists: bool) -> Option<Unusable> {
     match found {
@@ -383,19 +387,15 @@ pub fn unusable(found: &Found, reachable: bool, tag_exists: bool) -> Option<Unus
 }
 
 /// The next patch version: `0.0.214` → `0.0.215`, or `None` for a version
-/// that is not three dot-separated numbers.
+/// that is not semver, or carries a pre-release or build metadata — a patch base
+/// is a release (CLOUD-2906).
 #[must_use]
 pub fn next_version(version: &str) -> Option<String> {
-    let mut parts: Vec<u64> = version
-        .split('.')
-        .map(str::parse)
-        .collect::<Result<_, _>>()
-        .ok()?;
-    if parts.len() != 3 {
+    let version = crate::version::parse(version)?;
+    if !crate::version::is_release(&version) || !version.build.is_empty() {
         return None;
     }
-    parts[2] += 1;
-    Some(format!("{}.{}.{}", parts[0], parts[1], parts[2]))
+    Some(semver::Version::new(version.major, version.minor, version.patch + 1).to_string())
 }
 
 /// The four files a bump moves, as text in and text out.
@@ -418,7 +418,6 @@ pub struct Files {
 /// # Errors
 ///
 /// The pointer naming the file that does not carry X where it must.
-//MUTANT bump-keeps-changelog-heading|s@^    let changelog = bump_heading(\&files.changelog, from, \&to)$@    let changelog = Some(files.changelog.clone())@|an_unusable_version_bumps_all_four_paths
 pub fn bump(files: &Files, from: &str, packages: &[String]) -> Result<(String, Files), String> {
     let to = next_version(from).ok_or_else(|| format!("{from} is not a patch version"))?;
     let old_line = format!("version = \"{from}\"");
@@ -478,11 +477,12 @@ fn bump_lock(lock: &str, packages: &[String], old_line: &str, new_line: &str) ->
 /// moved to X+1, or `None` where no such heading exists.
 fn bump_heading(changelog: &str, from: &str, to: &str) -> Option<String> {
     let opener = format!("## [{from}]");
+    let want = crate::version::parse(from)?;
     let mut found = false;
     let lines: Vec<String> = changelog
         .lines()
         .map(|line| {
-            if !found && line.starts_with(&opener) {
+            if !found && crate::engine::heading_version(line).as_ref() == Some(&want) {
                 found = true;
                 line.replacen(&opener, &format!("## [{to}]"), 1).replacen(
                     &format!("...v{from})"),
@@ -700,6 +700,11 @@ pub fn read_flight(
             .unwrap_or_default()
             .to_owned();
         let flag = |key: &str| entry.get(key).and_then(serde_json::Value::as_bool) == Some(true);
+        // A dev pre-release is ahead of `main` by construction and has no land
+        // job: whatever its flags, it is never in flight (CLOUD-2954).
+        if tag.starts_with("dev/") {
+            continue;
+        }
         if flag("draft") {
             let created = entry
                 .get("created_at")
@@ -734,7 +739,7 @@ fn slug_or_say(
     verb: &str,
     err: &mut dyn std::io::Write,
 ) -> std::io::Result<Option<String>> {
-    let slug = crate::repo_slug(here);
+    let slug = crate::race::repo_slug(here);
     if slug.is_none() {
         writeln!(
             err,
@@ -834,7 +839,7 @@ pub fn run_in_flight(
         return Ok(crate::ExitCode::Internal);
     };
     let get = |path: &str| crate::rest::get(path, None);
-    let now = i64::try_from(crate::now_unix()).unwrap_or(i64::MAX);
+    let now = i64::try_from(crate::clock::now_unix()).unwrap_or(i64::MAX);
     let flight = trunk(here)
         .and_then(|(_, short)| read_flight(&slug, (&short, workflows), now, LAND_HOLD_SECS, &get));
     match flight.map(|flight| in_flight(&flight)) {
@@ -1159,7 +1164,9 @@ pub fn run_bump_unusable(
         config,
         changelog: log,
     };
-    let (to, bumped) = match bump(&files, tag.trim_start_matches('v'), &packages) {
+    let from =
+        crate::version::Tag::parse(tag).map_or_else(String::new, |tag| tag.version.to_string());
+    let (to, bumped) = match bump(&files, &from, &packages) {
         Ok(bumped) => bumped,
         Err(why) => {
             writeln!(err, "release bump-unusable: {tag}: {why}")?;
@@ -1191,13 +1198,14 @@ pub fn run_bump_unusable(
 
 /// The body of the changelog's `## [version]` section — every line after its
 /// heading up to the next `## [` heading — or `None` where there is none.
-//MUTANT notes-section-unbounded|s@^        if line.starts_with("## \[") {$@        if false {@|the_notes_are_the_versions_own_section
 #[must_use]
 pub fn section(changelog: &str, version: &str) -> Option<String> {
-    let opener = format!("## [{version}]");
+    // FOUND BY THE PARSED VERSION (CLOUD-2906), so `## [1.0.0]` is never the
+    // section of `1.0.0-rc.1` because it shares a prefix with it.
+    let want = crate::version::parse(version)?;
     let mut lines = changelog
         .lines()
-        .skip_while(|line| !line.starts_with(&opener));
+        .skip_while(|line| crate::engine::heading_version(line).as_ref() != Some(&want));
     lines.next()?;
     let mut body = Vec::new();
     for line in lines {
@@ -1318,7 +1326,9 @@ fn run_cut_in(
             Discarded::Undeleted(path, None) => return Err(format!("{path} did not answer")),
         }
         let text = crate::git::show(here, sha, changelog).map_err(|why| why.to_string())?;
-        let Some(notes) = section(&text, tag.trim_start_matches('v')) else {
+        let version =
+            crate::version::Tag::parse(tag).map_or_else(String::new, |tag| tag.version.to_string());
+        let Some(notes) = section(&text, &version) else {
             return Ok(Err(format!(
                 "{changelog} at {sha} has no section for {tag}"
             )));
@@ -1562,7 +1572,7 @@ pub fn run_pin(
     let text = match at {
         Some(rev) => crate::git::show(std::path::Path::new("."), rev, "batten.toml")
             .map_err(|why| why.to_string()),
-        None => std::fs::read_to_string("batten.toml").map_err(|why| why.to_string()),
+        None => crate::fsio::read_to_string("batten.toml").map_err(|why| why.to_string()),
     };
     let text = match text {
         Ok(text) => text,
@@ -1571,12 +1581,32 @@ pub fn run_pin(
             return Ok(crate::ExitCode::Internal);
         }
     };
-    if let Some(pin) = crate::release_path::pin_of(&text) {
-        writeln!(out, "{pin}")?;
-        Ok(crate::ExitCode::Success)
-    } else {
-        writeln!(err, "release pin: batten.toml pins no release")?;
-        Ok(crate::ExitCode::Violation)
+    match cuttable_pin(&text) {
+        Ok(pin) => {
+            writeln!(out, "{pin}")?;
+            Ok(crate::ExitCode::Success)
+        }
+        Err(why) => {
+            writeln!(err, "release pin: {why}")?;
+            Ok(crate::ExitCode::Violation)
+        }
+    }
+}
+
+/// The release `config` pins, when it is one a release step may cut: a tag,
+/// parsed, and a release (CLOUD-2906). A pre-release, or a pin that is not a
+/// tag at all, is never handed to a release step.
+///
+/// # Errors
+///
+/// Why there is no such pin, as the pointer [`run_pin`] prints.
+pub fn cuttable_pin(config: &str) -> Result<String, String> {
+    let pin = crate::release_path::pin_of(config)
+        .ok_or_else(|| String::from("batten.toml pins no release"))?;
+    match crate::version::Tag::parse(&pin) {
+        Some(tag) if tag.is_release() => Ok(pin),
+        Some(_) => Err(format!("{pin} is a pre-release, which is never cut")),
+        None => Err(format!("{pin} is not a release tag")),
     }
 }
 
@@ -1584,7 +1614,7 @@ pub fn run_pin(
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
-
+    #[cfg(test)]
     fn answer(status: u16, body: &str) -> crate::rest::Answer {
         crate::rest::Answer {
             status,
@@ -1937,7 +1967,7 @@ mod tests {
         let (code, out, fixture) = cut("cut-dispatched", 204);
         assert_eq!(code, crate::ExitCode::Success, "{out}");
         assert!(out.contains("v1.0.0 drafted at"), "{out}");
-        let drafted = std::fs::read_to_string(fixture.join("route.3.request")).unwrap();
+        let drafted = crate::fsio::read_to_string(fixture.join("route.3.request")).unwrap();
         assert!(
             drafted.contains("notes") && !drafted.contains("old"),
             "{drafted}"
@@ -1950,11 +1980,7 @@ mod tests {
         use std::fmt::Write as _;
         let mut sums = String::new();
         for target in crate::install::TARGETS {
-            let stem = crate::dist::archive_stem(
-                env!("CARGO_PKG_NAME"),
-                tag.trim_start_matches('v'),
-                target,
-            );
+            let stem = crate::dist::tag_archive_stem(env!("CARGO_PKG_NAME"), tag, target);
             let _ = writeln!(
                 sums,
                 "{}  {stem}{}",
@@ -2041,7 +2067,7 @@ mod tests {
             "install.lock\ninstall.sh\n"
         );
         assert!(
-            std::fs::read_to_string(dir.join(crate::install::LOCK_FILE))
+            crate::fsio::read_to_string(dir.join(crate::install::LOCK_FILE))
                 .unwrap()
                 .contains("\ntag v1.0.0\n")
         );
@@ -2139,6 +2165,33 @@ mod tests {
             ..facts(SHA)
         };
         assert!(matches!(land_state(&wrong_version), LandState::DraftBad(_)));
+    }
+
+    #[test]
+    fn a_pre_release_pin_is_never_cut() {
+        let config = |pin: &str| format!("version = 1\nengine = {{ release = \"{pin}\" }}\n");
+        assert_eq!(cuttable_pin(&config("v0.0.221")), Ok("v0.0.221".to_owned()));
+        assert!(cuttable_pin(&config("v0.0.221-dev.pr1.20261124T050057Z+3f9c2a1b7d04")).is_err());
+        assert!(cuttable_pin(&config("v0.0.221-rc.1")).is_err());
+        assert!(cuttable_pin(&config("vv0.0.221")).is_err());
+        assert!(cuttable_pin("version = 1\n").is_err());
+    }
+
+    #[test]
+    fn a_pre_release_or_non_semver_is_not_a_patch_base() {
+        assert_eq!(next_version("0.0.214").as_deref(), Some("0.0.215"));
+        assert_eq!(next_version("0.0.221-dev.1"), None);
+        assert_eq!(next_version("0.00.221"), None);
+        assert_eq!(next_version("0.0.221+b"), None);
+        assert_eq!(next_version("0.0.221.1"), None);
+    }
+
+    #[test]
+    fn a_section_is_found_by_its_parsed_version_and_never_by_a_prefix() {
+        let log = "## [1.0.0-rc.1] - 2026-01-01\nrc\n## [1.0.0] - 2026-01-02\nfinal\n";
+        assert_eq!(section(log, "1.0.0").as_deref(), Some("final"));
+        assert_eq!(section(log, "1.0.0-rc.1").as_deref(), Some("rc"));
+        assert_eq!(section(log, "v1.0.0"), None);
     }
 
     #[test]
@@ -2292,6 +2345,34 @@ mod tests {
             }]
         );
         assert_eq!(flight.land_hold, 9);
+    }
+
+    /// A dev pre-release is ahead of `main` by construction and has no land, so
+    /// the freeze never counts a tag under `dev/` (CLOUD-2954).
+    #[test]
+    fn a_tag_under_dev_is_never_a_release_in_flight() {
+        let read = |listed: &'static str, reference: &'static str| {
+            let get = forge(&[
+                ("releases/latest", r#"{"tag_name":"v1"}"#),
+                ("releases?per_page=30", listed),
+                (reference, r#"{"object":{"sha":"c9","type":"commit"}}"#),
+                ("compare/main...c9", r#"{"status":"ahead"}"#),
+            ]);
+            read_flight("o/r", ("main", &[]), 0, LAND_HOLD_SECS, &get).unwrap()
+        };
+        let dev = read(
+            r#"[{"tag_name":"dev/v9-dev.pr1.1","prerelease":true}]"#,
+            "git/ref/tags/dev/v9-dev.pr1.1",
+        );
+        assert!(dev.pending.is_empty());
+        assert!(dev.drafts.is_empty());
+        assert_eq!(in_flight(&dev), None);
+        let release = read(
+            r#"[{"tag_name":"v9","prerelease":true}]"#,
+            "git/ref/tags/v9",
+        );
+        assert_eq!(release.pending.len(), 1);
+        assert!(in_flight(&release).is_some());
     }
 
     /// A draft is in flight for its first ten minutes, and a failed land holds

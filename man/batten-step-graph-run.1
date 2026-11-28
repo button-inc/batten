@@ -1,0 +1,19 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH batten-step-graph-run 1  batten 
+.SH NAME
+batten\-step\-graph\-run \- Run a group\*(Aqs rows, dependencies first and at most \-\-jobs at once, and exit with the worst row\*(Aqs code
+.SH SYNOPSIS
+\fBbatten step graph run\fR [\fB\-\-jobs\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIgroup\fR> 
+.SH DESCRIPTION
+Run a group\*(Aqs rows, dependencies first and at most \-\-jobs at once, and exit with the worst row\*(Aqs code
+.SH OPTIONS
+.TP
+\fB\-\-jobs\fR \fI<jobs>\fR
+Run at most this many of the group\*(Aqs rows at once (a positive integer; default: no bound)
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+<\fIgroup\fR>
+The graphs to run, in order, as the step table\*(Aqs `group` field names them; `NAME=N` runs that one at most N at once

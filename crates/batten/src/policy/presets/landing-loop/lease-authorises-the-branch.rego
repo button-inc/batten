@@ -81,7 +81,7 @@ rules contains "lease grant other"
 # whole bundle down at load.
 answers := [answer |
 	is_object(input.tree.records)
-	line := input.tree.records[_][_]
+	line = input.tree.records[_][_]
 	columns := split(line, " ")
 	count(columns) == 4
 	columns[0] == "lease"
@@ -102,7 +102,7 @@ answers := [answer |
 # hides. Undefined where there is no lease line at all, which allows.
 latest := answer if {
 	count(answers) > 0
-	answer := answers[count(answers) - 1]
+	answer = answers[count(answers) - 1]
 }
 
 # Refused: the lease is live, it grades this clone as not the holder, and no

@@ -53,6 +53,21 @@ fn check(dir: &Path) -> Output {
     run(dir, &["check"])
 }
 
+/// Fails by: a ratchet row's measure never checked (`self.kind !=
+/// RuleKind::Ratchet` read as `==`), so a row counting both a token measure
+/// and a literal loads and counts one of them silently (CLOUD-2789).
+#[test]
+fn a_ratchet_counting_tokens_and_a_literal_is_refused() {
+    let alone = ratchet_config("#[test]", "non_decreasing", "deny");
+    batten::config::parse(&alone, "test").expect("the premise: a literal ratchet loads");
+    let both = format!("{alone}counts = \"tokens\"\n");
+    let err = batten::config::parse(&both, "test").expect_err("two measures are refused");
+    assert!(
+        format!("{err:#}").contains("are alternatives; a ratchet"),
+        "{err:#}"
+    );
+}
+
 #[test]
 fn deleting_a_test_is_a_violation_naming_the_two_counts() {
     // The headline case: the working tree drops one of the two `#[test]` fns.
@@ -2168,3 +2183,50 @@ fn removing_an_inline_body_never_violates_either_row() {
 // withdrawn: "a rule the head config does not carry is could-not-look" a broken declaration read as could-not-look rather than blamed on the migration
 // withdrawn: "a suite that never invokes the program is a refusal, not a silent pass" the vacuous-pass refusal, and the one this repository has measured four times elsewhere; it is refused here by an instrument that is itself now gone
 // withdrawn: "no declared replay at all is not a failure" the mid-campaign carve-out that kept the task useful before its first consumer existed — a consumer that never arrived, which is this withdrawal's premise
+
+/// The committed `symbol skip unused` row's pattern, read from `batten.toml`,
+/// so the case drives the row this repository ships and not a copy of it.
+fn committed_pattern(id: &str) -> String {
+    let text =
+        std::fs::read_to_string(common::committed_config_file("ratchet")).expect("batten.toml");
+    let parsed: toml::Value = toml::from_str(&text).expect("batten.toml parses as TOML");
+    parsed["rule"]
+        .as_array()
+        .expect("a rule array")
+        .iter()
+        .find(|rule| rule["id"].as_str() == Some(id))
+        .and_then(|rule| rule["pattern"].as_str())
+        .expect("the committed row declares a pattern")
+        .to_owned()
+}
+
+/// Fails by: an added `#[allow(unused_imports)]` on a `use` admitted, or a
+/// fixture spelling one inside a string literal counted (CLOUD-2808).
+#[test]
+fn an_added_unused_imports_allow_on_a_use_is_refused() {
+    let pattern = toml::Value::String(committed_pattern("symbol skip unused")).to_string();
+    let config = format!(
+        "version = 1\n\n[[rule]]\nid = \"symbol skip unused\"\nkind = \"ratchet\"\nglob = \"src/**/*.rs\"\npattern = {pattern}\ndirection = \"non_increasing\"\nbase = \"main\"\nseverity = \"deny\"\n"
+    );
+    let dir = ratchet_repo("ratchet-unused-imports", &config);
+
+    common::write(
+        &dir,
+        "src/fixture.rs",
+        "const SPELLED: &str = \"#[allow(unused_imports)]\\nuse a::b;\\n\";\n",
+    );
+    assert_eq!(
+        check(&dir).status.code(),
+        Some(0),
+        "a string literal spelling the attribute is not one"
+    );
+
+    common::write(
+        &dir,
+        "src/dead.rs",
+        "#[allow(unused_imports)]\nuse std::fmt;\n",
+    );
+    let output = check(&dir);
+    assert_eq!(output.status.code(), Some(2), "{}", stdout(&output));
+    assert!(stdout(&output).contains("symbol skip unused"));
+}

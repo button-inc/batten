@@ -80,14 +80,14 @@ actions_table := "mise-tasks/sbom-actions.tsv"
 # rather than a silent miss, and an id nothing recorded is absent from the map.
 scan := verdict if {
 	is_object(input.tree["tool-verdict"])
-	verdict := input.tree["tool-verdict"].sbom
+	verdict = input.tree["tool-verdict"].sbom
 }
 
 # A recorded count, as a number. A key the producer did not write leaves this
 # undefined, so every rule reading it abstains rather than comparing against zero
 # — the difference between "the scan says none" and "nobody recorded it".
 count_of(key) := value if {
-	raw := scan[key]
+	raw = scan[key]
 	value := to_number(raw)
 }
 

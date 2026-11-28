@@ -60,7 +60,7 @@ violation contains {
 	"verdict": "grant carry missing",
 	"subjects": [{"path": ".claude/settings.json"}],
 } if {
-	document := input.tree.documents[".claude/settings.json"]
+	document = input.tree.documents[".claude/settings.json"]
 	is_object(document)
 	"autoMode" in object.keys(document)
 }

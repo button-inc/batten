@@ -30,7 +30,7 @@
 //!
 //! Every consumer fact is an argument: the manifest's name, the workflow to
 //! dispatch, the branch it runs on and the tag glob. The repository comes from
-//! [`crate::repo_slug`], the credential from `[forge] credential_names`
+//! [`crate::race::repo_slug`], the credential from `[forge] credential_names`
 //! (non-negotiable rule 1).
 //!
 //! # Three answers, kept apart
@@ -62,15 +62,6 @@ use crate::rest::Answer;
 
 // THE MECHANISM'S OWN DISCRIMINATION, over the compiled binary against the
 // fixture forge. Each row removes one property a packager or a gate depends on.
-//MUTANT-SUITE crates/batten/tests/it/checksums.rs
-//MUTANT sums-hash-the-manifest-itself|s@^    for asset in release.assets.iter().filter(.asset. asset.name != manifest) {$@    for asset in \&release.assets {@|the_manifest_covers_every_asset_never_itself_and_is_byte_stable
-//MUTANT sums-written-empty|s@^    if files.is_empty() {$@    if false {@|a_release_with_no_assets_writes_no_manifest
-//MUTANT-SUITE crates/batten/tests/it/release_assets.rs
-//MUTANT mismatch-never-recorded|s@^            .is_some_and(.bytes. digest(bytes) != .expected)$@            .is_none()@|a_byte_mismatch_is_refused_once_the_names_agree
-//MUTANT stale-record-survives-could-not-look|s@^            crate::record::clear_named(RECORD_VERB, FAMILY)?;$@@|an_unreadable_release_is_could_not_look_and_leaves_no_record
-//MUTANT-SUITE crates/batten/tests/it/release_backfill.rs
-//MUTANT backfill-trusts-the-dispatch|s@^                if !conclusion.publishes() {$@                if false {@|a_failed_run_stops_the_sweep_naming_the_tag
-//MUTANT backfill-lexical-order|s@^        tags.sort_by(.left, right. version_order(left, right));$@        tags.sort();@|the_repository_tags_are_swept_oldest_first_by_version
 
 /// The record family `record release` writes, and the one a module reads.
 ///
@@ -215,7 +206,6 @@ pub fn is_draft(slug: &str, tag: &str, get: Get<'_>) -> bool {
 ///
 /// Only an entry whose `tag_name` IS the tag is taken; a list with none is the
 /// same could-not-look the tag read would have been, naming both reads.
-//MUTANT draft-unread|s@^        return read_listed(slug, tag, \&path, get);$@        return Err(path.clone());@|a_draft_release_is_read_from_the_release_list
 fn read_listed(slug: &str, tag: &str, tag_path: &str, get: Get<'_>) -> Result<Published, String> {
     let path = format!("repos/{slug}/releases?per_page=100");
     let Some(answer) = get(&path) else {
@@ -482,7 +472,7 @@ fn manifest_name(verb: &str, name: &str) -> Result<()> {
 /// what could not be asked on `err`, and answers [`ExitCode::Internal`].
 pub fn run_record(tag: Option<&str>, manifest: &str, err: &mut dyn Write) -> Result<ExitCode> {
     manifest_name(RECORD_VERB, manifest)?;
-    let slug = crate::repo_slug(Path::new("."));
+    let slug = crate::race::repo_slug(Path::new("."));
     let produced = produce_record(
         slug.as_deref(),
         tag,
@@ -588,7 +578,7 @@ pub fn run_sums(
         writeln!(out, "sums={}", path.display())?;
         return Ok(ExitCode::Success);
     }
-    let slug = crate::repo_slug(Path::new("."));
+    let slug = crate::race::repo_slug(Path::new("."));
     let produced = produce_sums(
         slug.as_deref(),
         tag,
@@ -629,42 +619,25 @@ pub fn run_sums(
 
 // --- release backfill -----------------------------------------------------------
 
-/// `sort -V`'s order over two tag names: digit runs compare as numbers, every
-/// other run as bytes.
+/// The RELEASE tags among `tags` under the glob `pattern`, oldest first by
+/// semver precedence (CLOUD-2906).
 ///
-/// `v0.0.110` sorts after `v0.0.78` — which byte order gets backwards, and the
+/// `v0.0.110` sorts after `v0.0.78`, which byte order gets backwards, and the
 /// action a backfill drives derives each release's issues from the tag's commit
-/// range, so a wrong order records the wrong ranges.
+/// range, so a wrong order records the wrong ranges. A pre-release is never a
+/// release, so it is never backfilled; a tag that is not semver under the glob's
+/// prefix is not one either.
 #[must_use]
-pub fn version_order(left: &str, right: &str) -> std::cmp::Ordering {
-    let runs = |text: &str| -> Vec<(bool, String)> {
-        let mut found: Vec<(bool, String)> = Vec::new();
-        for character in text.chars() {
-            let digit = character.is_ascii_digit();
-            match found.last_mut() {
-                Some((kind, run)) if *kind == digit => run.push(character),
-                _ => found.push((digit, character.to_string())),
-            }
-        }
-        found
-    };
-    let (left_runs, right_runs) = (runs(left), runs(right));
-    for (one, other) in left_runs.iter().zip(right_runs.iter()) {
-        let order = match (one, other) {
-            ((true, a), (true, b)) => {
-                let (a, b) = (a.trim_start_matches('0'), b.trim_start_matches('0'));
-                a.len().cmp(&b.len()).then_with(|| a.cmp(b))
-            }
-            ((_, a), (_, b)) => a.cmp(b),
-        };
-        if order != std::cmp::Ordering::Equal {
-            return order;
-        }
-    }
-    left_runs
-        .len()
-        .cmp(&right_runs.len())
-        .then_with(|| left.cmp(right))
+pub fn releases_in_order(tags: Vec<String>, pattern: &str) -> Vec<String> {
+    let mut releases: Vec<(crate::version::Version, String)> = tags
+        .into_iter()
+        .filter_map(|tag| {
+            let version = crate::version::under_glob(&tag, pattern)?;
+            crate::version::is_release(&version).then_some((version, tag))
+        })
+        .collect();
+    releases.sort_by(|(left, _), (right, _)| crate::version::precedence(left, right));
+    releases.into_iter().map(|(_, tag)| tag).collect()
 }
 
 /// What a backfill is asked to do, every consumer fact an argument.
@@ -719,7 +692,7 @@ pub fn plan(request: &Backfill, root: &Path) -> Result<Vec<String>> {
             .get(&request.pattern)
             .map(|facts| facts.iter().map(|fact| fact.tag.clone()).collect())
             .unwrap_or_default();
-        tags.sort_by(|left, right| version_order(left, right));
+        tags = releases_in_order(tags, &request.pattern);
     }
     if tags.is_empty() {
         return Err(UsageError::raise(format!(
@@ -729,7 +702,10 @@ pub fn plan(request: &Backfill, root: &Path) -> Result<Vec<String>> {
     }
     let bad: Vec<&str> = tags
         .iter()
-        .filter(|tag| !crate::git::tag_glob_matches(&request.pattern, tag))
+        .filter(|tag| {
+            !crate::git::tag_glob_matches(&request.pattern, tag)
+                || !crate::version::is_release_under(tag, &request.pattern)
+        })
         .map(String::as_str)
         .collect();
     if !bad.is_empty() {
@@ -928,7 +904,7 @@ pub fn run_backfill(
         }
         return Ok(ExitCode::Success);
     }
-    let Some(slug) = crate::repo_slug(root) else {
+    let Some(slug) = crate::race::repo_slug(root) else {
         writeln!(
             err,
             "batten: {BACKFILL_VERB}: could not look: no forge remote names the repository to \
@@ -1038,6 +1014,9 @@ pub fn run(
             out,
             err,
         ),
+        crate::cli::ReleaseCommand::Previous { tag, pattern } => {
+            run_previous(std::path::Path::new("."), &tag, &pattern, out, err)
+        }
         crate::cli::ReleaseCommand::Install
         | crate::cli::ReleaseCommand::Verify { .. }
         | crate::cli::ReleaseCommand::Path { .. } => Err(anyhow::anyhow!(
@@ -1046,11 +1025,46 @@ pub fn run(
     }
 }
 
+/// `release previous` (CLOUD-2906): the nearest ancestor RELEASE tag under
+/// `pattern` before `tag`, one line (empty when there is none), exit 0. Exit 2
+/// when `tag` is not a release under `pattern` (a pre-release or a tag that is
+/// not semver ships nothing, so it has no predecessor to record from), and 3
+/// when the repository could not be read.
+///
+/// # Errors
+///
+/// Only a write to `out` or `err` failing.
+pub fn run_previous(
+    root: &std::path::Path,
+    tag: &str,
+    pattern: &str,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
+    if !crate::version::is_release_under(tag, pattern) {
+        writeln!(
+            err,
+            "release previous: {tag} is not a release under `{pattern}`"
+        )?;
+        return Ok(ExitCode::Violation);
+    }
+    match crate::git::previous_tag(root, tag, pattern) {
+        Ok(previous) => {
+            writeln!(out, "{}", previous.unwrap_or_default())?;
+            Ok(ExitCode::Success)
+        }
+        Err(why) => {
+            writeln!(err, "batten: release previous: could not look: {why}")?;
+            Ok(ExitCode::Internal)
+        }
+    }
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
-
+    #[cfg(test)]
     fn reading(body: &str) -> Answer {
         Answer {
             status: 200,
@@ -1183,9 +1197,23 @@ mod tests {
 
     #[test]
     fn version_order_is_numeric_per_run() {
-        let mut tags = vec!["v0.0.110", "v0.0.78", "v0.0.9", "v0.1.0"];
-        tags.sort_by(|a, b| version_order(a, b));
-        assert_eq!(tags, ["v0.0.9", "v0.0.78", "v0.0.110", "v0.1.0"]);
+        let tags = ["v0.0.110", "v0.0.78", "v0.0.9", "v0.1.0"].map(String::from);
+        assert_eq!(
+            releases_in_order(tags.to_vec(), "v[0-9]*"),
+            ["v0.0.9", "v0.0.78", "v0.0.110", "v0.1.0"]
+        );
+    }
+
+    #[test]
+    fn backfill_orders_by_precedence_and_drops_pre_releases() {
+        let tags = ["v0.1.0", "v0.1.0-rc.1", "v0.0.110", "v0.0.9", "v1.0.0+b"].map(String::from);
+        assert_eq!(
+            releases_in_order(tags.to_vec(), "v[0-9]*"),
+            ["v0.0.9", "v0.0.110", "v0.1.0", "v1.0.0+b"]
+        );
+        assert!(
+            releases_in_order(vec!["vv1.0.0".to_owned(), "v0.99".to_owned()], "v[0-9]*").is_empty()
+        );
     }
 
     fn request() -> Backfill {

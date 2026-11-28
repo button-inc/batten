@@ -1,0 +1,16 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH batten-receipt-pull 1  batten 
+.SH NAME
+batten\-receipt\-pull \- Pull this branch\*(Aqs published receipts from the state repository into this checkout
+.SH SYNOPSIS
+\fBbatten receipt pull\fR [\fB\-\-advisory\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+.SH DESCRIPTION
+Pull this branch\*(Aqs published receipts from the state repository into this checkout
+.SH OPTIONS
+.TP
+\fB\-\-advisory\fR
+Say one line and exit 0 whatever the state repository answered (the session\-start route)
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help

@@ -52,7 +52,7 @@
 //!
 //! # The ladder decides, and this is its first consumer
 //!
-//! [`crate::config::Strictness`] has resolved since the loader landed and
+//! [`crate::config_model::Strictness`] has resolved since the loader landed and
 //! nothing read it. [`blocks`] is where it starts deciding, and it reads **all
 //! three ranks** rather than special-casing `Strict`, because each variant's own
 //! doc comment already pins its meaning. Promotion runs through
@@ -67,11 +67,11 @@ use anyhow::Result;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::config::Strictness;
+use crate::config_model::Strictness;
+use crate::digest::sha256_hex as hex_sha256;
 use crate::error::UsageError;
+use crate::findings::Finding;
 use crate::identity::{FindingKind, StoredIdentity};
-use crate::receipt::hex_sha256;
-use crate::rules::Finding;
 use crate::severity::RuleSeverity;
 
 /// The pointer a finding names, since the corpus arrives on stdin and has no
@@ -79,18 +79,7 @@ use crate::severity::RuleSeverity;
 /// stream, so one convention covers both.
 pub const STREAM: &str = "-";
 
-/// The `[design]` table: the one config key this gate reads.
-///
-/// Deliberately a single key. The corpus is stdin's, the predicates are the
-/// engine's, and the only thing a repository gets to say is how large a single
-/// capture may be before it is worth a second look.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct Design {
-    /// The per-capture byte ceiling. Absent means [`DEFAULT_MAX_CAPTURE_BYTES`].
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub max_capture_bytes: Option<usize>,
-}
+// The section's declaration lives with the model (CLOUD-2789).
 
 /// The engine's per-capture ceiling when a config names none.
 ///
@@ -285,10 +274,10 @@ pub const GATES: &[(&str, RuleSeverity)] = &[
     (DIGEST_MISMATCH, RuleSeverity::Deny),
     (VERIFIER_ABSENT, RuleSeverity::Deny),
     (BYTE_COUNT_MISMATCH, RuleSeverity::Deny),
-    (CLAIMANT_ABSENT, RuleSeverity::Warn),
-    (SELF_ATTESTED, RuleSeverity::Warn),
-    (DIGEST_NOT_COMPUTABLE, RuleSeverity::Warn),
-    (CAPTURE_OVER_BUDGET, RuleSeverity::Warn),
+    (CLAIMANT_ABSENT, RuleSeverity::Advise),
+    (SELF_ATTESTED, RuleSeverity::Advise),
+    (DIGEST_NOT_COMPUTABLE, RuleSeverity::Advise),
+    (CAPTURE_OVER_BUDGET, RuleSeverity::Advise),
 ];
 
 /// The severity a gate id carries.
@@ -558,10 +547,8 @@ pub fn blocks(findings: &[Finding], strictness: Strictness, fail_on_warning: boo
 /// path never carries one.
 fn promotes_to_fail(findings: &[Finding], fail_on_warning: bool) -> bool {
     findings.iter().any(|finding| {
-        crate::severity::promote(
-            crate::severity::row_for_rule(finding.severity).report,
-            fail_on_warning,
-        ) == crate::severity::ReportLevel::Fail
+        crate::severity::report_for(finding.severity, fail_on_warning)
+            == crate::severity::ReportLevel::Fail
     })
 }
 
@@ -621,7 +608,7 @@ impl Report {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
-
+    #[cfg(test)]
     /// A capture whose digest and count are honest, so a test that is not about
     /// the capture gates does not trip them.
     fn capture(body: &str) -> Capture {
@@ -725,7 +712,7 @@ mod tests {
             .iter()
             .find(|problem| problem.id == CLAIMANT_ABSENT)
             .unwrap();
-        assert_eq!(claimant.severity(), RuleSeverity::Warn);
+        assert_eq!(claimant.severity(), RuleSeverity::Advise);
     }
 
     #[test]
@@ -734,7 +721,7 @@ mod tests {
         claim.verifier = claim.claimant.clone();
         let problems = audit(&[claim], DEFAULT_MAX_CAPTURE_BYTES);
         assert_eq!(ids(&problems), [SELF_ATTESTED]);
-        assert_eq!(problems[0].severity(), RuleSeverity::Warn);
+        assert_eq!(problems[0].severity(), RuleSeverity::Advise);
     }
 
     #[test]

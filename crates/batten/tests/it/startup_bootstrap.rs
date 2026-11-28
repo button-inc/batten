@@ -109,8 +109,10 @@ fn the_runner_check_is_answerable_with_only_batten_present() {
         .lines()
         .find_map(|line| line.trim().strip_prefix("check = "))
         .expect("the row declares a check");
+    // `env` until step 14 (`batten.toml`'s withheld shape): spawnable wherever
+    // batten is, and exiting 127 over a missing runner, which the repair acts on.
     assert!(
-        check.starts_with(r#"["batten""#),
+        check.starts_with(r#"["batten""#) || check.starts_with(r#"["env""#),
         "the runner row's check must be answerable by batten alone — the runner it \
          is about is what may be missing, and a check that cannot spawn is \
          reported as could-not-look and never repaired. Was: {check}"
@@ -228,7 +230,7 @@ fn applying_a_linked_entry_puts_the_binary_where_a_bare_name_resolves() {
     let out = batten()
         .current_dir(&dir)
         .args(["provision", "apply"])
-        .output()
+        .streamed_output()
         .expect("the binary runs");
     assert_eq!(
         out.status.code(),
@@ -269,7 +271,7 @@ fn a_warm_cache_whose_link_vanished_is_relinked_rather_than_reported_fresh() {
     let first = batten()
         .current_dir(&dir)
         .args(["provision", "apply"])
-        .output()
+        .streamed_output()
         .expect("the binary runs");
     assert_eq!(first.status.code(), Some(0), "{}", stderr(&first));
     assert!(landed.is_file(), "the cold apply links");
@@ -280,7 +282,7 @@ fn a_warm_cache_whose_link_vanished_is_relinked_rather_than_reported_fresh() {
     let status = batten()
         .current_dir(&dir)
         .args(["provision", "status"])
-        .output()
+        .streamed_output()
         .expect("the binary runs");
     assert_ne!(
         status.status.code(),
@@ -293,7 +295,7 @@ fn a_warm_cache_whose_link_vanished_is_relinked_rather_than_reported_fresh() {
     let second = batten()
         .current_dir(&dir)
         .args(["provision", "apply"])
-        .output()
+        .streamed_output()
         .expect("the binary runs");
     assert_eq!(second.status.code(), Some(0), "{}", stderr(&second));
     assert!(
@@ -425,7 +427,7 @@ fn a_relative_link_destination_is_refused_rather_than_resolved() {
     let out = batten()
         .current_dir(&dir)
         .args(["provision", "apply"])
-        .output()
+        .streamed_output()
         .expect("the binary runs");
     assert_ne!(out.status.code(), Some(0));
     let said = format!("{}{}", stdout(&out), stderr(&out));

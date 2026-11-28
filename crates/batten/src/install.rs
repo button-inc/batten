@@ -308,7 +308,7 @@ pub fn committed_binaries(root: &Path, tracked: &BTreeSet<String>) -> Vec<String
     tracked
         .iter()
         .filter(|path| {
-            let Ok(bytes) = std::fs::read(root.join(path)) else {
+            let Ok(bytes) = crate::fsio::read(root.join(path)) else {
                 return false;
             };
             is_executable(&bytes)
@@ -347,12 +347,14 @@ pub const BOOTSTRAP_PROGRAMS: &[&str] = &[
 ];
 
 /// What the bootstrap asks the release for: `dist`'s own stem and extension,
-/// with the version left as the shell expression that carries it.
+/// with the TAG left as the shell variable that carries it, verbatim — the
+/// download URL beside it already requires the tag as written, so nothing strips
+/// its `v` (CLOUD-2906).
 #[must_use]
 pub fn bootstrap_asset(name: &str) -> String {
     format!(
         "{}{}",
-        crate::dist::archive_stem(name, "${tag#v}", "$target"),
+        crate::dist::tag_archive_stem(name, "$tag", "$target"),
         crate::dist::archive_ext("x86_64-unknown-linux-gnu")
     )
 }
@@ -386,10 +388,15 @@ impl Lock {
     /// no line for: a bootstrap baked without it would refuse that platform.
     pub fn from_sums(name: &str, tag: &str, sums: &str) -> Result<Self> {
         let mut lines = Vec::new();
+        let version = crate::version::Tag::parse(tag)
+            .map(|tag| tag.version.to_string())
+            .ok_or_else(|| {
+                UsageError::raise(format!("release bake: {tag} is not a release tag"))
+            })?;
         for target in TARGETS {
             let asset = format!(
                 "{}{}",
-                crate::dist::archive_stem(name, tag.trim_start_matches('v'), target),
+                crate::dist::archive_stem(name, &version, target),
                 crate::dist::archive_ext(target)
             );
             let digest = crate::engine::published_digest(sums, &asset).ok_or_else(|| {
@@ -487,8 +494,14 @@ impl Lock {
 /// own reading of `CURL_CA_BUNDLE`, then `SSL_CERT_FILE`. `BATTEN_RELEASES`
 /// exists so a suite can serve the release from a fixture; nothing else is
 /// configurable here.
-//MUTANT-SUITE crates/batten/tests/it/install_web.rs
-//MUTANT bootstrap-skips-its-baked-hash|s@^\[ "${{sum%% \*}}" = "$want" \] \x7c\x7c fail@true \x7c\x7c fail@|a_served_archive_disagreeing_with_the_lock_installs_nothing
+///
+/// **NO LIBC CHOICE EITHER (CLOUD-2595).** Linux always takes the static musl
+/// build, the one that runs on every Linux, so the script never probes the host.
+/// Choosing gnu — about 15× faster per hook — where it runs is work for the
+/// binary: `engine install` fetches the same tag's gnu build, verifies it, runs
+/// it, and keeps it only if it answered. The script used to guess from a
+/// `/lib/ld-musl-*` loader, which handed a gnu binary to every host with no libc
+/// or too old a glibc.
 #[must_use]
 pub fn render_bootstrap(name: &str, repository: &str, lock: &Lock) -> String {
     let asset = bootstrap_asset(name);
@@ -524,13 +537,7 @@ aarch64 | arm64) arch=aarch64 ;;
 *) fail "no release for $os/$arch" 1 ;;
 esac
 case "$os" in
-Linux)
-	libc=gnu
-	for loader in /lib/ld-musl-*; do
-		[ -e "$loader" ] && libc=musl
-	done
-	target="$arch-unknown-linux-$libc"
-	;;
+Linux) target="$arch-unknown-linux-musl" ;;
 Darwin) target="$arch-apple-darwin" ;;
 *) fail "no release for $os/$arch" 1 ;;
 esac
@@ -590,8 +597,6 @@ pub const SYSTEM_BIN_DIRS: &[&str] = &["/usr/local/bin", "/opt/homebrew/bin"];
 /// directory, so the runner a setup provisions follows the same PATH fallback
 /// rather than landing where the same shell cannot resolve it.
 /// `BATTEN_INSTALL_DIR` and `XDG_BIN_HOME` steer only `engine install`.
-//MUTANT-SUITE crates/batten/src/install.rs
-//MUTANT self-install-ignores-path|s@^        if on_path.iter().any(\x7centry\x7c entry == dir) && writable(dir) {$@        if false {@|a_writable_system_directory_on_path_is_chosen
 #[must_use]
 pub fn destination(
     named: Option<std::path::PathBuf>,
@@ -620,7 +625,7 @@ pub fn destination(
 pub(crate) fn on_path_dirs(dir: &Path, on_path: &[std::path::PathBuf]) -> bool {
     on_path
         .iter()
-        .any(|entry| entry == dir || crate::wiring::same_file(entry, dir))
+        .any(|entry| entry == dir || crate::fsio::same_file(entry, dir))
 }
 
 /// Every program the script runs, read as the first word of each command: a
@@ -681,7 +686,7 @@ pub fn programs_in(script: &str) -> BTreeSet<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
+    #[cfg(test)]
     /// A `SHA256SUMS` body naming `digest` for every bootstrap target at v1.2.3.
     fn sums_of(digest: &str) -> String {
         TARGETS.iter().fold(String::new(), |mut sums, target| {
@@ -900,11 +905,10 @@ mod tests {
     #[test]
     fn the_bootstrap_asset_is_dists_name_with_the_tags_version() {
         let asset = bootstrap_asset("batten");
-        assert_eq!(asset, "batten-v${tag#v}-$target.tar.gz");
+        assert_eq!(asset, "batten-$tag-$target.tar.gz");
         for target in TARGETS {
-            let concrete = asset
-                .replace("${tag#v}", "1.2.3")
-                .replace("$target", target);
+            // `$target` first: `$tag` is a prefix of it.
+            let concrete = asset.replace("$target", target).replace("$tag", "v1.2.3");
             assert_eq!(
                 concrete,
                 format!(

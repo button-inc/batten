@@ -92,8 +92,9 @@ fn asking(name: &str) -> PathBuf {
 fn payload(command: &str) -> String {
     let encoded = serde_json::to_string(command).expect("a command is encodable");
     format!(
-        "{{\"hook_event_name\":\"PreToolUse\",\"session_id\":\"s1\",\"tool_name\":\"Bash\",\
-         \"tool_input\":{{\"command\":{encoded}}}}}"
+        "{{\"hook_event_name\":\"PreToolUse\",\"session_id\":\"{session}\",\"tool_name\":\"Bash\",\
+         \"tool_input\":{{\"command\":{encoded}}}}}",
+        session = common::session_id("s1")
     )
 }
 
@@ -242,7 +243,7 @@ fn ask_on_a_tree_rule_is_a_usage_error() {
     let out = common::batten()
         .args(["check"])
         .current_dir(&dir)
-        .output()
+        .streamed_output()
         .expect("run batten");
     assert_eq!(
         out.status.code(),
@@ -267,7 +268,7 @@ fn ask_without_a_reason_is_a_usage_error() {
     let out = common::batten()
         .args(["check"])
         .current_dir(&dir)
-        .output()
+        .streamed_output()
         .expect("run batten");
     assert_eq!(out.status.code(), Some(1), "exit 1, at load");
     let cause = stderr(&out);

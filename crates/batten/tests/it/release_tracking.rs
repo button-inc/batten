@@ -72,7 +72,8 @@ use crate::common;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use batten::rules::{self, Rule};
+use batten::config_model::Rule;
+use batten::rules;
 
 const RELEASE: &str = ".github/workflows/release-land.yml";
 const BACKFILL: &str = ".github/workflows/linear-release-backfill.yml";
@@ -174,11 +175,11 @@ jobs:
             echo "::error:: no such tag" >&2
             exit 1
           fi
-      - name: Resolve the tag this one follows
+      - name: Resolve the release this one follows
         id: base
         env:
           TAG: ${{ inputs.tag }}
-        run: echo "ref=$(git describe --abbrev=0 --tags "$TAG^" 2>/dev/null || true)" >>"$GITHUB_OUTPUT"
+        run: mise run batten -- ci step --capture ref --arg-env TAG -- mise run batten -- release previous --pattern 'v[0-9]*' --tag
       - name: Release tracking requires its credential
         env:
           LINEAR_ACCESS_KEY: ${{ secrets.LINEAR_ACCESS_KEY }}
@@ -274,7 +275,8 @@ fn row() -> Rule {
 }
 
 fn patterns() -> Vec<batten::pattern::NamedPattern> {
-    let config = fs::read_to_string(common::at_root("batten.toml")).expect("the committed config");
+    let config = fs::read_to_string(common::committed_config_file("release_tracking"))
+        .expect("the committed config");
     let parsed: toml::Value = toml::from_str(&config).expect("batten.toml parses");
     let rows = parsed["pattern"].as_array().expect("`[[pattern]]` rows");
     let found: Vec<_> = rows
@@ -296,7 +298,7 @@ fn patterns() -> Vec<batten::pattern::NamedPattern> {
 /// A tree carrying the two workflows (either may be absent) and the committed
 /// module. A sibling workflow is always present so the glob always matches.
 fn tree(name: &str, release: Option<&str>, backfill: Option<&str>) -> PathBuf {
-    let root = common::scratch(&format!("release-tracking-{name}"));
+    let root = common::scratch_repo(&format!("release-tracking-{name}"));
     common::write(&root, ".github/workflows/ci.yml", "jobs:\n  ci:\n");
     if let Some(body) = release {
         common::write(&root, RELEASE, body);

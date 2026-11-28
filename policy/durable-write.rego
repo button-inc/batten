@@ -29,6 +29,7 @@
 #MUTANT test-boundary-ignored|s@^\tnot after_test_boundary(lines, i)$@\ttrue@|a_write_inside_a_test_module_is_not_refused
 #MUTANT module-never-closes|s@^\tline == "}"$@\tfalse@|production_after_a_closed_test_module_is_refused
 #MUTANT stream-mark-ignored|s@^\tnot contains(line, "// stream:")$@\ttrue@|a_line_marked_as_a_stream_is_not_refused
+#MUTANT production-one-crate|s@^\tparts\[0\] == "crates"$@\tstartswith(path, "crates/batten/src/")@|a_raw_write_in_another_crate_is_refused
 
 # METADATA
 # description: |
@@ -57,11 +58,31 @@ raw_write(line) if contains(line, ".append(true)")
 # the FIRST `#[cfg(test)]` as test code, which assumes the test module is last.
 # `forge.rs` has production after it, and its `conditional_get` wrote the ETag
 # and the body raw, green, because the gate had stopped reading at line 146.
+#
+# THE SEAM IS A BOUNDARY TOO (#1276). The crate split gated fixture code on
+# `#[cfg(any(test, feature = "seam"))]` so a dependent's suites can reach it, and
+# `seam` is enabled only from a `[dev-dependencies]` entry: no shipped build
+# compiles that code, exactly as none compiles a `#[cfg(test)]` module.
+#
+# A ONE-LINE GATED ITEM OPENS NOTHING: `#[cfg(test)]` over `use std::fmt;` ends
+# at its `;`, and reading on to the next column-0 brace would mask the
+# production function after it.
 after_test_boundary(lines, i) if {
 	some j, boundary in lines
-	boundary == "#[cfg(test)]"
+	gated_boundary(boundary)
 	j < i
+	not one_line_item(lines, j)
 	not closed_between(lines, j, i)
+}
+
+gated_boundary(line) if line == "#[cfg(test)]"
+
+gated_boundary(line) if line == "#[cfg(any(test, feature = \"seam\"))]"
+
+one_line_item(lines, j) if {
+	item = lines[j + 1]
+	not startswith(item, "#[")
+	endswith(trim_space(item), ";")
 }
 
 closed_between(lines, j, i) if {
@@ -89,10 +110,17 @@ item_start(line) if {
 	startswith(line, prefix)
 }
 
+# EVERY PACKAGE'S SOURCE, read from the path rather than a list of crates
+# (#1276): `crates/<crate>/src/**`. The split moved `durable` into
+# `batten-facts`, and a prefix naming one crate stopped judging every module it
+# moved while the row's globs still listed them.
 production(path) if {
-	startswith(path, "crates/batten/src/")
+	parts := split(path, "/")
+	count(parts) > 3
+	parts[0] == "crates"
+	parts[2] == "src"
 	endswith(path, ".rs")
-	path != "crates/batten/src/durable.rs"
+	path != "crates/batten-facts/src/durable.rs"
 }
 
 violation contains {
@@ -144,9 +172,63 @@ test_a_brace_inside_an_embedded_string_does_not_close_the_module if {
 }
 
 test_durable_itself_is_exempt if {
-	count(violation) == 0 with input as {"tree": {"lines": {"crates/batten/src/durable.rs": ["std::fs::OpenOptions::new().append(true)"]}}}
+	count(violation) == 0 with input as {"tree": {"lines": {"crates/batten-facts/src/durable.rs": ["std::fs::OpenOptions::new().append(true)"]}}}
 }
 
 test_the_test_crate_is_out_of_scope if {
 	count(violation) == 0 with input as {"tree": {"lines": {"crates/batten/tests/it/a.rs": ["std::fs::write(p, b);"]}}}
+}
+
+# EVERY PACKAGE'S SOURCE (#1276). The crate split moved `durable` itself and
+# half the crate into sibling packages; a predicate keyed on one crate's prefix
+# stopped judging all of them while every row still listed their globs.
+test_a_raw_write_in_another_crates_source_is_refused if {
+	count(violation) == 1 with input as {"tree": {"lines": {"crates/batten-base/src/a.rs": ["fn f() { std::fs::write(p, b); }"]}}}
+}
+
+test_a_nested_module_in_another_crate_is_judged if {
+	count(violation) == 1 with input as {"tree": {"lines": {"crates/batten-core/src/m/a.rs": ["fn f() { std::fs::write(p, b); }"]}}}
+}
+
+test_the_old_durable_path_is_no_longer_exempt if {
+	count(violation) == 1 with input as {"tree": {"lines": {"crates/batten/src/durable.rs": ["std::fs::write(p, b);"]}}}
+}
+
+test_another_crates_tests_are_out_of_scope if {
+	count(violation) == 0 with input as {"tree": {"lines": {"crates/batten-base/tests/a.rs": ["std::fs::write(p, b);"]}}}
+}
+
+# THE SEAM IS A TEST BOUNDARY. `feature = "seam"` is enabled only from a
+# dependent's `[dev-dependencies]`, so an item gated on it is fixture code that
+# no shipped build compiles.
+test_a_write_inside_a_seam_gated_item_is_not_refused if {
+	count(violation) == 0 with input as {"tree": {"lines": {"crates/batten-base/src/a.rs": [
+		"#[cfg(any(test, feature = \"seam\"))]",
+		"pub fn routed() {",
+		"    std::fs::write(p, b).expect(\"x\");",
+		"}",
+	]}}}
+}
+
+test_production_after_a_closed_seam_item_is_refused if {
+	count(violation) == 1 with input as {"tree": {"lines": {"crates/batten-base/src/a.rs": [
+		"#[cfg(any(test, feature = \"seam\"))]",
+		"pub fn routed() {",
+		"    std::fs::write(p, b).expect(\"x\");",
+		"}",
+		"fn f() { std::fs::write(p, b); }",
+	]}}}
+}
+
+# A ONE-LINE GATED ITEM OPENS NO MODULE. `#[cfg(test)]` over a `use` ends at its
+# `;`, so the production function after it is judged, not read as test code up
+# to the next column-0 brace.
+test_production_after_a_one_line_gated_item_is_refused if {
+	count(violation) == 1 with input as {"tree": {"lines": {"crates/batten/src/a.rs": [
+		"#[cfg(test)]",
+		"use std::fmt;",
+		"fn f() {",
+		"    std::fs::write(p, b);",
+		"}",
+	]}}}
 }

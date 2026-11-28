@@ -45,7 +45,7 @@
 //! beside the `#MUTANT` rows, and nothing else (CLOUD-2160). A source declaring
 //! none, or naming a path no runner here recognizes, reports `no-suite` and runs
 //! nothing — a guessed suite is a guessed verdict. A
-//! `.rego` module can therefore name `crates/batten/tests/<x>.rs` — the tier
+//! `.rego` module can therefore name a crate's `tests/<x>.rs` — the tier
 //! that actually drives the engine — as the suite a mutation must redden. The
 //! declaration is read PER SOURCE: a preset gate is a directory of modules, and
 //! each module's rows run under its own module's suite (see `Gate::suite_for`).
@@ -97,6 +97,32 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context as _, Result, bail};
 
+/// Write one sweep progress line to `$out` and say the step advanced
+/// (CLOUD-2789): the line a person reads and the stamp the land's self-stall
+/// arm reads are one write, so no stage can report to the log and stay still to
+/// the lap. MEASURED ON #1276 at add313832: the declared sweep printed all 204
+/// of its rows over 9,754 s and the lap was cancelled as stalled, because only
+/// the judging loop told the task it moved.
+///
+/// Every `mutate sweep: row …` and `mutate schema: …` line goes through this,
+/// and `every_sweep_line_says_the_step_advanced` refuses one written any other
+/// way.
+macro_rules! progress {
+    ($out:expr, $($arg:tt)*) => {{
+        let line = ::std::format!($($arg)*);
+        $crate::step::advanced(&line);
+        ::std::writeln!($out, "{line}")
+    }};
+}
+pub(crate) use progress;
+
+pub mod cover;
+pub mod resume;
+pub mod schema;
+pub mod shown;
+pub mod stable;
+pub mod trace;
+
 /// The declaration markers, bare — the comment opener is [`OPENERS`]'s business.
 ///
 /// Beside the code rather than in a manifest: a declaration in a second file is
@@ -106,14 +132,14 @@ use anyhow::{Context as _, Result, bail};
 /// IMPLEMENTATION LANGUAGE** (CLOUD-1369). These read `#MUTANT `, matched with
 /// `strip_prefix` and no trim, so a declaration could only live in a `#`-comment
 /// file — bash or Rego. `#MUTANT` is not valid Rust, so no predicate in
-/// `crates/batten/src/**` could carry one, while `obligations-bound` demands the
+/// a crate's `src/**` could carry one, while `obligations-bound` demands the
 /// declared obligation file carry exactly that row. The pair was unsatisfiable
 /// for every Rust change, and a shell suite was no escape because
 /// `V-SHELL-RULE-ADDED` refuses adding one.
 ///
 /// The measured cost was not the gap itself: CLOUD-1349's "shown able to fail"
 /// was performed BY HAND — predicate edited to a constant, suite re-run, result
-/// read by eye, edit reverted — which is a model verdict standing where
+/// read by eye, edit reverted — which is a gated-model verdict standing where
 /// non-negotiable rule 3 wants a command and an exit code. The revert then took
 /// the uncommitted implementation with it.
 ///
@@ -139,30 +165,9 @@ const EXEMPT: &str = "MUTANT-EXEMPT ";
 /// declaration.
 const OPENERS: &[&str] = &["//", "#"];
 
-/// Where a Rust source lives, relative to the repository root.
-///
-/// A gate name is kebab and a Rust module is snake, so the name is transliterated
-/// rather than matched: `sources_for` is the one place that mapping happens.
-const ENGINE: &str = "crates/batten/src";
-
-/// The namespace an engine subject's name carries.
-///
-/// **A PREFIX RATHER THAN THE BARE MODULE NAME, BECAUSE THE NAMES COLLIDE.**
-/// `mise-tasks/doctor.sh` is a gate called `doctor` and `crates/batten/src/
-/// doctor.rs` transliterates to `doctor` too — so a bare name would have made
-/// `subjects` overwrite the shell gate's row with the module's, and left
-/// `sources_for` still resolving the shell task, which means the module's
-/// declared mutations would never be applied while reading as declared. A
-/// coverage-shaped nothing, from a name clash, in the verb whose whole job is
-/// refusing exactly that.
-///
-/// Caught while landing CLOUD-1369, whose own worked example is `doctor.rs`, so
-/// the collision was the first thing the route hit rather than a hypothetical.
-const ENGINE_PREFIX: &str = "engine-";
-
 /// The namespace an inline task's name carries (CLOUD-1909).
 ///
-/// **A PREFIX FOR `ENGINE_PREFIX`'s REASON, one file over.** The retirement
+/// **A PREFIX, BECAUSE NAMES COLLIDE ACROSS A RETIREMENT.** The retirement
 /// campaign keeps a program's name when it moves the body inline, so
 /// `mise-tasks/<name>.sh` and `[tasks."<name>"]` routinely name the same gate
 /// across a retirement. A bare name would resolve the shell program and leave the
@@ -199,6 +204,23 @@ pub fn changed_since() -> Option<String> {
         .ok()
         .map(|value| value.trim().to_owned())
         .filter(|value| !value.is_empty())
+}
+
+/// The variable that asks `mutate cargo` for the whole workspace's mutants
+/// rather than a change's (CLOUD-2849): the scheduled sweep's scope, declared
+/// in the environment beside [`changed_since`]'s base for that function's
+/// reason.
+pub const WHOLE_TREE: &str = "MUTANT_WHOLE_TREE";
+
+/// Whether [`WHOLE_TREE`] is set to anything but blank.
+///
+/// THE SCHEDULE'S PROOF OVER EVERY RUST SOURCE (CLOUD-2849): with the
+/// hand-written Rust rows retired onto cargo-mutants, a sweep that only ever
+/// listed a diff left code no change touches with no mutation judged against
+/// its suite at all. A whole-tree run lists `--workspace` and carries no base.
+#[must_use]
+pub fn whole_tree() -> bool {
+    std::env::var(WHOLE_TREE).is_ok_and(|value| !value.trim().is_empty())
 }
 
 /// The lines of one inline task's table, header included, or `None` where the
@@ -268,13 +290,6 @@ fn task_names(lines: &[String]) -> Vec<String> {
 /// Every source but the manifest is read whole, exactly as before. The manifest is
 /// read as the named task's block alone — for a `task-` gate, so its reads cannot
 /// reach another task's rows (CLOUD-1909).
-//MUTANT-SUITE crates/batten/tests/it/mutate.rs
-//MUTANT task-block-unscoped|s@        Some(task) if task_manifest().as_deref() == Some(source) => task_block(&lines, task),@        Some(_) if task_manifest().as_deref() == Some(source) => Some(lines),@|a_task_gate_sweeps_only_its_own_block
-//MUTANT registered-rows-swept-by-hand|s@^                if !gate.rows.is_empty() \&\& !gate.rows.iter().any(\x7crow\x7c registry.declares(row)) {$@                if false {@|a_change_to_a_rust_gate_is_judged_by_its_registered_runner
-//MUTANT registered-row-judged-twice|s@^                .filter(\x7crow\x7c registry.declares(row))$@                .filter(\x7c_\x7c true)@|a_registered_runners_rows_are_never_swept_by_the_declared_runner
-//MUTANT shard-slices-unsorted|s@^    sorted.sort();$@@|shards_partition_the_sorted_gates_and_refuse_a_malformed_value
-//MUTANT shard-takes-every-gate|s@^        .filter(\x7c(_, owned)\x7c \*owned)$@        .filter(\x7c_\x7c true)@|shards_partition_the_sorted_gates_and_refuse_a_malformed_value
-//MUTANT every-gate-touched|s@^        \.filter(\x7cname\x7c {$@        .filter(\x7cname\x7c { true \x7c\x7c@|a_change_touching_no_gate_sweeps_nothing
 fn declaring_lines(root: &Path, name: &str, source: &str) -> Option<Vec<String>> {
     declaring_in(name, source, lines_of(root, source)?)
 }
@@ -305,8 +320,17 @@ fn strip_marker(line: &str, marker: &str) -> Option<String> {
 /// What `no-suite` names for a gate none of whose sources declares a suite.
 const UNDECLARED: &str = "undeclared";
 
-/// Where a preset's modules live, relative to the repository root.
-const PRESETS: &str = "crates/batten/src/policy/presets";
+/// Where the consumer keeps its presets, one directory per preset of `.rego`
+/// modules, relative to the repository root: `$MUTANT_PRESETS`, read as
+/// `MUTANT_TASKS` is, beside the rest of the sweep's scope. Unset, there is no
+/// preset arm: the crate names no directory of a consumer's (rule 1,
+/// CLOUD-2711).
+fn presets_dir() -> Option<String> {
+    std::env::var("MUTANT_PRESETS")
+        .ok()
+        .map(|value| value.trim().trim_end_matches('/').to_owned())
+        .filter(|value| !value.is_empty())
+}
 
 /// One declared mutation: `#MUTANT <slug>|<script>|<case>`.
 ///
@@ -371,7 +395,6 @@ pub enum Suite {
     Pytest { path: String },
 }
 
-//MUTANT unrecognized-suite-guessed|s@^            return None;$@            return Some(Suite::Pytest { path: path.to_owned() });@|an_unrecognized_suite_is_reported_not_run
 impl Suite {
     /// The suite a declared path names, or `None` for a path this runner has no
     /// runner for — which is reported rather than guessed at.
@@ -542,11 +565,22 @@ pub enum Verdict {
     /// case does, so a sweep reading the code would call every mutation that
     /// breaks the parse `caught`. Only the case's own failure kills a mutant.
     CaseErrored { want: String },
+    /// The suite never read the mutated copy the overlay held for this row, so
+    /// it judged the UNMUTATED module (CLOUD-2839). Its reader leaves a receipt
+    /// beside a copy it read ([`crate::preset::OVERLAY_READ`]), and none was
+    /// there.
+    ///
+    /// **A COULD-NOT-LOOK, NEVER A SURVIVOR.** A reader that fell back to the
+    /// embedded text in silence ran green over code nobody mutated, and that
+    /// green run was reported `SURVIVED`: CLOUD-2836's one-off survivor.
+    OverlayUnread { want: String },
     /// The case was already red before the mutation, so its redness afterwards
     /// is not evidence.
     CaseAlreadyRed { want: String },
-    /// The filter selected the whole suite, so redness could come from anywhere
-    /// in it and the row stops naming a case.
+    /// The filter selected more than the case it names — the whole suite under
+    /// a substring filter, or a second case of the same name in a Cargo suite's
+    /// binary — so redness could come from elsewhere and the row stops naming a
+    /// case.
     FilterNamesEveryCase { want: String },
     /// The script would not apply.
     UnappliableMutation,
@@ -560,6 +594,14 @@ pub enum Verdict {
     RunnerAbsent,
     /// Two registered runners claim one source, so which judged it is unknown.
     RunnerOverlap,
+    /// A declared row in a source a registered runner owns (CLOUD-2253). That
+    /// runner judges the source and never reads the row, so the row is
+    /// coverage-shaped nothing: refused, never skipped. 868 such rows
+    /// accumulated in Rust while the sweep passed over them in silence.
+    RunnerOwned {
+        /// The runner that owns the source.
+        runner: &'static str,
+    },
     /// A `command` runner exited with neither 0 (caught) nor 2 (survived), or
     /// ran out of time, so it said nothing about the mutants (CLOUD-2211).
     ///
@@ -594,6 +636,7 @@ impl Verdict {
                 | Verdict::SuiteTimedOut { .. }
                 | Verdict::SuiteDidNotRun { .. }
                 | Verdict::CaseErrored { .. }
+                | Verdict::OverlayUnread { .. }
                 | Verdict::CaseAlreadyRed { .. }
                 | Verdict::UnappliableMutation
                 | Verdict::RunnerAbsent
@@ -618,6 +661,7 @@ impl fmt::Display for Verdict {
             }
             Verdict::SuiteDidNotRun { want } => write!(out, "suite-did-not-run ({want})"),
             Verdict::CaseErrored { want } => write!(out, "case-errored ({want})"),
+            Verdict::OverlayUnread { want } => write!(out, "overlay-unread ({want})"),
             Verdict::CaseAlreadyRed { want } => write!(out, "case-already-red ({want})"),
             Verdict::FilterNamesEveryCase { want } => {
                 write!(out, "filter-names-every-case ({want})")
@@ -627,6 +671,7 @@ impl fmt::Display for Verdict {
             Verdict::SelfMutatingRow => write!(out, "self-mutating-row"),
             Verdict::RunnerAbsent => write!(out, "runner-absent"),
             Verdict::RunnerOverlap => write!(out, "runner-overlap"),
+            Verdict::RunnerOwned { runner } => write!(out, "runner-owned ({runner})"),
             Verdict::RunnerErrored { code: Some(code) } => {
                 write!(out, "runner-errored (exit {code})")
             }
@@ -669,6 +714,9 @@ pub struct Sweep {
     pub findings: Vec<Finding>,
     /// How many declared mutations this sweep judged.
     pub declared: usize,
+    /// How many of `declared` were answered from the row record rather than
+    /// run ([`sweep_shard`]); always 0 where [`crate::step::bypassed`] holds.
+    pub recorded: usize,
     /// How many gates this sweep answered for: a gate-level finding reported,
     /// or a row judged ([`sweep_shard`]).
     pub gates: usize,
@@ -700,10 +748,74 @@ impl Sweep {
     /// could see it.
     #[must_use]
     pub fn unlooked(&self) -> usize {
+        self.count(Class::Unlooked)
+    }
+
+    /// How many findings are rows the suite stayed green under: the only ones
+    /// a coverage verdict over `declared` is about.
+    #[must_use]
+    pub fn survived(&self) -> usize {
+        self.count(Class::Survived)
+    }
+
+    /// How many findings are rows that prove nothing as written, whatever the
+    /// suite does: inert, self-mutating, malformed, or naming every case.
+    #[must_use]
+    pub fn row_defects(&self) -> usize {
+        self.count(Class::RowDefect)
+    }
+
+    /// How many findings are about a gate rather than a row of it: no row
+    /// declared, or a source a runner owns. NOT OVER `declared` (#1276): a set
+    /// of one rowless gate read `1 of 0 declared mutation(s) … were not caught`.
+    #[must_use]
+    pub fn gate_level(&self) -> usize {
+        self.count(Class::GateLevel)
+    }
+
+    fn count(&self, class: Class) -> usize {
         self.findings
             .iter()
-            .filter(|f| f.verdict.could_not_look())
+            .filter(|f| f.verdict.class() == class)
             .count()
+    }
+}
+
+/// Which line of a sweep's summary a verdict is counted on. Every verdict has
+/// exactly one, BY AN EXHAUSTIVE MATCH ([`Verdict::class`]), so a new variant
+/// cannot fall into a count it does not belong to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Class {
+    Caught,
+    Survived,
+    RowDefect,
+    GateLevel,
+    Unlooked,
+}
+
+impl Verdict {
+    const fn class(&self) -> Class {
+        match self {
+            Verdict::Caught => Class::Caught,
+            Verdict::Survived { .. } => Class::Survived,
+            Verdict::MalformedRow { .. }
+            | Verdict::FilterNamesEveryCase { .. }
+            | Verdict::InertMutation
+            | Verdict::SelfMutatingRow => Class::RowDefect,
+            Verdict::NoMutantDeclared | Verdict::RunnerOwned { .. } => Class::GateLevel,
+            Verdict::NoSuchGate
+            | Verdict::NoSuite { .. }
+            | Verdict::NamesNoCase { .. }
+            | Verdict::SuiteTimedOut { .. }
+            | Verdict::SuiteDidNotRun { .. }
+            | Verdict::CaseErrored { .. }
+            | Verdict::OverlayUnread { .. }
+            | Verdict::CaseAlreadyRed { .. }
+            | Verdict::UnappliableMutation
+            | Verdict::RunnerAbsent
+            | Verdict::RunnerOverlap
+            | Verdict::RunnerErrored { .. } => Class::Unlooked,
+        }
     }
 }
 
@@ -723,7 +835,7 @@ fn has_extension(path: &str, extension: &str) -> bool {
 
 /// Every line of `path` under `root`, or `None` where it will not read.
 fn lines_of(root: &Path, path: &str) -> Option<Vec<String>> {
-    let text = std::fs::read_to_string(root.join(path)).ok()?;
+    let text = crate::fsio::read_to_string(root.join(path)).ok()?;
     Some(text.lines().map(str::to_owned).collect())
 }
 
@@ -832,30 +944,18 @@ pub fn sources_for(root: &Path, name: &str) -> Vec<String> {
     if root.join(&module).is_file() {
         return vec![module];
     }
-    // THE ENGINE ARM (CLOUD-1369), and its POSITION is what keeps it additive: a
-    // name that resolved to a shell task or a module before still resolves to
-    // exactly that, so no landed gate changes meaning by growing a same-named
-    // Rust neighbour.
-    //
-    // A gate name is kebab and a Rust module is snake, so the name is
-    // transliterated here — the one place that mapping lives, because a second
-    // spelling of it is the second authority this file already refuses for argv.
-    // The `engine-` prefix is what keeps `doctor` (the shell gate) and
-    // `engine-doctor` (the module) from being one name; see `ENGINE_PREFIX`.
-    if let Some(module) = name.strip_prefix(ENGINE_PREFIX) {
-        let engine = format!("{ENGINE}/{}.rs", module.replace('-', "_"));
-        if root.join(&engine).is_file() {
-            return vec![engine];
-        }
-    }
-    let dir = root.join(PRESETS).join(name);
-    let mut found: Vec<String> = std::fs::read_dir(&dir)
-        .map(|entries| {
+    let mut found: Vec<String> = presets_dir()
+        .and_then(|presets| {
+            std::fs::read_dir(root.join(&presets).join(name))
+                .ok()
+                .map(|entries| (presets, entries))
+        })
+        .map(|(presets, entries)| {
             entries
                 .filter_map(std::result::Result::ok)
                 .filter_map(|entry| {
                     let file = entry.file_name().to_string_lossy().into_owned();
-                    has_extension(&file, "rego").then(|| format!("{PRESETS}/{name}/{file}"))
+                    has_extension(&file, "rego").then(|| format!("{presets}/{name}/{file}"))
                 })
                 .collect()
         })
@@ -866,7 +966,7 @@ pub fn sources_for(root: &Path, name: &str) -> Vec<String> {
     if !found.is_empty() {
         return found;
     }
-    // THE INLINE-TASK ARM (CLOUD-1909), LAST OF ALL, for the engine arm's reason:
+    // THE INLINE-TASK ARM (CLOUD-1909), LAST OF ALL, so it stays additive:
     // a name that resolved to anything before still resolves to exactly that, so
     // no landed gate changes meaning by growing a same-named task block.
     if let Some(task) = name.strip_prefix(TASK_PREFIX)
@@ -905,7 +1005,12 @@ fn is_source_path(name: &str) -> bool {
 /// to nothing is exactly the drift the census exists to find.
 #[must_use]
 pub fn resolve(root: &Path, name: &str) -> Option<Gate> {
-    let sources = sources_for(root, name);
+    gate_of(root, name, &sources_for(root, name))
+}
+
+/// The gate `name` is over `sources`, or `None` for no source: [`resolve`]'s
+/// reading, apart from where the sources were found.
+fn gate_of(root: &Path, name: &str, sources: &[String]) -> Option<Gate> {
     if sources.is_empty() {
         return None;
     }
@@ -915,7 +1020,7 @@ pub fn resolve(root: &Path, name: &str) -> Option<Gate> {
     let mut unrunnable = None;
     let mut own_suites = BTreeMap::new();
     let mut owner = None;
-    for source in &sources {
+    for source in sources {
         let Some(lines) = declaring_lines(root, name, source) else {
             continue;
         };
@@ -966,7 +1071,7 @@ pub fn resolve(root: &Path, name: &str) -> Option<Gate> {
     }
     Some(Gate {
         name: name.to_owned(),
-        sources,
+        sources: sources.to_vec(),
         suite,
         unrunnable,
         own_suites,
@@ -991,7 +1096,10 @@ pub fn resolve(root: &Path, name: &str) -> Option<Gate> {
 /// Both empty, a `[mutate]` glob or scope that does not compile, or a tree
 /// whose tracked paths cannot be listed for a glob, is a usage error
 /// (→ exit `1`).
-pub fn enforced_set(root: &Path, table: Option<&crate::config::Mutate>) -> Result<Vec<String>> {
+pub fn enforced_set(
+    root: &Path,
+    table: Option<&crate::config_model::Mutate>,
+) -> Result<Vec<String>> {
     let mut names = committed(root, table)?;
     let raw = std::env::var("MUTANT_GATES").unwrap_or_default();
     for name in raw
@@ -1015,15 +1123,13 @@ pub fn enforced_set(root: &Path, table: Option<&crate::config::Mutate>) -> Resul
 
 /// The committed table's gates, each glob expanded to the names its matches
 /// already have as subjects, in tracked-path order.
-//MUTANT-SUITE crates/batten/tests/it/mutate.rs
-//MUTANT committed-set-unread|s@^    let declared = \&table.gates;$@    let declared = \&table.scope;@|census_runs_on_the_set_batten_toml_declares
-fn committed(root: &Path, table: Option<&crate::config::Mutate>) -> Result<Vec<String>> {
+fn committed(root: &Path, table: Option<&crate::config_model::Mutate>) -> Result<Vec<String>> {
     let Some(table) = table else {
         return Ok(Vec::new());
     };
     // Compiled here, where an error can still be a usage error, so the census's
     // declaration arm below never meets a scope it cannot read.
-    crate::rules::PathSet::scope(&table.scope)?;
+    crate::path_set::PathSet::scope(&table.scope)?;
     let declared = &table.gates;
     let tracked = if declared.iter().any(|entry| entry.contains('*')) {
         crate::git::tracked_paths(root)
@@ -1034,7 +1140,7 @@ fn committed(root: &Path, table: Option<&crate::config::Mutate>) -> Result<Vec<S
     let mut names: Vec<String> = Vec::new();
     for entry in declared {
         let expanded = if entry.contains('*') {
-            let selector = crate::rules::Selector::new(entry)?;
+            let selector = crate::selector::Selector::new(entry)?;
             let matched: Vec<String> = tracked
                 .iter()
                 .filter(|path| selector.matches(path))
@@ -1061,16 +1167,14 @@ fn committed(root: &Path, table: Option<&crate::config::Mutate>) -> Result<Vec<S
 }
 
 /// The name a tracked file already has as a subject: `X` for `policy/X.rego`,
-/// the task name for `mise-tasks/X.sh`, `engine-x` for an engine module, the
-/// preset for a preset's module — and its own path, the file arm's name, for a
+/// the task name for `mise-tasks/X.sh`, the preset for a preset's module — and its own path, the file arm's name, for a
 /// file no other arm names.
 ///
 /// **CHECKED BY RESOLVING IT BACK**, so a name is only offered where
 /// [`sources_for`] would take it to this very file: a module whose stem a shell
 /// task also carries resolves to the task, and gets its path instead.
 fn subject_name(root: &Path, path: &str) -> String {
-    let engine = format!("{ENGINE}/");
-    let presets = format!("{PRESETS}/");
+    let presets = presets_dir().map(|presets| format!("{presets}/"));
     let candidates = [
         path.strip_prefix("mise-tasks/")
             .and_then(|rest| rest.strip_suffix(".sh"))
@@ -1078,10 +1182,9 @@ fn subject_name(root: &Path, path: &str) -> String {
         path.strip_prefix("policy/")
             .and_then(|rest| rest.strip_suffix(".rego"))
             .map(str::to_owned),
-        path.strip_prefix(&engine)
-            .and_then(|rest| rest.strip_suffix(".rs"))
-            .map(|stem| format!("{ENGINE_PREFIX}{}", stem.replace('_', "-"))),
-        path.strip_prefix(&presets)
+        presets
+            .as_deref()
+            .and_then(|presets| path.strip_prefix(presets))
             .and_then(|rest| rest.split_once('/'))
             .map(|(name, _)| name.to_owned()),
     ];
@@ -1102,18 +1205,20 @@ fn subject_name(root: &Path, path: &str) -> String {
 /// the gates a pull request touched rather than on a schedule over all of them.
 ///
 /// A gate is touched when a changed path is one of its sources, or one of
-/// [`Gate::suites`]: a weaker suite is the commonest way a gate stops
-/// discriminating, so a change to the suite alone must re-sweep its rows.
+/// [`Gate::suites`] whose CODE changed (`code_changed`, the paths whose
+/// non-comment remainder moved): a weaker suite is the commonest way a gate stops
+/// discriminating, so a change to the suite alone must re-sweep its rows, and a
+/// comment edit to one cannot weaken it. A source is read whole, comments
+/// included, because a gate's rows are comment lines in it.
 ///
 /// A changed path inside a PRESET gate's directory touches that gate too, and
 /// that is what reaches a DELETED module: `resolve` reads the tree as it is now,
 /// so a module the change removed is no longer among the gate's sources, and a
 /// match on sources alone let the deletion pass unswept (review of #1099).
 ///
-/// A gate none of whose rows the DECLARED runner owns is not touched: another
-/// registered runner owns every source it mutates ([`Registry::owner`]) and
-/// judges the change itself ([`run_registered`]). A row is never judged by two
-/// runners, and never by none.
+/// A gate whose rows another registered runner owns is touched like any other,
+/// so the sweep reaches its rows and refuses each as `runner-owned`: a row is
+/// never judged by two runners, and never passed over by both.
 ///
 /// A name that resolves to nothing is KEPT. Narrowing it away would turn the
 /// sweep's `no-such-gate` report into silence; could-not-look widens here as it
@@ -1123,33 +1228,126 @@ pub fn touched(
     root: &Path,
     names: &[String],
     changed: &std::collections::BTreeSet<String>,
-    registry: &Registry,
+    code_changed: &std::collections::BTreeSet<String>,
 ) -> Vec<String> {
     names
         .iter()
         .filter(|name| {
-            resolve(root, name).is_none_or(|gate| {
-                if !gate.rows.is_empty() && !gate.rows.iter().any(|row| registry.declares(row)) {
-                    return false;
-                }
-                changed_by(&gate, name, changed)
-            })
+            resolve(root, name)
+                .is_none_or(|gate| changed_by(root, &gate, name, changed, code_changed))
         })
         .cloned()
         .collect()
 }
 
-/// Whether `changed` moves `gate`: a changed path is one of its sources, one of
-/// [`Gate::suites`], or inside its preset directory ([`touched`]'s three arms).
-//MUTANT source-change-ignored|s@^    let by_source = .*;$@    let by_source = false;@|a_change_to_one_gate_sweeps_only_that_gate
-//MUTANT suite-change-ignored|s@^    let by_suite = .*;$@    let by_suite = false;@|a_change_to_a_suite_sweeps_its_gate
-//MUTANT deleted-module-ignored|s@^    let by_preset = .*;$@    let by_preset = false;@|a_deleted_preset_module_sweeps_its_gate
-fn changed_by(gate: &Gate, name: &str, changed: &std::collections::BTreeSet<String>) -> bool {
+/// Whether the change moves `gate`: a changed path is one of its sources, a
+/// [`Gate::suites`] entry whose code changed, inside its preset directory, or a
+/// file one of its rows' cases lives in ([`case_files`], #1276) whose code
+/// changed ([`touched`]'s arms).
+fn changed_by(
+    root: &Path,
+    gate: &Gate,
+    name: &str,
+    changed: &std::collections::BTreeSet<String>,
+    code_changed: &std::collections::BTreeSet<String>,
+) -> bool {
     let by_source = gate.sources.iter().any(|path| changed.contains(path));
-    let by_suite = gate.suites().iter().any(|s| changed.contains(s.path()));
-    let dir = format!("{PRESETS}/{name}/");
-    let by_preset = changed.iter().any(|path| path.starts_with(&dir));
-    by_source || by_suite || by_preset
+    // A suite whose every row is judged by its module's own case is never run
+    // (#1276), so it touches nothing; any other declaration still does,
+    // including one no row sits under yet (CLOUD-2193).
+    let unrun = |suite: &Suite| {
+        let mut judged = gate
+            .rows
+            .iter()
+            .filter(|row| gate.suite_for(row) == Some(suite))
+            .peekable();
+        judged.peek().is_some() && judged.all(|row| judged_by_module(root, row))
+    };
+    let by_suite = || {
+        gate.suites()
+            .iter()
+            .any(|s| code_changed.contains(s.path()) && !unrun(s))
+    };
+    let by_preset = || {
+        presets_dir().is_some_and(|presets| {
+            let dir = format!("{presets}/{name}/");
+            changed.iter().any(|path| path.starts_with(&dir))
+        })
+    };
+    let by_case = || {
+        gate.rows.iter().any(|row| {
+            gate.suite_for(row).is_some_and(|suite| {
+                case_files(root, suite, &row.want)
+                    .iter()
+                    .any(|path| code_changed.contains(path))
+            })
+        })
+    };
+    by_source || by_suite() || by_preset() || by_case()
+}
+
+/// The names of `names` a change ENROLLED since `base` (#1276): a gate joining
+/// the set moves nothing of its own, so [`touched`] alone never swept it, and a
+/// new gate's first survivor waited for some later edit to its source.
+///
+/// READ FROM THE TWO FILES THE SET IS DECLARED IN, the committed authority's
+/// `[mutate]` and the task manifest `$MUTANT_TASKS` names beside
+/// `$MUTANT_GATES`, and only where the change touched one: a name occurring
+/// more often in one now than at `base` was enrolled. A glob newly written
+/// there enrolls every name whose sources it matches. It counts words, not
+/// keys, so a name newly mentioned elsewhere in either file widens the sweep,
+/// which is the direction could-not-look takes here; a base that cannot be
+/// read is an empty file, and widens the same way.
+#[must_use]
+pub fn enrolled_since(
+    root: &Path,
+    base: &str,
+    names: &[String],
+    changed: &std::collections::BTreeSet<String>,
+) -> std::collections::BTreeSet<String> {
+    let mut declaring = vec![crate::config_model::CONFIG_FILE.to_owned()];
+    declaring.extend(task_manifest());
+    let mut grown: BTreeMap<String, isize> = BTreeMap::new();
+    for path in declaring.iter().filter(|path| changed.contains(*path)) {
+        let now = crate::fsio::read_to_string(root.join(path)).unwrap_or_default();
+        let then = crate::git::show(root, base, path).unwrap_or_default();
+        for word in set_words(&now) {
+            *grown.entry(word.to_owned()).or_default() += 1;
+        }
+        for word in set_words(&then) {
+            *grown.entry(word.to_owned()).or_default() -= 1;
+        }
+    }
+    let new: std::collections::BTreeSet<String> = grown
+        .into_iter()
+        .filter(|(_, count)| *count > 0)
+        .map(|(word, _)| word)
+        .collect();
+    let globs: Vec<crate::selector::Selector> = new
+        .iter()
+        .filter(|word| word.contains('*'))
+        .filter_map(|word| crate::selector::Selector::new(word).ok())
+        .collect();
+    names
+        .iter()
+        .filter(|name| {
+            new.contains(*name)
+                || (!globs.is_empty()
+                    && resolve(root, name).is_some_and(|gate| {
+                        gate.sources
+                            .iter()
+                            .any(|source| globs.iter().any(|glob| glob.matches(source)))
+                    }))
+        })
+        .cloned()
+        .collect()
+}
+
+/// The words a set declaration can carry a name or glob in: runs of the
+/// characters a gate name, path or glob is spelled with.
+fn set_words(text: &str) -> impl Iterator<Item = &str> {
+    text.split(|c: char| !(c.is_alphanumeric() || "._-/*".contains(c)))
+        .filter(|word| !word.is_empty())
 }
 
 // ---------------------------------------------------------------------------
@@ -1264,30 +1462,6 @@ impl RunnerKind {
     }
 }
 
-//MUTANT-SUITE crates/batten/src/mutate.rs
-//MUTANT registry-owns-nothing|s@^            .filter(\x7c(_, glob)\x7c crate::rules::glob_match(glob, path))$@            .filter(\x7c_\x7c false)@|a_registered_glob_owns_its_sources_and_the_declared_runner_the_rest
-//MUTANT overlap-picks-one|s@^        let mut owners = owners.into_iter();$@        let mut owners = owners.into_iter().take(1);@|a_source_two_runners_claim_has_no_owner
-//MUTANT declared-runner-takes-globs|s@^            if kind == RunnerKind::Declared {$@            if false {@|a_registry_naming_no_runner_or_giving_the_declared_one_globs_is_refused
-//MUTANT declared-suites-unscoped|s@^        .filter(\x7csuite\x7c has_extension(suite, "rs"))$@        .filter(\x7c_\x7c false)@|a_sources_scope_is_its_own_tests_and_every_suite_it_declares
-//MUTANT missed-unread|s@^    let missed: Vec<String> = lines("missed.txt")@    let missed: Vec<String> = lines("absent.txt")@|a_missed_mutant_is_a_survivor_named_by_pointer_alone
-//MUTANT failed-run-reads-caught|s@^        } else if !ran.passed() \&\& found.is_empty() {$@        } else if false {@|a_failed_run_with_nothing_missed_is_never_every_mutant_caught
-//MUTANT row-judged-under-first-suite|s@^            above = Some(suite);$@            above = first.clone().or(Some(suite));@|a_row_is_judged_under_the_suite_above_it
-//MUTANT later-unrecognized-costs-the-gate|s@^                None if index == 0 => unrunnable@                None if true => unrunnable@|a_later_unrecognized_suite_costs_only_the_rows_under_it
-//MUTANT suite-first-only|s@^            Some(_) => row.resolved.as_ref(),$@            Some(_) => self.suite.as_ref(),@|each_preset_module_row_runs_under_its_own_declared_suite
-//MUTANT every-row-on-every-shard|s@^    shard.is_none_or(\x7c(k, n)\x7c index % n == k)$@    true@|a_large_gates_rows_spread_across_every_shard
-//MUTANT gate-finding-on-every-shard|s@^        if reports {$@        if true {@|a_sharded_sweep_judges_each_row_and_reports_each_gate_once
-//MUTANT gate-named-twice-swept-twice|s@^    sorted.dedup();$@@|a_sharded_sweep_judges_each_row_and_reports_each_gate_once
-//MUTANT empty-shard-staged|s@^    if mine.is_empty() {$@    if false {@|a_shard_owning_no_row_stages_nothing
-//MUTANT nextest-profile-unpinned|s@^        (String::from("NEXTEST_PROFILE"), String::from("default")),$@        (String::from("NEXTEST_PROFILE"), String::from("ci")),@|every_runner_runs_the_default_nextest_profile
-//MUTANT nextest-env-inherited|s@^        .filter(\x7ckey\x7c key.starts_with("NEXTEST_") \&\& @        .filter(\x7ckey\x7c key.is_empty() \&\& @|an_env_naming_nextest_scrubs_every_inherited_nextest_variable
-//MUTANT-SUITE crates/batten/tests/it/mutate.rs
-//MUTANT later-suites-unread|s@^                    own.push(resolved);$@                    if own.is_empty() { own.push(resolved); }@|a_change_to_a_sources_second_suite_sweeps_its_gate
-//MUTANT retries-unpinned|s@^    "--retries=0",$@    "--retries=3",@|a_declared_profile_keeps_its_setup_scripts_and_none_of_its_verdict_settings
-//MUTANT default-filter-kept|s@^    "--ignore-default-filter",$@    "--test-threads=num-cpus",@|a_declared_profile_keeps_its_setup_scripts_and_none_of_its_verdict_settings
-//MUTANT status-level-unpinned|s@^    "--status-level=pass",$@    "--status-level=fail",@|a_declared_profile_keeps_its_setup_scripts_and_none_of_its_verdict_settings
-//MUTANT nextest-unprobed|s@^    let absent = mine.iter().any(runs_nextest) \&\& !cargo_answers(root, "nextest", None);$@    let absent = false;@|a_declared_cargo_row_without_nextest_reads_one_runner_absent
-//MUTANT malformed-shard-unrefused|s@^    parse_shard(shard).ok_or_else(\x7c\x7c format!("{SHARD}={shard} is not `k/n` with 0 <= k < n"))$@    Ok(parse_shard(shard).unwrap_or((0, 1)))@|a_malformed_shard_is_refused_before_the_registered_runner
-//MUTANT declared-profile-dropped|s@^    if let Some(profile) = declared_profile(staged, std::env::var("NEXTEST_PROFILE").ok())$@    if let Some(profile) = None::<String>@|a_declared_profile_keeps_its_setup_scripts_and_none_of_its_verdict_settings
 /// Which registered runner owns which sources.
 ///
 /// Every source has exactly one owner: the first registered runner whose glob
@@ -1299,9 +1473,6 @@ pub struct Registry {
     owns: Vec<(RunnerKind, String)>,
     /// The `command` runner's argv, from committed `[mutate] command`.
     command: Vec<String>,
-    /// The directory a committed `[[provision]]` row installed a registered
-    /// runner's program into ([`Registry::with_provisioned`]).
-    provisioned: Option<PathBuf>,
 }
 
 impl Registry {
@@ -1348,19 +1519,6 @@ impl Registry {
         })
     }
 
-    /// Run every registered runner's program from `dir` first: the pinned
-    /// cargo-mutants a `[[provision]]` row ships, which a CI runner holds nowhere
-    /// on its `PATH` (CLOUD-2345). `None` leaves the inherited `PATH` deciding.
-    ///
-    /// A VALUE ON THE REGISTRY, NOT A PROCESS-WIDE CELL (CLOUD-2466 item 6): the
-    /// `OnceLock` this replaces kept only its first value, so a second registry in
-    /// one process ran the first one's directory.
-    #[must_use]
-    pub fn with_provisioned(mut self, dir: Option<PathBuf>) -> Self {
-        self.provisioned = dir;
-        self
-    }
-
     /// Attach the `command` runner's committed argv (CLOUD-2211).
     ///
     /// # Errors
@@ -1398,7 +1556,7 @@ impl Registry {
         let owners: std::collections::BTreeSet<RunnerKind> = self
             .owns
             .iter()
-            .filter(|(_, glob)| crate::rules::glob_match(glob, path))
+            .filter(|(_, glob)| crate::selector::glob_match(glob, path))
             .map(|(kind, _)| *kind)
             .collect();
         let mut owners = owners.into_iter();
@@ -1469,61 +1627,40 @@ pub fn owned_changes(
 /// beside it and reported as its own [`NEXTEST`] finding (CLOUD-2466 item 4).
 #[must_use]
 pub fn unresolvable(root: &Path, registry: &Registry) -> Vec<Finding> {
-    let provisioned = registry.provisioned.as_deref();
-    absent_runners(
-        registry,
-        |subcommand| cargo_answers(root, subcommand, provisioned),
-        // A LOOKUP, NEVER A PROBE RUN: the consumer's program has no
-        // `--version` contract, and running it would be the sweep itself.
-        |program| resolves(root, program),
-    )
-    .into_iter()
-    .map(runner_absent)
-    .collect()
+    // A LOOKUP, NEVER A PROBE RUN: the consumer's program has no `--version`
+    // contract, and running it would be the sweep itself.
+    absent_runners(registry, |program| resolves(root, program))
+        .into_iter()
+        .map(runner_absent)
+        .collect()
 }
 
-/// The runners `registry` needs whose program does not answer, by id: `cargo`
-/// says whether `cargo <subcommand>` answers, `command` whether a `command`
-/// runner's program resolves.
-fn absent_runners(
-    registry: &Registry,
-    cargo: impl Fn(&str) -> bool,
-    command: impl Fn(&str) -> bool,
-) -> Vec<&'static str> {
-    let mut absent = Vec::new();
-    for kind in registry.registered() {
-        let answers = match kind {
-            RunnerKind::Declared => true,
-            RunnerKind::CargoMutants => cargo("mutants"),
-            RunnerKind::Command => registry
+/// The runners `registry` needs whose program does not answer, by id: `command`
+/// says whether a `command` runner's program resolves.
+fn absent_runners(registry: &Registry, command: impl Fn(&str) -> bool) -> Vec<&'static str> {
+    registry
+        .registered()
+        .into_iter()
+        .filter(|kind| match kind {
+            // The declared runner is this module; cargo-mutants runs as itself.
+            RunnerKind::Declared | RunnerKind::CargoMutants => false,
+            RunnerKind::Command => !registry
                 .command
                 .first()
                 .is_some_and(|program| command(program)),
-        };
-        if !answers {
-            absent.push(kind.id());
-        }
-        if kind == RunnerKind::CargoMutants && !cargo("nextest") {
-            absent.push(NEXTEST);
-        }
-    }
-    absent
+        })
+        .map(RunnerKind::id)
+        .collect()
 }
 
-/// The runner every Cargo suite runs under, as its `runner-absent` names it.
+/// The runner every declared Cargo suite runs under, as its `runner-absent`
+/// names it.
 pub const NEXTEST: &str = "cargo-nextest";
 
-/// `cargo <subcommand> --version` answers from `root`, on `provisioned`'s `PATH`.
-fn cargo_answers(root: &Path, subcommand: &str, provisioned: Option<&Path>) -> bool {
+/// `cargo <subcommand> --version` answers from `root`.
+fn cargo_answers(root: &Path, subcommand: &str) -> bool {
     let args = [subcommand, "--version"].map(String::from);
-    spawn(
-        root,
-        Program::Cargo,
-        &args,
-        &runner_path(provisioned),
-        HOUSEKEEPING_BOUND,
-    )
-    .is_ok_and(|ran| ran.passed())
+    spawn(root, Program::Cargo, &args, &[], HOUSEKEEPING_BOUND).is_ok_and(|ran| ran.passed())
 }
 
 /// The could-not-look finding for a runner whose program does not answer.
@@ -1534,6 +1671,24 @@ fn runner_absent(runner: &str) -> Finding {
         verdict: Verdict::RunnerAbsent,
         owner: None,
     }
+}
+
+/// The [`NEXTEST`] `runner-absent` a Cargo sweep owes BEFORE it builds
+/// anything, where `cargo nextest` does not answer from `root` (CLOUD-2881).
+///
+/// The schema sweep judges every mutant under nextest, and it used to learn
+/// nextest was missing only when its first judging run failed — after the
+/// schema build, measured at 7-20 minutes cold. Asked first, a missing runner
+/// is could-not-look in seconds.
+#[must_use]
+pub fn nextest_absent(root: &Path) -> Option<Finding> {
+    (!cargo_answers(root, "nextest")).then(|| runner_absent(NEXTEST))
+}
+
+/// The `runner-absent` for a registered runner the sweep could not fetch.
+#[must_use]
+pub fn absent(runner: RunnerKind) -> Finding {
+    runner_absent(runner.id())
 }
 
 /// Whether `program` names something runnable from `root`: a path (any name
@@ -1548,8 +1703,6 @@ fn resolves(root: &Path, program: &str) -> bool {
 
 /// What a `command` runner's exit says (CLOUD-2211): 0 caught, 2 survived, and
 /// anything else — 1 included, which is a crash's code — could-not-look.
-//MUTANT command-exit-unread|s@^    match ran.outcome {$@    match Outcome::Passed {@|a_command_runner_exit_two_is_survived
-//MUTANT command-error-read-as-caught|s@^        Outcome::Failed(code) => Verdict::RunnerErrored { code },$@        Outcome::Failed(_) => Verdict::Caught,@|a_command_runner_that_errors_cannot_look
 #[must_use]
 fn command_verdict(ran: &Ran) -> Verdict {
     match ran.outcome {
@@ -1580,51 +1733,26 @@ fn run_command(root: &Path, registry: &Registry, sources: &[String]) -> Result<O
     }))
 }
 
-/// Where a sweep runs: the checkout, the base its change is measured from, the
-/// committed registry, and the scratch directory a staged copy lives under.
-#[derive(Debug, Clone, Copy)]
-pub struct Site<'a> {
-    /// The checkout.
-    pub root: &'a Path,
-    /// The base the change is measured from.
-    pub base: &'a str,
-    /// The committed runner registry.
-    pub registry: &'a Registry,
-    /// The scratch directory the staged copy and each run's output live under.
-    pub work: &'a Path,
-}
-
-/// Run `kind` over the sources it owns that changed since `base`.
-///
-/// For cargo-mutants, one invocation per source, `--in-diff` over the change
-/// and `--in-place` in the staged copy (the book's CI recipe; the copy is a
-/// repository, so a suite asking git about its tree is answered). Each run's
-/// tests are that source's own unit tests plus every suite it declares with
-/// `MUTANT-SUITE` ([`test_scope`]), so the obligation a row already states is
-/// what bounds the cost.
+/// Judge a change for `kind`: every changed path two runners claim is a
+/// `runner-overlap`, and the `command` runner runs once over the sources it
+/// owns (cargo-mutants runs as itself; the declared runner is the sweep).
 ///
 /// # Errors
 ///
-/// A tree that cannot be staged, or a diff that cannot be written; a `shard`
-/// that is not `k/n` with `k < n`, which [`shard_parsed`] never yields.
+/// The `command` runner cannot be spawned; a `shard` that is not `k/n` with
+/// `k < n`, which [`shard_parsed`] never yields.
 pub fn run_registered(
-    site: &Site<'_>,
+    root: &Path,
+    registry: &Registry,
     changed: &std::collections::BTreeSet<String>,
     kind: RunnerKind,
     shard: Option<(usize, usize)>,
-    progress: &mut dyn std::io::Write,
 ) -> Result<Registered> {
     if let Some((k, n)) = shard
         && shard_bounded(k, n).is_none()
     {
         bail!("mutate: shard {k}/{n} is not `k/n` with 0 <= k < n");
     }
-    let Site {
-        root,
-        base,
-        registry,
-        work,
-    } = *site;
     let mut result = Registered::default();
     for path in changed {
         if let Err(reason) = registry.owner(path) {
@@ -1639,188 +1767,14 @@ pub fn run_registered(
     }
     let sources = owned_changes(root, changed, registry, kind);
     result.sources = sources.len();
-    if kind == RunnerKind::Declared || sources.is_empty() {
-        return Ok(result);
-    }
-    if kind == RunnerKind::Command {
+    // ONLY THE `command` RUNNER IS RUN HERE. cargo-mutants runs as itself
+    // (`cargo mutants --in-diff`), and the declared runner is the sweep.
+    if kind == RunnerKind::Command && !sources.is_empty() {
         result
             .findings
             .extend(run_command(root, registry, &sources)?);
-        return Ok(result);
-    }
-    let diff = in_diff_patch(root, base, &sources).with_context(|| {
-        format!("mutate: the change since {base} cannot be named to cargo-mutants")
-    })?;
-    let staged = Staged::new(root, work.to_path_buf())?;
-    let runs = work.join("cargo-mutants");
-    fs::create_dir_all(&runs)
-        .with_context(|| format!("mutate: could not create {}", runs.display()))?;
-    let patch = runs.join("change.diff");
-    crate::durable::replace(&patch, diff)
-        .with_context(|| format!("mutate: could not write {}", patch.display()))?;
-    let env = nextest_env(root, staged.dir(), registry.provisioned.as_deref());
-    let shards = shard_plan(staged.dir(), &patch, &sources, shard, &env)?;
-    let assigned = shards.iter().filter(|on| **on != Place::Off).count();
-    let mut position = 0usize;
-    for (index, (source, on)) in sources.iter().zip(shards).enumerate() {
-        // A source with no mutant on this shard is not run here at all: no
-        // build, no suite, no finding, which another shard carries.
-        let local = match on {
-            Place::Off => continue,
-            Place::On(local) => shard.map(|(_, n)| (local, n)),
-            Place::Unsharded => None,
-        };
-        position += 1;
-        // ONE READ OF THE SCOPE: the filterset and the target selectors are
-        // both this list's, so it is built once per source.
-        let scope = scope_of(root, source);
-        if scope.is_empty() {
-            result.findings.push(Finding {
-                gate: kind.id().to_owned(),
-                slug: Some(source.clone()),
-                verdict: Verdict::NoSuite {
-                    suite: String::from("no cargo target compiles it"),
-                },
-                owner: None,
-            });
-            continue;
-        }
-        let output = runs.join(index.to_string());
-        let _ = fs::remove_dir_all(&output);
-        let args = source_args(&patch, source, &output, local, &scope);
-        let started = std::time::Instant::now();
-        let _ = writeln!(
-            progress,
-            "mutate sweep: source {position}/{assigned} {source} starting"
-        );
-        let ran = spawn_as(
-            staged.dir(),
-            Program::Cargo,
-            &args,
-            &env,
-            runner_bound(),
-            Said::Streamed,
-        )?;
-        let outcome = read_outcomes(&output.join("mutants.out"));
-        // ONE LINE PER SOURCE (CLOUD-2253's progress, for this runner), AND ITS
-        // FINDINGS AS IT ENDS: on #1132 fifteen shards ran 111 minutes each,
-        // were stopped at their bound, and their logs held nothing of what they
-        // had judged, because every finding waited for the last source.
-        let _ = writeln!(
-            progress,
-            "mutate sweep: source {position}/{assigned} {source} {} mutant(s) {}s",
-            outcome.ran,
-            started.elapsed().as_secs()
-        );
-        let found = outcome.findings(kind, source, &ran);
-        for finding in &found {
-            let _ = writeln!(progress, "mutate sweep: {finding}");
-        }
-        result.mutants += outcome.ran;
-        result.findings.extend(found);
     }
     Ok(result)
-}
-
-/// Where one source's run sits on the sweep's shard.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Place {
-    /// The sweep is not sharded: the source runs whole.
-    Unsharded,
-    /// No mutant of the source is on this shard: it is not run here.
-    Off,
-    /// The source runs its own `--shard <local>/<n>`.
-    On(usize),
-}
-
-/// Each source's [`Place`] on `shard`: [`Place::Unsharded`] where the sweep is
-/// not sharded, else [`source_shards`] over the change's listed mutants.
-fn shard_plan(
-    staged: &Path,
-    patch: &Path,
-    sources: &[String],
-    shard: Option<(usize, usize)>,
-    env: &[(String, String)],
-) -> Result<Vec<Place>> {
-    let Some((k, n)) = shard else {
-        return Ok(vec![Place::Unsharded; sources.len()]);
-    };
-    let mut list = vec![
-        String::from("mutants"),
-        String::from("--list"),
-        String::from("--no-shuffle"),
-        String::from("--in-diff"),
-        patch.to_string_lossy().into_owned(),
-    ];
-    for source in sources {
-        list.extend([String::from("--file"), source.clone()]);
-    }
-    let listed = spawn(staged, Program::Cargo, &list, env, build_bound())?;
-    if !listed.passed() {
-        bail!("mutate: cargo-mutants could not list the change's mutants");
-    }
-    Ok(source_shards(&mutant_counts(&listed.output, sources), k, n)
-        .into_iter()
-        .map(|local| local.map_or(Place::Off, Place::On))
-        .collect())
-}
-
-/// One source's cargo-mutants argv; `local` is its `--shard` as `(k, n)`, and
-/// `scope` its [`scope_of`], which names both the filterset and the targets.
-fn source_args(
-    patch: &Path,
-    source: &str,
-    output: &Path,
-    local: Option<(usize, usize)>,
-    scope: &[(String, Option<String>)],
-) -> Vec<String> {
-    let mut args = vec![
-        String::from("mutants"),
-        String::from("--in-place"),
-        String::from("--no-shuffle"),
-        String::from("--in-diff"),
-        patch.to_string_lossy().into_owned(),
-        String::from("--file"),
-        source.to_owned(),
-        String::from("--test-tool"),
-        String::from("nextest"),
-        String::from("--output"),
-        output.to_string_lossy().into_owned(),
-    ];
-    // ONLY THE TARGETS THE SCOPE RUNS ARE BUILT ([`targets_of`]): `--cargo-arg`
-    // reaches both the build and the test invocation, so what is compiled per
-    // mutant is what the filterset below can select, and nothing else.
-    args.extend(
-        targets_of(scope)
-            .iter()
-            .map(|target| format!("--cargo-arg={target}")),
-    );
-    // A SHARD SKIPS THE BASELINE, as the book's CI recipe does
-    // (mutants.rs/shards.html). One invocation per source meant every shard
-    // built and tested 157 unmutated baselines, most for sources with no
-    // mutant in that shard: measured on #1132, the shards ran past their
-    // 120-minute bound and only one finished. The book's precondition is a
-    // suite already green on the unmutated tree; `--timeout` stands in for the
-    // per-mutant bound the baseline would have measured.
-    if let Some((k, n)) = local {
-        args.extend([
-            String::from("--shard"),
-            format!("{k}/{n}"),
-            String::from("--sharding"),
-            String::from("round-robin"),
-            String::from("--baseline=skip"),
-            String::from("--timeout"),
-            SHARD_MUTANT_TIMEOUT_SECS.to_string(),
-        ]);
-    }
-    // `-v`: a line per mutant as it is judged, caught ones included, so the
-    // log says how far a run got against what it was given. The arguments after
-    // `--` reach only the test phase's `cargo nextest run`, which is where the
-    // verdict flags belong: `--cargo-arg` would hand them to the build as well.
-    args.extend([String::from("-v"), String::from("--")]);
-    args.extend(NEXTEST_VERDICT_FLAGS.map(String::from));
-    args.extend([String::from("-E"), terms_of(scope)]);
-    args
 }
 
 /// The nextest settings that decide a verdict, chosen by the sweep on BOTH of
@@ -1833,24 +1787,19 @@ fn source_args(
 /// THE TIMEOUT IS NOT HERE, because cargo-nextest 0.9.104 has no flag for it
 /// (`cargo nextest run --help`): a profile's `terminate-after` still bounds a
 /// case inside the sweep's own bound (CLOUD-2590).
-const NEXTEST_VERDICT_FLAGS: [&str; 3] = [
+///
+/// `--fail-fast`: A MUTANT IS DECIDED BY ITS FIRST FAILING CASE.
+/// `.config/nextest.toml` sets `fail-fast = false` so a suite run reports every
+/// failure, which a mutant run has no use for: measured on CLOUD-2595,
+/// `declared -> None` failed case after case for 53s until the bound cut it off
+/// as TIMEOUT, a caught mutant graded as a finding. A clean run is unchanged, so
+/// the declared arm still counts every case it names.
+const NEXTEST_VERDICT_FLAGS: [&str; 4] = [
     "--retries=0",
     "--ignore-default-filter",
     "--status-level=pass",
+    "--fail-fast",
 ];
-
-/// One mutant's test bound in a sharded run, which skips the baseline that
-/// would otherwise measure it: the book's CI recipe's `--timeout 300`.
-///
-/// **Deliberately NOT extended to the unsharded run (CLOUD-2376).** It was, on
-/// the theory that a bound measured on the unmutated suite can be shorter than a
-/// slow catch. The measurement refuted it: with `--timeout 300` the
-/// `collect.rs:1319` mutant still ran the full 300s, where its baseline tests in
-/// 9s. It does not catch slowly — it HANGS, on a test deadlock the mutation
-/// opens, and a larger bound only buys a more expensive way to learn that. The
-/// unsharded run keeps the measured bound, which reports the same verdict five
-/// times sooner.
-const SHARD_MUTANT_TIMEOUT_SECS: u64 = 300;
 
 /// The shard a `$MUTANT_SHARD` of `value` asks for: none when it is unset or
 /// blank, else its raw text for [`parse_shard`] to read or refuse.
@@ -1883,44 +1832,6 @@ const fn shard_bounded(k: usize, n: usize) -> Option<(usize, usize)> {
     if k < n { Some((k, n)) } else { None }
 }
 
-/// The `--shard` each source's own run takes on shard `k` of `n`, so the
-/// matrix shares the whole change's mutants evenly: mutant `g` of the change,
-/// counted across the sources in order, belongs to shard `g % n`, which is
-/// `--sharding round-robin` within one source run offset by the mutants before
-/// it. `None` for a source with no mutant on this shard, which is not run.
-///
-/// ONE RUN PER SOURCE SHARDED ALONE PILED THE WORK ON THE LOW SHARDS: cargo-mutants'
-/// default `slice` hands a source of five mutants to shards 0 to 4, so on #1132
-/// shard 0 drew a mutant from nearly every one of 158 sources, ran past its
-/// 120-minute bound and reported nothing, while shard 15 finished in an hour.
-#[must_use]
-pub fn source_shards(counts: &[usize], k: usize, n: usize) -> Vec<Option<usize>> {
-    let mut before = 0usize;
-    counts
-        .iter()
-        .map(|&count| {
-            let local = (k + n - before % n) % n;
-            before += count;
-            (local < count).then_some(local)
-        })
-        .collect()
-}
-
-/// How many mutants cargo-mutants' `--list` names in each of `sources`, from
-/// its `<path>:<line>:<col>: <mutation>` lines.
-fn mutant_counts(listing: &str, sources: &[String]) -> Vec<usize> {
-    sources
-        .iter()
-        .map(|source| {
-            let prefix = format!("{source}:");
-            listing
-                .lines()
-                .filter(|line| line.starts_with(&prefix))
-                .count()
-        })
-        .collect()
-}
-
 /// How long one registered run over one source may take: a build per mutant.
 fn runner_bound() -> std::time::Duration {
     std::time::Duration::from_secs(
@@ -1930,277 +1841,6 @@ fn runner_bound() -> std::time::Duration {
             .filter(|seconds| *seconds > 0)
             .unwrap_or(21_600),
     )
-}
-
-/// What one cargo-mutants run wrote to its `mutants.out`.
-#[derive(Debug, Default, PartialEq, Eq)]
-struct Outcomes {
-    /// Every mutant it ran, whatever became of it.
-    ran: usize,
-    /// `path:line:col` of each mutant no test caught.
-    missed: Vec<String>,
-    /// `path:line:col` of each mutant whose tests ran out of time.
-    timeout: Vec<String>,
-    /// Whether the unmutated baseline failed, so no catch means anything.
-    baseline_failed: bool,
-}
-
-/// The pointer of one `mutants.out` line, `path:line:col`, never the mutation's
-/// text, which quotes the source (rule 4).
-fn pointer_of(line: &str) -> Option<String> {
-    let mut fields = line.splitn(4, ':');
-    let path = fields.next()?;
-    let row = fields.next()?;
-    let column = fields.next()?;
-    (row.parse::<u32>().is_ok() && column.parse::<u32>().is_ok())
-        .then(|| format!("{path}:{row}:{column}"))
-}
-
-/// Read a run's outcome files. Absent files are empty: a run that never got as
-/// far as writing them is told apart by [`Outcomes::findings`] from its exit.
-fn read_outcomes(dir: &Path) -> Outcomes {
-    let lines = |name: &str| -> Vec<String> {
-        fs::read_to_string(dir.join(name))
-            .unwrap_or_default()
-            .lines()
-            .filter(|line| !line.trim().is_empty())
-            .map(str::to_owned)
-            .collect()
-    };
-    let caught = lines("caught.txt").len();
-    let unviable = lines("unviable.txt").len();
-    let missed: Vec<String> = lines("missed.txt")
-        .iter()
-        .filter_map(|l| pointer_of(l))
-        .collect();
-    let timeout: Vec<String> = lines("timeout.txt")
-        .iter()
-        .filter_map(|l| pointer_of(l))
-        .collect();
-    let baseline_failed = fs::read_to_string(dir.join("outcomes.json"))
-        .ok()
-        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
-        .and_then(|json| {
-            json.get("outcomes")?.as_array().map(|outcomes| {
-                outcomes.iter().any(|outcome| {
-                    outcome.get("scenario").and_then(serde_json::Value::as_str) == Some("Baseline")
-                        && outcome.get("summary").and_then(serde_json::Value::as_str)
-                            != Some("Success")
-                })
-            })
-        })
-        .unwrap_or(false);
-    Outcomes {
-        ran: caught + unviable + missed.len() + timeout.len(),
-        missed,
-        timeout,
-        baseline_failed,
-    }
-}
-
-impl Outcomes {
-    /// The findings one run over `source` amounts to.
-    ///
-    /// A run that failed with nothing missed and nothing timed out decided
-    /// nothing: a failed baseline is `case-already-red`, anything else is
-    /// `suite-did-not-run`. Neither may read as every mutant caught.
-    fn findings(&self, kind: RunnerKind, source: &str, ran: &Ran) -> Vec<Finding> {
-        let at = |slug: &str, verdict: Verdict| Finding {
-            gate: kind.id().to_owned(),
-            slug: Some(slug.to_owned()),
-            verdict,
-            owner: None,
-        };
-        let mut found: Vec<Finding> = self
-            .missed
-            .iter()
-            .map(|pointer| {
-                at(
-                    pointer,
-                    Verdict::Survived {
-                        want: String::from("in-diff"),
-                    },
-                )
-            })
-            .chain(
-                self.timeout
-                    .iter()
-                    .map(|pointer| at(pointer, Verdict::SuiteTimedOut { seconds: 0 })),
-            )
-            .collect();
-        if ran.outcome == Outcome::TimedOut {
-            found.push(at(
-                source,
-                Verdict::SuiteTimedOut {
-                    seconds: runner_bound().as_secs(),
-                },
-            ));
-        } else if !ran.passed() && found.is_empty() {
-            found.push(at(
-                source,
-                if self.baseline_failed {
-                    Verdict::CaseAlreadyRed {
-                        want: String::from("baseline"),
-                    }
-                } else {
-                    Verdict::SuiteDidNotRun {
-                        want: String::from("cargo mutants"),
-                    }
-                },
-            ));
-        }
-        found
-    }
-}
-
-/// The nextest filterset of the tests that judge `source`: its own tests, and
-/// every Rust suite it declares with `MUTANT-SUITE`, each inside its package.
-///
-/// `None` when no cargo target compiles the source and it declares no suite, so
-/// nothing could be named. A source no test target compiles (`build.rs`) is
-/// judged by the suites it declares: what it generates is what they read.
-#[must_use]
-pub fn test_scope(root: &Path, source: &str) -> Option<String> {
-    let scope = scope_of(root, source);
-    (!scope.is_empty()).then(|| terms_of(&scope))
-}
-
-/// A [`scope_of`]'s filterset: its terms, alternated.
-fn terms_of(scope: &[(String, Option<String>)]) -> String {
-    scope
-        .iter()
-        .map(|(term, _)| term.as_str())
-        .collect::<Vec<_>>()
-        .join(" | ")
-}
-
-/// The cargo target selectors that build exactly the test binaries a
-/// [`scope_of`] names, each once, in order: `--lib`, `--bins`, `--bin=<b>`,
-/// `--test=<t>`.
-///
-/// THE BUILD IS THE WHOLE COST OF A MUTANT, and this is what bounds it
-/// (CLOUD-1746). Measured on this tree, a mutant's tests ran in 0s and its
-/// build in 27-41s, because `cargo nextest run` with no selector compiles every
-/// test target of the package — the library twice (as a dependency and under
-/// `cfg(test)`), every integration target and every example — whichever of them
-/// the filterset then runs. A scope of one module's unit tests needs only
-/// `--lib` (20-27s); a declared `tests/<t>` suite adds `--test=<t>`, and cargo
-/// builds the package's binaries for an integration target by itself.
-fn targets_of(scope: &[(String, Option<String>)]) -> Vec<String> {
-    let mut targets: Vec<String> = Vec::new();
-    for target in scope.iter().filter_map(|(_, target)| target.as_ref()) {
-        if !targets.contains(target) {
-            targets.push(target.clone());
-        }
-    }
-    targets
-}
-
-/// Each `(filterset term, cargo target selector)` judging `source`: its own
-/// tests, then every Rust suite it declares with `MUTANT-SUITE`, each once. A
-/// suite in another package carries no selector.
-fn scope_of(root: &Path, source: &str) -> Vec<(String, Option<String>)> {
-    let mut scope: Vec<(String, Option<String>)> = tests_of(root, source)
-        .into_iter()
-        .map(|(term, target)| (term, Some(target)))
-        .collect();
-    let home = package_of(root, source).map(|(package, _)| package);
-    for suite in declared_suites(root, source) {
-        if let Some((term, target)) = tests_of(root, &suite)
-            && !scope.iter().any(|(known, _)| *known == term)
-        {
-            // A SUITE IN ANOTHER PACKAGE NAMES NO TARGET HERE: cargo-mutants
-            // builds the mutated package, where `--test=<t>` of a sibling's
-            // target is a build error rather than a narrower build.
-            let home_package = package_of(root, &suite).map(|(package, _)| package) == home;
-            scope.push((term, home_package.then_some(target)));
-        }
-    }
-    scope
-}
-
-/// The Rust suites `source` declares with `MUTANT-SUITE`, trimmed, in order:
-/// what [`scope_of`] judges it by beyond its own tests, and what a
-/// [`ChangePass`] key carries, so the two cannot name different scopes.
-fn declared_suites(root: &Path, source: &str) -> Vec<String> {
-    lines_of(root, source)
-        .unwrap_or_default()
-        .iter()
-        .filter_map(|line| strip_marker(line, SUITE))
-        .map(|suite| suite.trim().to_owned())
-        .filter(|suite| has_extension(suite, "rs"))
-        .collect()
-}
-
-/// The filterset term naming the tests compiled from `path`, inside its
-/// package, and the cargo selector of the target that compiles them.
-///
-/// Cargo's own layout decides it, never this repository's: `src/lib.rs` is the
-/// library's whole unit-test set and `src/a/b.rs` its `a::b::` module;
-/// `tests/<t>.rs` and `tests/<t>/main.rs` are the target `<t>`, and
-/// `tests/<t>/<m>.rs` its `<m>::` module.
-fn tests_of(root: &Path, path: &str) -> Option<(String, String)> {
-    let (package, dir) = package_of(root, path)?;
-    let relative = Path::new(path)
-        .strip_prefix(&dir)
-        .ok()?
-        .to_string_lossy()
-        .replace('\\', "/");
-    let stem = relative.strip_suffix(".rs")?;
-    let (term, target) = if let Some(module) = stem.strip_prefix("src/") {
-        let module = module.strip_suffix("/mod").unwrap_or(module);
-        match module {
-            "lib" => (String::from("kind(lib)"), String::from("--lib")),
-            "main" => (String::from("kind(bin)"), String::from("--bins")),
-            _ => match module.strip_prefix("bin/") {
-                Some(binary) => {
-                    // `src/bin/<name>/main.rs` is the binary `<name>`, as
-                    // `src/bin/<name>.rs` is: cargo's layout, never this repo's.
-                    let binary = binary.strip_suffix("/main").unwrap_or(binary);
-                    (format!("binary({binary})"), format!("--bin={binary}"))
-                }
-                None => (
-                    format!("kind(lib) & test(/^{}::/)", module.replace('/', "::")),
-                    String::from("--lib"),
-                ),
-            },
-        }
-    } else {
-        let test = stem.strip_prefix("tests/")?;
-        let (target, module) = match test.split_once('/') {
-            None => (test, None),
-            Some((target, "main")) => (target, None),
-            Some((target, module)) => (target, Some(module)),
-        };
-        let term = match module {
-            None => format!("binary({target})"),
-            Some(module) => format!(
-                "binary({target}) & test(/^{}::/)",
-                module.replace('/', "::")
-            ),
-        };
-        (term, format!("--test={target}"))
-    };
-    Some((format!("(package({package}) & {term})"), target))
-}
-
-/// The package whose manifest is nearest above `path`, and that manifest's
-/// directory, repo-relative.
-fn package_of(root: &Path, path: &str) -> Option<(String, PathBuf)> {
-    let mut dir = Path::new(path).parent();
-    while let Some(candidate) = dir {
-        if let Ok(text) = fs::read_to_string(root.join(candidate).join("Cargo.toml"))
-            && let Ok(manifest) = text.parse::<toml::Table>()
-            && let Some(name) = manifest
-                .get("package")
-                .and_then(|package| package.get("name"))
-                .and_then(toml::Value::as_str)
-        {
-            return Some((name.to_owned(), candidate.to_path_buf()));
-        }
-        dir = candidate.parent();
-    }
-    None
 }
 
 // ---------------------------------------------------------------------------
@@ -2214,6 +1854,13 @@ pub struct Staged {
     dir: PathBuf,
     /// The path most recently corrupted, restored before the next row.
     dirty: Option<String>,
+    /// The digest of the unmutated tree this was staged from: every tracked
+    /// path and its working bytes ([`Staged::new`]).
+    tree: String,
+    /// Each unmutated control run this sweep, keyed by [`control_key`]
+    /// (CLOUD-2253): the control is a function of its case and the tree, never
+    /// of the row, so a case many rows name runs it once.
+    controls: std::collections::HashMap<String, Selection>,
 }
 
 impl Staged {
@@ -2232,6 +1879,7 @@ impl Staged {
         let tracked = crate::git::tracked_paths(root)
             .context("mutate: could not list the tracked tree to stage it")?;
         reconcile(&dir, &tracked)?;
+        let mut tree = blake3::Hasher::new();
         for path in &tracked {
             let from = root.join(path);
             // A tracked path can be absent from the working tree (deleted but
@@ -2240,6 +1888,13 @@ impl Staged {
             if !from.is_file() {
                 continue;
             }
+            // THE TREE'S DIGEST, read off the bytes the stage reads anyway: the
+            // unmutated tree every control runs against ([`control_key`]).
+            let bytes = crate::fsio::read(&from)
+                .with_context(|| format!("mutate: could not stage {path}"))?;
+            tree.update(path.as_bytes());
+            tree.update(&[0]);
+            tree.update(blake3::hash(&bytes).as_bytes());
             let to = dir.join(path);
             // COPIED ONLY WHERE THE BYTES DIFFER, and this is an economy with a
             // correctness argument rather than a shortcut. A declared suite can
@@ -2248,9 +1903,7 @@ impl Staged {
             // every sweep, which is what makes a Rust-tier gate affordable at
             // all. The staged bytes are still exactly the tracked bytes; the
             // only thing preserved is the timestamp of a file nothing changed.
-            if std::fs::read(&to)
-                .is_ok_and(|there| std::fs::read(&from).is_ok_and(|here| here == there))
-            {
+            if crate::fsio::read(&to).is_ok_and(|there| there == bytes) {
                 continue;
             }
             if let Some(parent) = to.parent() {
@@ -2259,7 +1912,12 @@ impl Staged {
             }
             std::fs::copy(&from, &to).with_context(|| format!("mutate: could not stage {path}"))?;
         }
-        let staged = Staged { dir, dirty: None };
+        let staged = Staged {
+            dir,
+            dirty: None,
+            tree: tree.finalize().to_hex().to_string(),
+            controls: std::collections::HashMap::new(),
+        };
         let tracked: Vec<String> = tracked.into_iter().collect();
         staged.make_a_repository(&tracked)?;
         Ok(staged)
@@ -2313,7 +1971,7 @@ impl Staged {
         };
         copy_if_changed(&root.join(&path), &self.dir.join(&path))
             .with_context(|| format!("mutate: could not restore {path} in the staged tree"))?;
-        Ok(())
+        self.index(&path)
     }
 
     /// Put the committed bytes of `path` back and record it as this row's
@@ -2325,8 +1983,27 @@ impl Staged {
     pub fn stage_subject(&mut self, root: &Path, path: &str) -> Result<()> {
         copy_if_changed(&root.join(path), &self.dir.join(path))
             .with_context(|| format!("mutate: could not stage {path}"))?;
+        self.index(path)?;
         self.dirty = Some(path.to_owned());
         Ok(())
+    }
+
+    /// Stage `path`'s working bytes in the staged tree's index.
+    ///
+    /// **THE INDEX IS PART OF THE TREE UNDER JUDGEMENT** (CLOUD-2789). A gate
+    /// that reads the committed rule reads the index, never the checkout, by
+    /// design (`lock_complete`'s `the_index_answers_not_the_worktree_for_the_committed_rule`).
+    /// A mutation written to the working copy alone was invisible to it, so
+    /// a consumer's `settings-unlocked` row survived a suite that denies the
+    /// same bytes staged. Every write to the staged tree, mutant and restore
+    /// alike, is staged with it, so the index never disagrees with the copy.
+    ///
+    /// # Errors
+    ///
+    /// A failed stage is could-not-look (→ exit `3`).
+    fn index(&self, path: &str) -> Result<()> {
+        crate::gitwrite::stage_paths(&self.dir, &[path.to_owned()])
+            .with_context(|| format!("mutate: could not stage {path} in the staged tree's index"))
     }
 
     /// The staged tree's root.
@@ -2342,8 +2019,8 @@ impl Staged {
 /// and restoring it made cargo see a changed source on every row and rebuild
 /// inside the timed run. Leaving identical bytes untouched keeps the tree warm.
 fn copy_if_changed(from: &Path, to: &Path) -> std::io::Result<()> {
-    let wanted = std::fs::read(from)?;
-    if std::fs::read(to).is_ok_and(|have| have == wanted) {
+    let wanted = crate::fsio::read(from)?;
+    if crate::fsio::read(to).is_ok_and(|have| have == wanted) {
         return Ok(());
     }
     std::fs::copy(from, to).map(|_| ())
@@ -2368,7 +2045,7 @@ const MANIFEST: &str = ".mutate-staged";
 /// a build nothing asked it to judge. The manifest touches exactly the paths a
 /// run put there and never looks at anything else.
 fn reconcile(dir: &Path, tracked: &std::collections::BTreeSet<String>) -> Result<()> {
-    let previous = std::fs::read_to_string(dir.join(MANIFEST)).unwrap_or_default();
+    let previous = crate::fsio::read_to_string(dir.join(MANIFEST)).unwrap_or_default();
     for path in previous.lines() {
         if path.is_empty() || tracked.contains(path) {
             continue;
@@ -2418,6 +2095,9 @@ pub struct Ran {
     pub outcome: Outcome,
     /// Its combined output, which is scanned for case lines and never reported.
     pub output: String,
+    /// Its standard output alone, for a program whose answer is a document
+    /// (nextest's binary list, cargo's metadata) that stderr would corrupt.
+    pub stdout: String,
 }
 
 impl Ran {
@@ -2448,7 +2128,7 @@ pub fn in_diff_patch(root: &Path, base: &str, sources: &[String]) -> Result<Stri
             crate::git::BaseBlob::Found { text, .. } => text,
             _ => String::new(),
         };
-        let after = fs::read_to_string(root.join(source)).unwrap_or_default();
+        let after = crate::fsio::read_to_string(root.join(source)).unwrap_or_default();
         if before == after {
             continue;
         }
@@ -2475,14 +2155,46 @@ enum Program<'a> {
     /// The consumer's own mutation tool, `[mutate] command`'s first element
     /// (CLOUD-2211): committed in the reviewed authority, like a suite runner.
     Command(&'a str),
+    /// One test binary nextest handed the schema's reach recorder
+    /// ([`schema`]): the case under measurement, which no in-process route
+    /// can run.
+    Test(&'a str),
+    /// The syscall tracer a reach case runs under ([`schema`]), recording the
+    /// files it touches: nothing in-process sees a child process's reads.
+    Tracer(&'a str),
 }
 
 impl Program<'_> {
     const fn name(&self) -> &str {
         match self {
             Program::Cargo => "cargo",
-            Program::Suite(program) | Program::Command(program) => program,
+            Program::Suite(program)
+            | Program::Command(program)
+            | Program::Test(program)
+            | Program::Tracer(program) => program,
         }
+    }
+}
+
+/// The image this process runs, named so it still reads after cargo replaced
+/// the file it was started from (CLOUD-2886): on Linux the kernel's own
+/// `/proc/self/exe`, which opens the running inode even once `current_exe()`
+/// names `… (deleted)`; elsewhere `current_exe()`.
+///
+/// MEASURED ON #1276: a sweep started from `target/debug/batten`, a concurrent
+/// build relinked it three minutes in, and the copy of `current_exe()` that
+/// made the reach run's recorder failed `No such file or directory` after a
+/// whole schema build.
+///
+/// # Errors
+///
+/// Neither name can be had for the running image.
+fn running_image() -> std::io::Result<std::path::PathBuf> {
+    let own = Path::new("/proc/self/exe");
+    if own.exists() {
+        Ok(own.to_path_buf())
+    } else {
+        std::env::current_exe()
     }
 }
 
@@ -2505,13 +2217,30 @@ fn spawn(
 /// Where a spawned program's output goes.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Said {
-    /// Into [`Ran::output`], read once it has exited.
+    /// Into [`Ran::output`] for the caller to read once it has exited, and to
+    /// this process's stderr as it is written ([`pump_into`]).
     Captured,
     /// Straight to this process's stderr, as it is written, for a runner whose
     /// verdict is a file it writes (cargo-mutants' `mutants.out`): measured on
     /// #1132, capturing it left fifteen shards' logs silent for 111 minutes and
     /// lost every mutant they judged when their bound stopped them.
     Streamed,
+    /// Into [`Ran::output`] only, shown nowhere: for a run whose verdict is a
+    /// report it writes and whose sweep prints its own progress (the schema's
+    /// judging runs). MEASURED ON #1276: teed, 4,797 judging runs replayed
+    /// cargo's warnings into the sweep's stderr, and `hk`, which holds a
+    /// step's output, was killed by the OOM killer at 7.4 GB.
+    Kept,
+}
+
+impl Said {
+    /// Whether the child's stderr is shown as it is written.
+    const fn stderr_echo(self) -> Echo {
+        match self {
+            Self::Captured | Self::Streamed => Echo::Shown,
+            Self::Kept => Echo::Quiet,
+        }
+    }
 }
 
 fn spawn_as(
@@ -2522,6 +2251,36 @@ fn spawn_as(
     bound: std::time::Duration,
     said: Said,
 ) -> Result<Ran> {
+    spawn_scrubbed(dir, program, args, env, bound, said, scrubbed)
+}
+
+/// [`spawn_as`] for a suite run, which inherits no `NEXTEST_*` or `MUTANT_*`
+/// ([`suite_scrubbed`]).
+fn spawn_suite(
+    dir: &Path,
+    program: Program<'_>,
+    args: &[String],
+    env: &[(String, String)],
+    bound: std::time::Duration,
+    said: Said,
+) -> Result<Ran> {
+    spawn_scrubbed(dir, program, args, env, bound, said, suite_scrubbed)
+}
+
+/// Which inherited variables a spawn removes, given the names it inherited
+/// and the env it sets ([`scrubbed`], [`suite_scrubbed`]).
+type Scrub = fn(std::vec::IntoIter<String>, &[(String, String)]) -> Vec<String>;
+
+/// [`spawn_as`] with `scrub` naming the inherited variables to remove.
+fn spawn_scrubbed(
+    dir: &Path,
+    program: Program<'_>,
+    args: &[String],
+    env: &[(String, String)],
+    bound: std::time::Duration,
+    said: Said,
+    scrub: Scrub,
+) -> Result<Ran> {
     let program = program.name();
     #[expect(
         clippy::disallowed_types,
@@ -2529,10 +2288,10 @@ fn spawn_as(
     )]
     let mut command = std::process::Command::new(program);
     command.args(args).current_dir(dir);
-    for key in scrubbed(
-        std::env::vars_os().filter_map(|(key, _)| key.into_string().ok()),
-        env,
-    ) {
+    let inherited: Vec<String> = std::env::vars_os()
+        .filter_map(|(key, _)| key.into_string().ok())
+        .collect();
+    for key in scrub(inherited.into_iter(), env) {
         command.env_remove(key);
     }
     for (key, value) in env {
@@ -2573,12 +2332,14 @@ fn spawn_as(
     // ITS OWN GROUP, ENDED WHOLE — see `wait_bounded`, which records why the
     // direct child alone left every hung suite's test binary alive under init.
     //
-    // FILES RATHER THAN PIPES, because nothing reads them until the child is
-    // gone. A pipe holds 64 KiB and then blocks its writer, so a chatty failure
-    // would deadlock against a reader that is waiting for the exit — the one
-    // hazard `.output()` avoided by reading both pipes concurrently. A file has
-    // no such bound, and the watchdog above is what makes waiting-then-reading
-    // safe rather than merely tidy.
+    // PIPES, PUMPED AS THEY ARE WRITTEN (#1276). Each captured stream is read by
+    // its own thread through `exec::pump`, which writes every chunk to this
+    // process's stderr and to the capture file before reading the next: the
+    // output is visible while the child runs, the file still holds all of it
+    // for the caller to parse, and a blocked sink stalls the child's write
+    // rather than growing a buffer. Both pipes drain concurrently, so the 64 KiB
+    // deadlock a wait-then-read had is not reachable. It replaced files read at
+    // exit, which left a 485 s schema build showing nothing.
     let capture = std::env::temp_dir().join(format!(
         "batten-mutate-{}-{}",
         std::process::id(),
@@ -2592,18 +2353,15 @@ fn spawn_as(
     })?;
     let out_path = capture.join("stdout");
     let err_path = capture.join("stderr");
-    if said == Said::Streamed {
-        command.stdout(std::process::Stdio::from(std::io::stderr()));
-        command.stderr(std::process::Stdio::from(std::io::stderr()));
-    } else {
-        command.stdout(std::process::Stdio::from(
-            fs::File::create(&out_path) // stream: a child's stdout sink
-                .with_context(|| format!("mutate: could not open {}", out_path.display()))?,
-        ));
-        command.stderr(std::process::Stdio::from(
-            fs::File::create(&err_path) // stream: a child's stderr sink
-                .with_context(|| format!("mutate: could not open {}", err_path.display()))?,
-        ));
+    match said {
+        Said::Streamed => {
+            command.stdout(std::process::Stdio::from(std::io::stderr()));
+            command.stderr(std::process::Stdio::from(std::io::stderr()));
+        }
+        Said::Captured | Said::Kept => {
+            command.stdout(std::process::Stdio::piped());
+            command.stderr(std::process::Stdio::piped());
+        }
     }
     // A GROUP OF ITS OWN, AND THE SWEEP FORWARDS WHAT IT IS SENT. Leading a group
     // is what lets the teardown reach the suite's grandchildren; it also takes the
@@ -2612,11 +2370,35 @@ fn spawn_as(
     // `exec::Forwarding::arm`'s stated reason, and hands those signals on.
     crate::exec::lead_group(&mut command);
     let forwarding = crate::exec::Forwarding::arm(crate::exec::GroupDecision::OWNED)?;
-    let child = command
+    let mut child = command
         .spawn()
         .with_context(|| format!("mutate: could not run {program}"))?;
     forwarding.adopt(child.id())?;
+    // LISTED WHILE IT RUNS (CLOUD-2854), so an orphaned sweep's parent watch
+    // can end it; `wait_bounded` ends the group on every path before it drops.
+    let listed = LiveSuite::list(child.id());
+    let pumps = [
+        child
+            .stdout
+            .take()
+            .map(|pipe| pump_into(pipe, &out_path, Echo::Quiet)),
+        child
+            .stderr
+            .take()
+            .map(|pipe| pump_into(pipe, &err_path, said.stderr_echo())),
+    ];
     let waited = wait_bounded(child, bound);
+    drop(listed);
+    // THE GROUP IS GONE BY NOW (`wait_bounded` ends it on every path), so each
+    // pipe's last writer has exited and its EOF is the event the drain waits
+    // on, with no clock (CLOUD-2789). Elsewhere there is no group to end, so a
+    // grandchild can still hold a pipe and the drain keeps its bound.
+    for pumping in pumps.into_iter().flatten().flatten() {
+        #[cfg(unix)]
+        let _ = pumping.eof();
+        #[cfg(not(unix))]
+        let _ = pumping.finished(crate::exec::PIPE_DRAIN_TIMEOUT);
+    }
     // A signal outranks the row: the sweep was asked to stop, so it stops, with
     // the signal's own status rather than a verdict on a suite it interrupted.
     let forwarded = forwarding.finish();
@@ -2643,13 +2425,49 @@ fn spawn_as(
     })
 }
 
+/// Whether a captured stream is also shown on this process's stderr.
+///
+/// **STDOUT IS THE CALLER'S DATA, STDERR ITS PROGRESS** (#1276). Echoing both
+/// put cargo-mutants' `--list --json`, every mutant's whole diff, into the gate
+/// log: 58 MB on one lap, where `disk_watch.rs`'s own text matched the
+/// `disk-full` environment row and a red baseline was reported as a full disk.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Echo {
+    /// Captured to its file only.
+    Quiet,
+    /// Captured, and shown as it is written.
+    Shown,
+}
+
+/// The sinks a captured stream is pumped into: its file, and this process's
+/// stderr where `echo` shows it.
+fn sinks(file: fs::File, echo: Echo) -> Vec<Box<dyn std::io::Write + Send>> {
+    let mut sinks: Vec<Box<dyn std::io::Write + Send>> = vec![Box::new(file)];
+    if echo == Echo::Shown {
+        sinks.push(Box::new(std::io::stderr()));
+    }
+    sinks
+}
+
+/// Pump `pipe` into `path`, and this process's stderr where `echo` shows it
+/// ([`crate::stream`]).
+fn pump_into<R: std::io::Read + Send + 'static>(
+    pipe: R,
+    path: &Path,
+    echo: Echo,
+) -> Result<crate::stream::Pumping> {
+    let file = fs::File::create(path) // stream: a child's captured stream
+        .with_context(|| format!("mutate: could not open {}", path.display()))?;
+    Ok(crate::stream::spawn_pump(pipe, sinks(file, echo)))
+}
+
 /// Wait for `child` until `bound`, end its whole process group, then reap it,
 /// answering its status and whether the bound ran out (CLOUD-1860, CLOUD-2059).
 ///
-/// A BLOCKING WAIT WITH A DEADLINE, NOT A POLL. `std::thread::sleep` is a denied
-/// method here (`clippy.toml`), and this wait has a terminal state to block on:
-/// a worker blocks on the child's exit, the receive carries the bound, and a
-/// suite that returns wakes this immediately.
+/// ONE BLOCKING RECEIVE OVER TWO EVENTS, NOT A POLL AND NOT A TIMED RECEIVE
+/// (CLOUD-2789). A worker blocks on the child's exit and a [`Deadline`] on
+/// `bound`, both sending into the channel this waits on, so a suite that
+/// returns wakes it at once and one that hangs wakes it at the bound.
 ///
 /// **KILL THE GROUP, THEN REAP THE LEADER, IN THAT ORDER.** The worker waits with
 /// `WNOWAIT`, which reports the exit without reaping, so the leader stays an
@@ -2664,10 +2482,6 @@ fn spawn_as(
 /// pid that leads no group answers `ESRCH`. What it cost was measured: every hung
 /// cargo suite left its test binary — which a mutant can make loop forever —
 /// alive under init, two of them found 35 and 56 minutes after their runs.
-//MUTANT hung-suite-not-reported|s@^        Err(_) => true,$@        Err(_) => false,@|a_suite_that_hangs_is_ended_by_the_sweeps_own_bound
-//MUTANT suite-reap-leader-only|s@^        let _ = rustix::process::kill_process_group(group, @        let _ = rustix::process::kill_process(group, @|a_suite_that_hangs_is_ended_by_the_sweeps_own_bound
-//MUTANT suite-ungrouped|s@^    crate::exec::lead_group(&mut command);$@    let _ = \&mut command;@|a_suite_that_hangs_is_ended_by_the_sweeps_own_bound
-//MUTANT forwarding-unadopted|s@^    forwarding.adopt(child.id())?;$@@|a_signalled_sweep_takes_its_suite_with_it
 #[cfg(unix)]
 fn wait_bounded(
     mut child: std::process::Child,
@@ -2675,14 +2489,16 @@ fn wait_bounded(
 ) -> std::io::Result<(std::process::ExitStatus, bool)> {
     let pid = child.id();
     let (send, exits) = std::sync::mpsc::channel();
+    let exited = send.clone();
     let worker = std::thread::spawn(move || {
         // The receiver is gone only when the bound already ran out and the
         // caller stopped listening; the group kill below is what ends this wait.
-        let _ = send.send(await_exit(pid));
+        let _ = exited.send(Some(await_exit(pid)));
     });
-    let timed_out = match exits.recv_timeout(bound) {
-        Ok(Ok(())) => false,
-        Ok(Err(failed)) => {
+    let deadline = Deadline::arm(bound, &send, None);
+    let timed_out = match exits.recv() {
+        Ok(Some(Ok(()))) => false,
+        Ok(Some(Err(failed))) => {
             // The wait itself failed, so whether the suite exited is unknown.
             // It is ended rather than left running, and the failure is the answer.
             kill_group(pid);
@@ -2693,8 +2509,10 @@ fn wait_bounded(
             let _ = child.wait();
             return Err(failed);
         }
-        Err(_) => true,
+        // `send` is held here, so the channel cannot close: `None` is the bound.
+        Ok(None) | Err(_) => true,
     };
+    drop(deadline);
     if timed_out {
         // A RUNNER THAT LEADS ITS OWN GROUPS IS ASKED FIRST. nextest starts each
         // test in a process group of its own, so a `SIGKILL` to the runner's
@@ -2703,7 +2521,8 @@ fn wait_bounded(
         // nextest). `SIGTERM` is what nextest answers by ending every group it
         // started. The grace is bounded, and the `SIGKILL` below still follows.
         terminate_group(pid);
-        let _ = exits.recv_timeout(TERMINATE_GRACE);
+        let _grace = Deadline::arm(TERMINATE_GRACE, &send, None);
+        let _ = exits.recv();
     }
     kill_group(pid);
     sweep_group(pid);
@@ -2736,7 +2555,6 @@ fn sweep_group(_leader: u32) {}
 /// nobody. The zombie also keeps the group answering, so the sweep runs its full
 /// count rather than stopping at the first `ESRCH`: a bounded cost of microseconds
 /// per suite, against a build per mutant.
-//MUTANT sweep-sends-nothing|s@^    for _ in 0\.\.SWEEPS {$@    for _ in 0..0 {@|a_sweep_ends_what_is_left_in_a_group
 #[cfg(unix)]
 fn sweep_group(leader: u32) {
     let Some(group) = rustix::process::Pid::from_raw(i32::try_from(leader).unwrap_or_default())
@@ -2756,9 +2574,120 @@ fn sweep_group(leader: u32) {
 #[cfg(unix)]
 const TERMINATE_GRACE: std::time::Duration = std::time::Duration::from_secs(15);
 
+/// A SUPERVISOR BOUND, AS AN EVENT (CLOUD-2789): `fired` is sent on the waiter's
+/// own channel once the bound has passed, unless the deadline is dropped first.
+///
+/// The waiter makes ONE blocking `recv` over every event it waits for — an
+/// exit, a close, the bound — so no receive carries a clock and no wait polls.
+/// The bound itself is served by the crate's one clock,
+/// [`crate::pr_watch::clock::pause_for`], raced against the drop as an EVENT
+/// ([`Raised`]): a dropped deadline wakes its thread at once and sends nothing.
+///
+/// THE THREAD NEVER OUTLIVES THE DEADLINE (CLOUD-2904). It was detached, so a
+/// process that answered and exited cut it off wherever the scheduler had left
+/// it: one reach recording ran the clock's functions, the next did not, and the
+/// case's mutant key moved with no code changed. Dropping the deadline now
+/// joins it, and it always polls the clock before it reads the drop, so it runs
+/// the same functions on every path. The join costs nothing: the drop is an
+/// event the thread is woken by.
+pub(crate) struct Deadline {
+    raised: std::sync::Arc<Raised>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+/// A deadline's drop, as a flag and the waker of the thread waiting on it.
+#[derive(Default)]
+struct Raised {
+    flag: std::sync::atomic::AtomicBool,
+    waker: std::sync::Mutex<Option<std::task::Waker>>,
+}
+
+impl Raised {
+    /// Raise the flag, then wake whatever registered: a waiter that registered
+    /// before this reads the flag after its wake; one that registers after
+    /// reads it raised.
+    fn raise(&self) {
+        self.flag.store(true, std::sync::atomic::Ordering::SeqCst);
+        let waker = self.waker.lock().ok().and_then(|mut held| held.take());
+        if let Some(waker) = waker {
+            waker.wake();
+        }
+    }
+
+    /// Whether the flag is raised, registering `cx`'s waker first so a raise
+    /// in between is never missed.
+    fn raised(&self, cx: &std::task::Context<'_>) -> bool {
+        if let Ok(mut held) = self.waker.lock() {
+            *held = Some(cx.waker().clone());
+        }
+        self.flag.load(std::sync::atomic::Ordering::SeqCst)
+    }
+}
+
+/// Whether `bound` lapsed before `raised` was: the clock polled FIRST on every
+/// turn, so it runs on every path, and the drop read after it.
+async fn lapsed(bound: std::time::Duration, raised: &Raised) -> bool {
+    let mut clock = std::pin::pin!(crate::pr_watch::clock::pause_for(bound));
+    std::future::poll_fn(|cx| {
+        if clock.as_mut().poll(cx).is_ready() {
+            return std::task::Poll::Ready(true);
+        }
+        if raised.raised(cx) {
+            return std::task::Poll::Ready(false);
+        }
+        std::task::Poll::Pending
+    })
+    .await
+}
+
+/// [`lapsed`] where no runtime could be built: the clock's sliced blocking
+/// face serves `bound`, and the bound lapsed unless `dropped` was raised first.
+/// Its own function so the drop test is driven directly, since no kernel this
+/// suite runs on refuses the runtime (as `disk_watch`'s blocking floor).
+fn lapsed_blocking(bound: std::time::Duration, dropped: &std::sync::atomic::AtomicBool) -> bool {
+    crate::pr_watch::pause_until(bound.as_secs_f64(), dropped);
+    !dropped.load(std::sync::atomic::Ordering::SeqCst)
+}
+
+impl Deadline {
+    /// Send `fired` on `send` once `bound` has passed, unless dropped first.
+    pub(crate) fn arm<T: Send + 'static>(
+        bound: std::time::Duration,
+        send: &std::sync::mpsc::Sender<T>,
+        fired: T,
+    ) -> Self {
+        let raised = std::sync::Arc::new(Raised::default());
+        let (send, held) = (send.clone(), std::sync::Arc::clone(&raised));
+        let thread = std::thread::spawn(move || {
+            // Where no runtime can be built, the clock's sliced blocking face
+            // serves the bound, and the join waits out at most one slice.
+            let lapsed = if let Ok(runtime) = compio::runtime::Runtime::new() {
+                runtime.block_on(lapsed(bound, &held))
+            } else {
+                lapsed_blocking(bound, &held.flag)
+            };
+            if lapsed {
+                let _ = send.send(fired);
+            }
+        });
+        Self {
+            raised,
+            thread: Some(thread),
+        }
+    }
+}
+
+impl Drop for Deadline {
+    fn drop(&mut self) {
+        self.raised.raise();
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+
 /// `SIGTERM` the process group `leader` leads, through [`crate::exec::signal_group`].
 /// Best effort, as [`kill_group`].
-//MUTANT runner-not-asked-first|s@^        crate::exec::signal_group(group, rustix::process::Signal::TERM);$@        let _ = group;@|a_suite_that_hangs_is_ended_by_the_sweeps_own_bound
 #[cfg(unix)]
 fn terminate_group(leader: u32) {
     if let Some(group) = rustix::process::Pid::from_raw(i32::try_from(leader).unwrap_or_default()) {
@@ -2768,27 +2697,37 @@ fn terminate_group(leader: u32) {
 
 /// [`wait_bounded`] off unix, as it was: no `waitid`, no group, and no `kill(2)`
 /// to reach for, so a hung suite there is waited out rather than ended.
+///
+/// NAMED APART from the unix arm, so the mutation config can say this one is
+/// compiled out on every platform mutants run on without excusing the arm they
+/// judge (CLOUD-2789).
 #[cfg(not(unix))]
-fn wait_bounded(
-    mut child: std::process::Child,
-    bound: std::time::Duration,
-) -> std::io::Result<(std::process::ExitStatus, bool)> {
-    let (send, statuses) = std::sync::mpsc::channel();
-    let worker = std::thread::spawn(move || {
-        let _ = send.send(child.wait());
-    });
-    let (status, timed_out) = match statuses.recv_timeout(bound) {
-        Ok(status) => (status?, false),
-        Err(_) => (
-            statuses
-                .recv()
-                .map_err(|_| std::io::Error::other("mutate: the wait for the suite was lost"))??,
-            true,
-        ),
-    };
-    let _ = worker.join();
-    Ok((status, timed_out))
+mod off_unix {
+    pub(super) fn wait_bounded(
+        mut child: std::process::Child,
+        bound: std::time::Duration,
+    ) -> std::io::Result<(std::process::ExitStatus, bool)> {
+        let (send, statuses) = std::sync::mpsc::channel();
+        let exited = send.clone();
+        let worker = std::thread::spawn(move || {
+            let _ = exited.send(Some(child.wait()));
+        });
+        let _deadline = super::Deadline::arm(bound, &send, None);
+        let lost = || std::io::Error::other("mutate: the wait for the suite was lost");
+        let (status, timed_out) = match statuses.recv().map_err(|_| lost())? {
+            Some(status) => (status?, false),
+            // The bound fired first; the next event is the exit, waited out.
+            None => (
+                statuses.recv().map_err(|_| lost())?.ok_or_else(lost)??,
+                true,
+            ),
+        };
+        let _ = worker.join();
+        Ok((status, timed_out))
+    }
 }
+#[cfg(not(unix))]
+use off_unix::wait_bounded;
 
 /// Block until `pid` has exited, WITHOUT reaping it (`WNOWAIT`), so its pid and
 /// its group id stay reserved until [`wait_bounded`] has signalled the group.
@@ -2828,8 +2767,9 @@ fn finish(
     err_path: &Path,
     capture: &Path,
 ) -> Ran {
-    let mut output = fs::read_to_string(out_path).unwrap_or_default();
-    output.push_str(&fs::read_to_string(err_path).unwrap_or_default());
+    let stdout = crate::fsio::read_to_string(out_path).unwrap_or_default();
+    let mut output = stdout.clone();
+    output.push_str(&crate::fsio::read_to_string(err_path).unwrap_or_default());
     // Best effort: a capture left behind is a few bytes under the system temp
     // directory, and failing a sweep over housekeeping would trade a real
     // verdict for tidiness.
@@ -2842,7 +2782,11 @@ fn finish(
     } else {
         Outcome::Failed(status.code())
     };
-    Ran { outcome, output }
+    Ran {
+        outcome,
+        output,
+        stdout,
+    }
 }
 
 /// Distinguishes concurrent captures within one process; the pid separates
@@ -2940,6 +2884,133 @@ fn kill_group(leader: u32) {
 }
 
 // ---------------------------------------------------------------------------
+// An orphaned sweep (CLOUD-2854).
+// ---------------------------------------------------------------------------
+
+/// The suite groups this process leads right now, by leader pid.
+static LIVE_SUITES: std::sync::Mutex<Vec<u32>> = std::sync::Mutex::new(Vec::new());
+
+/// One suite group listed in [`LIVE_SUITES`], unlisted when this drops.
+struct LiveSuite(u32);
+
+impl LiveSuite {
+    /// List `leader`'s group until the returned value drops.
+    fn list(leader: u32) -> Self {
+        if let Ok(mut live) = LIVE_SUITES.lock() {
+            live.push(leader);
+        }
+        Self(leader)
+    }
+}
+
+impl Drop for LiveSuite {
+    fn drop(&mut self) {
+        if let Ok(mut live) = LIVE_SUITES.lock() {
+            live.retain(|leader| *leader != self.0);
+        }
+    }
+}
+
+/// How long an orphaned sweep's suites have to end what they started after
+/// `SIGTERM`, before `SIGKILL`: short, because nobody waits on this answer.
+#[cfg(target_os = "linux")]
+const ORPHAN_GRACE: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// End this sweep, and every suite group it leads, once its parent is gone
+/// (CLOUD-2854).
+///
+/// A capped `mutant:changed` had its mise killed while `--continue-on-error`
+/// went on into `mutant:rust`: that sweep ran under init for hours, writing to
+/// an output nobody read and holding the schema mirror's lock, so the next sweep
+/// refused. A process group does not reach it (mise leads one per task, which
+/// the kill missed), and `PR_SET_PDEATHSIG` fires on the spawning THREAD's exit
+/// in a threaded mise. So the verb waits on its parent itself: a pidfd of the
+/// parent it started under, readable when that parent exits, with no timer. On
+/// exit it says one could-not-look line, ends each listed suite group and exits
+/// 3; the `flock` the sweep holds drops with the process.
+///
+/// LINUX ONLY: rustix's `kevent` is `unsafe` and this crate forbids it, so a
+/// Darwin sweep keeps the behaviour it had.
+pub(crate) fn watch_parent() {
+    #[cfg(target_os = "linux")]
+    {
+        let Some(parent) = rustix::process::getppid() else {
+            return;
+        };
+        let pidfd = rustix::process::pidfd_open(parent, rustix::process::PidfdFlags::empty());
+        let _ = std::thread::Builder::new()
+            .name("parent-watch".to_owned())
+            .spawn(move || {
+                // GONE BEFORE THE PIDFD, OR REPARENTED SINCE: no wait owed.
+                if let Ok(pidfd) = pidfd
+                    && rustix::process::getppid() == Some(parent)
+                {
+                    let mut fds = [rustix::event::PollFd::new(
+                        &pidfd,
+                        rustix::event::PollFlags::IN,
+                    )];
+                    loop {
+                        match rustix::event::poll(&mut fds, None) {
+                            Ok(_) => break,
+                            Err(rustix::io::Errno::INTR) => {}
+                            Err(_) => return,
+                        }
+                    }
+                }
+                orphaned(parent);
+            });
+    }
+}
+
+/// Say that `parent` is gone, end every listed suite group, and exit 3.
+#[cfg(target_os = "linux")]
+fn orphaned(parent: rustix::process::Pid) -> ! {
+    let _ = std::io::Write::write_fmt(
+        &mut std::io::stderr(),
+        format_args!(
+            "mutate: parent {} is gone; could not look, ending this sweep and its suites\n",
+            parent.as_raw_nonzero()
+        ),
+    );
+    let live = LIVE_SUITES
+        .lock()
+        .map(|live| live.clone())
+        .unwrap_or_default();
+    // NEXTEST LEADS A GROUP PER TEST, so the TERM it answers by ending them all
+    // comes first, as in `wait_bounded`; the KILL follows within the grace.
+    let (send, exits) = std::sync::mpsc::channel();
+    for leader in &live {
+        terminate_group(*leader);
+        let send = send.clone();
+        let leader = *leader;
+        let _ = std::thread::Builder::new().spawn(move || {
+            let _ = await_exit(leader);
+            let _ = send.send(Some(()));
+        });
+    }
+    let _grace = Deadline::arm(ORPHAN_GRACE, &send, None);
+    drop(send);
+    let _ = exits_within(&exits, live.len());
+    for leader in &live {
+        kill_group(*leader);
+        sweep_group(*leader);
+    }
+    std::process::exit(crate::ExitCode::Internal.code())
+}
+
+/// How many of `count` exits `exits` delivered before its grace's [`Deadline`]
+/// fired: the wait [`orphaned`] gives a group it sent TERM before the KILL. Each
+/// exit is `Some`, the grace is `None`, and a closed channel ends the count too.
+/// A SEPARATE FUNCTION so a case can see the grace, which `orphaned` itself,
+/// ending the process, never lets one observe (CLOUD-2789); the grace is an
+/// event, so the case hands it in as one and never waits on a clock. Compiled
+/// where `orphaned` is, and under `test`, whose case runs on every target.
+#[cfg(any(target_os = "linux", test))]
+fn exits_within(exits: &std::sync::mpsc::Receiver<Option<()>>, count: usize) -> usize {
+    exits.iter().take(count).take_while(Option::is_some).count()
+}
+
+// ---------------------------------------------------------------------------
 // Running a suite.
 // ---------------------------------------------------------------------------
 
@@ -2960,7 +3031,7 @@ const SUITE_TARGET: &str = "target/mutate-cargo";
 /// `cargo nextest run` reads, and cargo then handed those artifacts back as
 /// fresh: measured here, a `mise run test:filter` in the real tree printed
 /// `Compiling batten`, linked a library whose debug info named
-/// `target/mutate/crates/batten/src/policy.rs`, and evaluated an engine that
+/// the mutated copy's `policy.rs` under `target/mutate/`, and evaluated an engine that
 /// projected `input.tree.missing` as an array while the source on disk projected
 /// a map. Two hours went into a projection defect that did not exist.
 ///
@@ -2988,6 +3059,15 @@ fn suite_env(root: &Path) -> Vec<(String, String)> {
             String::from("CARGO_TARGET_DIR"),
             root.join(SUITE_TARGET).to_string_lossy().into_owned(),
         ),
+        // THE CHECKOUT'S BUILD DIRECTORY FOR EVERY INTERMEDIATE UNIT (#1276):
+        // a mutant build's dependencies hash as `target/debug`'s do, so they
+        // are reused, not compiled into this target a second time. What cargo
+        // uplifts still lands in `SUITE_TARGET`, never over the checkout's own
+        // binary, which is the isolation the paragraph above is about.
+        (
+            String::from("CARGO_BUILD_BUILD_DIR"),
+            root.join("target").to_string_lossy().into_owned(),
+        ),
         (
             String::from("BATTEN_TEST_SCRATCH_LANE"),
             String::from("mutate"),
@@ -3013,21 +3093,201 @@ fn suite_env(root: &Path) -> Vec<(String, String)> {
     ]
 }
 
+/// Where a consumer's suite reads a mutated source from instead of the staged
+/// tree, declared by three variables together (CLOUD-2253):
+///
+/// - `MUTANT_PRESETS` ([`presets_dir`]): a module under it is mutated in a copy
+///   under [`Overlay::dir`], and the staged tree keeps the original;
+/// - `MUTANT_OVERLAY_ENV`: the variable that names [`Overlay::dir`] to the suite;
+/// - `MUTANT_OVERLAY_FEATURES`: the cargo features a suite is built with so it
+///   reads that copy;
+/// - `MUTANT_OVERLAY_ROOTS`, optional: further directories, space-separated,
+///   whose sources the suite reads through the overlay at their repository
+///   path (`<dir>/<source>`), for an embedded source outside the presets (the
+///   engine-default library, CLOUD-2253).
+///
+/// FOR A SOURCE A BUILD EMBEDS. A file the crate `include_str!`s is a build
+/// input, so mutating it in the staged tree recompiled the crate twice per row
+/// (the mutation, then its restore): measured on #1276, ~41 s a row, nearly all
+/// build. The overlay leaves the build's inputs untouched, so the suite built
+/// once runs every row, against exactly the mutated bytes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Overlay {
+    root: String,
+    /// [`Overlay::path_of`]'s further roots, `MUTANT_OVERLAY_ROOTS`.
+    roots: Vec<String>,
+    env: String,
+    features: String,
+    dir: PathBuf,
+}
+
+impl Overlay {
+    /// The overlay the environment declares for the tree at `root`, or `None`
+    /// where any of the three variables is unset or blank.
+    #[must_use]
+    pub fn declared(root: &Path) -> Option<Self> {
+        Self::declared_by(root, overlay_var)
+    }
+
+    /// [`Overlay::declared`] over the variables `var` answers: each trimmed of
+    /// space and a trailing `/`, and a blank one unset.
+    fn declared_by(root: &Path, var: impl Fn(&str) -> Option<String>) -> Option<Self> {
+        let read = |name: &str| {
+            var(name)
+                .map(|value| value.trim().trim_end_matches('/').to_owned())
+                .filter(|value| !value.is_empty())
+        };
+        Some(Self {
+            root: read("MUTANT_PRESETS")?,
+            roots: var("MUTANT_OVERLAY_ROOTS")
+                .unwrap_or_default()
+                .split_whitespace()
+                .map(|root| root.trim_end_matches('/').to_owned())
+                .filter(|root| !root.is_empty())
+                .collect(),
+            env: read("MUTANT_OVERLAY_ENV")?,
+            features: read("MUTANT_OVERLAY_FEATURES")?,
+            dir: target_dir(root).join("mutate-overlay"),
+        })
+    }
+
+    /// The `--features` a cargo invocation carries for this overlay.
+    fn feature_args(&self) -> Vec<String> {
+        vec![String::from("--features"), self.features.clone()]
+    }
+
+    /// Name `copy`, a path [`Overlay::path_of`] answered, as the one module this
+    /// row mutated ([`crate::preset::OVERLAY_TARGET`]). A reader of that module
+    /// whose copy will not read then refuses rather than judging the embedded
+    /// text (CLOUD-2839).
+    ///
+    /// # Errors
+    ///
+    /// The marker cannot be written.
+    fn mark(&self, copy: &Path) -> Result<()> {
+        let relative = copy.strip_prefix(&self.dir).unwrap_or(copy);
+        crate::durable::replace(
+            self.dir.join(crate::preset::OVERLAY_TARGET),
+            relative.to_string_lossy().into_owned(),
+        )
+        .context("mutate: could not name the overlay's target")
+    }
+
+    /// Whether a suite left its receipt beside `copy`, so its run read the
+    /// mutation (CLOUD-2839).
+    fn read(copy: &Path) -> bool {
+        let mut receipt = copy.as_os_str().to_owned();
+        receipt.push(crate::preset::OVERLAY_READ);
+        Path::new(&receipt).is_file()
+    }
+
+    /// Where the mutated copy of `source` is written, or `None` for a source
+    /// outside [`Overlay::root`] and every further root, which is mutated in
+    /// place. A preset's copy is at its path under the presets root, as
+    /// `PresetModule::text` spells it; a further root's at its whole repository
+    /// path, as `preset::library_text` does.
+    #[must_use]
+    pub fn path_of(&self, source: &str) -> Option<PathBuf> {
+        let under = |root: &str| {
+            source
+                .strip_prefix(root)
+                .and_then(|rest| rest.strip_prefix('/'))
+                .filter(|rest| !rest.is_empty())
+        };
+        under(&self.root)
+            .map(|rest| self.dir.join(rest))
+            .or_else(|| {
+                self.roots
+                    .iter()
+                    .any(|root| under(root).is_some())
+                    .then(|| self.dir.join(source))
+            })
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// The variables [`with_overlay_vars`] scoped to this thread.
+    static OVERLAY_VARS: std::cell::RefCell<Option<Vec<(&'static str, &'static str)>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Run `body` with [`Overlay::declared`] answered from `vars` on this thread,
+/// as the environment would answer it: THE ENVIRONMENT'S OWN SEAM, REACHABLE
+/// IN PROCESS, because this crate forbids the `unsafe` `set_var` needs (the
+/// pattern of `rest::with_fixture`). The previous scope is restored on the way
+/// out, unwinding included.
+#[cfg(test)]
+fn with_overlay_vars<T>(vars: &[(&'static str, &'static str)], body: impl FnOnce() -> T) -> T {
+    /// Puts the scope it replaced back when dropped.
+    struct Restore(Option<Vec<(&'static str, &'static str)>>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            OVERLAY_VARS.with(|scoped| scoped.replace(self.0.take()));
+        }
+    }
+    let _restore = Restore(OVERLAY_VARS.with(|scoped| scoped.replace(Some(vars.to_vec()))));
+    body()
+}
+
+/// One overlay variable: the thread's scoped set where a test declared one,
+/// else the environment.
+fn overlay_var(name: &str) -> Option<String> {
+    #[cfg(test)]
+    if let Some(vars) = OVERLAY_VARS.with(|scoped| scoped.borrow().clone()) {
+        return vars
+            .iter()
+            .find(|(key, _)| *key == name)
+            .map(|(_, value)| (*value).to_owned());
+    }
+    std::env::var(name).ok()
+}
+
+/// The `--features` every cargo invocation of a sweep carries, so the build it
+/// pays once is the one every row runs.
+fn overlay_features(root: &Path) -> Vec<String> {
+    Overlay::declared(root)
+        .as_ref()
+        .map_or_else(Vec::new, Overlay::feature_args)
+}
+
 /// The environment a nextest run in `staged` carries: [`suite_env`], with the
 /// inherited `NEXTEST_PROFILE` kept where `staged` declares that profile
-/// ([`declared_profile`]), and `PATH` led by `provisioned` ([`runner_path`]).
+/// ([`declared_profile`]).
 ///
 /// [`spawn_as`] scrubs every OTHER inherited `NEXTEST_*` variable from a child
 /// this env reaches, because it names nextest's profile ([`scrubbed`]).
-fn nextest_env(root: &Path, staged: &Path, provisioned: Option<&Path>) -> Vec<(String, String)> {
+fn nextest_env(root: &Path, staged: &Path) -> Vec<(String, String)> {
     let mut env = suite_env(root);
+    env.push(trusted_staged(
+        staged,
+        std::env::var("MISE_TRUSTED_CONFIG_PATHS").ok(),
+    ));
+    if let Some(overlay) = Overlay::declared(root) {
+        env.push((overlay.env, overlay.dir.to_string_lossy().into_owned()));
+    }
     if let Some(profile) = declared_profile(staged, std::env::var("NEXTEST_PROFILE").ok())
         && let Some((_, value)) = env.iter_mut().find(|(key, _)| key == "NEXTEST_PROFILE")
     {
         *value = profile;
     }
-    env.extend(runner_path(provisioned));
     env
+}
+
+/// `MISE_TRUSTED_CONFIG_PATHS` with `staged` added to whatever was inherited.
+///
+/// THE STAGED TREE IS A COPY OF THIS CHECKOUT'S OWN CONFIG, so trusting it adds
+/// no trust the checkout lacks. Without it, a case that resolves a pinned tool
+/// with `mise which` from the staged root read the copy as untrusted, failed
+/// before it ran, and three `hk-fix-selection.pkl` rows read `case-already-red`
+/// on every sweep in a fresh container (#1276).
+fn trusted_staged(staged: &Path, inherited: Option<String>) -> (String, String) {
+    let staged = staged.to_string_lossy();
+    let value = match inherited.filter(|paths| !paths.is_empty()) {
+        Some(paths) => format!("{paths}:{staged}"),
+        None => staged.into_owned(),
+    };
+    (String::from("MISE_TRUSTED_CONFIG_PATHS"), value)
 }
 
 /// `profile` where `staged`'s `.config/nextest.toml` declares `[profile.<it>]`,
@@ -3037,7 +3297,7 @@ fn nextest_env(root: &Path, staged: &Path, provisioned: Option<&Path>) -> Vec<(S
 /// 035fd4ea variant got wrong: the staged tree is the one nextest runs in.
 fn declared_profile(staged: &Path, profile: Option<String>) -> Option<String> {
     let profile = profile.filter(|name| !name.trim().is_empty())?;
-    let text = fs::read_to_string(staged.join(".config/nextest.toml")).ok()?;
+    let text = crate::fsio::read_to_string(staged.join(".config/nextest.toml")).ok()?;
     let config: toml::Table = text.parse().ok()?;
     config
         .get("profile")
@@ -3060,18 +3320,35 @@ fn scrubbed(inherited: impl IntoIterator<Item = String>, env: &[(String, String)
         .collect()
 }
 
-/// `PATH` with `provisioned` ahead of the inherited one, or nothing where it is
-/// `None`, so the inherited `PATH` passes through unchanged.
-fn runner_path(provisioned: Option<&Path>) -> Vec<(String, String)> {
-    let Some(dir) = provisioned else {
-        return Vec::new();
-    };
-    let inherited = std::env::var_os("PATH").unwrap_or_default();
-    let paths = std::iter::once(dir.to_path_buf()).chain(std::env::split_paths(&inherited));
-    std::env::join_paths(paths).map_or_else(
-        |_| Vec::new(),
-        |joined| vec![(String::from("PATH"), joined.to_string_lossy().into_owned())],
-    )
+/// The prefixes of the variables a suite run never inherits ([`suite_scrubbed`]).
+pub const SUITE_SCRUBBED: [&str; 2] = ["NEXTEST_", "MUTANT_"];
+
+/// The inherited variables to remove from a suite run, WHETHER OR NOT `env`
+/// names a profile: every `NEXTEST_*` and `MUTANT_*` the env does not set
+/// itself. The schema's reach and judge runs name their profile by argument,
+/// so [`scrubbed`] left `mutant:rust`'s `NEXTEST_PROFILE=mutants` on them, and
+/// on every case they ran: a case driving nextest over a fixture asked for the
+/// sweep's own `batten-cover` profile there (#1276), and an inherited
+/// `NEXTEST_RETRIES` turns a kill into a miss. A test body that runs a task
+/// removes the same set ([`SUITE_SCRUBBED`]).
+///
+/// AND THE MUTANT SWITCH ITSELF ([`schema::ACTIVE`]), unless the run sets it
+/// (CLOUD-2789). A sweep run as a case under another sweep's judge inherited
+/// that judge's `BATTEN_MUTANT`, so its own unmutated baseline ran with a
+/// switch on: `mutate_schema`'s control case read its judge-only red case as
+/// baseline-red, and every mutant it reached went unjudged.
+#[must_use]
+pub fn suite_scrubbed(
+    inherited: impl IntoIterator<Item = String>,
+    env: &[(String, String)],
+) -> Vec<String> {
+    inherited
+        .into_iter()
+        .filter(|key| {
+            key == schema::ACTIVE || SUITE_SCRUBBED.iter().any(|prefix| key.starts_with(prefix))
+        })
+        .filter(|key| !env.iter().any(|(set, _)| set == key))
+        .collect()
 }
 
 /// How far a run got, in the order `judge_row` must read it — every state but
@@ -3107,7 +3384,7 @@ impl Reach {
 }
 
 /// How many cases the run selected, whether it passed, and how far it got.
-#[derive(Debug, Default, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 struct Selection {
     selected: usize,
     ok: bool,
@@ -3147,7 +3424,6 @@ fn spawn_arm(
     spawn(&arm.cwd, Program::Suite(program), args, env, bound)
 }
 
-//MUTANT tofu-arm-never-initialises|s@^        let _ = spawn(&module, Program::Suite("tofu"), &init, &env, build_bound());$@        let _ = (module, init);@|a_tofu_suite_is_initialised_before_it_runs
 /// Run a gate's suite against the staged tree, filtered to `want` where its
 /// harness can filter, and read the named case's own verdict back.
 ///
@@ -3156,9 +3432,27 @@ fn spawn_arm(
 /// invoking task provides, exactly as `sed` and `cargo` do, so one missing
 /// program used to end the whole sweep with an error naming nothing about the
 /// gates it never reached.
-fn run_suite(staged: &Staged, root: &Path, suite: &Suite, want: &str) -> Selection {
+fn run_suite(
+    staged: &Staged,
+    root: &Path,
+    suite: &Suite,
+    row: &Row,
+    prebuilt: Option<&Prebuilt>,
+) -> Selection {
+    let want = row.want.as_str();
     let dir = staged.dir();
-    let env = nextest_env(root, dir, None);
+    let cargo = matches!(suite, Suite::Cargo { .. });
+    // No recorded build means the one build failed: nothing to run against, and
+    // a rebuild here is the per-row cost [`Prebuilt`] exists to rule out.
+    if cargo && prebuilt.is_none() {
+        return Selection::default();
+    }
+    // The recorded binaries, unless they embed this row's subject outside the
+    // overlay — then only a rebuild sees the mutation ([`Prebuilt`]).
+    let overlaid =
+        row_overlay(root, row, prebuilt).is_some_and(|o| o.path_of(&row.source).is_some());
+    let reuse = prebuilt.filter(|built| cargo && (overlaid || !built.embeds(&row.source)));
+    let env = nextest_env(root, dir);
     // Where a `JUnit` report lands for the one arm whose verdict is a file
     // rather than a stream. Beside the captures, never inside the tree under
     // judgement.
@@ -3168,13 +3462,23 @@ fn run_suite(staged: &Staged, root: &Path, suite: &Suite, want: &str) -> Selecti
         CAPTURE.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
     ));
     let _ = fs::remove_file(&junit);
-    if matches!(suite, Suite::Cargo { .. }) {
-        // BUILT UNDER THE BUILD BOUND FIRST, THEN TIMED (review of #962). A
-        // mutated source must be recompiled, and paying that inside the
-        // per-case bound is how a slow compile reads as `suite-did-not-run`.
-        // A build that fails here is left for the timed run to report.
-        let build = vec![String::from("test"), String::from("--no-run")];
+    // A REUSE AFTER A REBUILD REBUILDS CLEAN FIRST. The previous rebuild wrote
+    // its mutant into the very binaries the record names; the staged tree is
+    // restored (or carries only this row's unembedded mutation), so one build
+    // here puts back binaries that see no other row's mutant.
+    let dirty = reuse.is_some_and(|built| built.dirty.get());
+    if owes_build(cargo, reuse.is_some(), dirty) {
+        // AN EMBEDDED SUBJECT ONLY: BUILT UNDER THE BUILD BOUND FIRST, THEN TIMED
+        // (review of #962). A mutated embedded source must be recompiled, and
+        // paying that inside the per-case bound is how a slow compile reads as
+        // `suite-did-not-run`. A build that fails here is left for the timed run
+        // to report.
+        let mut build = vec![String::from("test"), String::from("--no-run")];
+        build.extend(overlay_features(root));
         let _ = spawn(dir, Program::Cargo, &build, &env, build_bound());
+    }
+    if let Some(built) = prebuilt.filter(|_| cargo) {
+        built.dirty.set(reuse.is_none());
     }
     if let Suite::Tofu { path } = suite {
         // INITIALISED UNDER THE BUILD BOUND FIRST, THEN TIMED (CLOUD-2190). The
@@ -3189,7 +3493,25 @@ fn run_suite(staged: &Staged, root: &Path, suite: &Suite, want: &str) -> Selecti
         let init = ["init", "-backend=false", "-input=false", "-no-color"].map(String::from);
         let _ = spawn(&module, Program::Suite("tofu"), &init, &env, build_bound());
     }
-    let (cwd, argv) = invocation(dir, suite, want, &junit);
+    // THE DECLARED SUITE'S OWN BINARY, read off the recorded `cargo metadata`,
+    // so a case of the same name in another target is never selected.
+    let binary = prebuilt
+        .filter(|_| cargo)
+        .and_then(|built| suite_binary(&built.metadata, dir, suite.path()));
+    let config = harness_config(root, dir);
+    let (cwd, mut argv) = invocation(
+        dir,
+        suite,
+        want,
+        binary.as_deref(),
+        &junit,
+        config.as_deref(),
+    );
+    if let Some(built) = reuse {
+        argv.extend(built.reuse_args());
+    } else if cargo {
+        argv.extend(overlay_features(root));
+    }
     // DECLARED AS AN ARM (CLOUD-1714), which is what makes this module an
     // INSTANCE of the harness rather than a second copy of it. The arm carries
     // what it takes to run the thing once — where, what, and under which
@@ -3217,23 +3539,31 @@ fn run_suite(staged: &Staged, root: &Path, suite: &Suite, want: &str) -> Selecti
         Suite::Conftest { path } => {
             conftest_verdict(&ran.output, want, &lines_of(dir, path).unwrap_or_default())
         }
-        Suite::Pytest { .. } => pytest_verdict(&fs::read_to_string(&junit).unwrap_or_default()),
+        Suite::Pytest { .. } => {
+            pytest_verdict(&crate::fsio::read_to_string(&junit).unwrap_or_default())
+        }
     };
     let _ = fs::remove_file(&junit);
     if ran.outcome == Outcome::TimedOut {
         if let Some(stopped) = stopped_at(&ran.output) {
             use std::io::Write as _;
-            let _ = writeln!(
+            let _ = crate::mutate::progress!(
                 std::io::stderr(),
                 "mutate sweep: {want} timed out at `{stopped}`"
             );
         }
-        return Selection {
-            reach: Reach::TimedOut,
-            ..selection
-        };
+        return ended_at_bound(selection);
     }
     selection
+}
+
+/// A suite's selection once its bound ended it: whatever it printed before,
+/// it reached [`Reach::TimedOut`], which outranks every other reach.
+fn ended_at_bound(selection: Selection) -> Selection {
+    Selection {
+        reach: Reach::TimedOut,
+        ..selection
+    }
 }
 
 /// The words cargo and nextest open a status line with.
@@ -3252,9 +3582,6 @@ const STATUS_WORDS: &[&str] = &[
     "LEAK",
 ];
 
-//MUTANT stopped-at-a-sibling|s@Some("SLOW") if@Some("SLOWX") if@|a_timed_out_suite_names_where_it_stopped
-//MUTANT stopped-at-a-finished-case|s@ if !finished.contains(&case_of(words)) =>@ =>@|a_timed_out_suite_names_where_it_stopped
-//MUTANT stopped-at-first-line|s@^        \.rev()$@        .skip(0)@|a_timed_out_suite_names_where_it_stopped
 /// Where a suite killed at its bound had got to: the first five words of a
 /// status line cargo or nextest printed, so `Compiling <crate>`, `SETUP` or
 /// `SLOW [> Ns] <case>` (CLOUD-2206). A POINTER, NEVER THE OUTPUT: a timeout
@@ -3311,9 +3638,38 @@ fn pointer(words: &[&str]) -> String {
     words.iter().take(5).copied().collect::<Vec<_>>().join(" ")
 }
 
+/// Where nextest reads its own configuration, relative to the tree it runs in.
+const NEXTEST_CONFIG: &str = ".config/nextest.toml";
+
+/// The unmutated nextest config a Cargo suite in `dir` runs under, where the
+/// row being judged mutated `dir`'s copy (#1276): `root`'s own, the bytes the
+/// staged copy was taken from. `None` where the two agree, or either is absent,
+/// and nextest reads `dir`'s as it always has.
+///
+/// THE HARNESS IS NOT THE SUBJECT. A row in `.config/nextest.toml` mutates the
+/// file the suite's harness reads before it selects a case, so a mutation that
+/// breaks its syntax or its profile stopped nextest with nothing run, and the
+/// row read could-not-look; one that loosens it changed which cases ran and how
+/// they were judged. The case still reads the mutated file as data, which is
+/// what the row is about.
+fn harness_config(root: &Path, dir: &Path) -> Option<PathBuf> {
+    let original = root.join(NEXTEST_CONFIG);
+    let staged = crate::fsio::read(dir.join(NEXTEST_CONFIG)).ok()?;
+    let unmutated = crate::fsio::read(&original).ok()?;
+    (staged != unmutated).then_some(original)
+}
+
 /// Where each harness runs and what it is handed: the working directory and
-/// the argv, program first.
-fn invocation(dir: &Path, suite: &Suite, want: &str, junit: &Path) -> (PathBuf, Vec<String>) {
+/// the argv, program first. `config` is the nextest config a Cargo suite runs
+/// under instead of the staged tree's ([`harness_config`]).
+fn invocation(
+    dir: &Path,
+    suite: &Suite,
+    want: &str,
+    binary: Option<&str>,
+    junit: &Path,
+    config: Option<&Path>,
+) -> (PathBuf, Vec<String>) {
     let argv = |words: &[&str]| words.iter().map(|word| (*word).to_owned()).collect();
     match suite {
         // NO `--test`, for `Suite::declared`'s reason: nothing in the declared
@@ -3334,8 +3690,18 @@ fn invocation(dir: &Path, suite: &Suite, want: &str, junit: &Path) -> (PathBuf, 
         // read `case-already-red`. `test(<want>)` matches by containment, the
         // filter libtest applied; `--no-tests=pass` leaves an empty selection
         // to `names-no-case` rather than to nextest's own error.
+        //
+        // ANCHORED, AND SCOPED TO THE SUITE'S BINARY. `test(<want>)` matched by
+        // containment across every binary, so a sibling whose name merely
+        // CONTAINS the case's was selected beside it and its redness credited
+        // to the row: `a_worktree_spawn_is_refused` also ran `…_in_auto`. The
+        // case now matches as a whole name or the last `::` segments of one,
+        // in the declared suite's binary only, and the caller requires exactly
+        // one ([`judge_row`]).
         Suite::Cargo { .. } => {
-            let filter = format!("test({want})");
+            let case = format!("test(/(^|::){}$/)", regex::escape(want));
+            let filter =
+                binary.map_or_else(|| case.clone(), |id| format!("binary_id(={id}) & {case}"));
             let mut words = vec![
                 "cargo",
                 "nextest",
@@ -3344,6 +3710,10 @@ fn invocation(dir: &Path, suite: &Suite, want: &str, junit: &Path) -> (PathBuf, 
                 "--no-tests=pass",
                 "--color=never",
             ];
+            let config = config.map(|path| path.to_string_lossy().into_owned());
+            if let Some(config) = &config {
+                words.extend(["--config-file", config]);
+            }
             words.extend(NEXTEST_VERDICT_FLAGS);
             words.extend(["-E", &filter]);
             (dir.to_path_buf(), argv(&words))
@@ -3460,7 +3830,6 @@ fn nextest_ran(output: &str) -> bool {
 /// shape is the errored one, and reading it as a failure would call every
 /// parse-breaking mutation caught. The `version` line opens every run, so it is
 /// what says the harness started.
-//MUTANT errored-case-read-as-killed|s@^        _ => (0, false, diagnosed && !any_run),$@        _ => (usize::from(diagnosed), false, false),@|an_errored_tofu_run_is_could_not_look
 fn tofu_verdict(output: &str, want: &str) -> Selection {
     let mut status = None;
     let mut any_run = false;
@@ -3541,10 +3910,6 @@ fn json_array(output: &str) -> Option<Vec<serde_json::Value>> {
 /// **THE CASE'S VERDICT IS A FUNCTION OF THE SET** ([`case_verdict`]): any
 /// error, else any fail, else all pass. The previous ladder fell back to the
 /// first verdict, so `[pass, fail, skip]` read pass.
-//MUTANT-SUITE crates/batten/tests/it/mutate.rs
-//MUTANT generated-case-any-pass|s@^    } else if any \&\& every_pass {$@    } else if any {@|a_case_verdict_is_independent_of_order
-//MUTANT generated-pool-ignores-fail-order|s@^        } else if v.eq_ignore_ascii_case("fail") {$@        } else if false {@|a_case_verdict_is_independent_of_order
-//MUTANT exact-shadow-restored|s@^        let chosen = if generated.is_empty() {$@        let chosen = if true {@|a_generating_kyverno_case_fails_when_any_object_it_generates_does
 fn kyverno_verdict(output: &str, want: &str) -> Selection {
     let field = |key: &str| {
         want.split(',')
@@ -3601,7 +3966,6 @@ fn kyverno_verdict(output: &str, want: &str) -> Selection {
 
 /// One result's verdict token, `error` when it carries none to read: a dropped
 /// result would let its siblings' passes decide the case.
-//MUTANT result-verdict-dropped|s@^    result\["RESULT"\].as_str().unwrap_or("error")$@    result["RESULT"].as_str().unwrap_or("pass")@|a_result_with_no_verdict_is_an_error
 fn result_verdict(result: &serde_json::Value) -> &str {
     result["RESULT"].as_str().unwrap_or("error")
 }
@@ -3693,17 +4057,21 @@ fn pytest_verdict(report: &str) -> Selection {
     }
 }
 
-/// How many cases a suite declares in total — for the two arms whose `want` is
-/// a substring filter. The others match `want` exactly, select at most one case,
-/// and so cannot select every case of a suite holding more than one.
+/// How many cases a suite declares in total — for pytest, the one arm whose
+/// `want` is a substring filter. The others match `want` exactly; a Cargo row's
+/// filter is an exact name in its suite's binary, so its bound is "exactly one
+/// selected" ([`judge_row`]), never a count of `#[test]` lines in one file
+/// that its selection, spanning the binary, would not match.
 fn total_cases(root: &Path, suite: &Suite) -> usize {
     let Some(lines) = lines_of(root, suite.path()) else {
         return 0;
     };
     let marker = match suite {
-        Suite::Cargo { .. } => "#[test]",
         Suite::Pytest { .. } => "def test_",
-        Suite::Tofu { .. } | Suite::Kyverno { .. } | Suite::Conftest { .. } => return 0,
+        Suite::Cargo { .. }
+        | Suite::Tofu { .. }
+        | Suite::Kyverno { .. }
+        | Suite::Conftest { .. } => return 0,
     };
     lines
         .iter()
@@ -3721,16 +4089,28 @@ fn total_cases(root: &Path, suite: &Suite) -> usize {
 ///
 /// `None` when it applied, else `unappliable-mutation`: a source that does not
 /// read, or a script outside the one-substitution subset.
-fn apply(staged: &Staged, row: &Row) -> Result<Option<Verdict>> {
+fn apply(staged: &Staged, overlay: Option<&Overlay>, row: &Row) -> Result<Option<Verdict>> {
     let path = staged.dir().join(&row.source);
-    let Ok(before) = std::fs::read_to_string(&path) else {
+    let Ok(before) = crate::fsio::read_to_string(&path) else {
         return Ok(Some(Verdict::UnappliableMutation));
     };
     let Some(after) = substitute(&before, &row.script) else {
         return Ok(Some(Verdict::UnappliableMutation));
     };
-    crate::durable::replace(&path, after)
+    // Into the overlay for a source a build embeds, so the staged tree, the
+    // build's input, never moves ([`Overlay`]).
+    let copy = overlay.and_then(|overlay| Some((overlay, overlay.path_of(&row.source)?)));
+    let target = copy.as_ref().map_or(path, |(_, copy)| copy.clone());
+    if let Some(dir) = target.parent() {
+        fs::create_dir_all(dir)
+            .with_context(|| format!("mutate: could not create {}", dir.display()))?;
+    }
+    crate::durable::replace(&target, after)
         .with_context(|| format!("mutate: could not write the mutated {}", row.source))?;
+    match copy {
+        Some((overlay, copy)) => overlay.mark(&copy)?,
+        None => staged.index(&row.source)?,
+    }
     Ok(None)
 }
 
@@ -3799,9 +4179,52 @@ fn basic_to_rust(pattern: &str, delimiter: char) -> Option<String> {
     // `^` anchors only first (or first in a group) and `$` only last: anywhere
     // else a basic regex reads them as themselves (`version=$(awk`, `"\[^"`).
     let mut at_start = true;
+    // A BRACKET EXPRESSION IS ITS OWN GRAMMAR: a leading `^` negates it and a
+    // leading `]` is a member, so `"[^"]*"` is "a quoted run" in sed and must
+    // not become `[\^"]` (the `rust-base-undeclared` row, inert on #1276).
+    let mut in_bracket = false;
     while let Some(c) = chars.next() {
         let starting = std::mem::replace(&mut at_start, false);
+        if in_bracket {
+            match c {
+                ']' => {
+                    in_bracket = false;
+                    out.push(']');
+                }
+                '[' if chars.peek() == Some(&':') => {
+                    out.push('[');
+                    for d in chars.by_ref() {
+                        out.push(d);
+                        if d == ']' {
+                            break;
+                        }
+                    }
+                }
+                '\\' => match chars.next()? {
+                    'n' => out.push_str("\\n"),
+                    't' => out.push_str("\\t"),
+                    other => out.push_str(&regex::escape(&other.to_string())),
+                },
+                // A range's dash stays live; every other class operator the
+                // regex crate has (`&&`, `~~`, a nested `[`) is a literal here.
+                '-' => out.push('-'),
+                other => out.push_str(&regex::escape(&other.to_string())),
+            }
+            continue;
+        }
         match c {
+            '[' => {
+                in_bracket = true;
+                out.push('[');
+                if chars.peek() == Some(&'^') {
+                    chars.next();
+                    out.push('^');
+                }
+                if chars.peek() == Some(&']') {
+                    chars.next();
+                    out.push_str("\\]");
+                }
+            }
             '^' if !starting => out.push_str("\\^"),
             '$' if chars.peek().is_some() => out.push_str("\\$"),
             '\\' => match chars.next()? {
@@ -3879,9 +4302,17 @@ fn sed_replacement(replacement: &str) -> String {
 /// gate's behaviour is untouched, and the mutation SURVIVES every run while
 /// reading as enforced coverage. Measured: `board-write-record`'s
 /// `overlap-frozen-at-write-time` had done exactly that for its whole life.
-fn diff_shape(root: &Path, staged: &Staged, source: &str) -> (bool, usize) {
-    let before = std::fs::read_to_string(root.join(source)).unwrap_or_default();
-    let after = std::fs::read_to_string(staged.dir().join(source)).unwrap_or_default();
+fn diff_shape(
+    root: &Path,
+    staged: &Staged,
+    overlay: Option<&Overlay>,
+    source: &str,
+) -> (bool, usize) {
+    let before = crate::fsio::read_to_string(root.join(source)).unwrap_or_default();
+    let mutated = overlay
+        .and_then(|overlay| overlay.path_of(source))
+        .unwrap_or_else(|| staged.dir().join(source));
+    let after = crate::fsio::read_to_string(mutated).unwrap_or_default();
     if before == after {
         return (false, 0);
     }
@@ -3903,7 +4334,6 @@ fn diff_shape(root: &Path, staged: &Staged, source: &str) -> (bool, usize) {
 /// self-match: `toolchain-probe-blind` swaps one `return Toolchain::…;` for
 /// another and `missing-receipt-route-dropped` blanks a list entry, and every
 /// one of those lines occurs elsewhere in its file (CLOUD-2067).
-//MUTANT shared-line-uncounted|s@^        \.filter(\x7c(line, _)\x7c strip_marker(line\.trim_start(), "MUTANT")\.is_none())$@        .filter(\x7c(line, _)\x7c !(before.contains(line) \&\& after.contains(line)) \&\& strip_marker(line.trim_start(), "MUTANT").is_none())@|a_changed_line_repeated_elsewhere_in_the_file_is_still_a_changed_code_line
 fn code_lines_changed(before: &str, after: &str) -> usize {
     let mut net: BTreeMap<&str, isize> = BTreeMap::new();
     for line in before.lines() {
@@ -3918,17 +4348,99 @@ fn code_lines_changed(before: &str, after: &str) -> usize {
         .sum()
 }
 
+/// The refusal a row earns from its mutation's shape alone, read in memory
+/// before anything is staged or run (#1276): a script that will not apply, a
+/// mutation that changes nothing, or one that changes only declaration lines.
+/// Each proves nothing whatever the suite says, so a clean run spent first
+/// bought nothing — and where the case filter was also wrong, it named that
+/// lesser defect instead. `None` where the mutation changes code, and the row
+/// goes on to be judged. The staged [`apply`] and [`diff_shape`] stay the
+/// verdict's word for the bytes the suite actually runs against.
+fn unproving(root: &Path, row: &Row) -> Option<Verdict> {
+    let Ok(before) = crate::fsio::read_to_string(root.join(&row.source)) else {
+        return Some(Verdict::UnappliableMutation);
+    };
+    let Some(after) = substitute(&before, &row.script) else {
+        return Some(Verdict::UnappliableMutation);
+    };
+    if before == after {
+        return Some(Verdict::InertMutation);
+    }
+    (code_lines_changed(&before, &after) == 0).then_some(Verdict::SelfMutatingRow)
+}
+
+/// Whether [`run_suite`] builds before it runs: only a cargo suite, and only
+/// where the recorded binaries are not reused or a rebuild left them dirty.
+/// Apart so a case can reach it: what a build spent on another runner's suite
+/// changes is time and the uplifted binaries, never a verdict a case can read.
+const fn owes_build(cargo: bool, reused: bool, dirty: bool) -> bool {
+    cargo && (!reused || dirty)
+}
+
+/// Whether a row is judged by its module's own test tier rather than its
+/// declared suite: [`judge_by_module`]'s conditions short of running it, a
+/// `.rego` row naming its own `test_` rule ([`declares_own_case`]) in a module
+/// the committed config registers as a policy row. Such a row never runs its
+/// suite, so its key and its touch set leave the suite out (#1276). A config
+/// that does not resolve registers nothing, and the suite stays in both.
+fn judged_by_module(root: &Path, row: &Row) -> bool {
+    declares_own_case(root, row) && registered_modules(root).contains(&row.source)
+}
+
+/// The modules the committed config registers as policy rows, read once per
+/// process per root: every row of a sweep asks.
+fn registered_modules(root: &Path) -> std::collections::BTreeSet<String> {
+    type Index = std::collections::HashMap<PathBuf, std::collections::BTreeSet<String>>;
+    static INDEX: std::sync::OnceLock<std::sync::Mutex<Index>> = std::sync::OnceLock::new();
+    let index = INDEX.get_or_init(Default::default);
+    if let Some(found) = index.lock().ok().and_then(|held| held.get(root).cloned()) {
+        return found;
+    }
+    let modules: std::collections::BTreeSet<String> =
+        crate::resolve::resolve(root, &crate::resolve::Overrides::default())
+            .map(|config| {
+                config
+                    .rules
+                    .iter()
+                    .filter(|rule| rule.kind == crate::config_model::RuleKind::Policy)
+                    .filter_map(|rule| rule.module.clone())
+                    .collect()
+            })
+            .unwrap_or_default();
+    if let Ok(mut held) = index.lock() {
+        held.insert(root.to_path_buf(), modules.clone());
+    }
+    modules
+}
+
 /// Judge one row.
-fn judge_row(root: &Path, staged: &mut Staged, gate: &Gate, row: &Row) -> Result<Verdict> {
+fn judge_row(
+    root: &Path,
+    staged: &mut Staged,
+    gate: &Gate,
+    row: &Row,
+    prebuilt: Option<&Prebuilt>,
+) -> Result<Verdict> {
     if let Some(why) = row.want.strip_prefix("\u{0}malformed:") {
         return Ok(Verdict::MalformedRow {
             why: why.to_owned(),
         });
     }
+    if let Some(refused) = unproving(root, row) {
+        return Ok(refused);
+    }
     // The previous row's subject first — it may be a DIFFERENT gate's file, and
     // this row's suite may compose over it.
     staged.restore(root)?;
     staged.stage_subject(root, &row.source)?;
+    // The previous row's mutated copy goes with its subject: a clean run must
+    // read the embedded module.
+    if let Some(overlay) = Overlay::declared(root) {
+        let _ = fs::remove_dir_all(&overlay.dir);
+    }
+    // The overlay this row is mutated in, or none where a test target embeds
+    // its source past the overlay ([`row_overlay`]).
+    let overlay = row_overlay(root, row, prebuilt);
     if declares_own_case(root, row)
         && let Some(verdict) = judge_by_module(root, staged, row)?
     {
@@ -3951,7 +4463,21 @@ fn judge_row(root: &Path, staged: &mut Staged, gate: &Gate, row: &Row) -> Result
     // assertion that never holds, a fixture that never builds — is red either
     // way, and every mutation aimed at it reads as caught. Costs one extra
     // filtered run per row, which is what an anti-vacuity term is worth.
-    let clean = run_suite(staged, root, suite, &row.want);
+    //
+    // ONCE PER CASE AND UNMUTATED TREE (CLOUD-2253): the restore above and the
+    // emptied overlay leave every row's control the same run, so a case many
+    // rows name is not re-run per row. Only a run that reported is kept; a
+    // could-not-look is the next row's to retry, as it was.
+    let control = control_key(root, staged, suite, row);
+    let clean = if let Some(held) = staged.controls.get(&control) {
+        *held
+    } else {
+        let ran = run_suite(staged, root, suite, row, prebuilt);
+        if kept(&ran) {
+            staged.controls.insert(control, ran);
+        }
+        ran
+    };
     // AND HOW FAR THE RUN GOT IS READ BEFORE EITHER (CLOUD-1860, CLOUD-2160),
     // for the same reason one rung up: a killed or errored run selects no case
     // and exits non-zero, so it satisfies both tests below while meaning
@@ -3977,17 +4503,25 @@ fn judge_row(root: &Path, staged: &mut Staged, gate: &Gate, row: &Row) -> Result
     // The other side of `names-no-case`: a filter matching EVERY case is the
     // same vacuity, because the row stops naming a case and redness under
     // mutation can then come from anywhere in the suite.
+    //
+    // A CARGO ROW NAMES EXACTLY ONE CASE. Its filter is an exact name in the
+    // suite's binary ([`invocation`]), so a second selected case is another
+    // module's case of the same name, and redness could come from it.
     let total = total_cases(root, suite);
-    if total > 1 && clean.selected >= total {
+    let wide = match suite {
+        Suite::Cargo { .. } => clean.selected > 1,
+        _ => total > 1 && clean.selected >= total,
+    };
+    if wide {
         return Ok(Verdict::FilterNamesEveryCase {
             want: row.want.clone(),
         });
     }
 
-    if let Some(refused) = apply(staged, row)? {
+    if let Some(refused) = apply(staged, overlay.as_ref(), row)? {
         return Ok(refused);
     }
-    let (changed, code_lines) = diff_shape(root, staged, &row.source);
+    let (changed, code_lines) = diff_shape(root, staged, overlay.as_ref(), &row.source);
     if !changed {
         return Ok(Verdict::InertMutation);
     }
@@ -3995,7 +4529,7 @@ fn judge_row(root: &Path, staged: &mut Staged, gate: &Gate, row: &Row) -> Result
         return Ok(Verdict::SelfMutatingRow);
     }
 
-    let mutated = run_suite(staged, root, suite, &row.want);
+    let mutated = run_suite(staged, root, suite, row, prebuilt);
     // THE SAME GUARD, AND HERE IT IS THE DANGEROUS DIRECTION. The clean run's
     // timeout costs a could-not-look reported under the wrong name; this one
     // would be read as evidence. A killed run exits non-zero, so without this
@@ -4012,12 +4546,49 @@ fn judge_row(root: &Path, staged: &mut Staged, gate: &Gate, row: &Row) -> Result
             want: row.want.clone(),
         });
     }
+    // WHICH SOURCE THE RUN JUDGED, read before EITHER verdict (CLOUD-2839). A
+    // suite that never read the overlay's copy ran the unmutated module: green
+    // is no survivor, and red (its reader refusing an unreadable copy) is no
+    // catch. Only a receipt beside the copy says the mutation was judged.
+    if let Some(copy) = overlay.as_ref().and_then(|o| o.path_of(&row.source))
+        && !Overlay::read(&copy)
+    {
+        return Ok(Verdict::OverlayUnread {
+            want: row.want.clone(),
+        });
+    }
     if mutated.ok {
         return Ok(Verdict::Survived {
             want: row.want.clone(),
         });
     }
     Ok(Verdict::Caught)
+}
+
+/// Whether a control run is kept for the next row naming its case: only one
+/// that reported cases. A could-not-look is the next row's to retry.
+fn kept(run: &Selection) -> bool {
+    run.reach == Reach::Reported
+}
+
+/// The key of a row's unmutated control run (CLOUD-2253): its suite and case,
+/// over the tree it runs against. That tree is the staged one with every
+/// subject restored, so it is [`Staged::tree`] and the subject's bytes as
+/// restored from `root`, which a change under the sweep is keyed by too.
+fn control_key(root: &Path, staged: &Staged, suite: &Suite, row: &Row) -> String {
+    let subject = crate::fsio::read(root.join(&row.source)).unwrap_or_default();
+    let mut key = blake3::Hasher::new();
+    for field in [
+        staged.tree.as_bytes(),
+        format!("{suite:?}").as_bytes(),
+        row.want.as_bytes(),
+        row.source.as_bytes(),
+        blake3::hash(&subject).as_bytes(),
+    ] {
+        key.update(field);
+        key.update(&[0]);
+    }
+    key.finalize().to_hex().to_string()
 }
 
 /// Whether a `.rego` row's case is a `test_` rule the mutated module itself
@@ -4031,7 +4602,7 @@ fn declares_own_case(root: &Path, row: &Row) -> bool {
         })
 }
 
-/// A row judged by its module's own test tier, in process ([`crate::policy_case`]),
+/// A row judged by its module's own test tier, in process ([`crate::policy::case`]),
 /// with the same three-step discipline as a suite: green before the mutation,
 /// a change that touches code, red after it. A fault is could-not-look, never a
 /// catch: a mutation that breaks the module's parse is not one its case caught.
@@ -4041,16 +4612,17 @@ fn declares_own_case(root: &Path, row: &Row) -> bool {
 /// naming no case.
 fn judge_by_module(root: &Path, staged: &mut Staged, row: &Row) -> Result<Option<Verdict>> {
     let want = row.want.clone();
-    match crate::policy_case(staged.dir(), &row.source, &row.want) {
+    match crate::policy::case(staged.dir(), &row.source, &row.want) {
         Ok(Some(true)) => {}
         Ok(Some(false)) => return Ok(Some(Verdict::CaseAlreadyRed { want })),
         Ok(None) => return Ok(None),
         Err(_) => return Ok(Some(Verdict::SuiteDidNotRun { want })),
     }
-    if let Some(refused) = apply(staged, row)? {
+    // IN PLACE: this tier reads the staged file itself and builds nothing.
+    if let Some(refused) = apply(staged, None, row)? {
         return Ok(Some(refused));
     }
-    let (changed, code_lines) = diff_shape(root, staged, &row.source);
+    let (changed, code_lines) = diff_shape(root, staged, None, &row.source);
     if !changed {
         return Ok(Some(Verdict::InertMutation));
     }
@@ -4058,7 +4630,7 @@ fn judge_by_module(root: &Path, staged: &mut Staged, row: &Row) -> Result<Option
         return Ok(Some(Verdict::SelfMutatingRow));
     }
     Ok(Some(
-        match crate::policy_case(staged.dir(), &row.source, &row.want) {
+        match crate::policy::case(staged.dir(), &row.source, &row.want) {
             Ok(Some(false)) => Verdict::Caught,
             Ok(Some(true)) => Verdict::Survived { want },
             Ok(None) => Verdict::NamesNoCase { want },
@@ -4090,31 +4662,244 @@ fn unreported(run: &Selection, suite: &Suite, row: &Row) -> Option<Verdict> {
 /// is the row, its source and its suite, so a change elsewhere in what the case
 /// exercises does not invalidate it. CI starts with no record, which keeps the
 /// full sweep the confirmation.
-const CAUGHT_RECORD: &str = "caught.tsv";
+const CAUGHT_RECORD: &str = "rows.tsv";
 
-/// A row's key: its script, the bytes it mutates, and the bytes of its suite.
+/// Where a sweep's verdict records live: the repository's STATE directory,
+/// never the build root (#1276).
+///
+/// **A RECORD IN `target/` IS SCRATCH.** The collector takes `target/mutate`
+/// whole as an idle staged copy (`collect.rs`'s `STAGED`), so the caught rows a
+/// killed lap had recorded — 292 of 351 on #1276 — survived the crash and were
+/// then deleted by the next lap's collection, and the sweep judged all of them
+/// again. The state directory is what the schema's own verdict journal already
+/// uses. Falls back to the build root only where no state directory resolves.
+fn record_dir(root: &Path) -> PathBuf {
+    crate::state::repo_state_dir(root)
+        .map_or_else(|_| target_dir(root), |state| state.join("mutate"))
+}
+
+/// A row's key: its script, the bytes it mutates, and its suite's CODE, the
+/// non-comment remainder [`crate::git::without_comments`] reads, so a comment
+/// edit to the suite keeps the row it already saw caught. The source is keyed
+/// whole: its rows are comments in it.
 fn row_key(root: &Path, gate: &Gate, row: &Row) -> String {
     let mut material = row.script.clone().into_bytes();
     material.push(0);
-    material.extend(std::fs::read(root.join(&row.source)).unwrap_or_default());
+    material.extend(crate::fsio::read(root.join(&row.source)).unwrap_or_default());
     material.push(0);
-    if let Some(suite) = gate.suite_for(row) {
-        material.extend(std::fs::read(root.join(suite.path())).unwrap_or_default());
+    if let Some(suite) = gate.suite_for(row).filter(|_| !judged_by_module(root, row)) {
+        let path = suite.path();
+        let text = crate::fsio::read_to_string(root.join(path)).unwrap_or_default();
+        material.extend(crate::git::without_comments(path, &text).into_bytes());
+        // AND EVERY FILE ITS CASE CAN LIVE IN (#1276): a case weakened in a
+        // sibling module must not keep the catch recorded against the suite.
+        for path in case_files(root, suite, &row.want) {
+            let text = crate::fsio::read_to_string(root.join(&path)).unwrap_or_default();
+            material.push(0);
+            material.extend(path.as_bytes());
+            material.push(0);
+            material.extend(crate::git::without_comments(&path, &text).into_bytes());
+        }
     }
-    crate::provision::digest(&material)
+    crate::digest::sha256_hex(&material)
 }
 
-/// The keys recorded caught; an unreadable record is an empty one.
+/// The files other than `suite`'s own that define a case `want` selects
+/// (#1276), sorted.
+///
+/// A suite's runner selects a case wherever it compiled or loaded, not in the
+/// declared file alone: `cargo test -- <want>` matches every function whose
+/// name carries `want` across the targets under the suite's directory, and
+/// `conftest verify -p <dir>` loads every module there. So a case moved into a
+/// sibling (`tests/<dir>/main.rs` declaring a module of cases) is still the
+/// row's evidence, and reading the declared path alone let a change weakening
+/// it touch no gate and keep its recorded catch. The other runners name their
+/// case in the declared file itself, and answer none.
+///
+/// A function NAMED like the case is enough, so a name the filter does not in
+/// fact select (another module's path prefix) widens; it never narrows.
+fn case_files(root: &Path, suite: &Suite, want: &str) -> Vec<String> {
+    // libtest's filter is a substring of the case's path; a `test_` rule is
+    // named exactly.
+    let (extension, wanted, exact) = match suite {
+        Suite::Cargo { .. } => (
+            "rs",
+            want.rsplit("::").next().unwrap_or(want).to_owned(),
+            false,
+        ),
+        Suite::Conftest { .. } => ("rego", format!("test_{want}"), true),
+        Suite::Tofu { .. } | Suite::Kyverno { .. } | Suite::Pytest { .. } => return Vec::new(),
+    };
+    if wanted.is_empty() {
+        return Vec::new();
+    }
+    let selects = |name: &String| {
+        if exact {
+            *name == wanted
+        } else {
+            name.contains(&wanted)
+        }
+    };
+    let own = suite.path();
+    let dir = own.rsplit_once('/').map_or("", |(dir, _)| dir);
+    case_index(root, dir, extension)
+        .iter()
+        .filter(|(path, names)| path != own && names.iter().any(selects))
+        .map(|(path, _)| path.clone())
+        .collect()
+}
+
+/// The case names each `extension` file under `dir` defines, by path, read once
+/// per process: a sweep keys every row and a narrowing walks every gate, and
+/// both ask the same directory each time.
+fn case_index(root: &Path, dir: &str, extension: &'static str) -> Vec<(String, Vec<String>)> {
+    type Index =
+        std::collections::HashMap<(PathBuf, String, &'static str), Vec<(String, Vec<String>)>>;
+    static INDEX: std::sync::OnceLock<std::sync::Mutex<Index>> = std::sync::OnceLock::new();
+    let key = (root.to_path_buf(), dir.to_owned(), extension);
+    let index = INDEX.get_or_init(Default::default);
+    if let Some(found) = index.lock().ok().and_then(|held| held.get(&key).cloned()) {
+        return found;
+    }
+    let mut files = Vec::new();
+    // A suite at the root walks the root's own files alone: recursing there
+    // would read the build directory and every other tree in the checkout.
+    collect_files(root, dir, extension, !dir.is_empty(), &mut files);
+    files.sort();
+    let built: Vec<(String, Vec<String>)> = files
+        .into_iter()
+        .filter_map(|path| {
+            let text = crate::fsio::read_to_string(root.join(&path)).ok()?;
+            Some((path, case_names(&text, extension)))
+        })
+        .collect();
+    if let Ok(mut held) = index.lock() {
+        held.insert(key, built.clone());
+    }
+    built
+}
+
+/// Every `extension` file under `dir`, repo-relative, recursing where `deep`.
+/// A hidden directory and a `target` directory are never entered.
+fn collect_files(root: &Path, dir: &str, extension: &str, deep: bool, into: &mut Vec<String>) {
+    let Ok(entries) = fs::read_dir(root.join(dir)) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let path = if dir.is_empty() {
+            name.clone()
+        } else {
+            format!("{dir}/{name}")
+        };
+        let Ok(kind) = entry.file_type() else {
+            continue;
+        };
+        if kind.is_dir() {
+            if deep && !name.starts_with('.') && name != "target" {
+                collect_files(root, &path, extension, deep, into);
+            }
+        } else if has_extension(&path, extension) {
+            into.push(path);
+        }
+    }
+}
+
+/// The case names a file defines: a Rust `fn`'s name, or a Rego `test_` rule's.
+fn case_names(text: &str, extension: &str) -> Vec<String> {
+    let ident = |rest: &str| -> String {
+        rest.chars()
+            .take_while(|c| c.is_alphanumeric() || *c == '_')
+            .collect()
+    };
+    text.lines()
+        .filter_map(|line| {
+            let line = line.trim_start();
+            let name = if extension == "rego" {
+                line.starts_with("test_").then(|| ident(line))
+            } else {
+                line.split_once("fn ").map(|(_, rest)| ident(rest))
+            }?;
+            (!name.is_empty()).then_some(name)
+        })
+        .collect()
+}
+
+/// The keys recorded caught; an unreadable record is an empty one. A line is a
+/// bare key (a change's pass, or a row recorded before #1276) or a row's
+/// `key<TAB>verdict` ([`record_row`]); only `caught` answers here.
 fn recorded_caught(record: &Path) -> std::collections::HashSet<String> {
-    std::fs::read_to_string(record)
-        .map(|text| text.lines().map(str::to_owned).collect())
+    recorded_rows(record)
+        .into_iter()
+        .filter(|(_, verdict)| *verdict == Verdict::Caught)
+        .map(|(key, _)| key)
+        .collect()
+}
+
+/// Every row verdict recorded, the latest per key: `caught`, or `survived`
+/// with the case it wanted. A bare key is a caught one.
+fn recorded_rows(record: &Path) -> std::collections::HashMap<String, Verdict> {
+    crate::fsio::read_to_string(record)
+        .map(|text| {
+            text.lines()
+                .filter_map(|line| {
+                    let mut columns = line.split('\t');
+                    let key = columns.next().filter(|key| !key.is_empty())?;
+                    let verdict = match (columns.next(), columns.next()) {
+                        (None | Some("caught"), _) => Verdict::Caught,
+                        (Some("survived"), Some(want)) => Verdict::Survived {
+                            want: want.to_owned(),
+                        },
+                        _ => return None,
+                    };
+                    Some((key.to_owned(), verdict))
+                })
+                .collect()
+        })
         .unwrap_or_default()
+}
+
+/// The row verdicts a sweep reads: the state directory's record, over the one a
+/// sweep wrote into `work` before #1276 moved it, so a record left there is
+/// read once more rather than judged again. A key in both answers as the state
+/// directory has it.
+fn rows_recorded_for(record: &Path, work: &Path) -> std::collections::HashMap<String, Verdict> {
+    let mut rows = recorded_rows(&work.join(CAUGHT_RECORD));
+    rows.extend(recorded_rows(record));
+    rows
+}
+
+/// The finding a recorded verdict stands for, or none for a caught row.
+fn recorded_finding(name: &str, gate: &Gate, row: &Row, verdict: &Verdict) -> Option<Finding> {
+    verdict.is_finding().then(|| Finding {
+        gate: name.to_owned(),
+        slug: Some(row.slug.clone()),
+        verdict: verdict.clone(),
+        owner: gate.owner.clone(),
+    })
 }
 
 /// Append one caught key, whole-line so a torn tail never fuses two keys. Best
 /// effort: a key not recorded is a row run again.
 fn record_caught(record: &Path, key: &str) {
-    let _ = crate::durable::append_whole_lines(record, &format!("{key}\n"));
+    record_row(record, key, &Verdict::Caught);
+}
+
+/// Append a row's verdict under its key, when it is one the key decides:
+/// `caught` or `survived`. A could-not-look verdict (a timeout, a suite that
+/// did not run) says nothing about the row and is judged again.
+fn record_row(record: &Path, key: &str, verdict: &Verdict) {
+    let line = match verdict {
+        Verdict::Caught => format!("{key}\tcaught\n"),
+        Verdict::Survived { want } if !want.contains(['\t', '\n']) => {
+            format!("{key}\tsurvived\t{want}\n")
+        }
+        _ => return,
+    };
+    if let Some(parent) = record.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    let _ = crate::durable::append_whole_lines(record, &line);
 }
 
 /// Where a sweep records a change it saw pass whole: `target/mutate-passed.tsv`,
@@ -4222,15 +5007,15 @@ impl ChangePass {
         if self.inputs.key().as_deref() != Some(self.key.as_str()) {
             return;
         }
-        let _ = fs::create_dir_all(target_dir(&self.inputs.root));
         record_caught(&self.inputs.record_path(), &self.key);
     }
 }
 
 impl ChangeInputs {
-    /// Where the pass record lives: [`PASSED_RECORD`] in [`target_dir`].
+    /// Where the pass record lives: [`PASSED_RECORD`] in [`record_dir`], the
+    /// state directory, so a target cleanup does not take it (#1276).
     fn record_path(&self) -> PathBuf {
-        target_dir(&self.root).join(PASSED_RECORD)
+        record_dir(&self.root).join(PASSED_RECORD)
     }
 
     /// The key of the tree as it stands now.
@@ -4248,15 +5033,12 @@ impl ChangeInputs {
     ///   change, most rebases onto a busy trunk, keys alike while the context
     ///   lines still place the change; or, where no patch can be written
     ///   (non-UTF-8 working bytes), the path and a digest of those bytes;
-    /// - what judges it: the bytes of every [`declared_suites`] entry of a
-    ///   changed source, the scope cargo-mutants runs beyond the source's own
-    ///   inline tests (keyed only where a hunk's context reaches them;
-    ///   CLOUD-2591 owns the rest of the file), and each
-    ///   narrowed gate's name and its rows' [`row_key`]s, which carry the bytes
-    ///   of the sources and suites a declared row runs against.
+    /// - what judges it: each narrowed gate's name and its rows' [`row_key`]s,
+    ///   which carry the bytes of the sources a declared row mutates and the
+    ///   code of the suites it runs against.
     ///
-    /// So a base that moved a suite under an unchanged patch is a key that
-    /// moved, for either runner.
+    /// So a base that moved a suite's code under an unchanged patch is a key
+    /// that moved.
     fn key(&self) -> Option<String> {
         let Self {
             root,
@@ -4283,7 +5065,7 @@ impl ChangeInputs {
             // Any other patch that cannot be written (a base that will not
             // open) is `None`: no record, a full run. A binary base side
             // reads as empty, so its text successor keys as a whole-file add.
-            let read = fs::read(root.join(path));
+            let read = crate::fsio::read(root.join(path));
             let absent = read
                 .as_ref()
                 .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound);
@@ -4296,11 +5078,7 @@ impl ChangeInputs {
                 }
             } else {
                 put(path.as_bytes());
-                put(crate::provision::digest(&bytes).as_bytes());
-            }
-            for suite in declared_suites(root, path) {
-                put(suite.as_bytes());
-                put(&fs::read(root.join(&suite)).unwrap_or_default());
+                put(crate::digest::sha256_hex(&bytes).as_bytes());
             }
         }
         for name in names {
@@ -4311,15 +5089,390 @@ impl ChangeInputs {
                 }
             }
         }
-        Some(crate::provision::digest(&material))
+        Some(crate::digest::sha256_hex(&material))
     }
 }
 
-/// BUILD ONCE, BEFORE ANY ROW IS TIMED (CLOUD-1910). Best effort: a build that
-/// fails leaves every Cargo row to report `suite-did-not-run` on its own, which
-/// is the honest verdict, so nothing is decided here. NOT AT ALL when every
-/// Cargo row is already recorded caught (CLOUD-2253): the build is minutes and
-/// no row would use it.
+/// Where `batten mutate cargo` records a run it saw pass whole, beside
+/// [`PASSED_RECORD`] in [`record_dir`] (CLOUD-2253).
+const CARGO_PASSED_RECORD: &str = "mutate-cargo-passed.tsv";
+
+/// The environment a `mutate cargo` run's scope and judging are read from:
+/// whose sources, which shard, which phase, the whole tree or a change, and
+/// the nextest profile every case runs under.
+const CARGO_PASS_ENV: [&str; 5] = [RUNNERS, SHARD, schema::PHASE, WHOLE_TREE, "NEXTEST_PROFILE"];
+
+/// One `batten mutate cargo` run, keyed so a whole passing run is recorded once
+/// and answered after (CLOUD-2253, the stage audit's C7): a land lap's rerun
+/// over an unchanged tree listed, synced, snapshotted and digested it again,
+/// then re-ran the reach recorder over every case to find each one sealed.
+///
+/// THE KEY IS THE WHOLE TREE, NEVER THE PATCH ALONE: a mutant's verdict
+/// depends on every case that can reach it, and a case can live anywhere in
+/// the workspace, so a moved test anywhere is a key that moved. It is also the
+/// running engine's bytes, so a sweep fixed in between judges again. So this
+/// answers only a lap over the very tree a pass was seen on, and never under
+/// `$CI` ([`crate::step::bypassed`]), [`ChangePass`]'s reason.
+#[derive(Debug)]
+pub struct CargoPass {
+    root: PathBuf,
+    diff: Option<PathBuf>,
+    key: String,
+}
+
+impl CargoPass {
+    /// The pass of a run over `root` judging the change `diff` holds, or the
+    /// whole workspace where it is `None`; `None` under [`crate::step::bypassed`]
+    /// or where a part of the key cannot be read, and the run goes on as before.
+    #[must_use]
+    pub fn of(root: &Path, diff: Option<&Path>) -> Option<Self> {
+        if crate::step::bypassed() {
+            return None;
+        }
+        let engine = std::fs::read(running_image().ok()?).ok()?;
+        let key = cargo_pass_key(root, diff, &engine, &|name| std::env::var(name).ok())?;
+        Some(Self {
+            root: root.to_path_buf(),
+            diff: diff.map(Path::to_path_buf),
+            key,
+        })
+    }
+
+    /// Whether a run under the same key already passed whole.
+    #[must_use]
+    pub fn passed(&self) -> bool {
+        recorded_caught(&record_dir(&self.root).join(CARGO_PASSED_RECORD)).contains(&self.key)
+    }
+
+    /// Record this run as passing whole, ONLY WHERE THE TREE STILL KEYS AS IT
+    /// DID WHEN THE RUN BEGAN: an edit made while it ran was never judged.
+    pub fn record(&self) {
+        let Ok(engine) = running_image().and_then(std::fs::read) else {
+            return;
+        };
+        let now = cargo_pass_key(&self.root, self.diff.as_deref(), &engine, &|name| {
+            std::env::var(name).ok()
+        });
+        if now.as_deref() == Some(self.key.as_str()) {
+            record_caught(&record_dir(&self.root).join(CARGO_PASSED_RECORD), &self.key);
+        }
+    }
+}
+
+/// A [`CargoPass`] key: each part prefixed with its length, so two different
+/// scopes cannot serialise to the same bytes. Its material: [`CARGO_PASS_ENV`]'s
+/// values as `env` answers them, trimmed; the change's patch where there is
+/// one; the [`schema::tree_digest`] of `root`, every file but its build output
+/// and history; and `engine`, the judging binary's bytes. `None` where the
+/// patch or the tree cannot be read.
+fn cargo_pass_key(
+    root: &Path,
+    diff: Option<&Path>,
+    engine: &[u8],
+    env: &dyn Fn(&str) -> Option<String>,
+) -> Option<String> {
+    let mut material = Vec::new();
+    let mut put = |part: &[u8]| {
+        material.extend_from_slice(&part.len().to_le_bytes());
+        material.extend_from_slice(part);
+    };
+    for name in CARGO_PASS_ENV {
+        put(env(name).unwrap_or_default().trim().as_bytes());
+    }
+    match diff {
+        Some(diff) => {
+            put(b"change");
+            put(&crate::fsio::read(diff).ok()?);
+        }
+        None => put(b"workspace"),
+    }
+    put(schema::tree_digest(root).ok()?.as_bytes());
+    put(blake3::hash(engine).as_bytes());
+    Some(blake3::hash(&material).to_hex().to_string())
+}
+
+/// The one suite build every Cargo row runs against, written by
+/// [`build_if_owed`].
+///
+/// **A ROW NEVER ASKS CARGO TO BUILD.** The rows of this runner are
+/// Rego, Pkl and manifests, and a mutation of one changes no Rust, so a row that
+/// recompiles is paying for nothing. Leaving that to cargo's freshness check was
+/// a convention, and one `rerun-if-changed` naming a missing path broke it
+/// silently: every row rebuilt the library, 75s where the row took 1-6s. Each row
+/// instead hands nextest the binaries this build recorded, so a rebuild cannot
+/// happen whatever the fingerprint says.
+///
+/// **EXCEPT A SUBJECT THE BUILD EMBEDS**, which reused binaries would judge
+/// unmutated. Which subjects those are is READ, from the dep-info and build
+/// script output cargo wrote, never listed by hand; the preset overlay covers the
+/// ones it can, and the rest rebuild, row by row, because only a rebuild sees the
+/// mutation.
+struct Prebuilt {
+    /// nextest's `binaries-only` list, as `--binaries-metadata` reads it.
+    binaries: PathBuf,
+    /// `cargo metadata`'s answer, as `--cargo-metadata` reads it.
+    metadata: PathBuf,
+    /// Staged-tree paths the build read, and directories a build script watches.
+    embedded: Vec<String>,
+    /// The paths an INTEGRATION TEST target's own dep-info lists: a source a
+    /// test `include_str!`s directly, past the overlay the library reads.
+    test_embedded: Vec<String>,
+    /// Whether a row since the last clean build rebuilt the suite. A rebuild
+    /// writes the binaries at the SAME uplifted paths the record names, so after
+    /// an embedded row's mutated run they hold that row's mutant, and a later row
+    /// reusing them would be judged against it. Set by every rebuild, cleared by
+    /// the clean rebuild [`run_suite`] owes before the next reuse.
+    dirty: std::cell::Cell<bool>,
+}
+
+impl Prebuilt {
+    /// Whether a mutation of `source` is invisible to the recorded binaries.
+    fn embeds(&self, source: &str) -> bool {
+        covers(&self.embedded, source)
+    }
+
+    /// Whether a test target embeds `source` itself, so a mutated copy in the
+    /// overlay is invisible to it and only an in-place mutation and a rebuild
+    /// reach it.
+    fn tests_embed(&self, source: &str) -> bool {
+        covers(&self.test_embedded, source)
+    }
+
+    /// The arguments that make a nextest run use the recorded binaries.
+    fn reuse_args(&self) -> [String; 4] {
+        [
+            String::from("--binaries-metadata"),
+            self.binaries.to_string_lossy().into_owned(),
+            String::from("--cargo-metadata"),
+            self.metadata.to_string_lossy().into_owned(),
+        ]
+    }
+}
+
+/// The nextest binary id of the target that compiles `suite`, read off the
+/// recorded `cargo metadata` (`metadata`), whose source paths are `staged`'s.
+///
+/// A target's root file is the suite itself (`tests/toy.rs`), or a `main.rs`,
+/// `lib.rs` or `mod.rs` whose directory holds it (`tests/it/mutate.rs` in the
+/// `it` target, `src/x.rs` in the library): the deepest such directory wins.
+/// `None` where nothing matches, and the filter then runs unscoped.
+fn suite_binary(metadata: &Path, staged: &Path, suite: &str) -> Option<String> {
+    let text = crate::fsio::read_to_string(metadata).ok()?;
+    let doc: serde_json::Value = serde_json::from_str(&text).ok()?;
+    let canonical = crate::git::canonical(staged);
+    let suite = Path::new(suite);
+    let mut best: Option<(usize, String)> = None;
+    for package in doc["packages"].as_array()? {
+        let Some(name) = package["name"].as_str() else {
+            continue;
+        };
+        for target in package["targets"].as_array().into_iter().flatten() {
+            let (Some(src), Some(target_name)) =
+                (target["src_path"].as_str(), target["name"].as_str())
+            else {
+                continue;
+            };
+            let src = Path::new(src);
+            let Some(src) = src
+                .strip_prefix(&canonical)
+                .or_else(|_| src.strip_prefix(staged))
+                .ok()
+            else {
+                continue;
+            };
+            let kind = |want: &str| {
+                target["kind"]
+                    .as_array()
+                    .is_some_and(|kinds| kinds.iter().any(|kind| kind.as_str() == Some(want)))
+            };
+            let id = if kind("lib") || kind("proc-macro") {
+                name.to_owned()
+            } else if kind("test") {
+                format!("{name}::{target_name}")
+            } else if kind("bin") {
+                format!("{name}::bin/{target_name}")
+            } else {
+                continue;
+            };
+            let depth = if src == suite {
+                usize::MAX
+            } else {
+                let root_file = matches!(
+                    src.file_name().and_then(|file| file.to_str()),
+                    Some("main.rs" | "lib.rs" | "mod.rs")
+                );
+                match src.parent() {
+                    Some(dir) if root_file && suite.starts_with(dir) => dir.components().count(),
+                    _ => continue,
+                }
+            };
+            if best.as_ref().is_none_or(|(deepest, _)| depth > *deepest) {
+                best = Some((depth, id));
+            }
+        }
+    }
+    best.map(|(_, id)| id)
+}
+
+/// Whether `source` is one of `paths`, or under a directory among them.
+fn covers(paths: &[String], source: &str) -> bool {
+    paths.iter().any(|path| {
+        source == path
+            || source
+                .strip_prefix(path.as_str())
+                .is_some_and(|rest| rest.starts_with('/'))
+    })
+}
+
+/// The overlay a row's mutation is written to: [`Overlay::declared`], except
+/// where an integration test target embeds the row's source itself (#1276's
+/// mutation-tier audit). The overlay reaches only the readers built to consult
+/// it; a test that `include_str!`s the source holds the unmutated bytes, so the
+/// row would read SURVIVED over a mutation its case never saw. Such a row is
+/// mutated in place, and the embeds check then rebuilds.
+fn row_overlay(root: &Path, row: &Row, prebuilt: Option<&Prebuilt>) -> Option<Overlay> {
+    Overlay::declared(root)
+        .filter(|_| !prebuilt.is_some_and(|built| built.tests_embed(&row.source)))
+}
+
+/// Where [`Prebuilt`]'s documents live: beside the binaries they describe.
+fn prebuilt_dir(root: &Path) -> PathBuf {
+    root.join(SUITE_TARGET).join("mutate-reuse")
+}
+
+/// Every staged-tree path cargo recorded reading, and every directory a build
+/// script asked to be rerun over, under the BUILD directory `target` (cargo's
+/// `build.build-dir`, where dep-info and build-script output live).
+///
+/// Dep-info lists each input as its own `path:` line; a build script's
+/// `rerun-if-changed` is in its `output`. Both are read wholesale: a stale file
+/// left by an older build can only name MORE paths, which rebuilds a row that
+/// did not need it — never the other way round.
+///
+/// `crates` narrows the read to the dep-info of those crate names (a `.d`
+/// file is `<crate>-<hash>.d`) and skips build scripts: the test targets'
+/// own inputs, for [`Prebuilt::tests_embed`]. `None` reads everything.
+fn embedded_paths(
+    target: &Path,
+    staged: &Path,
+    crates: Option<&std::collections::BTreeSet<String>>,
+) -> Vec<String> {
+    let mut found = std::collections::BTreeSet::new();
+    // Cargo writes absolute paths canonically.
+    let staged = crate::git::canonical(staged);
+    // RELATIVE TO THE WORKSPACE ROOT, AND UNNORMALISED: rustc runs there and
+    // writes `include_str!`'s path as it resolved it — measured,
+    // `tests/../mise-tasks/toy.sh` — so a path is anchored on the staged tree and
+    // its `..` folded before it is compared with a row's subject.
+    let relative = |path: &str| {
+        let mut resolved = PathBuf::new();
+        for part in staged.join(path.trim()).components() {
+            match part {
+                std::path::Component::ParentDir => {
+                    resolved.pop();
+                }
+                std::path::Component::CurDir => {}
+                other => resolved.push(other),
+            }
+        }
+        resolved
+            .strip_prefix(&staged)
+            .ok()
+            .map(|rest| rest.to_string_lossy().into_owned())
+            .filter(|rest| !rest.is_empty())
+    };
+    let deps = target.join("debug").join("deps");
+    for entry in fs::read_dir(&deps).into_iter().flatten().flatten() {
+        let path = entry.path();
+        if path.extension().is_none_or(|ext| ext != "d") {
+            continue;
+        }
+        let stem = path
+            .file_stem()
+            .map(|stem| stem.to_string_lossy().into_owned());
+        let name = stem
+            .as_deref()
+            .and_then(|stem| stem.rsplit_once('-'))
+            .map(|(name, _)| name);
+        if crates.is_some_and(|crates| !name.is_some_and(|name| crates.contains(name))) {
+            continue;
+        }
+        let text = crate::fsio::read_to_string(&path).unwrap_or_default();
+        for line in text.lines() {
+            if let Some(input) = line.strip_suffix(':') {
+                found.extend(relative(&input.replace("\\ ", " ")));
+            }
+        }
+    }
+    let build = target.join("debug").join("build");
+    let scripts = if crates.is_none() {
+        fs::read_dir(&build)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .collect()
+    } else {
+        Vec::new()
+    };
+    for entry in scripts {
+        let text = crate::fsio::read_to_string(entry.path().join("output")).unwrap_or_default();
+        for line in text.lines() {
+            let watched = line
+                .strip_prefix("cargo:rerun-if-changed=")
+                .or_else(|| line.strip_prefix("cargo::rerun-if-changed="));
+            found.extend(watched.and_then(relative));
+        }
+    }
+    found.into_iter().collect()
+}
+
+/// The crate names of every integration test target the recorded `cargo
+/// metadata` lists, as rustc names their dep-info (`-` read as `_`).
+fn test_crates(metadata: &Path) -> std::collections::BTreeSet<String> {
+    let doc: serde_json::Value = crate::fsio::read_to_string(metadata)
+        .ok()
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .unwrap_or_default();
+    doc["packages"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .flat_map(|package| package["targets"].as_array().into_iter().flatten())
+        .filter(|target| {
+            target["kind"]
+                .as_array()
+                .is_some_and(|kinds| kinds.iter().any(|kind| kind.as_str() == Some("test")))
+        })
+        .filter_map(|target| target["name"].as_str())
+        .map(|name| name.replace('-', "_"))
+        .collect()
+}
+
+/// Run `args` in `staged` and keep its standard output at `into`.
+fn record_document(
+    root: &Path,
+    staged: &Staged,
+    program: Program<'_>,
+    args: &[String],
+    into: &Path,
+) -> Option<()> {
+    let ran = spawn(
+        staged.dir(),
+        program,
+        args,
+        &nextest_env(root, staged.dir()),
+        build_bound(),
+    )
+    .ok()?;
+    let document = ran.stdout.lines().find(|line| line.starts_with('{'))?;
+    (ran.passed() && crate::durable::replace(into, document).is_ok()).then_some(())
+}
+
+/// BUILD ONCE, BEFORE ANY ROW IS TIMED (CLOUD-1910), and record the build so no
+/// row repeats it ([`Prebuilt`]). Best effort: a build that fails answers `None`,
+/// and every Cargo row then reports `suite-did-not-run` without spawning, which
+/// is the honest verdict. NOT AT ALL when every Cargo row is already recorded
+/// caught (CLOUD-2253): the build is minutes and no row would use it.
 ///
 /// SAID ON `progress` WHEN IT BUILDS: the build is minutes, so a sweep that
 /// paid it says so, and a sweep that skipped it is told apart by its silence.
@@ -4330,7 +5483,7 @@ fn build_if_owed(
     caught: &std::collections::HashSet<String>,
     staged: &Staged,
     progress: &mut dyn std::io::Write,
-) {
+) -> Option<Prebuilt> {
     let owed = names
         .iter()
         .filter_map(|name| resolve(root, name))
@@ -4341,19 +5494,55 @@ fn build_if_owed(
                     && matches!(gate.suite_for(row), Some(Suite::Cargo { .. }))
             })
         });
-    if owed {
-        let _ = writeln!(
-            progress,
-            "mutate sweep: building the cargo suites the rows run under"
-        );
-        let args = vec![String::from("test"), String::from("--no-run")];
-        let _ = spawn(
-            staged.dir(),
-            Program::Cargo,
-            &args,
-            &nextest_env(root, staged.dir(), None),
-            build_bound(),
-        );
+    // A record from an earlier sweep describes binaries this one may not have.
+    let dir = prebuilt_dir(root);
+    let _ = fs::remove_dir_all(&dir);
+    if !owed {
+        return None;
+    }
+    let _ = crate::mutate::progress!(
+        progress,
+        "mutate sweep: building the cargo suites the rows run under"
+    );
+    fs::create_dir_all(&dir).ok()?;
+    let prebuilt = Prebuilt {
+        binaries: dir.join("binaries.json"),
+        metadata: dir.join("cargo-metadata.json"),
+        embedded: Vec::new(),
+        test_embedded: Vec::new(),
+        dirty: std::cell::Cell::new(false),
+    };
+    let mut list = [
+        "nextest",
+        "list",
+        "--list-type",
+        "binaries-only",
+        "--message-format",
+        "json",
+    ]
+    .map(String::from)
+    .to_vec();
+    list.extend(overlay_features(root));
+    record_document(root, staged, Program::Cargo, &list, &prebuilt.binaries)?;
+    let metadata = ["metadata", "--format-version", "1", "--no-deps"].map(String::from);
+    record_document(root, staged, Program::Cargo, &metadata, &prebuilt.metadata)?;
+    // THE BUILD DIRECTORY, where cargo writes dep-info and build-script output
+    // (#1276): `suite_env` puts intermediates in the checkout's `target`, and
+    // only uplifts in `SUITE_TARGET`. Read from the uplift directory, no `.d`
+    // was found, every subject read as unembedded, and an embedded subject's
+    // mutation survived on reused binaries.
+    Some(with_embedded(prebuilt, &root.join("target"), staged.dir()))
+}
+
+/// `prebuilt` with what the build under `target` embeds of `staged`: every
+/// input its dep-info and build scripts name, and apart from them the inputs
+/// of its integration test targets alone, as the recorded `cargo metadata`
+/// lists them.
+fn with_embedded(prebuilt: Prebuilt, target: &Path, staged: &Path) -> Prebuilt {
+    Prebuilt {
+        embedded: embedded_paths(target, staged, None),
+        test_embedded: embedded_paths(target, staged, Some(&test_crates(&prebuilt.metadata))),
+        ..prebuilt
     }
 }
 
@@ -4418,6 +5607,31 @@ fn gate_stopped(root: &Path, gate: &Gate) -> Option<Verdict> {
     gate.rows.is_empty().then_some(Verdict::NoMutantDeclared)
 }
 
+/// Every row of `runnable` a registered runner owns, as `runner-owned`.
+///
+/// REFUSED, NEVER PASSED OVER: a row another runner owns is never read by it,
+/// and filtering it out in silence is how 868 hand-written Rust rows read as
+/// coverage (CLOUD-2253).
+fn runner_owned(registry: &Registry, runnable: &[(&String, Gate)]) -> Vec<Finding> {
+    runnable
+        .iter()
+        .flat_map(|(name, gate)| {
+            gate.rows
+                .iter()
+                .filter(|row| !registry.declares(row))
+                .filter_map(move |row| {
+                    let owner = registry.owner(&row.source).ok()?;
+                    Some(Finding {
+                        gate: (*name).clone(),
+                        slug: Some(row.slug.clone()),
+                        verdict: Verdict::RunnerOwned { runner: owner.id() },
+                        owner: gate.owner.clone(),
+                    })
+                })
+        })
+        .collect()
+}
+
 /// One shard's rows of one gate, as [`sweep_shard`] numbers them.
 type ShardRow<'a> = (&'a String, &'a Gate, &'a Row);
 
@@ -4435,7 +5649,7 @@ fn without_absent_nextest<'a>(
     let runs_nextest = |(_, gate, row): &ShardRow<'_>| {
         !declares_own_case(root, row) && matches!(gate.suite_for(row), Some(Suite::Cargo { .. }))
     };
-    let absent = mine.iter().any(runs_nextest) && !cargo_answers(root, "nextest", None);
+    let absent = mine.iter().any(runs_nextest) && !cargo_answers(root, "nextest");
     if !absent {
         return (mine, None);
     }
@@ -4445,21 +5659,37 @@ fn without_absent_nextest<'a>(
     )
 }
 
-/// [`sweep_owned`] over one parsed `$MUTANT_SHARD`'s slice ([`shard_parsed`]):
-/// the declared rows [`shard_owns_row`] gives it, and the gate-level findings
-/// of the gates `by_shard` gives it. `None` is every row and every gate.
-///
-/// # Errors
-///
-/// [`sweep`]'s.
-pub fn sweep_shard(
+/// Every row verdict recorded for `work` and in `record`, none when
+/// `bypassed`, and the keys of those recorded caught.
+fn recorded_and_caught(
+    record: &Path,
+    work: &Path,
+    bypassed: bool,
+) -> (
+    std::collections::HashMap<String, Verdict>,
+    std::collections::HashSet<String>,
+) {
+    let recorded = if bypassed {
+        std::collections::HashMap::new()
+    } else {
+        rows_recorded_for(record, work)
+    };
+    let caught = recorded
+        .iter()
+        .filter(|(_, verdict)| **verdict == Verdict::Caught)
+        .map(|(key, _)| key.clone())
+        .collect();
+    (recorded, caught)
+}
+
+/// The gates of `shard`'s slice of `names` that can run, and a finding for
+/// each the slice reports that cannot: no such gate, or one [`gate_stopped`]
+/// stops before any row.
+fn gates_of_shard<'a>(
     root: &Path,
-    names: &[String],
-    work: PathBuf,
-    registry: &Registry,
+    names: &'a [String],
     shard: Option<(usize, usize)>,
-    progress: &mut dyn std::io::Write,
-) -> Result<Sweep> {
+) -> (Vec<Finding>, Vec<(&'a String, Gate)>) {
     // SORTED, so every shard numbers the same gates and rows in the same order
     // whatever order its caller listed them in.
     let mut findings = Vec::new();
@@ -4486,8 +5716,28 @@ pub fn sweep_shard(
             });
         }
     }
+    (findings, runnable)
+}
+
+/// [`sweep_owned`] over one parsed `$MUTANT_SHARD`'s slice ([`shard_parsed`]):
+/// the declared rows [`shard_owns_row`] gives it, and the gate-level findings
+/// of the gates `by_shard` gives it. `None` is every row and every gate.
+///
+/// # Errors
+///
+/// [`sweep`]'s.
+pub fn sweep_shard(
+    root: &Path,
+    names: &[String],
+    work: PathBuf,
+    registry: &Registry,
+    shard: Option<(usize, usize)>,
+    progress: &mut dyn std::io::Write,
+) -> Result<Sweep> {
+    let (mut findings, runnable) = gates_of_shard(root, names, shard);
     // THE SHARD'S ROWS, numbered across the runnable gates in sorted order, so
     // one numbering partitions the rows between the shards.
+    findings.extend(runner_owned(registry, &runnable));
     let mine: Vec<(&String, &Gate, &Row)> = runnable
         .iter()
         .flat_map(|(name, gate)| {
@@ -4508,7 +5758,7 @@ pub fn sweep_shard(
     let gates = findings.len() + holding.len();
     findings.extend(nextest_absent);
     let total = mine.len();
-    let _ = writeln!(
+    let _ = crate::mutate::progress!(
         progress,
         "mutate sweep: {total} row(s) across {gates} gate(s)"
     );
@@ -4517,31 +5767,39 @@ pub fn sweep_shard(
         return Ok(Sweep {
             findings,
             declared: 0,
+            recorded: 0,
             gates,
         });
     }
-    let record = work.join(CAUGHT_RECORD);
-    let caught = recorded_caught(&record);
+    // NOT UNDER CI (#1276), for `ChangePass::of`'s reason: a runner that keeps
+    // its workspace would otherwise answer a confirmation from a record. Nothing
+    // is replayed and nothing is recorded, so the run judges every row itself.
+    let bypassed = crate::step::bypassed();
+    let record = record_dir(root).join(CAUGHT_RECORD);
+    let (recorded, caught) = recorded_and_caught(&record, &work, bypassed);
     let mut staged = Staged::new(root, work)?;
-    build_if_owed(root, &holding, registry, &caught, &staged, progress);
+    let prebuilt = build_if_owed(root, &holding, registry, &caught, &staged, progress);
     let mut declared = 0;
+    let mut replayed = 0;
     for (name, gate, row) in mine {
         declared += 1;
         let key = row_key(root, gate, row);
-        if caught.contains(&key) {
-            let _ = writeln!(
+        if let Some(verdict) = recorded.get(&key) {
+            replayed += 1;
+            let _ = crate::mutate::progress!(
                 progress,
-                "mutate sweep: row {declared}/{total} {name} {} caught (recorded) 0s",
+                "mutate sweep: row {declared}/{total} {name} {} {verdict} (recorded) 0s",
                 row.slug
             );
+            findings.extend(recorded_finding(name, gate, row, verdict));
             continue;
         }
         let started = std::time::Instant::now();
-        let verdict = judge_row(root, &mut staged, gate, row)?;
-        if verdict == Verdict::Caught {
-            record_caught(&record, &key);
+        let verdict = judge_row(root, &mut staged, gate, row, prebuilt.as_ref())?;
+        if !bypassed {
+            record_row(&record, &key, &verdict);
         }
-        let _ = writeln!(
+        let _ = crate::mutate::progress!(
             progress,
             "mutate sweep: row {declared}/{total} {name} {} {verdict} {}s",
             row.slug,
@@ -4560,6 +5818,7 @@ pub fn sweep_shard(
     Ok(Sweep {
         findings,
         declared,
+        recorded: replayed,
         gates,
     })
 }
@@ -4582,6 +5841,9 @@ pub enum CensusVerdict {
     ExemptUnfiled,
     /// Declared and exempt at once, so the exemption's reason is a dead letter.
     DeclaredAndExempt,
+    /// Exempt while still declaring rows, so the rows read as covered and no
+    /// sweep ever applies them: the exemption is stale, or the gate owes a sweep.
+    ExemptWithRows,
     /// A name in the enforced set resolving to no gate at all.
     NamesNoSubject,
     /// A declared row whose script, applied to its own file, changes nothing:
@@ -4594,6 +5856,9 @@ pub enum CensusVerdict {
     /// A declared row whose script is outside the one-substitution subset the
     /// runner applies ([`substitute`]), so it can never be applied.
     UnappliableMutation,
+    /// A subject declaring rows in a source a registered runner owns, which
+    /// that runner judges without reading them ([`Verdict::RunnerOwned`]).
+    RunnerOwned,
 }
 
 impl fmt::Display for CensusVerdict {
@@ -4602,10 +5867,12 @@ impl fmt::Display for CensusVerdict {
             CensusVerdict::Uncovered => "uncovered",
             CensusVerdict::ExemptUnfiled => "exempt-unfiled",
             CensusVerdict::DeclaredAndExempt => "declared-and-exempt",
+            CensusVerdict::ExemptWithRows => "exempt-with-rows",
             CensusVerdict::NamesNoSubject => "names-no-subject",
             CensusVerdict::InertMutation => "inert-mutation",
             CensusVerdict::MalformedRow => "malformed-row",
             CensusVerdict::UnappliableMutation => "unappliable-mutation",
+            CensusVerdict::RunnerOwned => "runner-owned",
         };
         out.write_str(word)
     }
@@ -4613,13 +5880,9 @@ impl fmt::Display for CensusVerdict {
 
 /// What a census run answered.
 ///
-/// `#[non_exhaustive]` for [`crate::doctor::SessionReport`]'s reason, and adding
-/// it is CLOUD-1369's own bill coming due: this struct was constructible, so the
-/// `engine_undeclared` field below is `constructible_struct_adds_field` and
-/// `semver` refused the branch until a commit declared the break. Its two sibling
-/// report types already carry the attribute; this one did not, which is why a
-/// report type gaining a field — the most ordinary change such a type has — was a
-/// breaking one. Marking it now is what stops the next field costing the same.
+/// `#[non_exhaustive]` for [`crate::doctor::SessionReport`]'s reason: a report
+/// type gaining a field is the most ordinary change it has, and must not be a
+/// breaking one.
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct Census {
@@ -4627,11 +5890,6 @@ pub struct Census {
     pub findings: Vec<(String, CensusVerdict)>,
     /// How many subjects were censused.
     pub subjects: usize,
-    /// How many engine modules carry no declaration at all (CLOUD-1369).
-    ///
-    /// The population `subjects` deliberately does not admit, reported so the
-    /// retrofit backlog has a size. Never a finding — see [`engine_undeclared`].
-    pub engine_undeclared: usize,
 }
 
 /// Whether a `mise-tasks/` program describes itself as a gate.
@@ -4662,7 +5920,10 @@ fn is_gate(lines: &[String]) -> bool {
 ///
 /// With a committed `[mutate]` table, a DECLARATION ARM joins them (CLOUD-2010).
 #[must_use]
-pub fn subjects(root: &Path, table: Option<&crate::config::Mutate>) -> BTreeMap<String, String> {
+pub fn subjects(
+    root: &Path,
+    table: Option<&crate::config_model::Mutate>,
+) -> BTreeMap<String, String> {
     let mut found = BTreeMap::new();
     if let Ok(entries) = std::fs::read_dir(root.join("mise-tasks")) {
         for entry in entries.filter_map(std::result::Result::ok) {
@@ -4684,58 +5945,21 @@ pub fn subjects(root: &Path, table: Option<&crate::config::Mutate>) -> BTreeMap<
             }
         }
     }
-    // THE ENGINE, OPT-IN BY DECLARATION (CLOUD-1369) — and the opt-in is the
-    // design rather than a softer version of it.
-    //
-    // `mise-tasks/` is already opt-in by the same shape: a program is censused
-    // only if its own `#MISE description` calls it a gate, because that directory
-    // holds programs that refuse and programs that measure, and only the first
-    // kind owes a mutation. `crates/batten/src` is the same population problem
-    // one language over — most modules are plumbing, and a census that demanded a
-    // mutation from every one of them would report ~50 uncovered subjects on the
-    // day the route landed. CLOUD-1369 puts that retrofit out of scope in its own
-    // words: this row buys the ROUTE.
-    //
-    // SO A DECLARING MODULE IS A SUBJECT AND IS HELD TO THE SET. That is what
-    // stops the opt-in being a way out: a module that declares rows and is not in
-    // `$MUTANT_GATES` reads `uncovered`, because rows nobody sweeps are the
-    // coverage-shaped nothing this whole verb exists to refuse.
-    //
-    // What sizes the backlog is `engine_undeclared` below — a COUNT, not a
-    // finding, because a number is a sensor and a finding is a gate. Reporting
-    // the population without refusing it is how the next author learns the size
-    // without this change having to close it.
-    if let Ok(entries) = std::fs::read_dir(root.join(ENGINE)) {
-        for entry in entries.filter_map(std::result::Result::ok) {
-            let file = entry.file_name().to_string_lossy().into_owned();
-            let Some(stem) = file.strip_suffix(".rs") else {
-                continue;
-            };
-            let path = format!("{ENGINE}/{file}");
-            let declares = lines_of(root, &path).is_some_and(|lines| {
-                !rows_in(&lines, &path).is_empty()
-                    || [SUITE, OWNER, EXEMPT]
-                        .iter()
-                        .any(|marker| declared(&lines, marker).is_some())
-            });
-            if declares {
-                found.insert(format!("{ENGINE_PREFIX}{}", stem.replace('_', "-")), path);
-            }
-        }
-    }
-    if let Ok(entries) = std::fs::read_dir(root.join(PRESETS)) {
+    if let Some(presets) = presets_dir()
+        && let Ok(entries) = std::fs::read_dir(root.join(&presets))
+    {
         for entry in entries.filter_map(std::result::Result::ok) {
             if !entry.path().is_dir() {
                 continue;
             }
             let name = entry.file_name().to_string_lossy().into_owned();
             if !sources_for(root, &name).is_empty() {
-                found.insert(name.clone(), format!("{PRESETS}/{name}"));
+                found.insert(name.clone(), format!("{presets}/{name}"));
             }
         }
     }
-    // INLINE TASKS, OPT-IN BY DECLARATION (CLOUD-1909), on the engine arm's terms
-    // above: most of the manifest's tasks run, build or report and owe nothing, so
+    // INLINE TASKS, OPT-IN BY DECLARATION (CLOUD-1909): most of
+    // the manifest's tasks run, build or report and owe nothing, so
     // a block is a subject only once it declares something — and then it is held
     // to the set, so a row nobody sweeps reads `uncovered` rather than covered.
     if let Some((manifest, lines)) =
@@ -4764,19 +5988,18 @@ pub fn subjects(root: &Path, table: Option<&crate::config::Mutate>) -> BTreeMap<
 /// `MUTANT-EXEMPT` line at column zero and is no other arm's subject, keyed by
 /// its path, which is the file arm's name for it.
 ///
-/// **ON THE ENGINE AND INLINE-TASK ARMS' TERMS, AND ONLY UNDER A TABLE.** A
+/// **ON THE INLINE-TASK ARM'S TERMS, AND ONLY UNDER A TABLE.** A
 /// consumer's gates live wherever its tree keeps them — `.tf`, YAML, `.rego`,
 /// `.py` — so no directory list can find them, and a file that declares rows is
 /// exactly one that owes a sweep. Held to the set like those arms: a declaring
 /// file no gate entry covers reads `uncovered`. Off without a table, so a
 /// census that declares none is unchanged.
-//MUTANT declaring-file-not-a-subject|s@^        if declaring {$@        if false \&\& declaring {@|a_declaring_file_outside_the_set_is_uncovered
 fn declaring_files(
     root: &Path,
-    table: &crate::config::Mutate,
+    table: &crate::config_model::Mutate,
     found: &mut BTreeMap<String, String>,
 ) {
-    let scope = crate::rules::PathSet::scope(&table.scope).ok();
+    let scope = crate::path_set::PathSet::scope(&table.scope).ok();
     let claimed: Vec<String> = found.values().cloned().collect();
     for path in crate::git::tracked_paths(root).unwrap_or_default() {
         if !table.scope.is_empty() && !scope.as_ref().is_some_and(|set| set.contains(&path)) {
@@ -4825,20 +6048,58 @@ fn exemption_is_filed(row: &str) -> bool {
 /// row's defect, and the prose is in the file the pointer points at
 /// (non-negotiable rule 4).
 #[must_use]
-pub fn census(root: &Path, names: &[String], table: Option<&crate::config::Mutate>) -> Census {
+pub fn census(
+    root: &Path,
+    names: &[String],
+    table: Option<&crate::config_model::Mutate>,
+    registry: &Registry,
+) -> Census {
     let subjects = subjects(root, table);
     let mut findings = Vec::new();
+    // A ROW NO RUNNER WILL EVER READ (CLOUD-2253): a subject declaring rows in a
+    // source a registered runner owns. Reported whatever the set says, because
+    // neither declaring nor exempting it makes the row run.
+    // Every gate the census knows, discovered or named in the set: a `.rs` path
+    // named as a gate is no discovered subject, and is exactly where a Rust row
+    // would be declared.
+    let known: std::collections::BTreeSet<&String> = subjects.keys().chain(names.iter()).collect();
+    for name in known {
+        for source in sources_for(root, name) {
+            let owned = registry
+                .owner(&source)
+                .is_ok_and(|owner| owner != RunnerKind::Declared)
+                && lines_of(root, &source)
+                    .is_some_and(|lines| !rows_in(&lines, &source).is_empty());
+            if owned {
+                findings.push((source, CensusVerdict::RunnerOwned));
+            }
+        }
+    }
     for (name, path) in &subjects {
         let in_set = names.iter().any(|declared| declared == name);
         // Through the block for a `task-` gate (CLOUD-1909): an exemption written
         // in one task's table is not a statement about any other task.
-        let exempt = sources_for(root, name)
+        let declaring: Vec<(String, Vec<String>)> = sources_for(root, name)
+            .into_iter()
+            .filter_map(|source| {
+                let lines = declaring_lines(root, name, &source)?;
+                Some((source, lines))
+            })
+            .collect();
+        let exempt = declaring
             .iter()
-            .filter_map(|source| declaring_lines(root, name, source))
-            .find_map(|lines| declared(&lines, EXEMPT));
+            .find_map(|(_, lines)| declared(lines, EXEMPT));
+        // AN EXEMPTION OVER ROWS: the rows are a promise of coverage and the
+        // exemption says no sweep will keep it, so one of them is false.
+        let has_rows = declaring
+            .iter()
+            .any(|(source, lines)| !rows_in(lines, source).is_empty());
         match exempt {
             Some(row) if !exemption_is_filed(&row) => {
                 findings.push((path.clone(), CensusVerdict::ExemptUnfiled));
+            }
+            Some(_) if has_rows => {
+                findings.push((path.clone(), CensusVerdict::ExemptWithRows));
             }
             Some(_) if in_set => {
                 findings.push((path.clone(), CensusVerdict::DeclaredAndExempt));
@@ -4863,7 +6124,6 @@ pub fn census(root: &Path, names: &[String], table: Option<&crate::config::Mutat
     Census {
         findings,
         subjects: subjects.len(),
-        engine_undeclared: engine_undeclared(root, &subjects),
     }
 }
 
@@ -4883,14 +6143,11 @@ pub fn census(root: &Path, names: &[String], table: Option<&crate::config::Mutat
 /// outside the one-substitution subset (a sed address block left from before
 /// CLOUD-2255). Neither can ever apply, both are decidable from the text, and
 /// the sweep named each only after an hour of building.
-//MUTANT inert-row-admitted|s@^                    Some(after) if code_lines_changed(\&text, \&after) == 0 => {$@                    Some(after) if false => {@|a_row_whose_script_changes_nothing_is_refused_by_the_census
-//MUTANT malformed-row-admitted|s@, CensusVerdict::MalformedRow));$@, CensusVerdict::InertMutation));@|a_row_that_cannot_apply_is_refused_by_the_census
-//MUTANT unappliable-row-admitted|s@^                    None => CensusVerdict::UnappliableMutation,$@                    None => continue,@|a_row_that_cannot_apply_is_refused_by_the_census
 fn inert_rows(root: &Path, subjects: &BTreeMap<String, String>) -> Vec<(String, CensusVerdict)> {
     let mut found = Vec::new();
     for name in subjects.keys() {
         for source in sources_for(root, name) {
-            let Ok(text) = std::fs::read_to_string(root.join(&source)) else {
+            let Ok(text) = crate::fsio::read_to_string(root.join(&source)) else {
                 continue;
             };
             // ONE READ PER SOURCE: the declaring lines are sliced from the
@@ -4937,42 +6194,1117 @@ fn row_line(text: &str, slug: &str) -> usize {
         .map_or(0, |index| index + 1)
 }
 
-/// How many engine modules carry no declaration at all.
-///
-/// **A COUNT, AND DELIBERATELY NOT A FINDING** (CLOUD-1369). `subjects` admits an
-/// engine module only once it declares something, so an un-declared one produces
-/// no verdict — which would leave the population invisible and make "the backlog
-/// is what the census will then report" untrue. This is that report.
-///
-/// A number is a sensor and a finding is a gate, and the split is what lets the
-/// route land green while still saying how much is uncovered. Whoever retrofits
-/// the declarations gets the size from here; nothing here refuses anything.
-///
-/// Pointer-only by construction (rule 4): a count names no module.
-///
-/// The censused set is passed in rather than re-derived, because `subjects` walks
-/// three directories and reads every candidate: computing it per entry would make
-/// this quadratic in the size of the engine for a number nobody decides on.
-#[must_use]
-fn engine_undeclared(root: &Path, censused: &BTreeMap<String, String>) -> usize {
-    let Ok(entries) = std::fs::read_dir(root.join(ENGINE)) else {
-        return 0;
-    };
-    entries
-        .filter_map(std::result::Result::ok)
-        .filter(|entry| {
-            let file = entry.file_name().to_string_lossy().into_owned();
-            file.strip_suffix(".rs").is_some_and(|stem| {
-                !censused.contains_key(&format!("{ENGINE_PREFIX}{}", stem.replace('_', "-")))
-            })
+/// What one cargo-mutants job costs, as the repository declares it: the
+/// `MUTANT_JOB_DISK_MB` and `MUTANT_JOB_MEMORY_MB` a copy's build was measured
+/// to take. A property of THIS tree's build, so it is declared beside the task
+/// that runs it; the machine's side is measured at run time by [`Machine::probe`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct JobCost {
+    /// Megabytes one copy and its target directory reach.
+    pub disk_mb: u64,
+    /// Megabytes one copy's build peaks at.
+    pub memory_mb: u64,
+}
+
+impl JobCost {
+    /// The declared cost, from the environment.
+    ///
+    /// # Errors
+    ///
+    /// Either variable absent or not a whole number of megabytes: a job count
+    /// sized against a guessed cost is the hardcoding this replaces.
+    pub fn declared() -> Result<Self> {
+        Ok(Self {
+            disk_mb: Self::declared_disk_mb()?,
+            memory_mb: declared_mb("MUTANT_JOB_MEMORY_MB")?,
         })
-        .count()
+    }
+
+    /// The declared disk cost alone, which is all a hand-back's room check
+    /// reads: requiring the memory half too refused a run for a variable it
+    /// never used.
+    ///
+    /// # Errors
+    ///
+    /// `MUTANT_JOB_DISK_MB` absent or not a whole number: a usage error.
+    pub fn declared_disk_mb() -> Result<u64> {
+        declared_mb("MUTANT_JOB_DISK_MB")
+    }
+
+    /// The declared peak of one judged case's process tree,
+    /// `MUTANT_JUDGE_MEMORY_MB`, which [`judging_jobs`] divides available
+    /// memory by.
+    ///
+    /// # Errors
+    ///
+    /// `MUTANT_JUDGE_MEMORY_MB` absent or not a whole number: a usage error.
+    pub fn declared_judge_mb() -> Result<u64> {
+        declared_mb("MUTANT_JUDGE_MEMORY_MB")
+    }
+}
+
+/// A declared megabyte count from the environment variable `name`, refused as
+/// a usage error when absent or not a whole number, as the sibling variables
+/// of `mutate cargo` are. Read through [`overlay_var`], the module's one
+/// environment seam, so a unit case can declare it without `set_var`.
+fn declared_mb(name: &str) -> Result<u64> {
+    let raw = overlay_var(name)
+        .ok_or_else(|| crate::error::UsageError::raise(format!("`{name}` is not declared")))?;
+    raw.trim().parse().map_err(|_| {
+        crate::error::UsageError::raise(format!("`{name}` is not a whole number of megabytes"))
+    })
+}
+
+/// What this machine has left for jobs, measured where they will run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Machine {
+    /// Cores this process may use (cgroup quota included).
+    pub cores: usize,
+    /// Free megabytes on the volume the copies are made in, above the
+    /// collector's floor.
+    pub disk_headroom_mb: u64,
+    /// Megabytes available to this process: `MemAvailable`, or the cgroup's
+    /// remaining limit where that is smaller.
+    pub memory_mb: u64,
+}
+
+impl Machine {
+    /// Measure the machine. Copies go to the temp directory (cargo-mutants'
+    /// own default), so that is the volume whose headroom counts.
+    ///
+    /// # Errors
+    ///
+    /// The temp volume's free space cannot be read.
+    pub fn probe(floor_mb: u64) -> Result<Self> {
+        let cores = std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get);
+        let free_mb = crate::prune::sampler(std::env::temp_dir())?()?;
+        let meminfo = crate::fsio::read_to_string("/proc/meminfo").unwrap_or_default();
+        let available = mem_available_mb(&meminfo);
+        let own = crate::fsio::read_to_string("/proc/self/cgroup").unwrap_or_default();
+        let cgroup = cgroup_remaining_mb(Path::new("/sys/fs/cgroup"), &own);
+        let memory_mb = match (available, cgroup) {
+            (Some(a), Some(c)) => a.min(c),
+            (Some(a), None) => a,
+            (None, Some(c)) => c,
+            (None, None) => u64::MAX,
+        };
+        Ok(Self {
+            cores,
+            disk_headroom_mb: free_mb.saturating_sub(floor_mb),
+            memory_mb,
+        })
+    }
+}
+
+/// `MemAvailable` from a `/proc/meminfo` body, in megabytes.
+fn mem_available_mb(meminfo: &str) -> Option<u64> {
+    meminfo.lines().find_map(|line| {
+        let kb = line
+            .strip_prefix("MemAvailable:")?
+            .trim()
+            .strip_suffix("kB")?;
+        kb.trim().parse::<u64>().ok().map(|kb| kb / 1024)
+    })
+}
+
+/// What remains of the tightest memory limit on this process's own cgroup
+/// path, in megabytes, v2 then v1; `None` where no level along it holds a
+/// readable, bounded limit. `root` is the cgroup mount and `own` the body of
+/// `/proc/self/cgroup`.
+///
+/// THE PROCESS'S OWN CGROUP AND EVERY ANCESTOR, NEVER THE MOUNT'S ROOT ALONE
+/// (CLOUD-2253): a container's limit sits on a nested group
+/// (`memory:/process_api/…`, 14,338 MB on a 16 GB host), and the root reads
+/// unbounded, so a sweep sized itself to the host and was killed (137).
+///
+/// RECLAIMABLE CACHE IS NOT USED: a level's usage counts the page cache its
+/// builds left, 10 GB of 10.9 GB measured, which the kernel drops before it
+/// kills, so its file pages count as remaining ([`cgroup_level_mb`]).
+fn cgroup_remaining_mb(root: &Path, own: &str) -> Option<u64> {
+    let mut leaves: Vec<(PathBuf, PathBuf, bool)> = Vec::new();
+    for line in own.lines() {
+        let mut parts = line.splitn(3, ':');
+        let (Some(_), Some(controllers), Some(path)) = (parts.next(), parts.next(), parts.next())
+        else {
+            continue;
+        };
+        let path = path.trim().trim_start_matches('/');
+        if controllers.is_empty() {
+            leaves.push((root.to_path_buf(), root.join(path), true));
+        } else if controllers.split(',').any(|name| name == "memory") {
+            let base = root.join("memory");
+            leaves.push((base.clone(), base.join(path), false));
+        }
+    }
+    leaves
+        .iter()
+        .flat_map(|(base, leaf, v2)| {
+            leaf.ancestors()
+                .take_while(move |dir| dir.starts_with(base))
+                .filter_map(move |dir| cgroup_level_mb(dir, *v2))
+        })
+        .min()
+}
+
+/// What remains of one cgroup level's memory limit, in megabytes: its limit
+/// less its usage, its file pages, active and inactive, counted as free;
+/// `None` where it has no readable, bounded limit.
+///
+/// ACTIVE FILE PAGES TOO: counted as used, a host with 15,049 MB available
+/// read 5,577 MB and judged on one worker, since a build's page cache is
+/// mostly active, and the kernel reclaims it before it kills.
+fn cgroup_level_mb(dir: &Path, v2: bool) -> Option<u64> {
+    let read = |name: &str| -> Option<String> {
+        crate::fsio::read_to_string(dir.join(name))
+            .ok()
+            .map(|text| text.trim().to_owned())
+    };
+    let (limit, usage, file) = if v2 {
+        (
+            "memory.max",
+            "memory.current",
+            ["inactive_file", "active_file"],
+        )
+    } else {
+        (
+            "memory.limit_in_bytes",
+            "memory.usage_in_bytes",
+            ["total_inactive_file", "total_active_file"],
+        )
+    };
+    let limit: u64 = read(limit)?.parse().ok()?;
+    let usage: u64 = read(usage)?.parse().ok()?;
+    let stat = read("memory.stat").unwrap_or_default();
+    let cache: u64 = stat
+        .lines()
+        .filter_map(|line| line.split_once(' '))
+        .filter(|(name, _)| file.contains(name))
+        .filter_map(|(_, value)| value.trim().parse::<u64>().ok())
+        .sum();
+    // v1 spells "unbounded" as a page-rounded i64::MAX; anything past a
+    // petabyte is that, not a limit.
+    (limit < 1 << 50).then(|| limit.saturating_sub(usage.saturating_sub(cache)) / (1024 * 1024))
+}
+
+/// Write the change since `base` that cargo-mutants owns to `diff`, as the
+/// patch `--in-diff` reads, and answer how many sources it holds. `None`, and
+/// nothing written, when no source the registry gives cargo-mutants changed.
+///
+/// # Errors
+///
+/// No `base` to compare against, or a patch that cannot be written.
+pub fn write_change(
+    root: &Path,
+    registry: &Registry,
+    base: &str,
+    diff: &Path,
+) -> Result<Option<usize>> {
+    let Some(delta) = crate::git::base_delta(root, base, &[String::from("**")], false)? else {
+        bail!("mutate cargo: no {base} to compare against");
+    };
+    let changed: std::collections::BTreeSet<String> =
+        delta.added.into_iter().chain(delta.edited).collect();
+    let sources = owned_changes(root, &changed, registry, RunnerKind::CargoMutants);
+    if sources.is_empty() {
+        return Ok(None);
+    }
+    let patch = in_diff_patch(root, base, &sources)?;
+    if let Some(dir) = diff.parent() {
+        fs::create_dir_all(dir)
+            .with_context(|| format!("mutate cargo: create {}", dir.display()))?;
+    }
+    crate::durable::replace(diff, patch)
+        .with_context(|| format!("mutate cargo: write {}", diff.display()))?;
+    Ok(Some(sources.len()))
+}
+
+/// Every mutant cargo-mutants makes of `diff`, or of the whole workspace where
+/// there is none, as `--list --json` names them: its own generator, so the
+/// schema judges exactly the set it would.
+///
+/// # Errors
+///
+/// `runner` cannot be spawned, refuses, or prints no listing.
+pub fn list_mutants(
+    root: &Path,
+    runner: &Path,
+    diff: Option<&Path>,
+) -> Result<Vec<schema::Listed>> {
+    let args = cargo_mutants_argv((diff, None), ["--list", "--json"].map(String::from));
+    let runner = runner.to_string_lossy();
+    let ran = spawn(root, Program::Command(&runner), &args, &[], runner_bound())?;
+    if !ran.passed() {
+        bail!(
+            "mutate cargo: cargo-mutants could not list the change: {}",
+            ran.output
+        );
+    }
+    schema::listing(&ran.stdout)
+}
+
+/// cargo-mutants' argv for a listing over the change in `listed`, or over
+/// every package of the workspace where there is none (CLOUD-2849), then
+/// `rest`; a hand-back's run passes its `own` diff ([`target_diff`]) as well,
+/// which replaces `listed` as the `--in-diff` but never the package scope.
+/// BUILT HERE AND NOWHERE ELSE (`mutation_markers`), so the listing the schema
+/// judges and the run that judges what it hands back read one scope the one
+/// way: a whole-tree hand-back runs under `--workspace` as its listing did
+/// (CLOUD-2911), or a consumer whose root is a package, or that declares
+/// `default-members`, would have its member crates' hand-backs left out of
+/// cargo-mutants' own package choice and come back `error`.
+fn cargo_mutants_argv(
+    (listed, own): (Option<&Path>, Option<&Path>),
+    rest: impl IntoIterator<Item = String>,
+) -> Vec<String> {
+    let mut args = vec![String::from("mutants")];
+    if listed.is_none() {
+        args.push(String::from("--workspace"));
+    }
+    if let Some(diff) = own.or(listed) {
+        args.extend([
+            String::from("--in-diff"),
+            diff.to_string_lossy().into_owned(),
+        ]);
+    }
+    args.extend(rest);
+    args
+}
+
+/// The regex cargo-mutants' `--re` matches exactly `name` with: anchored, and
+/// every character the `regex` crate gives a meaning escaped (its own
+/// `regex::escape` set).
+#[must_use]
+pub fn exactly(name: &str) -> String {
+    let mut pattern = String::from("^");
+    for c in name.chars() {
+        if "\\.+*?()|[]{}^$#&-~".contains(c) {
+            pattern.push('\\');
+        }
+        pattern.push(c);
+    }
+    pattern.push('$');
+    pattern
+}
+
+/// Run cargo-mutants IN PLACE in `tree` over the one mutant named `name`,
+/// from the listing over `listed` (`None` for the whole workspace), in that
+/// listing's package scope and from `own`, [`target_diff`]'s for it: no copy and no
+/// baseline, since the schema's reach run proved the unmutated suite on this
+/// source; its tests narrowed to the nextest filterset `filter` when one is
+/// given; its outcome files under `output`; and `cargo`, each passed on to
+/// every cargo invocation as one `--cargo-arg`.
+/// AN ARGV, NEVER A HARNESS, like [`cargo_mutants`]: the verdict is read back
+/// by the caller.
+///
+/// # Errors
+///
+/// A `runner` that cannot be spawned.
+pub fn cargo_mutant_in_place(
+    (tree, runner): (&Path, &Path),
+    (listed, own): (Option<&Path>, &Path),
+    (name, filter): (&str, Option<&str>),
+    (timeout, output): (std::time::Duration, &Path),
+    cargo: &[String],
+) -> Result<Outcome> {
+    let args = cargo_mutants_argv(
+        (listed, Some(own)),
+        in_place_rest((name, filter), timeout, output, cargo),
+    );
+    let runner = runner.to_string_lossy();
+    let ran = spawn_as(
+        tree,
+        Program::Command(&runner),
+        &args,
+        &[],
+        runner_bound(),
+        Said::Streamed,
+    )?;
+    Ok(ran.outcome)
+}
+
+/// A unified diff of `file` that changes nothing and spans only its line
+/// `line` (1-based) of `source`: as a hand-back's `--in-diff`, it lists the
+/// mutants that touch that one line, and `--re` keeps the target among them.
+/// `None` where `source` has no such line.
+///
+/// THE TARGET'S OWN LINE, NEVER ITS FILE OR THE BRANCH'S DIFF (CLOUD-2911):
+/// cargo-mutants 27.1.0 applies neither `--re` nor `--exclude-re` to
+/// field-deletion mutants, so a run over the branch's diff judged every
+/// `delete field` mutant of it (lap 27: twelve extras a hand-back), and one
+/// narrowed by `--file` still judged every one of the target's file. Measured
+/// on `lease.rs` at bae4f5ddf: `--file` with the target's `--re` listed 19
+/// field deletions, and this diff listed the target alone. Each extra was
+/// built and run under the target's narrow filter, printed MISSED, and could
+/// spend the target's bound. `--in-diff` keeps a mutant whose span touches a
+/// changed line, so the line a mutant starts on is enough to keep a mutant
+/// that spans several lines.
+#[must_use]
+pub fn target_diff(file: &str, source: &str, line: usize) -> Option<String> {
+    let text = source.lines().nth(line.checked_sub(1)?)?;
+    Some(format!(
+        "diff --git a/{file} b/{file}\n--- a/{file}\n+++ b/{file}\n\
+         @@ -{line},1 +{line},1 @@\n-{text}\n+{text}\n"
+    ))
+}
+
+/// The arguments after `cargo_mutants_argv`'s own for one in-place run over
+/// `name`, its tests narrowed to `filter` when one is given. The run's
+/// `--in-diff` is [`target_diff`]'s, which already scopes it to the target's
+/// file and line.
+///
+/// ALWAYS UNDER NEXTEST (CLOUD-2253): the filter is nextest's `-E`, and a
+/// repository whose cargo-mutants defaults to `cargo test` handed it to
+/// `cargo test`, which exits 1 on the unknown argument, and cargo-mutants
+/// read that failed test run as the mutant CAUGHT. Every mutant is judged
+/// under nextest ([`nextest_absent`] is asked first), so this one is too.
+fn in_place_rest(
+    (name, filter): (&str, Option<&str>),
+    timeout: std::time::Duration,
+    output: &Path,
+    cargo: &[String],
+) -> Vec<String> {
+    let mut rest: Vec<String> = [
+        "--in-place",
+        "--test-tool",
+        "nextest",
+        "--baseline",
+        "skip",
+        "--test-workspace",
+        "true",
+        "--timeout",
+    ]
+    .map(String::from)
+    .to_vec();
+    rest.push(timeout.as_secs().max(1).to_string());
+    rest.extend([
+        String::from("--output"),
+        output.to_string_lossy().into_owned(),
+        String::from("--re"),
+        exactly(name),
+    ]);
+    for arg in cargo {
+        rest.extend([String::from("--cargo-arg"), arg.clone()]);
+    }
+    if let Some(filter) = filter {
+        rest.extend([
+            String::from("--"),
+            String::from("-E"),
+            filter.to_owned(),
+            String::from("--no-tests=pass"),
+        ]);
+    }
+    rest
+}
+
+/// cargo-mutants' exit read onto the house contract (§6): 0 every mutant
+/// caught, 1 its usage error, 2 a missed mutant; 3 a timeout, 4 a failed
+/// baseline, a signal or the bound decided nothing, so could not look.
+#[must_use]
+pub const fn cargo_exit(outcome: Outcome) -> crate::exit::ExitCode {
+    use crate::exit::ExitCode;
+    match outcome {
+        Outcome::Passed => ExitCode::Success,
+        Outcome::Failed(Some(1)) => ExitCode::Usage,
+        Outcome::Failed(Some(2)) => ExitCode::Violation,
+        Outcome::Failed(_) | Outcome::TimedOut => ExitCode::Internal,
+    }
+}
+
+/// How a schema sweep's judging is spread: its workers, and how many cases
+/// each one's nextest runs at once (`--test-threads`); `None` leaves that to
+/// nextest, which runs one a core.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Judges {
+    /// The judging workers, each a nextest run at a time.
+    pub workers: usize,
+    /// Each worker's concurrent cases.
+    pub threads: Option<usize>,
+}
+
+/// How a schema sweep judges on `machine` when one running case's process
+/// tree peaks at `case_mb`: as many cases at once as cores and available
+/// memory both hold, on a worker a core but one, each worker's nextest
+/// holding its share. `None` WHEN NOT EVEN ONE CASE FITS, as [`job_count`]
+/// refuses: a run that can only be killed is could-not-look.
+///
+/// MEMORY BOUNDS IT, NEVER THE CORES ALONE (CLOUD-2253). It was a worker a core
+/// but one, and each worker's nextest ran a case a core: twelve cases at once
+/// on four cores, and on a 16 GB host with no swap the land's `mutate cargo`
+/// was killed (137) with no other suite running. A worker builds nothing (the
+/// schema is one build), so its cost is the cases it runs.
+#[must_use]
+pub fn judging_jobs(machine: Machine, case_mb: u64) -> Option<Judges> {
+    let cores = machine.cores.max(1);
+    let fit = usize::try_from(machine.memory_mb.checked_div(case_mb).unwrap_or(u64::MAX))
+        .unwrap_or(usize::MAX);
+    let slots = cores.min(fit);
+    if slots == 0 {
+        return None;
+    }
+    let workers = cores.saturating_sub(1).clamp(1, slots);
+    Some(Judges {
+        workers,
+        threads: Some((slots / workers).max(1)),
+    })
+}
+
+/// How many cargo-mutants jobs this machine holds (`--jobs`).
+///
+/// A job per core at most, and as many as disk and memory each have room for.
+/// NOT HALF THE CORES: a mutant's build is the incremental rebuild of the one
+/// crate it mutates, which is mostly serial (a lap measured 4.1 h of build to
+/// 1.0 h of test), so one job leaves cores idle; the memory term is what keeps
+/// parallel builds from oversubscribing.
+///
+/// `None` WHEN NOT EVEN ONE FITS (CLOUD-2882), never a forced one: a build
+/// with no room for its target can only fail, and on #1276 a full disk failed
+/// hand-back builds that were then recorded unviable. Refused, the caller says
+/// so and judges nothing, which is could-not-look rather than a verdict.
+#[must_use]
+pub fn job_count(machine: Machine, cost: JobCost) -> Option<usize> {
+    let fit = |have: u64, need: u64| {
+        usize::try_from(have.checked_div(need).unwrap_or(u64::MAX)).unwrap_or(usize::MAX)
+    };
+    let jobs = machine
+        .cores
+        .max(1)
+        .min(fit(machine.disk_headroom_mb, cost.disk_mb))
+        .min(fit(machine.memory_mb, cost.memory_mb));
+    (jobs > 0).then_some(jobs)
+}
+
+/// The headroom above `floor_mb` on the volume holding `at`, when it is too
+/// small for one job of `disk_mb`; `None` when the job fits.
+///
+/// # Errors
+///
+/// The volume's free space cannot be read.
+pub fn disk_short(at: &Path, disk_mb: u64, floor_mb: u64) -> Result<Option<u64>> {
+    let free_mb = crate::prune::sampler(at.to_path_buf())?()?;
+    let headroom = free_mb.saturating_sub(floor_mb);
+    let one = Machine {
+        cores: 1,
+        disk_headroom_mb: headroom,
+        memory_mb: u64::MAX,
+    };
+    let cost = JobCost {
+        disk_mb,
+        memory_mb: 0,
+    };
+    Ok(job_count(one, cost).is_none().then_some(headroom))
 }
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+
+    /// EVERY SWEEP LINE SAYS THE STEP ADVANCED (CLOUD-2789): a census of the
+    /// sweep's own sources, so a stage that reports to the log through any
+    /// writer but [`progress!`] is refused here rather than found as a lap
+    /// cancelled while it was still working (add313832: 204 declared rows over
+    /// 9,754 s, none of them seen by the self-stall arm).
+    ///
+    /// Two shapes are refused, in the production half of each file: a write
+    /// whose format opens `mutate sweep` or `mutate schema`, and a `"{}"`
+    /// write of one of the functions that build such a line.
+    ///
+    /// Fails by: any of those lines written with `write!`/`writeln!`, which
+    /// leaves the stamp the stall arm reads where it was.
+    #[test]
+    fn every_sweep_line_says_the_step_advanced() {
+        let literal =
+            regex::Regex::new(r#"write(?:ln)?!\(\s*[^,]+,\s*"mutate (?:schema|sweep)"#).unwrap();
+        let built = regex::Regex::new(
+            r#"write(?:ln)?!\(\s*[^,]+,\s*"\{\}",\s*(?:untraced_line|reach_starts_line|control_red_lines|stable_line|[\w.]*hang_line|tally\.line)\("#,
+        )
+        .unwrap();
+        for (name, source) in [
+            ("mutate.rs", include_str!("mutate.rs")),
+            ("mutate/schema.rs", include_str!("mutate/schema.rs")),
+        ] {
+            let production = source
+                .find("\nmod tests {")
+                .map_or(source, |cut| &source[..cut]);
+            let unsaid: Vec<usize> = literal
+                .find_iter(production)
+                .chain(built.find_iter(production))
+                .map(|found| production[..found.start()].lines().count() + 1)
+                .collect();
+            assert!(
+                unsaid.is_empty(),
+                "{name}: a sweep line written without progress! at line(s) {unsaid:?}"
+            );
+        }
+    }
+
+    /// WHERE NO RUNTIME CAN BE BUILT, A DROPPED DEADLINE HAS NOT LAPSED and an
+    /// undropped one whose bound has passed has. Both bounds end at once: a
+    /// raised drop stops the clock before its first slice, and a zero bound
+    /// has no slice to wait.
+    ///
+    /// Fails by: the drop's reading inverted, so a deadline dropped before its
+    /// bound still fires and one that ran out never does (CLOUD-2789).
+    #[test]
+    fn a_blocking_deadline_lapses_only_when_not_dropped() {
+        let dropped = std::sync::atomic::AtomicBool::new(true);
+        assert!(!lapsed_blocking(
+            std::time::Duration::from_secs(3600),
+            &dropped
+        ));
+        let kept = std::sync::atomic::AtomicBool::new(false);
+        assert!(lapsed_blocking(std::time::Duration::ZERO, &kept));
+    }
+
+    /// A `mutate cargo` pass key moves with every input a verdict hangs on and
+    /// with nothing else (CLOUD-2253, C7).
+    ///
+    /// Fails by: a test file outside the patch left out of the key, so a lap
+    /// that deleted the case killing a mutant answers from the record; the
+    /// patch, the shard, the engine or the build output's absence ignored; or
+    /// a build under `target/` moving the key so no lap ever hits.
+    #[test]
+    fn a_cargo_pass_key_moves_with_the_tree_the_patch_the_scope_and_the_engine() {
+        let root = crate::scratch::scratch("mutate-cargo-pass-key");
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::create_dir_all(root.join("tests")).unwrap();
+        std::fs::write(root.join("src/lib.rs"), "pub fn one() -> u8 { 1 }\n").unwrap();
+        std::fs::write(root.join("tests/it.rs"), "#[test] fn t() {}\n").unwrap();
+        // OUTSIDE THE TREE, where the sweep writes it, so the patch is keyed
+        // as itself and not as one more file of the tree.
+        let diff = crate::scratch::scratch("mutate-cargo-pass-key-diff").join("change.diff");
+        std::fs::write(&diff, "+pub fn one() -> u8 { 1 }\n").unwrap();
+        let none = |_: &str| None;
+        let shard = |name: &str| (name == SHARD).then(|| String::from("1/2"));
+        let key = |engine: &[u8], env: &dyn Fn(&str) -> Option<String>| {
+            cargo_pass_key(&root, Some(&diff), engine, env).unwrap()
+        };
+        let first = key(b"engine", &none);
+        assert_eq!(first, key(b"engine", &none), "the same inputs key alike");
+        std::fs::create_dir_all(root.join("target/debug")).unwrap();
+        std::fs::write(root.join("target/debug/out"), "built").unwrap();
+        assert_eq!(first, key(b"engine", &none), "build output is not an input");
+        assert_ne!(first, key(b"engine", &shard), "the shard is an input");
+        assert_ne!(first, key(b"other engine", &none), "the engine is an input");
+        let whole = cargo_pass_key(&root, None, b"engine", &none).unwrap();
+        assert_ne!(first, whole, "a change and the workspace are two scopes");
+        std::fs::write(&diff, "+pub fn one() -> u8 { 2 }\n").unwrap();
+        let moved_patch = key(b"engine", &none);
+        assert_ne!(first, moved_patch, "the patch is an input");
+        std::fs::write(root.join("tests/it.rs"), "").unwrap();
+        assert_ne!(
+            moved_patch,
+            key(b"engine", &none),
+            "a case outside the patch is an input"
+        );
+    }
+
+    #[cfg(test)]
+    /// A kept run's stderr is shown nowhere; a captured or streamed one's is.
+    ///
+    /// Fails by: a kept run echoing its output again, the volume that had `hk`
+    /// killed for memory on #1276, or a captured run going silent.
+    #[test]
+    fn only_a_kept_run_is_shown_nowhere() {
+        assert_eq!(Said::Kept.stderr_echo(), Echo::Quiet);
+        assert_eq!(Said::Captured.stderr_echo(), Echo::Shown);
+        assert_eq!(Said::Streamed.stderr_echo(), Echo::Shown);
+    }
+
+    /// The staged copy is trusted, beside whatever the caller already trusted.
+    ///
+    /// Fails by: the staged root dropped, or an inherited list replaced.
+    #[test]
+    fn the_staged_copy_is_trusted_beside_what_was_inherited() {
+        let staged = Path::new("/repo/target/mutate");
+        assert_eq!(
+            trusted_staged(staged, None).1,
+            "/repo/target/mutate".to_owned()
+        );
+        assert_eq!(
+            trusted_staged(staged, Some(String::from("/a"))).1,
+            "/a:/repo/target/mutate".to_owned()
+        );
+        assert_eq!(
+            trusted_staged(staged, Some(String::new())).1,
+            "/repo/target/mutate"
+        );
+    }
+
+    /// A quiet stream reaches its file alone; a shown one also reaches stderr.
+    ///
+    /// Fails by: stdout echoed again, which put every mutant's diff in the gate
+    /// log, or stderr hidden, which left a long build showing nothing.
+    #[test]
+    fn only_a_shown_stream_reaches_stderr() {
+        let path = std::env::temp_dir().join(format!("batten-sinks-{}", std::process::id()));
+        let file = || fs::File::create(&path).unwrap(); // stream: a test's sink
+        assert_eq!(sinks(file(), Echo::Quiet).len(), 1);
+        assert_eq!(sinks(file(), Echo::Shown).len(), 2);
+        let _removed = fs::remove_file(&path);
+    }
+
+    const COST: JobCost = JobCost {
+        disk_mb: 2_000,
+        memory_mb: 3_000,
+    };
+
+    fn machine(cores: usize, disk_headroom_mb: u64, memory_mb: u64) -> Machine {
+        Machine {
+            cores,
+            disk_headroom_mb,
+            memory_mb,
+        }
+    }
+
+    /// Fails by: the cores divided, or any term ignored.
+    #[test]
+    fn the_scarcest_resource_sizes_the_jobs() {
+        assert_eq!(job_count(machine(8, 100_000, 100_000), COST), Some(8));
+        assert_eq!(job_count(machine(8, 6_000, 100_000), COST), Some(3));
+        assert_eq!(job_count(machine(8, 100_000, 6_000), COST), Some(2));
+        assert_eq!(job_count(machine(8, 2_000, 3_000), COST), Some(1));
+    }
+
+    /// A machine without room for one job is refused, never forced one
+    /// (CLOUD-2882): on #1276 a forced build on a full disk recorded mutants
+    /// unviable.
+    ///
+    /// Fails by: a forced job on a disk or memory one megabyte short, zero
+    /// cores read as zero jobs, or a zero cost dividing by zero.
+    #[test]
+    fn a_starved_machine_is_refused_a_job() {
+        assert_eq!(job_count(machine(1, 0, 0), COST), None);
+        assert_eq!(job_count(machine(4, 1_999, 100_000), COST), None);
+        assert_eq!(job_count(machine(4, 100_000, 2_999), COST), None);
+        assert_eq!(job_count(machine(0, 100_000, 100_000), COST), Some(1));
+        let free = JobCost {
+            disk_mb: 0,
+            memory_mb: 0,
+        };
+        assert_eq!(job_count(machine(6, 0, 0), free), Some(6));
+    }
+
+    /// Fails by: a volume with room read as short, or one without room read
+    /// as fitting, or the floor not taken from the headroom.
+    #[test]
+    fn a_disk_too_small_for_one_job_is_short() {
+        let here = std::env::temp_dir();
+        assert_eq!(disk_short(&here, 0, 0).unwrap(), None);
+        assert!(disk_short(&here, u64::MAX, 0).unwrap().is_some());
+        assert_eq!(disk_short(&here, 1, u64::MAX).unwrap(), Some(0));
+    }
+
+    /// Fails by: a source outside the root, or the root itself, given an overlay
+    /// path, or the path not mirroring the source under the root.
+    #[test]
+    fn an_overlay_mirrors_only_the_sources_under_its_root() {
+        let overlay = Overlay {
+            root: String::from("crates/x/presets"),
+            roots: Vec::new(),
+            env: String::from("X_OVERLAY"),
+            features: String::from("overlay"),
+            dir: PathBuf::from("/t/mutate-overlay"),
+        };
+        assert_eq!(
+            overlay.path_of("crates/x/presets/git/a.rego"),
+            Some(PathBuf::from("/t/mutate-overlay/git/a.rego"))
+        );
+        assert_eq!(overlay.path_of("crates/x/presetsy/a.rego"), None);
+        assert_eq!(overlay.path_of("crates/x/presets"), None);
+        assert_eq!(overlay.path_of("policy/a.rego"), None);
+        // A FURTHER ROOT'S COPY IS AT ITS WHOLE REPOSITORY PATH (CLOUD-2253),
+        // the spelling `preset::library_text` reads.
+        let overlay = Overlay {
+            roots: vec![String::from("crates/x/library")],
+            ..overlay
+        };
+        assert_eq!(
+            overlay.path_of("crates/x/library/r.rego"),
+            Some(PathBuf::from("/t/mutate-overlay/crates/x/library/r.rego"))
+        );
+        assert_eq!(
+            overlay.path_of("crates/x/presets/git/a.rego"),
+            Some(PathBuf::from("/t/mutate-overlay/git/a.rego"))
+        );
+        assert_eq!(overlay.path_of("crates/x/libraryz/r.rego"), None);
+        assert_eq!(overlay.path_of("crates/x/library"), None);
+    }
+
+    /// Fails by: a pytest suite counted as declaring no case, so a filter that
+    /// selects every one of them is never refused as naming every case.
+    #[test]
+    fn a_pytest_suite_counts_its_cases() {
+        let root = crate::scratch::scratch("mutate-pytest-total");
+        std::fs::create_dir_all(root.join("tests")).unwrap();
+        std::fs::write(
+            root.join("tests/test_gate.py"),
+            "def test_one():\n    pass\n\n    def test_nested():\n        pass\n\ndef helper():\n    pass\n",
+        )
+        .unwrap();
+        let suite = Suite::Pytest {
+            path: String::from("tests/test_gate.py"),
+        };
+        assert_eq!(total_cases(&root, &suite), 2);
+    }
+
+    /// Fails by: a missed mutant read as anything but a violation, or a timeout
+    /// or failed baseline read as a verdict.
+    #[test]
+    fn cargo_mutants_exits_read_onto_the_contract() {
+        use crate::exit::ExitCode;
+        assert_eq!(cargo_exit(Outcome::Passed), ExitCode::Success);
+        assert_eq!(cargo_exit(Outcome::Failed(Some(1))), ExitCode::Usage);
+        assert_eq!(cargo_exit(Outcome::Failed(Some(2))), ExitCode::Violation);
+        for undecided in [
+            Outcome::Failed(Some(3)),
+            Outcome::Failed(Some(4)),
+            Outcome::Failed(None),
+            Outcome::TimedOut,
+        ] {
+            assert_eq!(cargo_exit(undecided), ExitCode::Internal, "{undecided:?}");
+        }
+    }
+
+    /// Fails by: a diff written, or a count answered, for a change
+    /// cargo-mutants owns no source of; or an owned change left unwritten.
+    #[test]
+    fn only_a_change_cargo_mutants_owns_is_written() {
+        let root = fixture("cargo-run-unowned");
+        crate::gitwrite::init_on_main(&root).expect("a repository");
+        put(&root, "src/a.rs", "fn a() {}\n");
+        put(&root, "notes.txt", "one\n");
+        crate::gitwrite::commit_paths(
+            &root,
+            &[String::from("src/a.rs"), String::from("notes.txt")],
+            "base",
+        )
+        .expect("commit");
+        put(&root, "notes.txt", "two\n");
+        let registry = Registry::parse("cargo-mutants=src/*.rs").expect("parses");
+        let diff = root.join("state").join("change.diff");
+        assert_eq!(
+            write_change(&root, &registry, "HEAD", &diff).expect("judged"),
+            None
+        );
+        assert!(!diff.exists(), "no diff is written for nothing to run");
+        put(&root, "src/a.rs", "fn a() { b() }\n");
+        assert_eq!(
+            write_change(&root, &registry, "HEAD", &diff).expect("judged"),
+            Some(1)
+        );
+        let written = crate::fsio::read_to_string(&diff).expect("written");
+        assert!(
+            written.contains("src/a.rs") && written.contains("+fn a() { b() }"),
+            "{written}"
+        );
+    }
+
+    /// A sweep judges on a core each but one, and never more cases at once
+    /// than available memory holds at one case's declared peak (CLOUD-2253).
+    ///
+    /// Fails by: the count read off the cores alone, which ran three workers
+    /// of four cases each into a 16 GB host's OOM kill (137); a worker's
+    /// nextest left a case a core; or a host where no case fits judged
+    /// anyway, where its run could only be killed.
+    #[test]
+    fn a_sweep_judges_as_many_cases_as_cores_and_memory_both_hold() {
+        let on = |cores, memory_mb| Machine {
+            cores,
+            disk_headroom_mb: 0,
+            memory_mb,
+        };
+        let judges = |workers, threads| {
+            Some(Judges {
+                workers,
+                threads: Some(threads),
+            })
+        };
+        let ample = 64_000;
+        assert_eq!(judging_jobs(on(4, ample), 1_000), judges(3, 1));
+        assert_eq!(judging_jobs(on(2, ample), 1_000), judges(1, 2));
+        assert_eq!(judging_jobs(on(1, ample), 1_000), judges(1, 1));
+        assert_eq!(judging_jobs(on(0, ample), 1_000), judges(1, 1));
+        assert_eq!(judging_jobs(on(16, ample), 1_000), judges(15, 1));
+        // MEMORY, NOT CORES: 9 GB at 4 GB a case holds two of four cores' cases.
+        assert_eq!(judging_jobs(on(4, 9_000), 4_000), judges(2, 1));
+        assert_eq!(judging_jobs(on(16, 9_000), 4_000), judges(2, 1));
+        assert_eq!(judging_jobs(on(4, 4_000), 4_000), judges(1, 1));
+        assert_eq!(judging_jobs(on(4, 3_999), 4_000), None);
+        // EVERY CASE AT ONCE STAYS INSIDE MEMORY, threads included.
+        for (cores, memory_mb, case_mb) in
+            [(4, 16_000, 1_500), (32, 20_000, 900), (3, 10_000, 3_000)]
+        {
+            let Judges { workers, threads } =
+                judging_jobs(on(cores, memory_mb), case_mb).expect("one fits");
+            let at_once = workers * threads.expect("bounded");
+            assert!(
+                at_once as u64 * case_mb <= memory_mb,
+                "{cores} {memory_mb} {case_mb}"
+            );
+            assert!(at_once <= cores.max(1), "{cores} {memory_mb} {case_mb}");
+        }
+    }
+
+    /// A handed-back mutant is selected by its whole name and nothing else.
+    #[test]
+    fn a_name_is_matched_whole_and_literally() {
+        assert_eq!(
+            exactly("src/a.rs:3:5: replace a -> u8 with 0"),
+            "^src/a\\.rs:3:5: replace a \\-> u8 with 0$"
+        );
+        assert_eq!(exactly("a|b(c)"), "^a\\|b\\(c\\)$");
+    }
+
+    /// An in-place run names its target, its bound and its filter, the filter
+    /// only when there is one, and no `--file`: its `--in-diff` is the
+    /// target's own line ([`target_diff`]).
+    ///
+    /// Fails by: a `--file` added back (which widens the run to every field
+    /// deletion of the file), the filter passed without its `--`, the
+    /// target's name or bound misplaced, or the test tool left to the
+    /// repository, under which `cargo test` refused `-E` as a kill.
+    #[test]
+    fn an_in_place_run_names_its_target_and_no_file() {
+        let output = Path::new("/o");
+        let bound = std::time::Duration::from_secs(9);
+        let name = "crates/a/src/b.rs:3:5: delete field x from struct C expression in d";
+        let cargo = [String::from("--target-dir"), String::from("/t")];
+        let rest = in_place_rest((name, Some("test(=t)")), bound, output, &cargo);
+        assert!(!rest.iter().any(|arg| arg == "--file"), "{rest:?}");
+        // NEXTEST, WHATEVER THE REPOSITORY'S DEFAULT: the filter is its `-E`.
+        let at = rest.iter().position(|arg| arg == "--test-tool").unwrap();
+        assert_eq!(rest[at + 1], "nextest");
+        assert_eq!(
+            rest[rest.len() - 4..],
+            ["--", "-E", "test(=t)", "--no-tests=pass"]
+        );
+        let at = rest.iter().position(|arg| arg == "--re").unwrap();
+        assert_eq!(rest[at + 1], exactly(name));
+        let at = rest.iter().position(|arg| arg == "--timeout").unwrap();
+        assert_eq!(rest[at + 1], "9");
+        // EACH CARGO ARGUMENT ITS OWN `--cargo-arg`, ahead of the filter's `--`.
+        let at = rest.iter().position(|arg| arg == "--target-dir").unwrap();
+        assert_eq!(rest[at - 1], "--cargo-arg");
+        assert_eq!(rest[at + 1..at + 3], ["--cargo-arg", "/t"]);
+        assert!(at < rest.iter().position(|arg| arg == "--").unwrap());
+        let bare = in_place_rest((": no path", None), bound, output, &[]);
+        assert!(!bare.iter().any(|arg| arg == "--"), "{bare:?}");
+        assert!(!bare.iter().any(|arg| arg == "--cargo-arg"), "{bare:?}");
+    }
+
+    /// A hand-back's run reads its listing's package scope and its own diff:
+    /// a whole-tree hand-back runs under `--workspace` from its own line, one
+    /// over a change from its own line in the change's scope, and a listing
+    /// is unchanged (CLOUD-2849, CLOUD-2911).
+    ///
+    /// Fails by: a whole-tree hand-back run without `--workspace` (9675af017,
+    /// where cargo-mutants' own package choice left a consumer's member
+    /// crates out), the change's diff run in place of the target's, or a
+    /// `--workspace` added to a run over a change.
+    #[test]
+    fn a_handback_runs_in_its_listings_scope_from_its_own_line() {
+        let (change, own) = (Path::new("/c.diff"), Path::new("/t.diff"));
+        let rest = || [String::from("--re"), String::from("^x$")];
+        assert_eq!(
+            cargo_mutants_argv((None, Some(own)), rest()),
+            [
+                "mutants",
+                "--workspace",
+                "--in-diff",
+                "/t.diff",
+                "--re",
+                "^x$"
+            ]
+        );
+        assert_eq!(
+            cargo_mutants_argv((Some(change), Some(own)), rest()),
+            ["mutants", "--in-diff", "/t.diff", "--re", "^x$"]
+        );
+        assert_eq!(
+            cargo_mutants_argv((None, None), rest()),
+            ["mutants", "--workspace", "--re", "^x$"]
+        );
+        assert_eq!(
+            cargo_mutants_argv((Some(change), None), rest()),
+            ["mutants", "--in-diff", "/c.diff", "--re", "^x$"]
+        );
+    }
+
+    /// A target's diff changes nothing and spans its one line, under the
+    /// file's own path; a line the source does not hold has none.
+    ///
+    /// Fails by: the hunk off by one (a 0-based `nth`), spanning more than
+    /// the line, naming another line's text, or a line 0 or past the end
+    /// answered with a diff cargo-mutants would refuse or misread.
+    #[test]
+    fn a_targets_diff_spans_its_own_line_alone() {
+        let source = "fn f() {\n    let c = C { x: 1, y: 2 };\n    let d = C { x: 3, y: 4 };\n}\n";
+        assert_eq!(
+            target_diff("crates/a/src/b.rs", source, 2).as_deref(),
+            Some(
+                "diff --git a/crates/a/src/b.rs b/crates/a/src/b.rs\n\
+                 --- a/crates/a/src/b.rs\n+++ b/crates/a/src/b.rs\n\
+                 @@ -2,1 +2,1 @@\n\
+                 -    let c = C { x: 1, y: 2 };\n\
+                 +    let c = C { x: 1, y: 2 };\n"
+            )
+        );
+        assert_eq!(target_diff("b.rs", source, 0), None);
+        assert_eq!(target_diff("b.rs", source, 5), None);
+        assert!(target_diff("b.rs", source, 4).is_some_and(|diff| diff.ends_with("-}\n+}\n")));
+    }
+
+    /// Fails by: the first field read, kilobytes reported as megabytes.
+    #[test]
+    fn available_memory_is_read_in_megabytes() {
+        let meminfo =
+            "MemTotal:       16384000 kB\nMemFree:  100 kB\nMemAvailable:    8192000 kB\n";
+        assert_eq!(mem_available_mb(meminfo), Some(8_000));
+        assert_eq!(mem_available_mb("MemTotal: 1 kB\n"), None);
+    }
+
+    /// Fails by: usage ignored, v1 not read, or v1's unbounded limit taken as
+    /// one; the mount's root read in place of the process's own nested group,
+    /// whose 14,338 MB limit a 16 GB host's sweep then ran past (137); an
+    /// ancestor's tighter limit ignored; or reclaimable cache, inactive or
+    /// active, counted as used.
+    #[test]
+    fn the_cgroup_limit_is_what_remains_of_it() {
+        let v2 = crate::scratch::scratch("mutate-cgroup-v2");
+        std::fs::write(v2.join("memory.max"), format!("{}\n", 10u64 << 30)).unwrap();
+        std::fs::write(v2.join("memory.current"), format!("{}\n", 4u64 << 30)).unwrap();
+        assert_eq!(cgroup_remaining_mb(&v2, "0::/\n"), Some(6 * 1024));
+        // INACTIVE CACHE IS FREE: 3 GB of the 4 used is reclaimable.
+        std::fs::write(
+            v2.join("memory.stat"),
+            format!("anon 1\ninactive_file {}\n", 3u64 << 30),
+        )
+        .unwrap();
+        assert_eq!(cgroup_remaining_mb(&v2, "0::/\n"), Some(9 * 1024));
+        // THE OWN GROUP, NESTED, AND THE TIGHTEST LEVEL ALONG IT.
+        let nested = v2.join("outer/inner");
+        std::fs::create_dir_all(&nested).unwrap();
+        std::fs::write(nested.join("memory.max"), format!("{}", 2u64 << 30)).unwrap();
+        std::fs::write(nested.join("memory.current"), format!("{}", 1u64 << 30)).unwrap();
+        assert_eq!(cgroup_remaining_mb(&v2, "0::/outer/inner\n"), Some(1024));
+        std::fs::write(v2.join("outer/memory.max"), "max").unwrap();
+        assert_eq!(cgroup_remaining_mb(&v2, "0::/outer/inner\n"), Some(1024));
+
+        let v1 = crate::scratch::scratch("mutate-cgroup-v1");
+        let own = v1.join("memory/process_api/bash");
+        std::fs::create_dir_all(&own).unwrap();
+        let unbounded = "9223372036854771712";
+        std::fs::write(v1.join("memory/memory.limit_in_bytes"), unbounded).unwrap();
+        std::fs::write(
+            v1.join("memory/memory.usage_in_bytes"),
+            (1u64 << 30).to_string(),
+        )
+        .unwrap();
+        let path = "9:pids:/x\n4:memory:/process_api/bash\n0::/\n";
+        assert_eq!(
+            cgroup_remaining_mb(&v1, path),
+            None,
+            "only the root, unbounded"
+        );
+        std::fs::write(own.join("memory.limit_in_bytes"), (14u64 << 30).to_string()).unwrap();
+        std::fs::write(own.join("memory.usage_in_bytes"), (11u64 << 30).to_string()).unwrap();
+        std::fs::write(
+            own.join("memory.stat"),
+            format!("cache 1\ntotal_inactive_file {}\n", 4u64 << 30),
+        )
+        .unwrap();
+        assert_eq!(
+            cgroup_remaining_mb(&v1, path),
+            Some(7 * 1024),
+            "the nested limit"
+        );
+        // ACTIVE FILE PAGES ARE RECLAIMED TOO: 4 GB inactive and 5 GB active.
+        std::fs::write(
+            own.join("memory.stat"),
+            format!(
+                "total_inactive_file {}\ntotal_active_file {}\n",
+                4u64 << 30,
+                5u64 << 30
+            ),
+        )
+        .unwrap();
+        assert_eq!(
+            cgroup_remaining_mb(&v1, path),
+            Some(12 * 1024),
+            "every file page"
+        );
+        assert_eq!(
+            cgroup_remaining_mb(&v1, "4:memory:/\n"),
+            None,
+            "the root alone"
+        );
+        std::fs::write(v2.join("memory.max"), (1_u64 << 50).to_string()).unwrap();
+        assert_eq!(cgroup_remaining_mb(&v2, "0::/\n"), None);
+    }
+
+    /// An orphaned sweep's group that exits on TERM inside the grace is waited
+    /// for, and none is waited for once the grace has fired.
+    ///
+    /// Fails by: an exit after the grace counted, so a group still alive at
+    /// the bound escapes its KILL; the grace ignored, so a group that never
+    /// exits holds the sweep past it; or an exit miscounted. The grace is an
+    /// event in the channel, so no case here waits on a clock (CLOUD-2789).
+    #[test]
+    fn an_orphaned_sweep_waits_the_grace_for_its_groups() {
+        let counted = |events: &[Option<()>], count| {
+            let (send, exits) = std::sync::mpsc::channel();
+            for event in events {
+                send.send(*event).unwrap();
+            }
+            drop(send);
+            exits_within(&exits, count)
+        };
+        assert_eq!(
+            counted(&[Some(())], 1),
+            1,
+            "an exit inside the grace is waited for"
+        );
+        assert_eq!(
+            counted(&[None, Some(())], 2),
+            0,
+            "nothing is waited for after the grace"
+        );
+        assert_eq!(
+            counted(&[Some(()), None, Some(())], 3),
+            1,
+            "an exit after the grace is not counted, though the group was alive at it"
+        );
+        assert_eq!(
+            counted(&[Some(()), Some(()), Some(())], 2),
+            2,
+            "every exit asked for is counted, and only those"
+        );
+        assert_eq!(counted(&[], 3), 0, "a closed channel waits no longer");
+    }
+
+    /// Fails by: an armed deadline never firing, so a hung suite is never ended;
+    /// or a dropped one firing anyway, so an answered wait reads as timed out.
+    /// Both are events: the zero bound's send, and the dropped deadline's
+    /// thread ending without one, which closes the channel (CLOUD-2789).
+    #[test]
+    fn a_deadline_fires_at_its_bound_and_never_once_dropped() {
+        let (send, fired) = std::sync::mpsc::channel();
+        let _armed = Deadline::arm(std::time::Duration::ZERO, &send, 7);
+        assert_eq!(fired.recv(), Ok(7), "an armed deadline fires at its bound");
+
+        let (send, fired) = std::sync::mpsc::channel::<u8>();
+        drop(Deadline::arm(
+            std::time::Duration::from_secs(3600),
+            &send,
+            9,
+        ));
+        drop(send);
+        assert!(
+            fired.recv().is_err(),
+            "a dropped deadline ends without firing, closing the channel"
+        );
+    }
 
     /// Fails by: the first status line reported instead of the last, or a
     /// non-status line (a case's own output) taken for one, or the whole line
@@ -5015,37 +7347,6 @@ mod tests {
         );
     }
 
-    /// Fails by: the provisioned runner's directory dropped, or put after the
-    /// inherited `PATH`, so a CI runner with no cargo-mutants reads
-    /// `runner-absent` and a host's own version runs instead of the pin; or a
-    /// registry without one changing `PATH` at all.
-    #[test]
-    fn a_provisioned_runner_directory_leads_every_runner_path() {
-        let dir = PathBuf::from("/provisioned/cargo-mutants");
-        let registry = Registry::default().with_provisioned(Some(dir.clone()));
-        assert_eq!(registry.provisioned.as_deref(), Some(dir.as_path()));
-        let env = nextest_env(Path::new("/repo"), Path::new("/staged"), Some(&dir));
-        let path = env
-            .iter()
-            .find(|(key, _)| key == "PATH")
-            .map(|(_, value)| value.clone())
-            .expect("a provisioned directory sets PATH");
-        assert_eq!(
-            std::env::split_paths(&path).next(),
-            Some(dir.clone()),
-            "the provisioned directory must come first: {path}"
-        );
-        assert_eq!(
-            runner_path(Some(&dir)).len(),
-            1,
-            "unresolvable reads the same PATH"
-        );
-        assert!(
-            runner_path(None).is_empty(),
-            "no provisioned directory leaves PATH inherited"
-        );
-    }
-
     /// Fails by: an inherited `NEXTEST_*` variable left on a nextest child, so
     /// `NEXTEST_RETRIES` reads a killing case's flaky pass as a survivor; one the
     /// env sets itself removed; or a child that names no profile (the consumer's
@@ -5071,33 +7372,279 @@ mod tests {
         );
     }
 
-    /// Fails by: a cargo-mutants registry whose nextest does not answer read as
-    /// resolvable (every source then fails inside the run), nextest reported
-    /// absent where it answers, or demanded of a runner that never runs it.
+    /// A SUITE RUN INHERITS NO `NEXTEST_*` OR `MUTANT_*` (U1), though its env
+    /// names no profile: the schema names its profile by argument.
+    ///
+    /// Fails by: `mutant:rust`'s `NEXTEST_PROFILE` or `NEXTEST_RETRIES` left on
+    /// a reach or judge run, a `MUTANT_*` reaching the cases, one the env sets
+    /// itself removed, or an unrelated variable removed.
     #[test]
-    fn cargo_mutants_needs_nextest_and_no_other_runner_does() {
-        let answering =
-            |programs: &'static [&'static str]| move |sub: &str| programs.contains(&sub);
+    fn a_suite_run_inherits_no_nextest_or_mutant_variable() {
+        let inherited = [
+            "NEXTEST_PROFILE",
+            "NEXTEST_RETRIES",
+            "MUTANT_JOB_DISK_MB",
+            "PATH",
+            "BATTEN_MUTANT_RECORD",
+            "TMPDIR",
+            schema::ACTIVE,
+        ]
+        .map(String::from);
+        assert_eq!(
+            suite_scrubbed(inherited.clone(), &[]),
+            [
+                "NEXTEST_PROFILE",
+                "NEXTEST_RETRIES",
+                "MUTANT_JOB_DISK_MB",
+                schema::ACTIVE
+            ]
+        );
+        let env = [
+            (String::from("NEXTEST_RETRIES"), String::from("0")),
+            (String::from(schema::ACTIVE), String::from("none")),
+        ];
+        assert_eq!(
+            suite_scrubbed(inherited, &env),
+            ["NEXTEST_PROFILE", "MUTANT_JOB_DISK_MB"]
+        );
+    }
+
+    /// Fails by: cargo-mutants, which runs as itself, reported absent, or a
+    /// `command` runner whose program does not resolve read as resolvable.
+    #[test]
+    fn only_a_command_runner_is_probed() {
         let cargo_mutants = Registry::parse("cargo-mutants=**/*.rs").expect("parses");
-        assert_eq!(
-            absent_runners(&cargo_mutants, answering(&["mutants"]), |_| true),
-            [NEXTEST]
-        );
-        assert!(
-            absent_runners(&cargo_mutants, answering(&["mutants", "nextest"]), |_| true).is_empty()
-        );
-        assert_eq!(
-            absent_runners(&cargo_mutants, answering(&[]), |_| true),
-            ["cargo-mutants", NEXTEST]
-        );
+        assert!(absent_runners(&cargo_mutants, |_| false).is_empty());
         let command = Registry::parse("command=**/*.rs")
             .and_then(|registry| registry.with_command(&[String::from("./mutscore.sh")]))
             .expect("parses");
-        assert!(absent_runners(&command, answering(&[]), |_| true).is_empty());
-        assert_eq!(
-            absent_runners(&command, answering(&[]), |_| false),
-            ["command"]
+        assert!(absent_runners(&command, |_| true).is_empty());
+        assert_eq!(absent_runners(&command, |_| false), ["command"]);
+        let missing = Registry::parse("command=**/*.rs")
+            .and_then(|registry| {
+                registry.with_command(&[String::from("no-such-mutation-runner-anywhere")])
+            })
+            .expect("parses");
+        assert_eq!(unresolvable(Path::new("/"), &missing).len(), 1);
+    }
+
+    /// An overlay needs all three variables, each trimmed, and names its
+    /// features to cargo.
+    #[test]
+    fn an_overlay_is_declared_only_by_all_three_variables() {
+        let vars = |presets: &str| {
+            let presets = presets.to_owned();
+            move |name: &str| match name {
+                "MUTANT_PRESETS" => Some(presets.clone()),
+                "MUTANT_OVERLAY_ENV" => Some(String::from(" BATTEN_PRESET_OVERLAY ")),
+                "MUTANT_OVERLAY_FEATURES" => Some(String::from("preset-overlay")),
+                _ => None,
+            }
+        };
+        let root = Path::new("/r");
+        let overlay = Overlay::declared_by(root, vars("crates/x/presets/")).expect("declared");
+        assert_eq!(overlay.root, "crates/x/presets");
+        assert_eq!(overlay.env, "BATTEN_PRESET_OVERLAY");
+        assert_eq!(overlay.feature_args(), ["--features", "preset-overlay"]);
+        assert!(overlay.roots.is_empty(), "further roots are optional");
+        let further = Overlay::declared_by(root, |name| match name {
+            "MUTANT_OVERLAY_ROOTS" => Some(String::from(" crates/x/library/  crates/y ")),
+            _ => vars("crates/x/presets")(name),
+        })
+        .expect("declared");
+        assert_eq!(further.roots, ["crates/x/library", "crates/y"]);
+        assert!(
+            Overlay::declared_by(root, vars("  ")).is_none(),
+            "a blank one is unset"
         );
+        assert!(Overlay::declared_by(root, |_| None).is_none());
+    }
+
+    /// THE SWEEP NAMES ITS TARGET AS THE READER SPELLS IT (CLOUD-2839 §2(c)):
+    /// the `.target` `mark` writes holds the copy's path relative to the
+    /// overlay, the exact string `read_overlay` compares, so a reader of the
+    /// marked module whose copy is absent refuses instead of judging the
+    /// embedded text.
+    ///
+    /// Fails by: `mark` writing nothing (cargo-mutants' `Ok(())`), or the two
+    /// sides ever spelling the path differently.
+    #[test]
+    fn the_sweep_names_its_target_as_the_reader_spells_it() {
+        let dir = fixture("overlay-mark").join("mutate-overlay");
+        fs::create_dir_all(&dir).expect("the overlay directory");
+        let overlay = Overlay {
+            root: String::from("crates/x/presets"),
+            roots: Vec::new(),
+            env: String::from("BATTEN_PRESET_OVERLAY"),
+            features: String::from("preset-overlay"),
+            dir: dir.clone(),
+        };
+        let copy = overlay
+            .path_of("crates/x/presets/demo/a.rego")
+            .expect("a source under the root has a copy");
+        overlay.mark(&copy).expect("mark names the target");
+        let named = fs::read_to_string(dir.join(crate::preset::OVERLAY_TARGET))
+            .expect("mark writes `.target`");
+        assert_eq!(named.trim(), "demo/a.rego");
+        assert!(
+            matches!(
+                crate::preset::read_overlay(Some(&dir), "demo/a.rego"),
+                crate::preset::Overlaid::Unreadable(_)
+            ),
+            "the marked module's absent copy is refused, never the embedded text"
+        );
+    }
+
+    /// The listing asks cargo-mutants for exactly the change's mutants as
+    /// JSON, reads what it prints, and refuses a runner that failed.
+    ///
+    /// Fails by: an empty listing, a refusal read as a listing, or an argv
+    /// other than `mutants --in-diff <diff> --list --json`.
+    #[test]
+    fn the_listing_asks_for_the_changes_mutants_and_refuses_a_failed_runner() {
+        // The stand-in runner is a `#!/bin/sh` script, which only a unix host
+        // executes; the case compiles everywhere and asserts there.
+        if !cfg!(unix) {
+            return;
+        }
+        let root = fixture("list-mutants");
+        let listed = "[{\"name\":\"m\",\"file\":\"src/lib.rs\",\"package\":\"p\",\
+                      \"genre\":\"FnValue\",\"replacement\":\"true\",\"span\":{\"start\":\
+                      {\"line\":1,\"column\":2},\"end\":{\"line\":3,\"column\":4}},\
+                      \"function\":null}]";
+        let runner = |name: &str, exit: u8| {
+            put(
+                &root,
+                name,
+                &format!(
+                    "#!/bin/sh\nprintf '%s\\n' \"$@\" > args\nprintf '%s' '{listed}'\nexit {exit}\n"
+                ),
+            );
+            let path = root.join(name);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt as _;
+                fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).expect("chmod");
+            }
+            path
+        };
+        let diff = root.join("change.diff");
+        let got = list_mutants(&root, &runner("lists", 0), Some(&diff)).expect("listed");
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].name, "m");
+        assert_eq!(
+            crate::fsio::read_to_string(root.join("args")).expect("args"),
+            format!("mutants\n--in-diff\n{}\n--list\n--json\n", diff.display())
+        );
+        assert!(list_mutants(&root, &runner("refuses", 1), Some(&diff)).is_err());
+        // THE WHOLE WORKSPACE (CLOUD-2849): no diff is `--workspace`, never an
+        // `--in-diff` with nothing after it.
+        list_mutants(&root, &runner("whole", 0), None).expect("listed");
+        assert_eq!(
+            crate::fsio::read_to_string(root.join("args")).expect("args"),
+            "mutants\n--workspace\n--list\n--json\n"
+        );
+    }
+
+    /// The overlay the environment declares reaches every sweep's cargo
+    /// invocation as its features, and an undeclared one adds none.
+    ///
+    /// Fails by: `Overlay::declared` answering `None` whatever is set, or
+    /// `overlay_features` answering empty or a blank feature.
+    /// A staged nextest config that differs from the checkout's is the row's
+    /// subject, so the Cargo suite is handed the checkout's with
+    /// `--config-file`; one that agrees, or is absent, adds nothing (#1276).
+    /// Fails by: the suite run under the config the row is mutating.
+    #[test]
+    fn a_mutated_nextest_config_is_not_the_harness() {
+        let root = fixture("harness-config-root");
+        let dir = fixture("harness-config-staged");
+        let suite = Suite::Cargo {
+            path: String::from("tests/a.rs"),
+        };
+        let junit = Path::new("junit.xml");
+        let argv_with = |config: Option<PathBuf>| {
+            invocation(&dir, &suite, "a", None, junit, config.as_deref()).1
+        };
+        assert_eq!(harness_config(&root, &dir), None, "no config at all");
+        put(&root, NEXTEST_CONFIG, "[profile.default]\n");
+        put(&dir, NEXTEST_CONFIG, "[profile.default]\n");
+        assert_eq!(harness_config(&root, &dir), None, "an unmutated copy");
+        assert!(!argv_with(None).contains(&String::from("--config-file")));
+        put(&dir, NEXTEST_CONFIG, "[profile.default\n");
+        let config = harness_config(&root, &dir);
+        assert_eq!(config, Some(root.join(NEXTEST_CONFIG)), "the checkout's");
+        let argv = argv_with(config);
+        let at = argv
+            .iter()
+            .position(|word| word == "--config-file")
+            .expect("the config is named");
+        assert_eq!(
+            argv.get(at + 1).map(String::as_str),
+            Some(root.join(NEXTEST_CONFIG).to_string_lossy().as_ref())
+        );
+    }
+
+    /// Fails by: a hand-back's room check sized against anything but the
+    /// declared `MUTANT_JOB_DISK_MB` (`declared_disk_mb -> Ok(1)` admitted every
+    /// build to any disk), or an absent or fractional count admitted.
+    #[test]
+    fn a_job_cost_is_the_declared_megabytes() {
+        let declared = [
+            ("MUTANT_JOB_DISK_MB", " 6200 "),
+            ("MUTANT_JOB_MEMORY_MB", "4000"),
+        ];
+        assert_eq!(
+            with_overlay_vars(&declared, JobCost::declared_disk_mb).expect("declared"),
+            6200
+        );
+        let cost = with_overlay_vars(&declared, JobCost::declared).expect("declared");
+        assert_eq!((cost.disk_mb, cost.memory_mb), (6200, 4000));
+        assert!(with_overlay_vars(&[], JobCost::declared_disk_mb).is_err());
+        assert!(
+            with_overlay_vars(&[("MUTANT_JOB_DISK_MB", "6.2")], JobCost::declared_disk_mb).is_err()
+        );
+    }
+
+    /// Fails by: a judged case's peak read as anything but the declared
+    /// `MUTANT_JUDGE_MEMORY_MB` (bootstrap shard 0/8 at 34c6e4d1f survived
+    /// `declared_judge_mb -> Ok(0)` and `Ok(1)`, either of which sizes the
+    /// judging workers to the whole machine), or an absent count admitted.
+    #[test]
+    fn a_judged_case_costs_its_declared_megabytes() {
+        let declared = [("MUTANT_JUDGE_MEMORY_MB", " 2400 ")];
+        assert_eq!(
+            with_overlay_vars(&declared, JobCost::declared_judge_mb).expect("declared"),
+            2400
+        );
+        assert!(with_overlay_vars(&[], JobCost::declared_judge_mb).is_err());
+        assert!(
+            with_overlay_vars(
+                &[("MUTANT_JOB_MEMORY_MB", "2400")],
+                JobCost::declared_judge_mb
+            )
+            .is_err(),
+            "the job's memory is not the judged case's"
+        );
+    }
+
+    #[test]
+    fn a_declared_overlay_names_its_features_to_every_invocation() {
+        let root = Path::new("/r");
+        let declared = [
+            ("MUTANT_PRESETS", "crates/x/presets"),
+            ("MUTANT_OVERLAY_ENV", "BATTEN_PRESET_OVERLAY"),
+            ("MUTANT_OVERLAY_FEATURES", "preset-overlay"),
+        ];
+        let (overlay, features) = with_overlay_vars(&declared, || {
+            (Overlay::declared(root), overlay_features(root))
+        });
+        assert_eq!(
+            overlay.map(|overlay| overlay.root),
+            Some(String::from("crates/x/presets"))
+        );
+        assert_eq!(features, ["--features", "preset-overlay"]);
+        assert!(with_overlay_vars(&[], || overlay_features(root)).is_empty());
     }
 
     /// Fails by: an inherited profile kept that the staged tree does not
@@ -5136,6 +7683,43 @@ mod tests {
             Some("default"),
             "suite_env must pin NEXTEST_PROFILE=default: {env:?}"
         );
+    }
+
+    /// Fails by: a suite's drop keeping its own leader listed and unlisting
+    /// every other, so an orphaned sweep signals a group that ended (its pid
+    /// free for reuse) and spares one still running.
+    #[test]
+    fn a_dropped_suite_unlists_only_its_own_group() {
+        let listed = |leader: u32| LIVE_SUITES.lock().unwrap().contains(&leader);
+        let (mine, other) = (u32::MAX - 11, u32::MAX - 12);
+        let first = LiveSuite::list(mine);
+        let second = LiveSuite::list(other);
+        assert!(listed(mine) && listed(other));
+        drop(first);
+        assert!(!listed(mine), "its own group is unlisted");
+        assert!(listed(other), "another group stays listed");
+        drop(second);
+        assert!(!listed(other));
+    }
+
+    /// Every runner over the shared suite target builds WITHOUT DEBUG INFO
+    /// (CLOUD-1746), the nextest arm included. Carries the build half of
+    /// `main`'s `a_sources_build_is_exactly_the_targets_its_scope_runs`, whose
+    /// per-source target scope left with the cargo-mutants wrapper (01ed3d26).
+    ///
+    /// Fails by: the setting dropped or changed, which flips the test profile
+    /// under one runner's builds so each flip rebuilds the workspace crates.
+    #[test]
+    fn every_runner_over_the_shared_target_builds_without_debug_info() {
+        let debug = |env: &[(String, String)]| {
+            env.iter()
+                .find(|(key, _)| key == "CARGO_PROFILE_TEST_DEBUG")
+                .map(|(_, value)| value.clone())
+        };
+        let suite = suite_env(Path::new("/repo"));
+        assert_eq!(debug(&suite).as_deref(), Some("0"), "{suite:?}");
+        let nextest = nextest_env(Path::new("/repo"), Path::new("/staged"));
+        assert_eq!(debug(&nextest).as_deref(), Some("0"), "{nextest:?}");
     }
 
     /// Fails by: a nextest run read as libtest, which counts no case and finds
@@ -5305,6 +7889,11 @@ mod tests {
             .collect();
         assert_eq!(slices[0], ["a", "c", "e"]);
         assert_eq!(slices[1], ["b", "d"]);
+        assert_eq!(
+            parse_shard(" 3/16 "),
+            Some((3, 16)),
+            "padding is not a part"
+        );
         for bad in ["2/2", "0/0", "1", "x/2"] {
             assert!(shard_of(&names, bad).is_err(), "{bad} is not a shard");
         }
@@ -5341,7 +7930,7 @@ mod tests {
         let registry = Registry::parse("cargo-mutants=crates/**/*.rs").expect("parses");
         assert_eq!(
             registry
-                .owner("crates/batten/src/drain.rs")
+                .owner("crates/app/src/drain.rs")
                 .expect("one owner"),
             RunnerKind::CargoMutants
         );
@@ -5349,9 +7938,9 @@ mod tests {
             registry.owner("policy/filed-here.rego").expect("one owner"),
             RunnerKind::Declared
         );
-        assert!(!registry.declares(&row_from("crates/batten/src/drain.rs")));
+        assert!(!registry.declares(&row_from("crates/app/src/drain.rs")));
         assert!(registry.declares(&row_from("policy/filed-here.rego")));
-        assert!(Registry::default().declares(&row_from("crates/batten/src/drain.rs")));
+        assert!(Registry::default().declares(&row_from("crates/app/src/drain.rs")));
     }
 
     /// The committed globs own what ships and the cases that test it: a crate's
@@ -5364,10 +7953,10 @@ mod tests {
         )
         .expect("parses");
         for owned in [
-            "crates/batten/src/lib.rs",
-            "crates/batten/src/policy/presets/x.rs",
-            "crates/batten/build.rs",
-            "crates/batten/tests/it/mutate.rs",
+            "crates/app/src/lib.rs",
+            "crates/app/src/policy/presets/x.rs",
+            "crates/app/build.rs",
+            "crates/app/tests/it/mutate.rs",
         ] {
             assert_eq!(
                 registry.owner(owned).expect("one owner"),
@@ -5377,41 +7966,10 @@ mod tests {
         }
         assert_eq!(
             registry
-                .owner("crates/batten/examples/hook-read-bench.rs")
+                .owner("crates/app/examples/hook-read-bench.rs")
                 .expect("one owner"),
             RunnerKind::Declared
         );
-    }
-
-    /// THE MATRIX SHARES THE CHANGE, NOT EACH SOURCE: every mutant of every
-    /// source lands on exactly one shard, and no shard carries more than one
-    /// more than another.
-    #[test]
-    fn each_mutant_of_the_change_lands_on_exactly_one_shard_evenly() {
-        let counts = [5usize, 0, 40, 1, 1, 17, 3];
-        let n = 16;
-        let mut per_shard = vec![0usize; n];
-        for (source, &count) in counts.iter().enumerate() {
-            let mut covered = 0;
-            for (k, load) in per_shard.iter_mut().enumerate() {
-                if let Some(local) = source_shards(&counts, k, n)[source] {
-                    assert!(local < count, "a run is only asked of a source with work");
-                    let ran = (count - local).div_ceil(n);
-                    covered += ran;
-                    *load += ran;
-                }
-            }
-            assert_eq!(covered, count, "source {source}'s mutants, each once");
-        }
-        let (least, most) = (
-            per_shard.iter().min().copied().unwrap_or_default(),
-            per_shard.iter().max().copied().unwrap_or_default(),
-        );
-        assert!(most - least <= 1, "evenly: {per_shard:?}");
-        assert_eq!(parse_shard(" 3/16 "), Some((3, 16)));
-        for bad in ["16/16", "0/0", "3", "x/16"] {
-            assert_eq!(parse_shard(bad), None, "{bad}");
-        }
     }
 
     /// Fails by: a set `$MUTANT_SHARD` read as unset, which sweeps every row on
@@ -5424,19 +7982,6 @@ mod tests {
             shard_set(Some(String::from("1/4"))),
             Some(String::from("1/4"))
         );
-    }
-
-    #[test]
-    fn a_listing_counts_each_sources_mutants_by_its_path() {
-        let listing = "crates/a/src/x.rs:1:1: replace f -> u8 with 0\n\
-                       crates/a/src/x.rs:2:5: replace + with -\n\
-                       crates/a/src/xy.rs:3:1: replace g with ()\n";
-        let sources = [
-            String::from("crates/a/src/x.rs"),
-            String::from("crates/a/src/xy.rs"),
-            String::from("crates/a/src/z.rs"),
-        ];
-        assert_eq!(mutant_counts(listing, &sources), vec![2, 1, 0]);
     }
 
     #[test]
@@ -5457,193 +8002,6 @@ mod tests {
         };
         assert!(registry.owner("crates/a/src/lib.rs").is_err());
         assert!(registry.declares(&row_from("crates/a/src/lib.rs")));
-    }
-
-    #[test]
-    fn a_sources_scope_is_its_own_tests_and_every_suite_it_declares() {
-        let root = std::env::temp_dir().join(format!("batten-scope-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&root);
-        fs::create_dir_all(root.join("crates/k/src/a")).expect("dirs");
-        fs::create_dir_all(root.join("crates/k/tests/it")).expect("dirs");
-        fs::write(
-            root.join("crates/k/Cargo.toml"),
-            "[package]\nname = \"k\"\n",
-        )
-        .expect("manifest");
-        fs::write(
-            root.join("crates/k/src/a/b.rs"),
-            "//MUTANT-SUITE crates/k/tests/it/flows.rs\n//MUTANT-SUITE tests/x.bats\n",
-        )
-        .expect("source");
-        fs::write(root.join("crates/k/src/lib.rs"), "").expect("lib");
-        assert_eq!(
-            test_scope(&root, "crates/k/src/a/b.rs").as_deref(),
-            Some(
-                "(package(k) & kind(lib) & test(/^a::b::/)) | (package(k) & binary(it) & \
-                 test(/^flows::/))"
-            )
-        );
-        assert_eq!(
-            test_scope(&root, "crates/k/src/lib.rs").as_deref(),
-            Some("(package(k) & kind(lib))")
-        );
-        assert_eq!(test_scope(&root, "elsewhere/x.rs"), None);
-        let _ = fs::remove_dir_all(&root);
-    }
-
-    /// Fails by: a target the scope runs left unbuilt (its cases then select
-    /// nothing), or every target built again (the cost this exists to cut).
-    #[test]
-    fn a_sources_build_is_exactly_the_targets_its_scope_runs() {
-        let root = std::env::temp_dir().join(format!("batten-targets-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&root);
-        fs::create_dir_all(root.join("crates/k/src/a")).expect("dirs");
-        fs::create_dir_all(root.join("crates/k/src/bin")).expect("dirs");
-        fs::create_dir_all(root.join("crates/k/tests/it")).expect("dirs");
-        fs::write(
-            root.join("crates/k/Cargo.toml"),
-            "[package]\nname = \"k\"\n",
-        )
-        .expect("manifest");
-        // A sibling package: its suite is filtered for, never a `--test` here.
-        fs::create_dir_all(root.join("crates/o/tests")).expect("dirs");
-        fs::write(
-            root.join("crates/o/Cargo.toml"),
-            "[package]\nname = \"o\"\n",
-        )
-        .expect("manifest");
-        fs::write(
-            root.join("crates/k/src/a/b.rs"),
-            [
-                "crates/k/tests/it/flows.rs",
-                "crates/k/tests/it/more.rs",
-                "crates/k/tests/solo.rs",
-                "crates/k/src/lib.rs",
-                "crates/o/tests/elsewhere.rs",
-            ]
-            .map(|suite| format!("//{SUITE}{suite}\n"))
-            .concat(),
-        )
-        .expect("source");
-        fs::write(root.join("crates/k/src/main.rs"), "").expect("main");
-        fs::write(root.join("crates/k/src/bin/tool.rs"), "").expect("bin");
-        fs::create_dir_all(root.join("crates/k/src/bin/dir")).expect("dirs");
-        fs::write(root.join("crates/k/src/bin/dir/main.rs"), "").expect("bin");
-        let test_targets = |root: &Path, source: &str| targets_of(&scope_of(root, source));
-        assert_eq!(
-            test_targets(&root, "crates/k/src/a/b.rs"),
-            ["--lib", "--test=it", "--test=solo"]
-        );
-        assert!(
-            terms_of(&scope_of(&root, "crates/k/src/a/b.rs")).contains("package(o)"),
-            "the sibling's suite is still in the filterset"
-        );
-        assert_eq!(test_targets(&root, "crates/k/src/main.rs"), ["--bins"]);
-        assert_eq!(
-            test_targets(&root, "crates/k/src/bin/tool.rs"),
-            ["--bin=tool"]
-        );
-        assert_eq!(
-            test_targets(&root, "crates/k/src/bin/dir/main.rs"),
-            ["--bin=dir"]
-        );
-        assert_eq!(
-            test_targets(&root, "crates/k/tests/it/main.rs"),
-            ["--test=it"]
-        );
-        assert!(test_targets(&root, "elsewhere/x.rs").is_empty());
-        let args = source_args(
-            Path::new("change.diff"),
-            "crates/k/src/a/b.rs",
-            Path::new("out"),
-            None,
-            &scope_of(&root, "crates/k/src/a/b.rs"),
-        );
-        for target in [
-            "--cargo-arg=--lib",
-            "--cargo-arg=--test=it",
-            "--cargo-arg=--test=solo",
-        ] {
-            assert!(args.iter().any(|arg| arg == target), "{target} in {args:?}");
-        }
-        assert_eq!(
-            args.iter()
-                .filter(|arg| arg.starts_with("--cargo-arg="))
-                .count(),
-            3
-        );
-        assert!(
-            suite_env(&root)
-                .iter()
-                .any(|(key, value)| key == "CARGO_PROFILE_TEST_DEBUG" && value == "0"),
-            "every runner over the shared target builds without debug info"
-        );
-        let _ = fs::remove_dir_all(&root);
-    }
-
-    fn ran(ok: bool) -> Ran {
-        Ran {
-            outcome: if ok {
-                Outcome::Passed
-            } else {
-                Outcome::Failed(Some(1))
-            },
-            output: String::new(),
-        }
-    }
-
-    #[test]
-    fn a_missed_mutant_is_a_survivor_named_by_pointer_alone() {
-        let dir = std::env::temp_dir().join(format!("batten-outcomes-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&dir);
-        fs::create_dir_all(&dir).expect("dir");
-        fs::write(
-            dir.join("caught.txt"),
-            "src/a.rs:3:5: replace f -> bool with true\n",
-        )
-        .expect("caught");
-        fs::write(dir.join("missed.txt"), "src/a.rs:9:1: replace g with ()\n").expect("missed");
-        let outcomes = read_outcomes(&dir);
-        assert_eq!(outcomes.ran, 2);
-        let found = outcomes.findings(RunnerKind::CargoMutants, "src/a.rs", &ran(false));
-        assert_eq!(found.len(), 1);
-        assert_eq!(
-            found[0].to_string(),
-            "cargo-mutants/src/a.rs:9:1 SURVIVED (in-diff)"
-        );
-        let _ = fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn a_failed_run_with_nothing_missed_is_never_every_mutant_caught() {
-        let dir = std::env::temp_dir().join(format!("batten-baseline-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&dir);
-        fs::create_dir_all(&dir).expect("dir");
-        fs::write(
-            dir.join("outcomes.json"),
-            r#"{"outcomes":[{"scenario":"Baseline","summary":"Failure"}]}"#,
-        )
-        .expect("outcomes");
-        let found = read_outcomes(&dir).findings(RunnerKind::CargoMutants, "src/a.rs", &ran(false));
-        assert_eq!(found.len(), 1);
-        assert!(found[0].verdict.could_not_look(), "{}", found[0]);
-        assert_eq!(
-            found[0].to_string(),
-            "cargo-mutants/src/a.rs case-already-red (baseline)"
-        );
-        let none = std::env::temp_dir().join(format!("batten-nothing-{}", std::process::id()));
-        let found =
-            read_outcomes(&none).findings(RunnerKind::CargoMutants, "src/a.rs", &ran(false));
-        assert_eq!(
-            found[0].to_string(),
-            "cargo-mutants/src/a.rs suite-did-not-run (cargo mutants)"
-        );
-        assert!(
-            read_outcomes(&none)
-                .findings(RunnerKind::CargoMutants, "src/a.rs", &ran(true))
-                .is_empty()
-        );
-        let _ = fs::remove_dir_all(&dir);
     }
 
     /// The sweep's cargo cache is not the repository's, and this is the gate on
@@ -5759,7 +8117,7 @@ mod tests {
         // `#MUTANT-SUITE` can never be read as declarations of a mutation.
         let lines = vec![
             String::from("#MUTANT-EXEMPT CLOUD-1|why"),
-            String::from("#MUTANT-SUITE crates/batten/tests/x.rs"),
+            String::from("#MUTANT-SUITE crates/app/tests/x.rs"),
         ];
         assert!(rows_in(&lines, "policy/x.rego").is_empty());
     }
@@ -5770,11 +8128,11 @@ mod tests {
         // census both open it — and a target name is deliberately not derived
         // from it. A grouped suite lives at `tests/it/<x>.rs` and is a MODULE,
         // not a target called `<x>`, so a stem here would name nothing.
-        let suite = Suite::declared("crates/batten/tests/it/shell_retirement.rs");
+        let suite = Suite::declared("crates/app/tests/it/shell_retirement.rs");
         assert_eq!(
             suite,
             Some(Suite::Cargo {
-                path: String::from("crates/batten/tests/it/shell_retirement.rs"),
+                path: String::from("crates/app/tests/it/shell_retirement.rs"),
             })
         );
     }
@@ -5794,7 +8152,8 @@ mod tests {
             std::thread::current().id()
         ));
         let _ = std::fs::remove_dir_all(&root);
-        let dir = root.join(PRESETS).join("probe");
+        let presets = "presets";
+        let dir = root.join(presets).join("probe");
         std::fs::create_dir_all(&dir).unwrap_or_else(|e| panic!("mkdir: {e}"));
         for (file, text) in [
             (
@@ -5809,8 +8168,11 @@ mod tests {
         ] {
             std::fs::write(dir.join(file), text).unwrap_or_else(|e| panic!("write: {e}"));
         }
-        let Some(gate) = resolve(&root, "probe") else {
-            panic!("the preset directory resolves to a gate");
+        let sources: Vec<String> = ["a.rego", "b.rego", "c.rego"]
+            .map(|file| format!("{presets}/probe/{file}"))
+            .to_vec();
+        let Some(gate) = gate_of(&root, "probe", &sources) else {
+            panic!("the preset's modules make a gate");
         };
         let _ = std::fs::remove_dir_all(&root);
         let suite_of = |slug: &str| {
@@ -5878,13 +8240,82 @@ mod tests {
         assert_eq!(Suite::declared("infra/main.tf"), None);
     }
 
+    /// Fails by: a hidden directory walked and a plain one skipped, so the case
+    /// index reads `.git`-like trees and misses a nested module.
+    #[test]
+    fn a_deep_walk_skips_hidden_and_target_directories_only() {
+        let root = std::env::temp_dir().join(format!(
+            "batten-mutate-collect-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        for file in [
+            "tests/a.rs",
+            "tests/sub/z.rs",
+            "tests/.hidden/x.rs",
+            "tests/target/y.rs",
+            "tests/notes.md",
+        ] {
+            let path = root.join(file);
+            std::fs::create_dir_all(path.parent().unwrap_or(&root))
+                .unwrap_or_else(|e| panic!("mkdir: {e}"));
+            std::fs::write(&path, "fn x() {}\n").unwrap_or_else(|e| panic!("write: {e}"));
+        }
+        let mut found = Vec::new();
+        collect_files(&root, "tests", "rs", true, &mut found);
+        found.sort();
+        assert_eq!(found, ["tests/a.rs", "tests/sub/z.rs"]);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Fails by: a suite under a target's root directory not mapped to that
+    /// target, or a tie in depth won by the later target rather than the first.
+    #[test]
+    fn a_suite_maps_to_the_first_deepest_target_root_holding_it() {
+        let staged = std::env::temp_dir().join(format!(
+            "batten-mutate-suite-binary-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&staged);
+        std::fs::create_dir_all(&staged).unwrap_or_else(|e| panic!("mkdir: {e}"));
+        let src = |path: &str| format!("{}/{path}", staged.display());
+        let target = |name: &str, kind: &str, path: &str| serde_json::json!({"name": name, "kind": [kind], "src_path": src(path)});
+        let doc = serde_json::json!({"packages": [{
+            "name": "p",
+            "targets": [
+                target("p", "lib", "src/lib.rs"),
+                target("first", "test", "tests/it/main.rs"),
+                target("second", "test", "tests/it/mod.rs"),
+                target("toy", "test", "tests/toy.rs"),
+            ],
+        }]});
+        let metadata = staged.join("metadata.json");
+        std::fs::write(&metadata, doc.to_string()).unwrap_or_else(|e| panic!("write: {e}"));
+        assert_eq!(
+            suite_binary(&metadata, &staged, "tests/it/mutate.rs").as_deref(),
+            Some("p::first")
+        );
+        assert_eq!(
+            suite_binary(&metadata, &staged, "src/x.rs").as_deref(),
+            Some("p")
+        );
+        assert_eq!(
+            suite_binary(&metadata, &staged, "tests/toy.rs").as_deref(),
+            Some("p::toy")
+        );
+        assert_eq!(suite_binary(&metadata, &staged, "benches/b.rs"), None);
+        let _ = std::fs::remove_dir_all(&staged);
+    }
+
     /// The recorded output of one harness, its version line dropped.
     fn recorded(arm: &str, state: &str) -> String {
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("tests/fixtures/mutate")
             .join(arm)
             .join(state);
-        let text = std::fs::read_to_string(&path)
+        let text = crate::fsio::read_to_string(&path)
             .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
         text.split_once('\n')
             .map(|(_, rest)| rest.to_owned())
@@ -6035,6 +8466,12 @@ mod tests {
             }
             .could_not_look()
         );
+        assert!(
+            Verdict::OverlayUnread {
+                want: String::new()
+            }
+            .could_not_look()
+        );
         assert!(!Verdict::NoMutantDeclared.could_not_look());
         assert!(!Verdict::Caught.is_finding());
     }
@@ -6107,53 +8544,146 @@ mod tests {
                 finding(Verdict::CaseErrored {
                     want: String::new(),
                 }),
+                finding(Verdict::NoMutantDeclared),
+                finding(Verdict::RunnerOwned { runner: "r" }),
             ],
             declared: 3,
+            recorded: 0,
             gates: 1,
         };
         assert_eq!(sweep.unlooked(), 2);
+        // The gate-level count is its own class's, never a constant.
+        assert_eq!(sweep.gate_level(), 2);
     }
 
-    /// Fails by: a line whose row or column is not a number read as a pointer.
+    /// Fails by: a set declaration with no glob in it enrolling every name,
+    /// where only the name it newly mentions joined.
     #[test]
-    fn an_outcome_line_is_a_pointer_only_when_line_and_column_are_numbers() {
-        assert_eq!(
-            pointer_of("src/a.rs:3:5: replace f with ()").as_deref(),
-            Some("src/a.rs:3:5")
+    fn only_a_name_newly_written_into_the_authority_is_enrolled() {
+        let root = fixture("enrolled-literal");
+        crate::gitwrite::init_on_main(&root).expect("a repository");
+        let config = crate::config_model::CONFIG_FILE;
+        put(
+            &root,
+            config,
+            "version = 1\n\n[mutate]\ngates = [\"toy\"]\n",
         );
-        assert_eq!(pointer_of("src/a.rs:x:5: replace f with ()"), None);
-        assert_eq!(pointer_of("src/a.rs:3:y: replace f with ()"), None);
+        crate::gitwrite::commit_paths(&root, &[config.to_owned()], "base").expect("commit");
+        put(
+            &root,
+            config,
+            "version = 1\n\n[mutate]\ngates = [\"toy\", \"other\"]\n",
+        );
+        let names = ["toy", "other", "third"].map(String::from);
+        let changed = std::collections::BTreeSet::from([config.to_owned()]);
+        assert_eq!(
+            enrolled_since(&root, "HEAD", &names, &changed),
+            std::collections::BTreeSet::from([String::from("other")])
+        );
     }
 
-    /// Fails by: an outcome file dropped from (or subtracted out of) `ran`, or a
-    /// failed MUTANT scenario read as a failed baseline.
+    /// Fails by: a file defining no case named like the row's counted as one
+    /// of its case files, or the suite itself counted.
     #[test]
-    fn every_outcome_file_counts_toward_ran_and_only_a_failed_baseline_is_one() {
-        let dir = fixture("outcome-counts");
-        let lines = |n: usize| {
-            (1..=n)
-                .map(|i| format!("src/a.rs:{i}:1: replace f with ()"))
-                .collect::<Vec<_>>()
-                .join("\n")
+    fn a_rows_case_files_are_the_other_files_naming_its_case() {
+        let root = fixture("case-files");
+        put(&root, "tests/it/a.rs", "fn wanted_case() {}\n");
+        put(&root, "tests/it/b.rs", "fn wanted_case_too() {}\n");
+        put(&root, "tests/it/c.rs", "fn unrelated() {}\n");
+        put(&root, "tests/it/sub/d.rs", "fn wanted_case() {}\n");
+        let suite = Suite::Cargo {
+            path: String::from("tests/it/a.rs"),
         };
-        fs::write(dir.join("caught.txt"), lines(3)).expect("caught");
-        fs::write(dir.join("unviable.txt"), lines(2)).expect("unviable");
-        fs::write(dir.join("missed.txt"), lines(1)).expect("missed");
-        fs::write(dir.join("timeout.txt"), "src/a.rs:9:9: replace g with ()\n").expect("timeout");
-        fs::write(
-            dir.join("outcomes.json"),
-            r#"{"outcomes":[{"scenario":"Mutant","summary":"MissedMutant"},{"scenario":"Baseline","summary":"Success"}]}"#,
-        )
-        .expect("outcomes");
         assert_eq!(
-            read_outcomes(&dir),
-            Outcomes {
-                ran: 7,
-                missed: vec![String::from("src/a.rs:1:1")],
-                timeout: vec![String::from("src/a.rs:9:9")],
-                baseline_failed: false,
-            }
+            case_files(&root, &suite, "m::wanted_case"),
+            ["tests/it/b.rs", "tests/it/sub/d.rs"].map(String::from)
         );
+    }
+
+    /// Fails by: a rego case's exact name match inverted, so the sibling
+    /// defining only a LONGER rule (`test_deny_too`) is counted, and the one
+    /// defining the exact rule is not.
+    #[test]
+    fn a_rego_case_lives_only_in_the_sibling_defining_its_exact_rule() {
+        let root = fixture("case-files-rego");
+        put(&root, "policy/a_test.rego", "test_other if { true }\n");
+        put(&root, "policy/b_test.rego", "test_deny if { true }\n");
+        put(&root, "policy/c_test.rego", "test_deny_too if { true }\n");
+        let suite = Suite::Conftest {
+            path: String::from("policy/a_test.rego"),
+        };
+        assert_eq!(
+            case_files(&root, &suite, "deny"),
+            [String::from("policy/b_test.rego")]
+        );
+    }
+
+    /// Fails by: a shallow walk entering a directory, or a deep one entering a
+    /// hidden or a `target` directory.
+    #[test]
+    fn a_shallow_walk_stays_put_and_a_deep_one_skips_hidden_and_target() {
+        let root = fixture("collect-files");
+        for path in [
+            "a.rs",
+            "sub/b.rs",
+            ".hidden/c.rs",
+            "target/d.rs",
+            "sub/e.txt",
+        ] {
+            put(&root, path, "fn f() {}\n");
+        }
+        let walk = |deep: bool| {
+            let mut files = Vec::new();
+            collect_files(&root, "", "rs", deep, &mut files);
+            files.sort();
+            files
+        };
+        assert_eq!(walk(false), ["a.rs"].map(String::from));
+        assert_eq!(walk(true), ["a.rs", "sub/b.rs"].map(String::from));
+    }
+
+    /// Fails by: a target whose root file is not a `main.rs`, `lib.rs` or
+    /// `mod.rs`, or whose directory does not hold the suite, taken as its
+    /// binary; or a shallower match preferred over the deepest.
+    #[test]
+    fn a_suites_binary_is_the_deepest_root_file_above_it() {
+        let staged = fixture("suite-binary");
+        let src = |path: &str| staged.join(path).display().to_string();
+        let metadata = staged.join("metadata.json");
+        let doc = serde_json::json!({"packages": [{"name": "pkg", "targets": [
+            {"name": "pkg", "kind": ["lib"], "src_path": src("src/lib.rs")},
+            {"name": "tool", "kind": ["bin"], "src_path": src("src/a/main.rs")},
+            {"name": "deep", "kind": ["test"], "src_path": src("src/a/b/c/deep.rs")},
+            {"name": "aside", "kind": ["test"], "src_path": src("src/x/y/z/w/main.rs")},
+        ]}]});
+        fs::write(&metadata, doc.to_string()).expect("write the metadata");
+        assert_eq!(
+            suite_binary(&metadata, &staged, "src/a/b.rs").as_deref(),
+            Some("pkg::bin/tool")
+        );
+    }
+
+    /// Fails by: the row-defect count read as a constant, or as every finding.
+    #[test]
+    fn row_defects_counts_only_the_rows_that_prove_nothing() {
+        let finding = |verdict: Verdict| Finding {
+            gate: String::from("g"),
+            slug: None,
+            verdict,
+            owner: None,
+        };
+        let sweep = Sweep {
+            findings: vec![
+                finding(Verdict::InertMutation),
+                finding(Verdict::Caught),
+                finding(Verdict::SelfMutatingRow),
+                finding(Verdict::NoMutantDeclared),
+            ],
+            declared: 3,
+            recorded: 0,
+            gates: 1,
+        };
+        assert_eq!(sweep.row_defects(), 2);
     }
 
     /// Fails by: a root-level suite's directory read as empty, or any line
@@ -6253,6 +8783,39 @@ mod tests {
         assert_eq!(basic_to_rust(r"\w", '/').as_deref(), Some(r"\w"));
     }
 
+    /// Fails by: a bracket's leading `^` read as a literal caret, a leading `]`
+    /// read as the close, a class's own `]` read as the bracket's close, or a
+    /// regex-crate class operator left live inside one.
+    #[test]
+    fn a_bracket_expression_negates_on_its_leading_caret() {
+        assert_eq!(
+            basic_to_rust(r#""[^"]*""#, '@').as_deref(),
+            Some(r#""[^"]*""#)
+        );
+        assert_eq!(basic_to_rust(r"[]a]", '@').as_deref(), Some(r"[\]a]"));
+        assert_eq!(basic_to_rust(r"[a&&b]", '@').as_deref(), Some(r"[a\&\&b]"));
+        assert_eq!(basic_to_rust(r"[a-z]", '@').as_deref(), Some(r"[a-z]"));
+        // A `[` member opens no class unless a `:` follows it: read as one, the
+        // `b]` after it is swallowed as the class and the bracket never closes
+        // (CLOUD-2789).
+        assert_eq!(basic_to_rust(r"[a[b]c", '@').as_deref(), Some(r"[a\[b]c"));
+        assert_eq!(
+            basic_to_rust(r"[[:digit:]]x^", '@').as_deref(),
+            Some(r"[[:digit:]]x\^")
+        );
+        // A member after a class is still inside the bracket, so it is
+        // escaped there; closing the bracket at the class's own `]` would
+        // leave the `.` bare.
+        assert_eq!(
+            basic_to_rust(r"[[:digit:].]", '@').as_deref(),
+            Some(r"[[:digit:]\.]")
+        );
+        assert_eq!(
+            substitute("k = \"v\", j\n", r#"s@= "[^"]*"@= ""@"#).as_deref(),
+            Some("k = \"\", j\n")
+        );
+    }
+
     /// Fails by: an empty or non-numeric issue number accepted.
     #[test]
     fn an_exemption_key_is_cloud_and_digits_only() {
@@ -6267,6 +8830,50 @@ mod tests {
         let root = crate::scratch::scratch(&format!("mutate-{name}"));
         assert!(root.is_dir(), "the fixture root");
         root
+    }
+
+    /// Fails by: a survivor not kept (judged again after a crash), a timeout
+    /// kept (an environment's answer replayed as the row's), a record written
+    /// back under `target/` where the collector takes it, or a pre-#1276 bare
+    /// key no longer read as caught.
+    #[test]
+    fn a_row_verdict_the_key_decides_survives_in_the_state_dir() {
+        let root = fixture("row-record");
+        crate::gitwrite::init_on_main(&root).expect("a repository");
+        let dir = record_dir(&root);
+        assert!(
+            !dir.starts_with(target_dir(&root)),
+            "{} is under the build root",
+            dir.display()
+        );
+        let record = fixture("row-record-file").join(CAUGHT_RECORD);
+        fs::write(&record, "old-bare-key\n").expect("a pre-#1276 record");
+        record_row(&record, "k-caught", &Verdict::Caught);
+        record_row(
+            &record,
+            "k-survived",
+            &Verdict::Survived {
+                want: String::from("case_a"),
+            },
+        );
+        record_row(&record, "k-timeout", &Verdict::SuiteTimedOut { seconds: 9 });
+        let rows = recorded_rows(&record);
+        assert_eq!(rows.get("old-bare-key"), Some(&Verdict::Caught));
+        assert_eq!(rows.get("k-caught"), Some(&Verdict::Caught));
+        assert_eq!(
+            rows.get("k-survived"),
+            Some(&Verdict::Survived {
+                want: String::from("case_a")
+            })
+        );
+        assert!(!rows.contains_key("k-timeout"), "a timeout is judged again");
+        assert_eq!(
+            recorded_caught(&record),
+            ["old-bare-key", "k-caught"]
+                .map(String::from)
+                .into_iter()
+                .collect()
+        );
     }
 
     /// Write `text` at `path` under `root`, its directories included.
@@ -6318,31 +8925,6 @@ mod tests {
         assert!(!resolves(&root, "batten-no-program-is-called-this"));
     }
 
-    /// Fails by: an engine module that declares rows but no suite (or the
-    /// reverse) left out of the census, or the undeclared count read as a
-    /// constant or as the declared ones.
-    #[test]
-    fn an_engine_module_is_a_subject_by_any_declaration_and_the_rest_are_counted() {
-        let root = fixture("engine-subjects");
-        put(
-            &root,
-            &format!("{ENGINE}/rows_only.rs"),
-            &format!("//{ROW}a|s@x@y@|case\n"),
-        );
-        put(
-            &root,
-            &format!("{ENGINE}/suite_only.rs"),
-            &format!("//{SUITE}crates/batten/tests/it/x.rs\n"),
-        );
-        for plain in ["plain_a.rs", "plain_b.rs", "plain_c.rs"] {
-            put(&root, &format!("{ENGINE}/{plain}"), "fn f() {}\n");
-        }
-        let found = subjects(&root, None);
-        let names: Vec<&str> = found.keys().map(String::as_str).collect();
-        assert_eq!(names, ["engine-rows-only", "engine-suite-only"]);
-        assert_eq!(engine_undeclared(&root, &found), 3);
-    }
-
     /// Fails by: the declaration arm reading outside its `scope` (or only
     /// outside it), or reading a path another arm's subject already claims,
     /// exactly or as a directory.
@@ -6361,7 +8943,7 @@ mod tests {
             put(&root, path, &declaring);
         }
         crate::gitwrite::commit_paths(&root, &paths.map(String::from), "fixture").expect("commit");
-        let table = |scope: &[&str]| crate::config::Mutate {
+        let table = |scope: &[&str]| crate::config_model::Mutate {
             gates: Vec::new(),
             scope: scope.iter().map(|glob| (*glob).to_owned()).collect(),
             command: Vec::new(),
@@ -6386,6 +8968,63 @@ mod tests {
     /// Fails by: the build owed by a row the registered runner owns, or by a
     /// row already recorded caught. The staged directory is outside any cargo
     /// workspace, so the owed build fails at once rather than building one.
+    /// A CONTROL IS KEYED BY ITS CASE AND THE UNMUTATED TREE, NEVER ITS ROW
+    /// (CLOUD-2253): two rows naming one case over one tree share a control,
+    /// and a different case, suite, tree or subject runs its own. Only a run
+    /// that reported is kept.
+    ///
+    /// Fails by: every control sharing one key (a case judged on another's
+    /// control), a row's own mutation in the key (the control re-run per row),
+    /// or a could-not-look kept for the next row.
+    #[test]
+    fn a_control_is_keyed_by_its_case_and_tree_never_its_row() {
+        let root = fixture("control-key");
+        put(&root, "lib/r.rego", "limit := 10\n");
+        put(&root, "lib/s.rego", "limit := 11\n");
+        let staged = |tree: &str| Staged {
+            dir: fixture("control-key-staged"),
+            dirty: None,
+            tree: tree.to_owned(),
+            controls: std::collections::HashMap::new(),
+        };
+        let suite = Suite::Cargo {
+            path: String::from("tests/it/a.rs"),
+        };
+        let row = |slug: &str, want: &str, source: &str| Row {
+            slug: slug.to_owned(),
+            script: format!("s/10/{slug}/"),
+            want: want.to_owned(),
+            source: source.to_owned(),
+            suite: None,
+            resolved: None,
+        };
+        let one = staged("tree-1");
+        let key =
+            |staged: &Staged, suite: &Suite, row: &Row| control_key(&root, staged, suite, row);
+        let base = key(&one, &suite, &row("a", "case_a", "lib/r.rego"));
+        assert_eq!(base, key(&one, &suite, &row("b", "case_a", "lib/r.rego")));
+        assert_ne!(base, key(&one, &suite, &row("a", "case_b", "lib/r.rego")));
+        assert_ne!(base, key(&one, &suite, &row("a", "case_a", "lib/s.rego")));
+        assert_ne!(
+            base,
+            key(&staged("tree-2"), &suite, &row("a", "case_a", "lib/r.rego"))
+        );
+        let other = Suite::Cargo {
+            path: String::from("tests/it/b.rs"),
+        };
+        assert_ne!(base, key(&one, &other, &row("a", "case_a", "lib/r.rego")));
+
+        let reported = Selection {
+            selected: 1,
+            ok: true,
+            reach: Reach::Reported,
+        };
+        assert!(kept(&reported));
+        for reach in [Reach::TimedOut, Reach::Errored, Reach::Silent] {
+            assert!(!kept(&Selection { reach, ..reported }), "{reach:?}");
+        }
+    }
+
     #[test]
     fn the_build_is_owed_only_by_a_declared_uncaught_cargo_row() {
         let root = fixture("build-owed");
@@ -6397,11 +9036,13 @@ mod tests {
         let staged = Staged {
             dir: fixture("build-owed-staged"),
             dirty: None,
+            tree: String::new(),
+            controls: std::collections::HashMap::new(),
         };
         let names = [String::from("probe")];
         let said = |registry: &Registry, caught: &std::collections::HashSet<String>| {
             let mut progress = Vec::new();
-            build_if_owed(&root, &names, registry, caught, &staged, &mut progress);
+            let _ = build_if_owed(&root, &names, registry, caught, &staged, &mut progress);
             String::from_utf8(progress).expect("utf-8")
         };
         let none = std::collections::HashSet::new();
@@ -6426,6 +9067,35 @@ mod tests {
         );
         let owed = said(&Registry::default(), &none);
         assert!(owed.contains("building the cargo suites"), "{owed}");
+    }
+
+    /// Fails by: a row's caught key answered as a constant (`row_key` read as
+    /// a fixed string), so a row whose script or whose gate's source changed
+    /// keeps the catch recorded against what it was (CLOUD-2789).
+    #[test]
+    fn a_row_is_keyed_by_its_script_and_its_gate_source() {
+        let root = fixture("row-key");
+        let rego = format!("#{ROW}one|s/x/y/|case_a\n#{ROW}two|s/a/b/|case_b\n");
+        put(&root, "policy/probe.rego", &rego);
+        let keys = |root: &Path| -> Vec<String> {
+            let Some(gate) = resolve(root, "probe") else {
+                panic!("the module resolves to a gate");
+            };
+            gate.rows
+                .iter()
+                .map(|row| row_key(root, &gate, row))
+                .collect()
+        };
+        let before = keys(&root);
+        assert_eq!(before.len(), 2, "premise: two rows");
+        assert_ne!(before[0], before[1], "two scripts, two keys");
+        put(
+            &root,
+            "policy/probe.rego",
+            &format!("{rego}package edited\n"),
+        );
+        let after = keys(&root);
+        assert_ne!(before[0], after[0], "the gate's source is keyed");
     }
 
     /// CLOUD-2533: one gate's rows are judged across the shards, each by one,
@@ -6589,29 +9259,196 @@ mod tests {
         assert_eq!(kept, set, "an unchanged file is not rewritten");
     }
 
-    /// Fails by: a shard outside `0 <= k < n` reaching the plan, where `n = 0`
-    /// divides by zero and `k >= n` judges a shard that does not exist; or a
-    /// valid one refused.
+    /// Fails by: the mutation's shape answered as a constant: an untouched
+    /// subject read as changed, or a changed one's code lines miscounted.
+    #[test]
+    fn a_diff_shape_reads_the_staged_subject_against_the_checkout() {
+        let root = fixture("diff-shape");
+        crate::gitwrite::init_on_main(&root).expect("a repository");
+        put(&root, "a.txt", "one\ntwo\nthree\n");
+        crate::gitwrite::commit_paths(&root, &[String::from("a.txt")], "a").expect("commit");
+        let staged = Staged::new(&root, fixture("diff-shape-work")).expect("stage");
+        assert_eq!(diff_shape(&root, &staged, None, "a.txt"), (false, 0));
+        put(staged.dir(), "a.txt", "one\nTWO\nTHREE\n");
+        assert_eq!(diff_shape(&root, &staged, None, "a.txt"), (true, 4));
+    }
+
+    /// Fails by: an ordinary subdirectory skipped as though it were the build
+    /// directory (the `target` test inverted), or a hidden or `target`
+    /// directory entered.
+    #[test]
+    fn collecting_files_enters_every_directory_but_hidden_and_target() {
+        let root = fixture("collect-files");
+        for path in [
+            "d/w.rs",
+            "d/sub/x.rs",
+            "d/target/y.rs",
+            "d/.hidden/z.rs",
+            "d/n.txt",
+        ] {
+            put(&root, path, "");
+        }
+        let mut files = Vec::new();
+        collect_files(&root, "d", "rs", true, &mut files);
+        files.sort();
+        assert_eq!(files, ["d/sub/x.rs", "d/w.rs"]);
+    }
+
+    /// Fails by: a pytest suite's case census answered as a constant, or a
+    /// line that merely mentions a test function counted.
+    #[test]
+    fn a_pytest_suite_counts_its_test_functions() {
+        let root = fixture("total-cases");
+        put(
+            &root,
+            "test_x.py",
+            "def test_a():\n    pass\n\n    def test_nested():\n        pass\n\ndef helper():\n    test_a()\n\ndef test_b():\n    pass\n",
+        );
+        let pytest = Suite::Pytest {
+            path: String::from("test_x.py"),
+        };
+        assert_eq!(total_cases(&root, &pytest), 3);
+        let cargo = Suite::Cargo {
+            path: String::from("test_x.py"),
+        };
+        assert_eq!(total_cases(&root, &cargo), 0);
+    }
+
+    /// Fails by: a test target that embeds nothing read as embedding every
+    /// source, which mutates every row in place and rebuilds it.
+    #[test]
+    fn a_test_target_embeds_only_what_its_dep_info_lists() {
+        let built = Prebuilt {
+            binaries: PathBuf::new(),
+            metadata: PathBuf::new(),
+            embedded: Vec::new(),
+            test_embedded: vec![String::from("mise-tasks")],
+            dirty: std::cell::Cell::new(false),
+        };
+        assert!(built.tests_embed("mise-tasks/toy.sh"));
+        assert!(!built.tests_embed("src/lib.rs"));
+        assert!(!built.tests_embed("mise-tasks-other/toy.sh"));
+    }
+
+    /// Fails by: a build owed by another runner's suite, by reused binaries
+    /// that are clean, or not owed by a cargo suite that reuses nothing or
+    /// reuses dirty binaries.
+    #[test]
+    fn only_a_cargo_suite_without_clean_binaries_owes_a_build() {
+        assert!(owes_build(true, false, false));
+        assert!(owes_build(true, true, true));
+        assert!(!owes_build(true, true, false));
+        assert!(!owes_build(false, false, false));
+        assert!(!owes_build(false, true, true));
+    }
+
+    /// Fails by: the recorded build credited with embedding nothing, or its
+    /// test targets with nothing, so a mutation of a subject the build reads
+    /// is judged on binaries that never saw it.
+    #[test]
+    fn a_recorded_build_embeds_what_its_dep_info_names() {
+        let staged = fixture("embedded-staged");
+        let target = fixture("embedded-target");
+        let deps = target.join("debug/deps");
+        fs::create_dir_all(&deps).unwrap();
+        let at = crate::git::canonical(&staged);
+        put(
+            &deps,
+            "toy-0a.d",
+            &format!("{}:\n", at.join("tests/../mise-tasks/toy.sh").display()),
+        );
+        put(
+            &deps,
+            "libtoy-0b.d",
+            &format!("{}:\n", at.join("src/lib.rs").display()),
+        );
+        let metadata = target.join("cargo-metadata.json");
+        put(
+            &target,
+            "cargo-metadata.json",
+            r#"{"packages": [{"targets": [{"name": "toy", "kind": ["test"]}, {"name": "libtoy", "kind": ["lib"]}]}]}"#,
+        );
+        let built = with_embedded(
+            Prebuilt {
+                binaries: PathBuf::new(),
+                metadata,
+                embedded: Vec::new(),
+                test_embedded: Vec::new(),
+                dirty: std::cell::Cell::new(false),
+            },
+            &target,
+            &staged,
+        );
+        assert_eq!(
+            built.embedded,
+            ["mise-tasks/toy.sh", "src/lib.rs"].map(String::from)
+        );
+        assert_eq!(built.test_embedded, ["mise-tasks/toy.sh"].map(String::from));
+    }
+
+    /// Fails by: the suite's binary id answered as nothing; a library target
+    /// skipped (its kind test joined with `&&`); or a target whose root file
+    /// does not hold the suite, or whose file is no root file, taken as its
+    /// owner (the depth test joined with `||`).
+    #[test]
+    fn a_suites_binary_is_the_deepest_target_root_that_holds_it() {
+        let staged = fixture("suite-binary");
+        let canonical = crate::git::canonical(&staged);
+        let src = |path: &str| canonical.join(path).to_string_lossy().into_owned();
+        let doc = serde_json::json!({
+            "packages": [{
+                "name": "pkg",
+                "targets": [
+                    {"name": "pkg", "kind": ["lib"], "src_path": src("src/lib.rs")},
+                    {"name": "it", "kind": ["test"], "src_path": src("tests/it/main.rs")},
+                    {"name": "other", "kind": ["test"], "src_path": src("tests/other.rs")},
+                    {"name": "tool", "kind": ["bin"], "src_path": src("tools/main.rs")},
+                ],
+            }],
+        });
+        let metadata = staged.join("metadata.json");
+        fs::write(&metadata, doc.to_string()).expect("write the metadata");
+        let binary = |suite: &str| suite_binary(&metadata, &staged, suite);
+        assert_eq!(binary("src/x.rs").as_deref(), Some("pkg"));
+        assert_eq!(binary("tests/it/mutate.rs").as_deref(), Some("pkg::it"));
+        assert_eq!(binary("tests/other.rs").as_deref(), Some("pkg::other"));
+        assert_eq!(binary("tools/x.rs").as_deref(), Some("pkg::bin/tool"));
+        assert_eq!(binary("tests/flat.rs"), None);
+    }
+
+    /// Fails by: a declaring file's word counts gaining where they should
+    /// fall (`+=` for `-=`), or a word mentioned exactly as often as at base
+    /// read as enrolled (`>=` for `>`).
+    #[test]
+    fn a_gate_is_enrolled_only_when_its_name_is_mentioned_more_than_at_base() {
+        let root = fixture("enrolled-since");
+        crate::gitwrite::init_on_main(&root).expect("a repository");
+        let config = crate::config_model::CONFIG_FILE;
+        put(&root, config, "alpha beta beta\n");
+        crate::gitwrite::commit_paths(&root, &[String::from(config)], "base").expect("commit");
+        put(&root, config, "alpha beta gamma\n");
+        let names = ["alpha", "beta", "gamma", "delta"].map(String::from);
+        let changed = std::collections::BTreeSet::from([String::from(config)]);
+        assert_eq!(
+            enrolled_since(&root, "HEAD", &names, &changed),
+            std::collections::BTreeSet::from([String::from("gamma")])
+        );
+    }
+
+    /// Fails by: a shard outside `0 <= k < n` accepted, where `n = 0` divides
+    /// by zero and `k >= n` judges a shard that does not exist; or a valid one
+    /// refused.
     #[test]
     fn a_registered_run_refuses_a_shard_shard_parsed_never_yields() {
-        // Nothing is staged: a bad shard is refused first, and the declared
-        // runner over an empty change returns before it reads either path.
         let root = fixture("registered-shard-bounds");
-        let registry = Registry::default();
-        let site = Site {
-            root: &root,
-            base: "HEAD",
-            registry: &registry,
-            work: &root,
-        };
         let changed = std::collections::BTreeSet::new();
         let run = |shard| {
             run_registered(
-                &site,
+                &root,
+                &Registry::default(),
                 &changed,
                 RunnerKind::Declared,
                 shard,
-                &mut std::io::sink(),
             )
         };
         assert!(run(Some((0, 1))).is_ok(), "0/1 is a shard");
@@ -6620,65 +9457,34 @@ mod tests {
         }
     }
 
-    /// Fails by: the declared runner carried past its early return, every
-    /// source's plan dropped so nothing is judged, or a listing that failed
-    /// read as an empty shard.
+    /// Fails by: a runner other than `command` spawning anything, or the owned
+    /// sources miscounted.
     #[test]
-    fn a_registered_run_returns_early_for_the_declared_runner_and_plans_every_source() {
+    fn only_the_command_runner_runs_and_every_owned_source_is_counted() {
         let root = fixture("registered");
-        crate::gitwrite::init_on_main(&root).expect("a repository");
         put(&root, "elsewhere/x.rs", "fn f() {}\n");
-        crate::gitwrite::commit_paths(&root, &[String::from("elsewhere/x.rs")], "base")
-            .expect("commit");
-        put(&root, "elsewhere/x.rs", "fn f() {\n    let _ = 1;\n}\n");
         let changed = std::collections::BTreeSet::from([String::from("elsewhere/x.rs")]);
-        let run =
-            |registry: &Registry, kind: RunnerKind, shard: Option<(usize, usize)>, name: &str| {
-                let work = fixture(name);
-                let site = Site {
-                    root: &root,
-                    base: "HEAD",
-                    registry,
-                    work: &work,
-                };
-                run_registered(&site, &changed, kind, shard, &mut std::io::sink())
-            };
-        let declared = run(
+        let declared = run_registered(
+            &root,
             &Registry::default(),
+            &changed,
             RunnerKind::Declared,
             None,
-            "registered-declared",
         )
         .expect("the declared runner returns at once");
         assert_eq!((declared.sources, declared.findings), (1, Vec::new()));
         let owned = Registry::parse("cargo-mutants=elsewhere/*.rs").expect("parses");
-        let unsharded = run(
+        let cargo_mutants = run_registered(
+            &root,
             &owned,
+            &changed,
             RunnerKind::CargoMutants,
-            None,
-            "registered-unsharded",
+            Some((0, 1)),
         )
-        .expect("an unsharded run");
+        .expect("cargo-mutants is never spawned here");
         assert_eq!(
-            unsharded.findings,
-            vec![Finding {
-                gate: String::from("cargo-mutants"),
-                slug: Some(String::from("elsewhere/x.rs")),
-                verdict: Verdict::NoSuite {
-                    suite: String::from("no cargo target compiles it"),
-                },
-                owner: None,
-            }]
-        );
-        assert!(
-            run(
-                &owned,
-                RunnerKind::CargoMutants,
-                Some((0, 1)),
-                "registered-sharded",
-            )
-            .is_err(),
-            "a listing that fails is an error, never an empty plan"
+            (cargo_mutants.sources, cargo_mutants.findings),
+            (1, Vec::new())
         );
     }
 
@@ -6692,6 +9498,65 @@ mod tests {
     /// job could write, so the job is observed through a fifo instead: the suite
     /// opens its write end and the job inherits it, and the read reaches its end
     /// only once every writer — the job included — is gone.
+    /// Fails by: a captured stream lost (the caller's parse reads nothing), or
+    /// stdout and stderr crossed. The live half is [`super::pump_into`]'s and is
+    /// asserted in `exec`'s pump case: a chunk reaches every sink before the
+    /// next is read.
+    #[test]
+    fn a_captured_run_keeps_both_streams_while_pumping_them() {
+        let dir = crate::scratch::scratch("mutate-said-captured");
+        let bound = std::time::Duration::from_secs(60);
+        let chatty = [
+            String::from("-c"),
+            // Past one pipe's 64 KiB on each stream: a wait-then-read deadlocks.
+            String::from(
+                "head -c 200000 /dev/zero | tr '\\0' o; echo; head -c 200000 /dev/zero | tr '\\0' e >&2",
+            ),
+        ];
+        let ran = spawn(&dir, Program::Suite("sh"), &chatty, &[], bound).expect("sh runs");
+        assert_eq!(ran.outcome, Outcome::Passed, "the run is not deadlocked");
+        assert_eq!(ran.stdout.trim_end().len(), 200_000);
+        assert!(!ran.stdout.contains('e'));
+        assert_eq!(ran.output.matches('e').count(), 200_000);
+    }
+
+    /// Fails by: a suite its bound ended keeping the reach its output gave
+    /// (the `reach` override dropped), so a hang reads as a run that reported.
+    #[test]
+    fn a_suite_its_bound_ended_reached_timed_out() {
+        let reported = Selection {
+            selected: 3,
+            ok: true,
+            reach: Reach::Reported,
+        };
+        assert_eq!(
+            ended_at_bound(reported),
+            Selection {
+                selected: 3,
+                ok: true,
+                reach: Reach::TimedOut,
+            }
+        );
+    }
+
+    /// Fails by: a run its bound ended answered with how the killed child
+    /// exited rather than `TimedOut` (the `outcome` override dropped), so a
+    /// hung suite reads as a failing one.
+    #[test]
+    fn a_run_its_bound_ends_is_timed_out() {
+        let dir = crate::scratch::scratch("mutate-bound-ends");
+        let hang = [String::from("-c"), String::from("sleep 30")];
+        let ran = spawn(
+            &dir,
+            Program::Suite("sh"),
+            &hang,
+            &[],
+            std::time::Duration::from_millis(200),
+        )
+        .expect("sh runs");
+        assert_eq!(ran.outcome, Outcome::TimedOut);
+    }
+
     #[test]
     fn a_suite_that_exits_is_answered_with_its_status_and_its_group_is_ended() {
         // Only unix has the group to end; elsewhere the wait is waited out.
@@ -6714,7 +9579,7 @@ mod tests {
         // A thread, because opening a fifo's read end blocks until a writer
         // opens it — which is the suite, below.
         std::thread::spawn(move || {
-            let read = std::fs::read_to_string(&fifo);
+            let read = crate::fsio::read_to_string(&fifo);
             let _ = send.send(read);
         });
         // The suite names its own pid and its job's, so a job that outlives the
@@ -6733,16 +9598,46 @@ mod tests {
         )
         .expect("the wait answers");
         assert_eq!(ran.outcome, Outcome::Failed(Some(3)), "{}", ran.output);
-        let Ok(read) = said.recv_timeout(std::time::Duration::from_secs(10)) else {
-            panic!(
-                "the job the suite left running outlived the group kill: {}",
-                survivors(&dir)
-            );
-        };
+        // AN EVENT, NOT A CLOCK (CLOUD-2789): the fifo reads to its end once
+        // its last holder is gone, and a job the group kill missed writes
+        // `orphaned` into it before it goes.
+        let read = said.recv().expect("the fifo's reader answers");
         assert_eq!(
             read.expect("read the fifo to its end"),
             "",
-            "the job the suite left running is ended with it"
+            "the job the suite left running outlived the group kill: {}",
+            survivors(&dir)
+        );
+    }
+
+    /// Fails by: the drain answering before the group end, or the group left
+    /// standing while the drain waits on its EOF. The suite's job holds its
+    /// stdout and would write `late` into it; only the group end closes the
+    /// pipe without it, and that EOF is what `spawn` returns on (CLOUD-2789).
+    #[test]
+    fn a_grandchild_holding_the_pipe_is_ended_and_its_eof_drains_the_capture() {
+        // Only unix has the group whose end delivers the EOF.
+        if !cfg!(unix) {
+            return;
+        }
+        let dir = crate::scratch::scratch("mutate-held-pipe");
+        let ran = spawn(
+            &dir,
+            Program::Suite("sh"),
+            &[
+                String::from("-c"),
+                String::from("(sleep 30; echo late) & echo early"),
+            ],
+            &[],
+            std::time::Duration::from_secs(60),
+        )
+        .expect("the wait answers");
+        assert_eq!(ran.outcome, Outcome::Passed, "{}", ran.output);
+        assert!(ran.output.contains("early"), "{}", ran.output);
+        assert!(
+            !ran.output.contains("late"),
+            "the job holding the pipe outlived the group end: {}",
+            ran.output
         );
     }
 
@@ -6783,25 +9678,26 @@ mod tests {
                 bound,
             ));
         });
-        // The fifo's open blocks until the suite writes, so the read is the wait,
-        // and it is taken on its own thread so a suite that never writes fails
-        // the case within a bound instead of holding it.
+        // The fifo's open blocks until the suite writes, so the read is the wait:
+        // an event, never a clock (CLOUD-2789).
         let (named, said) = std::sync::mpsc::channel();
         let ready = dir.join("ready");
         std::thread::spawn(move || {
-            let _ = named.send(std::fs::read_to_string(ready));
+            let _ = named.send(crate::fsio::read_to_string(ready));
         });
         let leader: u32 = said
-            .recv_timeout(std::time::Duration::from_secs(20))
+            .recv()
             .expect("the suite names itself")
             .expect("read the fifo")
             .trim()
             .parse()
             .expect("a pid");
         sweep_group(leader);
+        // An unswept suite waits its sleep out and passes, which the assertion
+        // below refuses.
         let ran = swept
-            .recv_timeout(std::time::Duration::from_secs(20))
-            .expect("the swept suite returns before its sleep would")
+            .recv()
+            .expect("the swept suite returns")
             .expect("the wait answers");
         assert_ne!(ran.outcome, Outcome::Passed, "{}", ran.output);
     }
@@ -6815,7 +9711,7 @@ mod tests {
     /// would run, so a cleanup could only trade a bounded leak for a stranger.
     fn survivors(dir: &std::path::Path) -> String {
         let read = |name: &str| {
-            std::fs::read_to_string(dir.join(name))
+            crate::fsio::read_to_string(dir.join(name))
                 .unwrap_or_default()
                 .trim()
                 .to_owned()
@@ -6916,5 +9812,265 @@ mod tests {
             judge_by_module(&root, &mut staged, row).expect("the module judges"),
             Some(Verdict::Caught)
         );
+    }
+
+    /// AN OWN-CASE ROW'S DECLARED SUITE IS NEVER RUN, SO IT IS NEITHER ITS KEY
+    /// NOR WHAT TOUCHES IT (#1276). The module declares a conftest suite above
+    /// its row, and the row is judged by the module's own `test_` rule; a code
+    /// change to that suite alone must keep the row's recorded verdict and
+    /// sweep nothing. Fails by: the key and the touch set reading the suite
+    /// whatever judges the row, so every edit to it re-ran rows it never judges.
+    #[test]
+    fn an_own_case_rows_suite_is_neither_its_key_nor_its_touch() {
+        let root = fixture("own-module-suite");
+        crate::gitwrite::init_on_main(&root).expect("a repository");
+        put(
+            &root,
+            "batten.toml",
+            "version = 1\n\n[[rule]]\nid = \"limit-probe\"\nkind = \"policy\"\n\
+             scope = \"tree\"\nmodule = \"policy/limit.rego\"\nseverity = \"warn\"\n\
+             no_fix_reason = \"this row exists to carry its module's own case\"\n\n\
+             [[verdict]]\nid = \"the limit moved\"\ngloss = \"the limit is not ten\"\n\
+             class = \"What this fixture's probe asserts, at the length explain answers with.\"\n\n\
+             [[verdict.route]]\nid = \"read the limit\"\nkind = \"document\"\n\
+             target = \"policy/limit.rego\"\n",
+        );
+        put(
+            &root,
+            "policy/limit.rego",
+            &format!(
+                "#MUTANT-SUITE policy/suite/limit_test.rego\n\
+                 #{ROW}limit-moved|s/^limit := 10$/limit := 11/|limit_is_ten\n\
+                 package batten\n\nrules contains \"limit-probe\"\n\nlimit := 10\n\n\
+                 violation contains {{\n\t\"rule\": \"limit-probe\",\n\t\"verdict\": \"the limit moved\",\n\
+                 }} if {{\n\tlimit != 10\n}}\n\n\
+                 test_limit_is_ten if {{\n\tlimit == 10\n}}\n"
+            ),
+        );
+        let suite = "policy/suite/limit_test.rego";
+        put(
+            &root,
+            suite,
+            "package batten\n\ntest_other if {\n\ttrue\n}\n",
+        );
+        crate::gitwrite::commit_paths(
+            &root,
+            &[
+                String::from("batten.toml"),
+                String::from("policy/limit.rego"),
+                String::from(suite),
+            ],
+            "fixture",
+        )
+        .expect("commit");
+        let Some(gate) = resolve(&root, "limit") else {
+            panic!("the module resolves to a gate");
+        };
+        let [row] = gate.rows.as_slice() else {
+            panic!("the module declares exactly one row");
+        };
+        assert_eq!(
+            gate.suite_for(row).map(Suite::path),
+            Some(suite),
+            "the row declares the suite this case is about"
+        );
+        let key = row_key(&root, &gate, row);
+        put(
+            &root,
+            suite,
+            "package batten\n\ntest_other if {\n\tfalse\n}\n",
+        );
+        assert_eq!(row_key(&root, &gate, row), key, "the suite is not keyed");
+        let code_changed = std::collections::BTreeSet::from([String::from(suite)]);
+        assert!(
+            !changed_by(&root, &gate, "limit", &code_changed, &code_changed),
+            "the suite does not touch the gate"
+        );
+    }
+
+    /// Fails by: a row read as judged by its module's own case on either half
+    /// alone (the two joined by `||`), so a module declaring a `test_` rule
+    /// that no policy row registers drops its suite from the row's key.
+    #[test]
+    fn an_unregistered_module_with_its_own_case_is_judged_by_its_suite() {
+        let root = fixture("unregistered-own-case");
+        crate::gitwrite::init_on_main(&root).expect("a repository");
+        put(&root, "batten.toml", "version = 1\n");
+        put(
+            &root,
+            "policy/limit.rego",
+            &format!(
+                "#MUTANT-SUITE policy/suite/limit_test.rego\n\
+                 #{ROW}limit-moved|s/^limit := 10$/limit := 11/|limit_is_ten\n\
+                 package batten\n\nlimit := 10\n\n\
+                 test_limit_is_ten if {{\n\tlimit == 10\n}}\n"
+            ),
+        );
+        let suite = "policy/suite/limit_test.rego";
+        put(
+            &root,
+            suite,
+            "package batten\n\ntest_other if {\n\ttrue\n}\n",
+        );
+        crate::gitwrite::commit_paths(
+            &root,
+            &[
+                String::from("batten.toml"),
+                String::from("policy/limit.rego"),
+                String::from(suite),
+            ],
+            "fixture",
+        )
+        .expect("commit");
+        let Some(gate) = resolve(&root, "limit") else {
+            panic!("the module resolves to a gate");
+        };
+        let [row] = gate.rows.as_slice() else {
+            panic!("the module declares exactly one row");
+        };
+        assert!(
+            declares_own_case(&root, row),
+            "premise: the case is its own"
+        );
+        assert!(!judged_by_module(&root, row));
+    }
+    /// Fails by: no target answered for a suite the recorded metadata
+    /// compiles, which runs every mutant's filter unscoped over the workspace.
+    #[test]
+    fn a_suite_names_the_deepest_target_whose_root_holds_it() {
+        let staged = crate::scratch::scratch("mutate-suite-binary");
+        let root = |path: &str| staged.join(path).to_string_lossy().into_owned();
+        let metadata = staged.join("metadata.json");
+        let doc = serde_json::json!({"packages": [{
+            "name": "toy",
+            "targets": [
+                {"name": "toy", "kind": ["lib"], "src_path": root("crates/toy/src/lib.rs")},
+                {"name": "it", "kind": ["test"], "src_path": root("crates/toy/tests/it/main.rs")},
+            ],
+        }]});
+        std::fs::write(&metadata, doc.to_string()).unwrap();
+        assert_eq!(
+            suite_binary(&metadata, &staged, "crates/toy/tests/it/mutate.rs").as_deref(),
+            Some("toy::it")
+        );
+        assert_eq!(
+            suite_binary(&metadata, &staged, "crates/toy/src/x.rs").as_deref(),
+            Some("toy")
+        );
+    }
+}
+
+/// The sweep's row record (#1276).
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod record_row_tests {
+    use super::{Verdict, record_row};
+
+    /// Fails by: a survivor whose expectation holds a tab or a newline written
+    /// whole, which tears the record into rows that were never judged.
+    #[test]
+    fn a_survivor_that_would_tear_the_record_is_not_written() {
+        let record = crate::scratch::scratch("mutate-record-row").join("record");
+        let survived = |want: &str| Verdict::Survived {
+            want: want.to_owned(),
+        };
+        record_row(&record, "k1", &survived("a\tb"));
+        record_row(&record, "k2", &survived("a\nb"));
+        assert!(!record.exists(), "nothing torn is written");
+        record_row(&record, "k3", &survived("ok"));
+        record_row(&record, "k4", &Verdict::Caught);
+        assert_eq!(
+            std::fs::read_to_string(&record).unwrap(),
+            "k3\tsurvived\tok\nk4\tcaught\n"
+        );
+    }
+
+    /// Fails by: a survivor read back as caught (it is never judged again) or
+    /// a caught row as not (every caught row is judged on every sweep), or a
+    /// bypassed sweep reading a record at all.
+    #[test]
+    fn only_a_caught_row_is_read_back_as_caught() {
+        let dir = crate::scratch::scratch("mutate-recorded-and-caught");
+        let record = dir.join("record");
+        record_row(&record, "k1", &Verdict::Caught);
+        record_row(
+            &record,
+            "k2",
+            &Verdict::Survived {
+                want: "ok".to_owned(),
+            },
+        );
+        let (recorded, caught) = super::recorded_and_caught(&record, &dir, false);
+        assert_eq!(recorded.len(), 2);
+        assert_eq!(caught, std::collections::HashSet::from(["k1".to_owned()]));
+        let (recorded, caught) = super::recorded_and_caught(&record, &dir, true);
+        assert!(recorded.is_empty() && caught.is_empty());
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod enrolled_tests {
+    use super::*;
+
+    /// Fails by: a name the base already mentioned as often counted as newly
+    /// enrolled, which sweeps every gate a config change leaves alone.
+    #[test]
+    fn a_name_mentioned_as_often_at_base_is_not_enrolled() {
+        let dir = crate::scratch::scratch("mutate-enrolled-since");
+        crate::gitwrite::init_on_main(&dir).unwrap();
+        let config = crate::config_model::CONFIG_FILE;
+        std::fs::write(dir.join(config), "gates = [\"kept\"]\n").unwrap();
+        crate::gitwrite::commit_paths(&dir, &[config.to_owned()], "base").unwrap();
+        std::fs::write(dir.join(config), "gates = [\"kept\", \"added\"]\n").unwrap();
+        let names = ["kept".to_owned(), "added".to_owned()];
+        let changed = std::iter::once(config.to_owned()).collect();
+        assert_eq!(
+            enrolled_since(&dir, "HEAD", &names, &changed),
+            std::iter::once("added".to_owned()).collect()
+        );
+    }
+
+    /// Fails by: a newly written glob never consulted (`!globs.is_empty()`
+    /// read as `globs.is_empty()`), so a gate the glob newly selects by its
+    /// source is not enrolled although its name was never written.
+    #[test]
+    fn a_gate_a_new_glob_selects_is_enrolled_by_its_source() {
+        let dir = crate::scratch::scratch("mutate-enrolled-glob");
+        crate::gitwrite::init_on_main(&dir).unwrap();
+        std::fs::create_dir_all(dir.join("mise-tasks")).unwrap();
+        std::fs::write(dir.join("mise-tasks/toy.sh"), "#!/bin/sh\n").unwrap();
+        let config = crate::config_model::CONFIG_FILE;
+        std::fs::write(dir.join(config), "gates = []\n").unwrap();
+        crate::gitwrite::commit_paths(&dir, &[config.to_owned()], "base").unwrap();
+        std::fs::write(dir.join(config), "gates = [\"mise-tasks/*.sh\"]\n").unwrap();
+        assert!(
+            resolve(&dir, "toy").is_some(),
+            "premise: the task resolves to a gate over its source"
+        );
+        // `other` is never written and the new glob selects no source of it:
+        // enrolled only where the glob's mere presence is read as a match.
+        let names = ["toy".to_owned(), "other".to_owned()];
+        let changed = std::iter::once(config.to_owned()).collect();
+        assert_eq!(
+            enrolled_since(&dir, "HEAD", &names, &changed),
+            std::iter::once("toy".to_owned()).collect()
+        );
+    }
+
+    /// Fails by: a newly written glob enrolling every name whatever its gate,
+    /// where only a name whose gate's sources the glob matches joins; here no
+    /// name resolves to a gate at all, so none does.
+    #[test]
+    fn a_new_glob_enrolls_no_name_whose_gate_it_does_not_reach() {
+        let dir = crate::scratch::scratch("mutate-enrolled-glob-unreached");
+        crate::gitwrite::init_on_main(&dir).unwrap();
+        let config = crate::config_model::CONFIG_FILE;
+        std::fs::write(dir.join(config), "gates = [\"kept\"]\n").unwrap();
+        crate::gitwrite::commit_paths(&dir, &[config.to_owned()], "base").unwrap();
+        std::fs::write(dir.join(config), "gates = [\"kept\", \"src/*.zz\"]\n").unwrap();
+        let names = ["kept".to_owned()];
+        let changed = std::iter::once(config.to_owned()).collect();
+        assert!(enrolled_since(&dir, "HEAD", &names, &changed).is_empty());
     }
 }

@@ -2,15 +2,18 @@
 .el .ds Aq '
 .TH batten-wiring-gate 1  batten 
 .SH NAME
-batten\-wiring\-gate \- Link this clone\*(Aqs two commit hooks to a hook body the repository checks in
+batten\-wiring\-gate \- Link every git hook in this clone to the running batten binary, or both commit hooks to a checked\-in body
 .SH SYNOPSIS
-\fBbatten wiring gate\fR [\fB\-h\fR|\fB\-\-help\fR] <\fIbody\fR> 
+\fBbatten wiring gate\fR [\fB\-\-check\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fIbody\fR] 
 .SH DESCRIPTION
-Link this clone\*(Aqs two commit hooks to a hook body the repository checks in
+Link every git hook in this clone to the running batten binary, or both commit hooks to a checked\-in body
 .SH OPTIONS
+.TP
+\fB\-\-check\fR
+Exit non\-zero if a git hook link is owed, and write nothing
 .TP
 \fB\-h\fR, \fB\-\-help\fR
 Print help
 .TP
-<\fIbody\fR>
-The hook body to link, relative to the repository root
+[\fIbody\fR]
+A hook body to link both commit hooks to, relative to the repository root

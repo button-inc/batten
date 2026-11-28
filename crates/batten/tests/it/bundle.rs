@@ -14,6 +14,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
+use batten::capture::Streamed as _;
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -22,12 +23,8 @@ use std::path::{Path, PathBuf};
     reason = "stays, and test-only: `exec --jobs` is a bundle of real children, so this suite's subject is a process tree and its fixtures are processes"
 )]
 use std::process::{Command, Output, Stdio};
-use std::time::{Duration, Instant};
 
 use common::{StateHome as _, scratch};
-
-/// How long a case waits for a condition before giving up.
-const PATIENCE: Duration = Duration::from_secs(20);
 
 /// A `#!/bin/sh` fixture, executable, that runs `body`.
 fn script(name: &str, body: &str) -> PathBuf {
@@ -49,7 +46,7 @@ fn exec(name: &str, args: &[&str]) -> (Output, PathBuf) {
     let output = common::batten()
         .args(args)
         .state_home(&home)
-        .output()
+        .streamed_output()
         .expect("run batten exec");
     (output, home)
 }
@@ -277,21 +274,29 @@ fn a_bad_jobs_value_names_what_was_wrong_with_it() {
 fn the_record_is_in_declaration_order_whatever_order_they_finish_in() {
     // What `--jobs` would otherwise cost: with two children in flight the order
     // things FINISH in is a property of the machine, and Batten's output has to
-    // be a property of the bundle. Command 0 sleeps so it reliably finishes last.
+    // be a property of the bundle. Command 0 finishes last ON AN EVENT, never a
+    // clock (CLOUD-2789): it reads a FIFO whose write end command 1 holds for
+    // its whole life, so its read ends at command 1's exit. Run one at a time
+    // instead, command 0 would wait on a writer that never starts, and the
+    // mutation judge's per-case cut files that hang as the timeout it is.
+    let gate = scratch("bundle-jobs-order-gate").join("gate");
+    let _ = fs::remove_file(&gate);
+    #[expect(
+        clippy::disallowed_types,
+        reason = "stays, test-only: a FIFO is made by `mkfifo`, and no door in `common` makes one"
+    )]
+    let made = Command::new("mkfifo")
+        .arg(&gate)
+        .streamed_output()
+        .expect("mkfifo runs");
+    assert!(made.status.success(), "{}", said(&made));
+    let gate = gate.to_str().expect("a UTF-8 temp path");
+    let slow = format!("cat '{gate}' > /dev/null; echo slow");
+    let fast = format!("exec 3> '{gate}'; echo fast");
     let (output, _) = exec(
         "bundle-jobs-order",
         &[
-            "exec",
-            "--jobs",
-            "2",
-            "--",
-            "sh",
-            "-c",
-            "sleep 1; echo slow",
-            ":::",
-            "sh",
-            "-c",
-            "echo fast",
+            "exec", "--jobs", "2", "--", "sh", "-c", &slow, ":::", "sh", "-c", &fast,
         ],
     );
     assert!(output.status.success(), "{}", said(&output));
@@ -321,29 +326,19 @@ fn has_flock() -> bool {
 
 /// The live spool's three paths for one stream of one command.
 fn spool_paths(home: &Path, stream: &str, pid: u32, index: usize) -> (PathBuf, PathBuf, PathBuf) {
-    let dir = home.join("data").join("batten");
-    // The repo-name segment is derived at runtime, so the directory is found
-    // rather than spelled: one `live` directory exists under the scratch home.
-    let mut live = None;
-    let mut stack = vec![dir];
-    while let Some(next) = stack.pop() {
-        let Ok(entries) = fs::read_dir(&next) else {
-            continue;
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                if path.file_name().and_then(|name| name.to_str()) == Some("live") {
-                    live = Some(path.clone());
-                }
-                stack.push(path);
-            }
-        }
-    }
-    let live = live.expect("the live capture directory exists while a command runs");
-    // `<pid>.<dispatch>.<index>`, and the dispatch is always `0` through the
-    // CLI — one `exec` per process. Derived here rather than read out of Batten's
-    // output, because printing it would break §6 byte-stability.
+    // DERIVED, NOT FOUND (CLOUD-2789): the repo-name segment is the one the
+    // engine derives from the directory it runs in — the case's own fixture
+    // ([`common::case_fixture`]), never the checkout (CLOUD-2904) — so the path
+    // is known before the engine has created any of it, which is what lets a
+    // case wait on its creation instead of searching for it.
+    let root =
+        batten::git::repo_root(common::case_fixture()).expect("the case's fixture is a repository");
+    let live = home
+        .join("data")
+        .join(env!("CARGO_PKG_NAME"))
+        .join(batten::state::derive_repo_name(&root).expect("derive the repo state segment"))
+        .join("captures")
+        .join("live");
     let handle = format!("{stream}@{pid}.0.{index}");
     (
         live.join(&handle),
@@ -366,70 +361,77 @@ fn spool_paths(home: &Path, stream: &str, pid: u32, index: usize) -> (PathBuf, P
     reason = "stays, and test-only: the point of the case is a REAL second process contending for the same OS advisory lock — an in-process reader would assert nothing about kernel-released locks"
 )]
 fn read_spool(lock: &Path, watermark: &Path, data: &Path, from: u64) -> String {
-    let deadline = Instant::now() + PATIENCE;
+    let out = Command::new("flock")
+        .args([
+            "-s",
+            lock.to_str().expect("utf-8"),
+            "sh",
+            "-c",
+            &format!(
+                "w=$(cat {}); dd if={} bs=1 skip={from} count=$((w - {from})) 2>/dev/null",
+                watermark.display(),
+                data.display()
+            ),
+        ])
+        .streamed_output()
+        .expect("read the spool");
+    // THE READER'S OWN FAILURE IS NAMED, never read as an empty spool: under a
+    // full suite a `flock`, `sh`, `cat` or `dd` that could not run printed
+    // nothing, and the case then reported a watermark it never got to read.
+    assert!(
+        out.status.success(),
+        "the locked reader did not run: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    String::from_utf8_lossy(&out.stdout).into_owned()
+}
+
+/// Block until `ready` answers, re-asked at every change the kernel reports
+/// in the deepest existing ancestor of `dir` — so the wait DESCENDS as the
+/// engine creates the directories on the way (CLOUD-2789). The watch is armed
+/// BEFORE each ask, so a change between an ask and the wait is never missed,
+/// and nothing here reads a clock: a condition that never comes hangs the case,
+/// and the mutation judge's per-case cut files that as the timeout it is.
+/// Linux only, as `flock(1)` already makes every caller.
+fn await_in<T>(dir: &Path, mut ready: impl FnMut() -> Option<T>) -> T {
+    use rustix::fs::inotify::{self, CreateFlags, WatchFlags};
+    let deepest = || {
+        dir.ancestors()
+            .find(|ancestor| ancestor.is_dir())
+            .expect("an existing ancestor")
+            .to_path_buf()
+    };
     loop {
-        let out = Command::new("flock")
-            .args([
-                "-s",
-                lock.to_str().expect("utf-8"),
-                "sh",
-                "-c",
-                &format!(
-                    "w=$(cat {}); dd if={} bs=1 skip={from} count=$((w - {from})) 2>/dev/null",
-                    watermark.display(),
-                    data.display()
-                ),
-            ])
-            .output()
-            .expect("read the spool");
-        let seen = String::from_utf8_lossy(&out.stdout).into_owned();
-        if !seen.is_empty() || Instant::now() >= deadline {
-            return seen;
+        let watch = inotify::init(CreateFlags::CLOEXEC).expect("an inotify instance");
+        let watched = deepest();
+        inotify::add_watch(
+            &watch,
+            &watched,
+            WatchFlags::CREATE
+                | WatchFlags::MOVED_TO
+                | WatchFlags::CLOSE_WRITE
+                | WatchFlags::MODIFY,
+        )
+        .expect("watch the directory");
+        // ARMED, THEN CHECKED AGAIN (CLOUD-2789): a directory the engine made
+        // below `watched` between choosing it and arming the watch raised its
+        // event before anything listened, and every later event lands in that
+        // deeper directory, which this watch never sees. Under load that gap
+        // was a hang. So a deeper ancestor now is watched afresh.
+        if deepest() != watched {
+            continue;
         }
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "the interval of a poll whose exit condition is the `flock`ed reader \
-                      returning bytes, bounded by `PATIENCE` — the `deadline` comparison one line \
-                      up is what ends it either way (CLOUD-1177)"
-        )]
-        std::thread::sleep(Duration::from_millis(20));
+        if let Some(found) = ready() {
+            return found;
+        }
+        let mut event = [0_u8; 4096];
+        let _ = rustix::io::read(&watch, &mut event);
     }
 }
 
-/// Block until `path` exists, or fail.
-fn await_path(path: &Path) {
-    let deadline = Instant::now() + PATIENCE;
-    while Instant::now() < deadline {
-        if path.exists() {
-            return;
-        }
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "the interval of a poll whose exit condition is `path.exists`, bounded by \
-                      `PATIENCE` — past that this panics rather than waiting longer (CLOUD-1177)"
-        )]
-        std::thread::sleep(Duration::from_millis(20));
-    }
-    panic!("{} never appeared", path.display());
-}
-
-/// Poll `probe` until it answers, bounded by [`PATIENCE`], or `None` once the
-/// patience is spent — so the CALLER asserts on the state it found, and no
-/// assertion reads the clock (CLOUD-2059).
-fn poll_until<T>(mut probe: impl FnMut() -> Option<T>) -> Option<T> {
-    let deadline = Instant::now() + PATIENCE;
-    while Instant::now() < deadline {
-        if let Some(found) = probe() {
-            return Some(found);
-        }
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "the interval of a poll whose exit condition is the caller's probe answering, \
-                      bounded by `PATIENCE` — past that this answers `None` (CLOUD-1177)"
-        )]
-        std::thread::sleep(Duration::from_millis(20));
-    }
-    None
+/// The length the watermark at `path` commits, once it is published.
+fn committed(path: &Path) -> Option<u64> {
+    fs::read_to_string(path).ok()?.trim().parse().ok()
 }
 
 /// A child that says `line`, records its own pid, and then holds its capture
@@ -440,13 +442,19 @@ fn live_child(name: &str, line: &str) -> (PathBuf, PathBuf) {
     let note = scratch(&format!("{name}-pid")).join("pid");
     let child = script(
         name,
-        &format!("echo {line}\necho $$ > {}\nexec sleep 300", note.display()),
+        // Held live by a builtin spin that ends with THIS TEST PROCESS
+        // (`kill -0` sends nothing), not by a `sleep` (CLOUD-2789).
+        &format!(
+            "echo {line}\necho $$ > {}\nwhile kill -0 {} 2>/dev/null; do :; done",
+            note.display(),
+            std::process::id()
+        ),
     );
     (child, note)
 }
 
-/// End the child [`live_child`] recorded, so the `sleep` it became does not
-/// outlive the case that killed its writer.
+/// End the child [`live_child`] recorded, so its spin does not outlive the
+/// case that killed its writer.
 #[expect(
     clippy::disallowed_types,
     reason = "stays, and test-only: the live child is a real process the case left running, and ending it is a signal to its pid"
@@ -486,13 +494,14 @@ fn a_second_process_reads_a_live_capture_and_never_passes_the_watermark() {
     // The live handle is derived from the pid and the command's index, both of
     // which this test knows because it spawned the process — printing it would
     // put a pid in Batten's output and break §6 byte-stability.
-    let (data, watermark, lock) = poll_until(|| {
-        std::panic::catch_unwind(|| spool_paths(&home, "stdout", pid, 0))
-            .ok()
-            .filter(|paths| paths.0.exists())
-    })
-    .expect("the spool never appeared");
-    await_path(&watermark);
+    let (data, watermark, lock) = spool_paths(&home, "stdout", pid, 0);
+    // THE EVENT: the engine publishing a watermark past zero, which it does
+    // once the child's line is in the spool.
+    let live = watermark
+        .parent()
+        .expect("the live directory")
+        .to_path_buf();
+    await_in(&live, || committed(&watermark).filter(|length| *length > 0));
 
     // A REAL SECOND PROCESS, holding the same OS advisory lock Batten takes.
     let read = |from: u64| read_spool(&lock, &watermark, &data, from);
@@ -572,12 +581,14 @@ fn a_killed_writer_leaves_a_reader_a_defined_answer_rather_than_a_hang() {
         .expect("spawn batten exec");
     let pid = batten.id();
 
-    let (data, watermark, lock) = poll_until(|| {
-        std::panic::catch_unwind(|| spool_paths(&home, "stdout", pid, 0))
-            .ok()
-            .filter(|paths| fs::read_to_string(&paths.1).is_ok_and(|text| text.trim() != "0"))
-    })
-    .expect("the spool never committed anything");
+    let (data, watermark, lock) = spool_paths(&home, "stdout", pid, 0);
+    // THE EVENT: a watermark past zero, the moment there is something durable
+    // to read after the kill.
+    let live = watermark
+        .parent()
+        .expect("the live directory")
+        .to_path_buf();
+    await_in(&live, || committed(&watermark).filter(|length| *length > 0));
 
     #[expect(
         clippy::disallowed_types,
@@ -609,7 +620,7 @@ fn a_killed_writer_leaves_a_reader_a_defined_answer_rather_than_a_hang() {
                 data.display()
             ),
         ])
-        .output()
+        .streamed_output()
         .expect("take the lock a dead writer held");
     assert!(
         taken.status.success(),

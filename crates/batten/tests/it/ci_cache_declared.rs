@@ -50,7 +50,8 @@ use crate::common;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use batten::rules::{self, Rule};
+use batten::config_model::Rule;
+use batten::rules;
 
 /// The row as `batten.toml` declares it, deserialized rather than
 /// struct-literalled: `Rule` carries `deny_unknown_fields`, so this goes through
@@ -70,7 +71,7 @@ fn row() -> Rule {
 
 /// A scratch tree carrying a manifest, some workflows and the committed module.
 fn tree(name: &str, manifest: &str, workflows: &[(&str, &str)]) -> PathBuf {
-    let root = common::scratch(&format!("ci-cache-declared-{name}"));
+    let root = common::scratch_repo(&format!("ci-cache-declared-{name}"));
     common::write(&root, "mise.toml", manifest);
     for (file, body) in workflows {
         common::write(&root, &format!(".github/workflows/{file}"), body);
@@ -199,7 +200,7 @@ fn this_repository_is_clean_today() {
     // reason `findings` states; the scratch name is this case's own, because
     // nextest runs each case in its own process and a shared name is a wipe
     // under another process's read.
-    let only = common::scratch("ci-cache-declared-vocabulary-real-tree");
+    let only = common::scratch_repo("ci-cache-declared-vocabulary-real-tree");
     install_module(&only);
     let found = findings_declared_by(&root, &only);
     assert!(
@@ -293,6 +294,30 @@ fn a_cargo_job_with_no_cache_step_is_refused() {
     assert!(
         !found.is_empty(),
         "a pull-request job forking cargo with no cache should be refused"
+    );
+}
+
+/// A workflow declaring its spend publishes what it builds, and a published
+/// build restores no shared cache (CLOUD-2903).
+#[test]
+fn a_workflow_that_declares_its_spend_is_not_asked_for_a_cache() {
+    let uncached = READER
+        .split_once("      - uses: Swatinem/rust-cache")
+        .expect("the fixture carries a cache step")
+        .0
+        .replace(
+            "jobs:",
+            "env:\n  CI_SPEND_AUTHORISED: \"publishes each head\"\njobs:",
+        );
+    let root = tree(
+        "spend-declared",
+        MANIFEST,
+        &[("warm.yml", WARM), ("pr.yml", &uncached)],
+    );
+    let found = findings(&root);
+    assert!(
+        found.is_empty(),
+        "a declared spend needs no cache: {found:?}"
     );
 }
 
@@ -621,7 +646,7 @@ fn an_unparsed_workflow_is_could_not_look() {
 
 #[test]
 fn a_tree_with_no_workflow_is_not_this_rows_business() {
-    let root = common::scratch("ci-cache-declared-absent");
+    let root = common::scratch_repo("ci-cache-declared-absent");
     common::write(&root, "mise.toml", MANIFEST);
     install_module(&root);
     let found = findings(&root);

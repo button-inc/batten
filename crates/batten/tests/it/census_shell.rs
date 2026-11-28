@@ -10,8 +10,11 @@
 //! this tier proves they agree about WHAT. Two
 //! readings of "a shell line" would make those claims able to disagree — a wave
 //! could read as progress to one and as growth to the other. So the census does
-//! not choose its own detection; it carries the ban's, and this tier proves the
-//! two count the same over one fixture carrying every shape either can see.
+//! not choose its own detection. Since CLOUD-2625 there is ONE detection,
+//! `crate::shell::logic` on the parser's AST, which the census counts with and
+//! hands the ban as `input.tree.shell`, so the two agree by construction; this
+//! tier still proves they count the same over one fixture carrying every shape
+//! either can see.
 //!
 //! **How a count is read out of a gate that only reports growth.** The ban fires
 //! `task write refused` exactly when the head's count exceeds the base's. So for a
@@ -61,14 +64,28 @@ fn config() -> String {
          exempt = [\"install.sh\"]\n\
          \n[[census.shell.manifest]]\n\
          path = \"mise.toml\"\n\
-         keys = [\"run\"]\n\
+         carrier = \"mise-task\"\n\
          unit = \"[tasks.\"\n"
     );
     text
 }
 
-/// A manifest whose one task carries `lines` plain body lines — the shape both
-/// readings trivially count one per line.
+/// A census-only configuration: `workflows` and one `mise-task` manifest.
+fn census_only(workflows: &str) -> String {
+    format!(
+        "version = 1\n\
+         \n[census.shell]\n\
+         workflows = [{workflows}]\n\
+         \n[[census.shell.manifest]]\n\
+         path = \"mise.toml\"\n\
+         carrier = \"mise-task\"\n\
+         unit = \"[tasks.\"\n"
+    )
+}
+
+/// A manifest whose one task carries `lines` plain body lines. Two or more are a
+/// multi-command body and count one per line; ONE is a single plain command and
+/// counts zero (CLOUD-2625).
 fn plain_manifest(lines: usize) -> String {
     let mut text = String::from("[tasks.plain]\nrun = '''\n");
     for i in 0..lines {
@@ -78,7 +95,8 @@ fn plain_manifest(lines: usize) -> String {
     text
 }
 
-/// A workflow whose one step carries `lines` plain block lines.
+/// A workflow whose one step carries `lines` plain block lines, counted as
+/// [`plain_manifest`]'s are.
 fn plain_workflow(lines: usize) -> String {
     let mut text = String::from("name: ci\njobs:\n  a:\n    steps:\n      - run: |\n");
     for i in 0..lines {
@@ -93,11 +111,13 @@ fn plain_workflow(lines: usize) -> String {
 /// Counted: a `'''` body with a comment and a blank inside it; a `"""` body; a
 /// one-liner with a pipe, one with a `VAR=` prefix and one with a `;`; an array's
 /// shell entry; a one-liner BEFORE any task header (a lone line, which the ban
-/// counts and attributes to no task).
+/// counts and attributes to no task); and one plain argv whose program runs an
+/// inline script, `perl -e`, reached through the interpreter table (CLOUD-2626).
 ///
-/// Not counted: a plain argv one-liner; a quoted keyword (the first word keeps
-/// its quote, so `"set -e"` is not a keyword to either reading); an array's plain
-/// entry; a body that closes on its own opening line; a task with no shell.
+/// Not counted: a plain argv one-liner; `set -e`, which is one plain command to
+/// the detector (CLOUD-2625); an array's plain entry; a body that closes on its
+/// own opening line; a task with no shell; and a glob inside shell quotes, which
+/// only a shell would expand and this one is told not to.
 const TRICKY_MANIFEST: &str = "\
 run = \"a | b\"
 
@@ -138,6 +158,12 @@ run = \"set -e\"
 
 [tasks.inline]
 run = '''echo closed'''
+
+[tasks.quoted-glob]
+run = \"echo 'a*b'\"
+
+[tasks.perl]
+run = \"perl -e 'x'\"
 ";
 
 /// Blocks by indentation with a comment and a blank inside, a folded block, a
@@ -238,17 +264,23 @@ fn total(document: &serde_json::Value, key: &str) -> usize {
 fn the_census_counts_the_fixture_as_the_shapes_say() {
     // The census's own reading, pinned first so the agreement cases below compare
     // against a number a reader can check by hand: the manifest carries
-    // 1 lone + 2 (body) + 2 (dquote) + 1 + 1 + 1 + 1 (array) = 9 shell lines, the
-    // workflow 2 + 2 + 1 = 5, and the shell files 1 + 3 + 2 = 6 code lines (a
-    // shebang is a comment), with `install.sh` apart.
+    // 1 lone + 2 (body) + 2 (dquote) + 1 + 1 + 1 + 1 (array) + 1 (perl) = 10
+    // shell lines, the workflow 2 + 2 + 1 = 5, and the shell files 1 + 3 + 2 = 6
+    // code lines (a shebang is a comment), with `install.sh` apart. Re-pinned on
+    // the AST detector (CLOUD-2625): the two bodies are multi-command, the
+    // folded block is two source lines, and `quoted-glob` counts 0 — its `*` is
+    // inside shell quotes. `perl` counts 1 through the interpreter table
+    // (CLOUD-2626): one plain argv, and an inline script. The `array` unit's
+    // 1 is the `mise-task` carrier's list form (CLOUD-2627): a mise `run` array
+    // is a list of shell strings, so `a && b` counts; read as argv it would not.
     let dir = repo("census-counted", &plain_manifest(1), &plain_workflow(1));
     tricky_head(&dir);
     let document = census(&dir);
-    assert_eq!(total(&document, "manifests"), 9, "{document}");
+    assert_eq!(total(&document, "manifests"), 10, "{document}");
     assert_eq!(total(&document, "steps"), 5, "{document}");
     assert_eq!(total(&document, "files"), 6, "{document}");
     assert_eq!(total(&document, "exempt"), 1, "{document}");
-    assert_eq!(total(&document, "total"), 20, "{document}");
+    assert_eq!(total(&document, "total"), 21, "{document}");
     let exempt: Vec<&str> = document["exempt"]
         .as_array()
         .unwrap()
@@ -285,10 +317,10 @@ fn a_linked_worktree_is_measured_and_not_the_main_checkout_beside_it() {
     );
     tricky_head(&linked);
     let measured = census(&linked);
-    assert_eq!(total(&measured, "manifests"), 9, "{measured}");
+    assert_eq!(total(&measured, "manifests"), 10, "{measured}");
     assert_ne!(
         total(&base, "manifests"),
-        9,
+        10,
         "the main checkout still carries the base manifest, so the two must differ: {base}"
     );
     assert_eq!(
@@ -300,24 +332,24 @@ fn a_linked_worktree_is_measured_and_not_the_main_checkout_beside_it() {
 
 #[test]
 fn the_ban_counts_the_manifest_exactly_as_the_census_does() {
-    // Equality through the gate's own predicate — see the module header. Nine is
+    // Equality through the gate's own predicate — see the module header. Ten is
     // the census's count, pinned by the case above.
     let at = repo(
         "census-agree-manifest-at",
-        &plain_manifest(9),
+        &plain_manifest(10),
         &plain_workflow(5),
     );
     tricky_head(&at);
     let (_, found) = ban(&at);
     assert!(
         !found.contains(&("mise.toml".to_owned(), None)),
-        "a base of 9 plain lines is not exceeded, so the ban counts the head at 9 or fewer: \
+        "a base of 10 plain lines is not exceeded, so the ban counts the head at 10 or fewer: \
          {found:?}"
     );
 
     let under = repo(
         "census-agree-manifest-under",
-        &plain_manifest(8),
+        &plain_manifest(9),
         &plain_workflow(5),
     );
     tricky_head(&under);
@@ -325,7 +357,7 @@ fn the_ban_counts_the_manifest_exactly_as_the_census_does() {
     assert_eq!(code, Some(2), "{found:?}");
     assert!(
         found.contains(&("mise.toml".to_owned(), None)),
-        "a base of 8 is exceeded, so the ban counts the head at 9 or more: {found:?}"
+        "a base of 9 is exceeded, so the ban counts the head at 10 or more: {found:?}"
     );
 }
 
@@ -387,7 +419,7 @@ fn the_tasks_the_ban_says_gained_shell_are_the_units_the_census_names() {
         .collect();
     assert_eq!(
         names,
-        BTreeSet::from(["array", "body", "dquote", "env", "pipe", "semi"])
+        BTreeSet::from(["array", "body", "dquote", "env", "perl", "pipe", "semi"])
     );
     assert!(
         document["manifests"]
@@ -444,7 +476,7 @@ fn the_pointer_lines_carry_no_body() {
     assert!(text.contains("scripts/deploy.sh file 1\n"), "{text}");
     assert!(text.contains("install.sh exempt 1\n"), "{text}");
     assert!(
-        text.ends_with("total 20 manifests=9 steps=5 files=6 exempt=1\n"),
+        text.ends_with("total 21 manifests=10 steps=5 files=6 exempt=1\n"),
         "{text}"
     );
 }
@@ -472,6 +504,99 @@ fn an_inert_manifest_row_is_refused_at_load() {
     assert_eq!(run(&dir, &["census", "shell"]).status.code(), Some(1));
 }
 
+/// CLOUD-2627: a row names its command fields by `carrier` or by `keys`,
+/// never both and never neither.
+#[test]
+fn a_manifest_row_naming_both_or_neither_of_carrier_and_keys_is_refused_at_load() {
+    for (name, row) in [
+        ("census-both", "carrier = \"mise-task\"\nkeys = [\"run\"]\n"),
+        ("census-neither", "unit = \"[tasks.\"\n"),
+    ] {
+        let dir = Fixture::new(name)
+            .config(&format!(
+                "version = 1\n\n[[census.shell.manifest]]\npath = \"m.toml\"\n{row}"
+            ))
+            .file("m.toml", "[tasks.a]\nrun = \"a | b\"\n")
+            .git()
+            .base_commit()
+            .build();
+        let output = run(&dir, &["census", "shell", "-J"]);
+        assert_eq!(output.status.code(), Some(1), "{name}");
+        assert!(
+            output.stdout.is_empty(),
+            "{name}: no document for a refused row"
+        );
+    }
+}
+
+/// A composite action's `run:` steps are `gha-run` steps: counted where a
+/// workflow glob names the action's file, and not where none does.
+#[test]
+fn a_composite_actions_steps_are_counted_only_where_declared() {
+    const ACTION: &str = "\
+name: x
+runs:
+  using: composite
+  steps:
+    - name: install
+      shell: bash
+      run: |
+        curl -fsSL https://example.invalid/x | tar -x
+        echo done
+    - name: plain
+      shell: bash
+      run: cargo build
+";
+    for (name, workflows, steps) in [
+        ("census-action-declared", "\"action.yml\"", 2),
+        ("census-action-undeclared", "", 0),
+    ] {
+        let dir = Fixture::new(name)
+            .config(&census_only(workflows))
+            .file("mise.toml", "[tasks.a]\nrun = \"cargo build\"\n")
+            .file("action.yml", ACTION)
+            .git()
+            .base_commit()
+            .build();
+        let document = census(&dir);
+        assert_eq!(total(&document, "steps"), steps, "{name}: {document}");
+        let lines: Vec<u64> = document["steps"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|entry| entry["path"] == "action.yml")
+            .map(|entry| entry["line"].as_u64().unwrap())
+            .collect();
+        let expected: &[u64] = if steps > 0 { &[7] } else { &[] };
+        assert_eq!(lines, expected, "{name}: {document}");
+    }
+}
+
+/// A mise task's own `shell =` changes which shell runs `run`, never whether
+/// one does: a one-word `run` under it is still the detector's to judge.
+#[test]
+fn a_mise_tasks_shell_override_is_still_read_through_the_detector() {
+    let dir = Fixture::new("census-mise-shell")
+        .config(&census_only(""))
+        .file(
+            "mise.toml",
+            "[tasks.word]\nshell = \"bash -c\"\nrun = \"$CMD\"\n\
+             \n[tasks.plain]\nshell = \"bash -c\"\nrun = \"cargo\"\n",
+        )
+        .git()
+        .base_commit()
+        .build();
+    let document = census(&dir);
+    assert_eq!(total(&document, "manifests"), 1, "{document}");
+    let units: Vec<&str> = document["manifests"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|entry| entry["unit"].as_str())
+        .collect();
+    assert_eq!(units, ["word"], "{document}");
+}
+
 #[test]
 fn the_census_is_byte_stable() {
     let dir = repo("census-stable", &plain_manifest(1), &plain_workflow(1));
@@ -488,8 +613,10 @@ fn the_census_is_byte_stable() {
 /// itself, and that every declared home is a line source.
 #[test]
 fn this_repositorys_ban_reads_the_census_declaration() {
-    let authority: toml::Value =
-        toml::from_str(&std::fs::read_to_string(common::at_root("batten.toml")).unwrap()).unwrap();
+    let authority: toml::Value = toml::from_str(
+        &std::fs::read_to_string(common::committed_config_file("census_shell")).unwrap(),
+    )
+    .unwrap();
     let row = authority["rule"]
         .as_array()
         .unwrap()
@@ -513,7 +640,7 @@ fn this_repositorys_ban_reads_the_census_declaration() {
 /// exempt file it names is one the ban exempts.
 #[test]
 fn this_repositorys_own_census_answers() {
-    let output = common::run(&common::at_root("."), &["census", "shell", "-J"]);
+    let output = common::run(common::committed_repo(), &["census", "shell", "-J"]);
     assert_eq!(
         output.status.code(),
         Some(0),
@@ -526,7 +653,28 @@ fn this_repositorys_own_census_answers() {
             .as_array()
             .unwrap()
             .iter()
-            .any(|entry| entry["path"] == "setup.sh"),
+            .any(|entry| entry["path"] == ".claude/hooks/git-hook.sh"),
         "{document}"
     );
+}
+
+/// A generated row's `check` is `<test file>::<test name>` with BOTH halves
+/// non-empty AND free of whitespace. Fails by: a half passing on one of the
+/// two conditions alone.
+#[test]
+fn a_generated_check_needs_both_halves_bare_and_present() {
+    use batten::config_model::check_parts;
+    assert_eq!(check_parts("it/a.rs::holds"), Some(("it/a.rs", "holds")));
+    assert_eq!(
+        check_parts("it/a b.rs::holds"),
+        None,
+        "whitespace in the file"
+    );
+    assert_eq!(
+        check_parts("it/a.rs::holds it"),
+        None,
+        "whitespace in the name"
+    );
+    assert_eq!(check_parts("::holds"), None, "an empty file");
+    assert_eq!(check_parts("it/a.rs::"), None, "an empty name");
 }

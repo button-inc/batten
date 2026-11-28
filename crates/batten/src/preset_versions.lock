@@ -1,0 +1,53 @@
+# Each vendored preset's version, pinned to the digest of what it decides
+# (CLOUD-2822): `<name> <version> <sha256 of its modules, verdicts and patterns>`.
+#
+# `every_manifest_matches_its_recorded_digest` fails when a preset's sources
+# change under an unchanged version, or when a version has no row here. Bump the
+# manifest's `version` (major: refuses something it admitted; minor: admits more
+# or a verdict gains a route; patch: prose only) and add its row. Rows for older
+# versions stay as history.
+check-verdict 0.0.1 cecee79994509c9fc5a87392e1321e21a3aaed6e231cc949ca122e88eab4aaf2
+check-verdict 0.0.2 5d53c0e0d45f41d36474e319f6bc406732c8c7c3b3428d91ce000aff6e92b9fd
+ci-hygiene 0.0.1 8fdef6e45ad173ed01e6c4b91d5fab44deef93fd9cebec9da986874cb077db16
+ci-hygiene 0.1.0 22034d16ce97e1e8d5dc5639913112ae8d8a309498bb36dbf59e9ab001832da8
+ci-hygiene 0.1.1 8403cd3e0df6f00673726f05c7e3e246dbae4cc74ecedbe25ee02b98d5571320
+ci-hygiene 0.1.2 486be84ba3f45c69e95e3d97a05e4d46dd28f979139055994c24d6610c762704
+ci-signal 0.0.1 e419a0ba9e1ba64aae1d88a75e462d8dcb09c57543878f59a1e0c861e877eefe
+ci-signal 0.0.2 5eab6c324c73d844ac6c050f6eba74f8bd92332cf3795a2d2a2663fb0e67cded
+claude-code-cloud 0.0.3 9e95144e70fe185533cde4aa34fd62b4eb6d06f198e1585919393cabdb48ba7a
+claude-code-cloud 0.0.4 2c8f21bc4c65556ea33b7ac58eafe42b781003b47e00e3bf7a229094fd2a2022
+claude-code-cloud 0.1.0 5f767beba49facde9086839d7957f286d443264f2f6845e9004905c1b6a02736
+claude-code-cloud 1.0.0 e6c7091663fe34801fa874d6d5a60faec94ea5f59da5f654b949212608df0ce9
+claude-code-dispatch 0.0.1 146bd079838eed614f75435eb02f0252229259e9253cebe52cbe290a20b98aef
+claude-code-state 0.0.1 5852f1d7a76dd93f915616339c1264875f61c1a577c3b1c4e4fdcab052597df9
+claude-code-plan 0.0.1 ff3f9452f4c7ee3c03657ba8b1b837dac34b1795f4c1fc3f32b6fae79a305404
+commit-hygiene 0.0.2 8adaf9bcd8225951344e9f48d233bb6d23196e7e77bef373f63a15494b1d09b2
+engine-hygiene 0.0.1 115764b4d4ea1b3de17d2551b10dbafad9b8efed404ac580260ec4561e175e54
+git 0.0.1 6448daf7506f6eca280515ec7aa0d1769c20c2708b1755995213f38c364992b0
+git 0.0.2 9d54cf87b9843f56ccc83ed14cd74e93bc6be56fbf3c941c35ea1b5bcafb032e
+git 0.0.3 91e0ba4ac44150fe89a15f53bc43e7283d18c0f70fd47ecff98c919cffd58650
+landing-loop 0.0.1 f1aba17b182d0c738331885a82fae2b46203137c75ab6c2f8acd5447015937fa
+landing-loop 0.0.2 99636ab5be4b8811556d13940ee17e37f0caf20af7514b32eea8b542e15f8eb2
+lease-asserted 0.0.1 e2a5f7b4a2962d576b82ff1718d4ce7a6389d18c30abf3b2d760ed998664b3d0
+linear-history 0.0.2 7d131d34d4dab53bf782afe60c037beec2381696a6e98794c6f0a66864868ea8
+mise 0.0.2 213b02cc137be64291b6c12711097aeafcc18a3ef6aee3f5e99966c08b2b734c
+mise 0.0.3 774d9fd12d0ec63023e3f8f77281a8c5f9476e9ad46b82cdf55035673e1c5275
+pinned-toolchain 0.0.1 274d3593e07525073b61290da4eaa73cd1f3546187e6d8dfc6446b1fc8ef2618
+pinned-toolchain 0.0.2 5d5241f4934694510bc2e1ebcac7abaff83bc6845e516f80545f8d3a34b5d96d
+red-head 0.0.1 d3dd4972e87175ef52ac7b2e5d01f1a4c905adb413529bcec7878477ecf1dce6
+red-head 0.1.0 f6a581fffe1c6913ac983ffd2bda921d7f63191ce2a70570600bb6841f474f1e
+red-head 0.1.1 488842d8cb3a92ade2f6dedb01e9dcda8fecf54de386401d6a8ce6d227dd09ef
+rego-hygiene 0.0.1 98b2846507238e425fea2193d4d7699751e8654c3f2935fcb9f550d7fcb02b37
+release-hygiene 0.0.1 3169f941f872ddd514fa9360b055fb55ed31f60d7eed127a50d3939ca97bd3aa
+release-hygiene 0.0.2 0b8b83d27783142fa037a7602ab5cad7b09328b6014304c50b80b3450188387e
+rust 0.0.1 5ad9c6f0d032486e3694142caed51a709d40e1e2b5ca2ce153844d779086472e
+rust 0.0.2 74d0a4958f71f2c736efd01983d92af1ce89304699d7f8c8f195120045304394
+rust-quality 0.0.1 8983ad551e281f0493d535a4d052e3467a4a06bb73742beb4d5976716307eea4
+shell-hygiene 0.0.3 469667231075a3aad5c504b9f33209305eeacfe336fd5aabee0132e67bf01458
+shell-hygiene 0.0.4 e7347e8ba304fcf41685207a8bd02be75a25daf35f5dff39a4971556a24b6f0c
+supply-chain 0.0.1 ebbe8afe0afb356c537dc596a23d0f9ca5aa40f6bd29611158d937ef28e276b4
+supply-chain 0.0.2 e022914b05203c9eca0b8ba32271c09652cb0c63fab368de84c2b41a7115f927
+supply-chain 0.0.3 abb7afd437474b271f424bf873c003811cef8d3d8e0ff88853edb175e8c9869a
+tracker-hygiene 0.0.1 60ab512abb176873f020d5b966581e77135c10a26db4f40d6857c3ebb5562d9b
+tracker-hygiene 0.0.2 e05fcee847000d07bba0ed597d86024d03b384cf3e69a1d123461b0ec2eb12c5
+trunk-based 0.0.1 9d246085f95b0bb751726ec427ff3e5bad25d50cc24cfc24c2a7ac6afc908fc8

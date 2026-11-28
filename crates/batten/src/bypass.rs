@@ -346,6 +346,7 @@ pub fn no_fix_reason() -> String {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+    #[cfg(test)]
     use crate::hook::RecordShape;
     use crate::transcript::parse;
 

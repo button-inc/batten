@@ -18,7 +18,7 @@ use crate::common;
 use std::path::{Path, PathBuf};
 use std::process::Output;
 
-use common::{batten, git_in, scratch, stderr, stdout, write};
+use common::{batten, git_in, run_with_stdin, scratch, stderr, stdout, write};
 
 /// A convention narrower than this repository's, so the cases prove the engine
 /// reads the config rather than agreeing with it by coincidence.
@@ -53,7 +53,7 @@ fn check_range(dir: &Path, base: &str, head: &str) -> Output {
     batten()
         .args(["commit", "check", &format!("{base}..{head}")])
         .current_dir(dir)
-        .output()
+        .streamed_output()
         .expect("run batten")
 }
 
@@ -62,7 +62,7 @@ fn check_message(dir: &Path, body: &str) -> Output {
     batten()
         .args(["commit", "check", "--message", "msg"])
         .current_dir(dir)
-        .output()
+        .streamed_output()
         .expect("run batten")
 }
 
@@ -255,7 +255,7 @@ fn a_malformed_range_is_one() {
     let out = batten()
         .args(["commit", "check", "not-a-range"])
         .current_dir(&dir)
-        .output()
+        .streamed_output()
         .expect("run batten");
     assert_eq!(out.status.code(), Some(1));
 }
@@ -268,7 +268,7 @@ fn neither_mode_is_one_rather_than_a_vacuous_pass() {
     let out = batten()
         .args(["commit", "check"])
         .current_dir(&dir)
-        .output()
+        .streamed_output()
         .expect("run batten");
     assert_eq!(out.status.code(), Some(1));
 }
@@ -280,7 +280,7 @@ fn both_modes_at_once_is_one() {
     let out = batten()
         .args(["commit", "check", "HEAD..HEAD", "--message", "msg"])
         .current_dir(&dir)
-        .output()
+        .streamed_output()
         .expect("run batten");
     assert_eq!(out.status.code(), Some(1));
 }
@@ -291,7 +291,7 @@ fn an_unreadable_message_file_is_one() {
     let out = batten()
         .args(["commit", "check", "--message", "does-not-exist"])
         .current_dir(&dir)
-        .output()
+        .streamed_output()
         .expect("run batten");
     assert_eq!(out.status.code(), Some(1));
 }
@@ -345,7 +345,7 @@ fn json_is_emitted_for_a_clean_run_too() {
     let out = batten()
         .args(["commit", "check", "--json", &format!("{base}..{last}")])
         .current_dir(&dir)
-        .output()
+        .streamed_output()
         .expect("run batten");
     assert_eq!(out.status.code(), Some(0));
     assert_eq!(stdout(&out).trim(), "[]");
@@ -359,11 +359,101 @@ fn json_carries_the_pointer_and_no_payload() {
     let out = batten()
         .args(["commit", "check", "--json", &format!("{base}..{last}")])
         .current_dir(&dir)
-        .output()
+        .streamed_output()
         .expect("run batten");
     assert_eq!(out.status.code(), Some(2));
     let rendered = stdout(&out);
     assert!(rendered.contains("subject"));
     assert!(rendered.contains(&short(&last)));
     assert!(!rendered.contains("UNIQUEMARKER"));
+}
+
+/// CLOUD-2683: the mediated call, judged before the commit exists. A narrow
+/// `feat`-only convention, so a conforming subject is unmistakable.
+const FEAT_ONLY: &str = "version = 1\n\n[commit]\nsubject_pattern = '^feat: .+'\n";
+
+/// `command` adjudicated as Claude Code sees it, from `dir`.
+fn mediated(dir: &Path, command: &str) -> String {
+    let payload = serde_json::json!({
+        "hook_event_name": "PreToolUse",
+        "session_id": common::session_id("s1"),
+        "tool_name": "Bash",
+        "cwd": dir,
+        "tool_input": {"command": command},
+    })
+    .to_string();
+    let out = run_with_stdin(dir, &["adjudicate", "--harness", "claude-code"], &payload);
+    format!(
+        "exit {:?}\n{}\n{}",
+        out.status.code(),
+        stdout(&out),
+        stderr(&out)
+    )
+}
+
+fn refused(dir: &Path, command: &str) -> bool {
+    mediated(dir, command).contains("\"deny\"")
+}
+
+/// The gate refuses a subject the pattern refuses, under the class the range
+/// check uses, and never echoes the subject.
+#[test]
+fn a_mediated_commit_whose_subject_breaks_the_pattern_is_refused() {
+    let dir = fixture_with("subject-gate-refused", FEAT_ONLY);
+    let out = mediated(&dir, "git commit -m \"bad subject\"");
+    assert!(out.contains("\"deny\""), "{out}");
+    assert!(out.contains("commit spelling wrong"), "{out}");
+    assert!(
+        !out.contains("bad subject"),
+        "the subject is never carried\n{out}"
+    );
+}
+
+/// Every spelling git reads a message from is read.
+#[test]
+fn every_message_spelling_is_read() {
+    let dir = fixture_with("subject-gate-spellings", FEAT_ONLY);
+    write(&dir, "msg", "bad\n\nbody\n");
+    write(&dir, "sub/msg", "bad\n");
+    for command in [
+        "git commit -mbad",
+        "git commit --message=bad",
+        "git commit --message bad",
+        "git commit -F msg",
+        "git -C sub commit -F msg",
+        "git commit -F - <<'EOF'\nbad\nEOF",
+        "git commit -F - <<< bad",
+        "git commit -m \"$(cat <<'EOF'\nbad\nEOF\n)\"",
+        "git commit -m \"$(cat <<EOF\nbad\nEOF\n)\"",
+    ] {
+        assert!(
+            refused(&dir, command),
+            "`{command}` must be refused\n{}",
+            mediated(&dir, command)
+        );
+    }
+}
+
+/// Could-not-look allows: a conforming subject, no message at all, an
+/// expansion in the first line, an unreadable file, and a repository with no
+/// `[commit]` table.
+#[test]
+fn an_unreadable_or_conforming_message_is_not_refused() {
+    let dir = fixture_with("subject-gate-allowed", FEAT_ONLY);
+    for command in [
+        "git commit -m \"feat: x\"",
+        "git commit --amend --no-edit",
+        "git commit -m \"$X\"",
+        "git commit -m \"$(cat <<EOF\n$X bad\nEOF\n)\"",
+        "git commit -F missing",
+        "git commit",
+    ] {
+        assert!(
+            !refused(&dir, command),
+            "`{command}` must be allowed\n{}",
+            mediated(&dir, command)
+        );
+    }
+    let bare = fixture_with("subject-gate-no-table", "version = 1\n");
+    assert!(!refused(&bare, "git commit -m bad"));
 }

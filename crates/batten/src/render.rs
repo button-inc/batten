@@ -4,7 +4,7 @@
 //! of the one spec, "so the shipped binary and the generated docs can never
 //! drift." [`crate::spec`] emits the machine reading of that surface and
 //! `clap_complete` emits the shell reading; this module emits the two human
-//! readings. All four walk the same [`crate::surface::SURFACE`]-built
+//! readings. All four walk the same [`crate::surface_table::SURFACE`]-built
 //! [`clap::Command`] tree, so none of them can describe a verb the binary does
 //! not have.
 //!
@@ -59,7 +59,7 @@ pub fn man(root: &Command, path: Option<&str>) -> Result<String> {
         .display_name(title)
         .bin_name(qualified(root.get_name(), path))
         // Reset, not merely "never set". The ROOT node carries a version —
-        // `surface::command()` sets it from `CARGO_PKG_VERSION` so `--version`
+        // `surface::command()` sets it from `config::VERSION` so `--version`
         // works — and a clone of it inherits one, so the root page grew a
         // VERSION section while every subcommand page had none. An asymmetry
         // that only bites one page out of 38 is exactly the kind a smoke test
@@ -222,8 +222,10 @@ fn flag_table(out: &mut String, node: &CommandSpec) {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+    #[cfg(test)]
     use crate::spec;
-    use crate::surface::{self, SURFACE};
+    use crate::surface;
+    use crate::surface_table::SURFACE;
 
     #[test]
     fn every_declared_path_renders_a_non_empty_page() {
@@ -287,6 +289,12 @@ mod tests {
             assert!(
                 !page.contains(env!("CARGO_PKG_VERSION")),
                 "{path}'s page carries the crate version, so a bump alone drifts it"
+            );
+            // The build identity moves with every commit (CLOUD-2903), so a page
+            // carrying it would drift on every one.
+            assert!(
+                !page.contains(crate::config::VERSION),
+                "{path}'s page carries the build identity, so every commit drifts it"
             );
             assert!(
                 !page.contains(".SH VERSION"),

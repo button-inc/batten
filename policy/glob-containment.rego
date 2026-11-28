@@ -69,11 +69,11 @@ hooks_path := "hk.pkl"
 step_header := "  [\"batten-check\"]"
 
 config_lines := lines if {
-	lines := input.tree.lines[config_path]
+	lines = input.tree.lines[config_path]
 }
 
 hooks_lines := lines if {
-	lines := input.tree.lines[hooks_path]
+	lines = input.tree.lines[hooks_path]
 }
 
 # --- which table a config line sits in ---------------------------------------
@@ -234,7 +234,7 @@ covered contains entry if {
 	j <= glob_end
 	not comment_line(line)
 	some quoted in regex.find_n(data.batten.patterns["md-quoted-span"], code_of(line), -1)
-	entry := unquoted(quoted)
+	entry = unquoted(quoted)
 	entry != ""
 }
 

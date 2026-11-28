@@ -1,7 +1,7 @@
 //! `[tasks.finding-sink-check]` — a turn that cites `path:line` evidence and
 //! gives it no OPEN row stranded a finding (CLOUD-252, CLOUD-475, CLOUD-775) —
 //! over the compiled binary: `batten record decide turn-writes` reads the turn
-//! (`crates/batten/src/turn.rs`) and `policy/finding-sink.rego` decides
+//! (`crates/batten-base/src/turn.rs`) and `policy/finding-sink.rego` decides
 //! (CLOUD-843).
 //!
 //! Every case runs the COMMITTED task's argv (read out of `mise.toml`) against
@@ -15,34 +15,34 @@
 // ported: mise-tasks/finding-sink-check.sh subject:mise.toml crates/batten/tests/it/finding_sink.rs
 // ported: tests/finding-sink-check.bats subject:mise.toml crates/batten/tests/it/finding_sink.rs
 // carried: "[tasks.finding-sink-check] body" policy/finding-sink.rego crates/batten/tests/it/finding_sink.rs
-// carried: "[tasks.finding-sink-check] body, the reading" crates/batten/src/turn.rs kind:mechanism crates/batten/tests/it/finding_sink.rs
+// carried: "[tasks.finding-sink-check] body, the reading" crates/batten-base/src/turn.rs kind:mechanism crates/batten/tests/it/finding_sink.rs
 // carried: "THE STRANDED FINDING: path:line evidence with no durable write is reported" policy/finding-sink.rego
 // carried: "the same turn with a tracker write is clean" policy/finding-sink.rego
-// carried: "prose with no path:line is clean — ordinary conversation is not noise" crates/batten/src/turn.rs kind:mechanism
+// carried: "prose with no path:line is clean — ordinary conversation is not noise" crates/batten-base/src/turn.rs kind:mechanism
 // carried: "a durable write counts under the UUID prefix, not only the readable alias" policy/finding-sink.rego
 // carried: "CLOUD-475: a COMMENT alone is not a home — recorded is not scheduled" policy/finding-sink.rego
 // carried: "CLOUD-475: comment PLUS a new open row is a home — the CLOUD-473 shape" policy/finding-sink.rego
 // carried: "CLOUD-475: save_issue WITH an id is an annotation, not a filing" policy/finding-sink.rego
 // carried: "a memory write counts as durable too, not only the tracker" policy/finding-sink.rego
 // carried: "a read-only tool call is not a durable write" policy/finding-sink.rego
-// carried: "a subagent's write is not credited to the orchestrator's turn" crates/batten/src/turn.rs kind:mechanism
-// carried: "a subagent's prose is not judged as the orchestrator's" crates/batten/src/turn.rs kind:mechanism
-// carried: "a tool_result does not open a new turn" crates/batten/src/turn.rs kind:mechanism
-// carried: "POINTER, NEVER PAYLOAD: the report carries no byte of the prose" crates/batten/src/turn.rs kind:mechanism
-// carried: "ONLY THE LAST TURN is judged — an earlier stranding is not re-reported" crates/batten/src/turn.rs kind:mechanism
-// carried: "a stranding in the last turn fires even when earlier turns were clean" crates/batten/src/turn.rs kind:mechanism
+// carried: "a subagent's write is not credited to the orchestrator's turn" crates/batten-base/src/turn.rs kind:mechanism
+// carried: "a subagent's prose is not judged as the orchestrator's" crates/batten-base/src/turn.rs kind:mechanism
+// carried: "a tool_result does not open a new turn" crates/batten-base/src/turn.rs kind:mechanism
+// carried: "POINTER, NEVER PAYLOAD: the report carries no byte of the prose" crates/batten-base/src/turn.rs kind:mechanism
+// carried: "ONLY THE LAST TURN is judged — an earlier stranding is not re-reported" crates/batten-base/src/turn.rs kind:mechanism
+// carried: "a stranding in the last turn fires even when earlier turns were clean" crates/batten-base/src/turn.rs kind:mechanism
 // carried: "a path:line-looking string that is not a source file does not fire" batten.toml
 // carried: "ANTI-VACUITY: a transcript with no turns exits 0 and says it judged nothing" crates/batten/src/lib.rs kind:verb
 // carried: "ANTI-VACUITY: the suite's own fired case is reachable" policy/finding-sink.rego
 // carried: "CLOUD-775: an annotation on a TERMINAL row still reports — CLOUD-475 survives" policy/finding-sink.rego
 // carried: "CLOUD-775: an amendment to a NON-TERMINAL row is a home" policy/finding-sink.rego
-// carried: "CLOUD-775: a row this clone has no recorded read of is not a home" crates/batten/src/turn.rs kind:mechanism
+// carried: "CLOUD-775: a row this clone has no recorded read of is not a home" crates/batten-base/src/turn.rs kind:mechanism
 // carried: "CLOUD-775: a receipt that recorded no column is not a home either" policy/finding-sink.rego
 // carried: "CLOUD-775: an unrecognised column is not a home" policy/finding-sink.rego
 // carried: "CLOUD-775: a comment on an OPEN row is a home, named by issueId" policy/finding-sink.rego
 // carried: "CLOUD-775: every open column the board carries is a home" policy/finding-sink.rego
-// carried: "CLOUD-775: an id that is not an issue key is not a home" crates/batten/src/turn.rs kind:mechanism
-// carried: "the mediated route files through batten mcp call, and a mediated read is not a home" crates/batten/src/turn.rs kind:mechanism
+// carried: "CLOUD-775: an id that is not an issue key is not a home" crates/batten-base/src/turn.rs kind:mechanism
+// carried: "the mediated route files through batten mcp call, and a mediated read is not a home" crates/batten-base/src/turn.rs kind:mechanism
 // carried: "#1052: a row's column is known only from a read receipt, which a listing never mints" batten.toml
 // changed: "a firing exits 1 with turn:<n> finding-without-durable-write" crates/batten/src/lib.rs a firing is `check`'s exit 2 with the pointer `turn:<n>` and the rule `turn file missing`: one exit table, no per-verb exception, and the stop handler's door says an exit 2 exactly as it said an exit 1
 // changed: "the refusal names the practice: OPEN row" batten.toml the practice is the verdict's gloss and class, which `policy explain turn file missing` prints, rather than a sentence the task wrote beside the pointer
@@ -56,6 +56,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
+use batten::capture::StreamedChild as _;
 
 use std::fmt::Write as _;
 use std::io::{BufRead as _, BufReader, Write as _};
@@ -69,9 +70,11 @@ const CITED: &str = "The ordering key is wrong at mise-tasks/checks-green.sh:164
 fn committed_argv() -> Vec<String> {
     let text = std::fs::read_to_string(common::at_root("mise.toml")).expect("the manifest");
     let parsed: toml::Value = toml::from_str(&text).expect("mise.toml parses");
-    let run = parsed["tasks"]["finding-sink-check"]["run"]
-        .as_str()
-        .expect("the task is one argv string");
+    let run = common::rendered(
+        parsed["tasks"]["finding-sink-check"]["run"]
+            .as_str()
+            .expect("the task is one argv string"),
+    );
     let (_, argv) = run
         .split_once(" -- ")
         .expect("the task runs the engine with `cargo run ... --`");
@@ -331,6 +334,38 @@ fn ordinary_prose_and_non_source_colons_do_not_fire() {
     }
 }
 
+/// Fails by: `record decide` deciding with the whole ruleset rather than the
+/// rules it names, so a rule that never reads the turn refuses a clean one
+/// (CLOUD-2789).
+#[test]
+fn the_decision_is_the_named_rules_alone() {
+    let turns = Turns::new("named-rules");
+    let mut config = std::fs::read_to_string(turns.repo.join("batten.toml")).expect("the config");
+    config.push_str(
+        "\n[[rule]]\nid = \"no-todo\"\nkind = \"forbid\"\nseverity = \"deny\"\n\
+         glob = \"**/*.rs\"\npattern = \"TODO\"\nno_fix_reason = \"delete the marker\"\n",
+    );
+    common::write(&turns.repo, "batten.toml", &config);
+    common::write(&turns.repo, "src/a.rs", "fn main() {}\n// TODO fix me\n");
+    common::git_in(&turns.repo, &["add", "-A"]);
+    common::git_in(
+        &turns.repo,
+        &["commit", "-qm", "a rule that refuses the tree"],
+    );
+    let bystander = common::run(&turns.repo, &["check", "--rule", "no-todo"]);
+    assert_eq!(
+        bystander.status.code(),
+        Some(2),
+        "the premise: the other rule refuses"
+    );
+    clean(
+        &turns
+            .prompt()
+            .say("Rebased onto main and pushed. The gate is green.")
+            .check(),
+    );
+}
+
 #[test]
 fn a_comment_alone_is_not_a_home() {
     let turns = Turns::new("comment")
@@ -342,7 +377,7 @@ fn a_comment_alone_is_not_a_home() {
     // from a READ receipt, which a listing never mints. The committed verdict
     // row carries both, and `policy explain` is where a reader meets them.
     let explained = common::run(
-        &common::at_root("."),
+        common::committed_repo(),
         &["policy", "explain", "turn file missing"],
     );
     let said = format!(
@@ -377,7 +412,7 @@ fn a_comment_alone_is_not_a_home() {
 fn a_subagents_write_is_not_credited_to_the_turn() {
     let turns = Turns::new("sub-write")
         .prompt()
-        .say("Broken at crates/batten/src/git.rs:100.")
+        .say("Broken at crates/batten-core/src/git.rs:100.")
         .sub_tool("mcp__Linear__save_issue");
     fired(&turns.check(), 1);
     // Nor is its prose judged as the orchestrator's.
@@ -613,7 +648,8 @@ fn a_concurrent_decide_waits_for_the_one_holding_the_record() {
         .write(true)
         .open(turns.repo.join(".git/batten-record-decide.lock"))
         .expect("the decide lock");
-    fs4::FileExt::lock(&lock).expect("hold it, as a concurrent decide would");
+    lock.try_lock()
+        .expect("hold it, as a concurrent decide would; free in a fresh fixture");
     let mut child = common::batten()
         .args(committed_argv())
         .current_dir(&turns.repo)
@@ -638,7 +674,7 @@ fn a_concurrent_decide_waits_for_the_one_holding_the_record() {
     drop(lock);
     let rest: Vec<String> = said.map_while(Result::ok).collect();
     let out = child
-        .wait_with_output()
+        .streamed_wait()
         .expect("the decide finishes once released");
     let both = format!(
         "{}{}",
@@ -655,7 +691,8 @@ fn a_concurrent_decide_waits_for_the_one_holding_the_record() {
 /// The declared door the engine's end-of-turn ladder runs.
 #[test]
 fn the_stop_handler_row_runs_this_task() {
-    let text = std::fs::read_to_string(common::at_root("batten.toml")).expect("the config");
+    let text =
+        std::fs::read_to_string(common::committed_config_file("finding_sink")).expect("the config");
     let config: toml::Value = toml::from_str(&text).expect("parses");
     let rows = config["hook"]["handler"].as_array().expect("handler rows");
     let row = rows

@@ -57,6 +57,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
+use batten::capture::Streamed as _;
 
 use std::path::{Path, PathBuf};
 
@@ -100,7 +101,7 @@ fn plan(hk: &Path, args: &[&str]) -> serde_json::Value {
             command.env_remove(name);
         }
     }
-    let output = command.output().expect("hk prints a plan");
+    let output = command.streamed_output().expect("hk prints a plan");
     assert!(
         output.status.success(),
         "hk check --plan {args:?} failed: {}",

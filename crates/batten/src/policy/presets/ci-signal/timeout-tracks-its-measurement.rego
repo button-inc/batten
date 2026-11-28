@@ -243,7 +243,7 @@ drift_justified(seconds) := ceil((seconds * drift_multiplier) / 60)
 drift_jobs contains entry if {
 	drift_measured
 	some row in drift_budget
-	values := drift_samples(row.path, row.name)
+	values = drift_samples(row.path, row.name)
 	entry := {
 		"file": row.path,
 		"name": row.name,
@@ -349,7 +349,7 @@ drift_legs(n, seconds) := [drift_leg("bats", "success", seconds) | some _ in num
 drift_job(declared, seconds, n, basis) := drift_tree(declared, basis, drift_legs(n, seconds))
 
 test_drift_a_census_that_did_not_finish_is_not_a_short_census if {
-	good := drift_job(6, 120, 25, "measured")
+	good = drift_job(6, 120, 25, "measured")
 	count(violation) == 0 with input as good
 	unclosed := object.union(good, {"tree": {"records": {"drift-jobs": drift_legs(25, 120)}}})
 	some v in violation with input as unclosed

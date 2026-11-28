@@ -48,13 +48,25 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
+use batten::capture::StreamedChild as _;
+use batten::hook::HarnessExt as _;
 
 use std::path::{Path, PathBuf};
 
 use common::{Fixture, run_with_stdin, stderr};
 
 fn root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
+    // The committed rows plus the retired substitution row (CLOUD-2698): this
+    // suite exercises the `pipeline` kind, which the repository no longer
+    // declares. Per PROCESS, since nextest runs each case in its own.
+    static ROOT: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    ROOT.get_or_init(|| {
+        common::committed_fixture_with_substitution(&format!(
+            "refusal-ceiling-{}",
+            std::process::id()
+        ))
+    })
+    .clone()
 }
 
 /// The session the real-root repeats fire under: this suite's own context, so
@@ -73,7 +85,8 @@ fn payload_in(session: Option<&str>, agent: Option<&str>, command: &str) -> Stri
         "tool_input": {"command": command},
     });
     if let Some(session) = session {
-        value["session_id"] = serde_json::Value::from(session);
+        // A NAME, qualified by the running case (`common::session_id`).
+        value["session_id"] = serde_json::Value::from(common::session_id(session));
     }
     if let Some(agent) = agent {
         value["agent_id"] = serde_json::Value::from(agent);
@@ -222,7 +235,8 @@ fn a_routed_read_of_every_committed_memory_is_within_the_declared_ceiling() {
     // because the longest name is the one that breaches — measured at 101 bytes
     // against a 96-byte ceiling while the tool rode as a third subject.
     let ceiling = declared_ceiling();
-    let memories = root().join(".serena/memories");
+    // The real tree's memories: `root()` is a fixture of the committed config.
+    let memories = common::at_root(".serena/memories");
     let mut measured = 0_usize;
     let mut over: Vec<(usize, String)> = Vec::new();
     for entry in std::fs::read_dir(&memories).expect("the committed memories are listable") {
@@ -295,11 +309,16 @@ fn no_refusal_lost_its_pointer() {
 /// stated reason: naming a consumer's policy filenames inside `crates/**` is
 /// non-negotiable rule 1, and `source name other` computes that.
 fn fixture(name: &str) -> PathBuf {
-    stage(name, &common::without_session_handlers(COMMITTED))
+    stage(name, &common::without_session_handlers(&committed()))
 }
 
 /// The committed config, as every fixture here stages it.
-const COMMITTED: &str = include_str!("../../../../batten.toml");
+
+/// The committed config ([`common::committed_config`]) plus the retired substitution row (CLOUD-2698): the row this
+/// suite's corpus refuses under.
+fn committed() -> String {
+    format!("{}{}", common::committed_config(), common::SUBSTITUTION_ROW)
+}
 
 /// [`fixture`] for a case that sends a `SessionStart`, with the committed
 /// config's session provisioning removed: every `[[startup]]` row and every
@@ -314,13 +333,23 @@ const COMMITTED: &str = include_str!("../../../../batten.toml");
 /// reclaim -y`, a forge probe over the network. Measured 2026-10-08
 /// (CLOUD-2173): 200 spawned processes and 78s for one `SessionStart` alone, and
 /// 260s under the suite, which made each such case the suite's critical path.
-//MUTANT-SUITE crates/batten/tests/it/refusal_ceiling.rs
-//MUTANT session-startup-rows-kept|s@^    config\.remove("startup");$@@|the_session_fixture_carries_no_session_provisioning
-//MUTANT session-start-handlers-kept|s@^            \.retain(\x7crow\x7c row\.get("on")\.and_then(toml_edit::Item::as_str) != Some("session-start"));$@            .retain(\x7c_\x7c true);@|the_session_fixture_carries_no_session_provisioning
 fn session_fixture(name: &str) -> PathBuf {
     let mut config: toml_edit::DocumentMut =
-        COMMITTED.parse().expect("the committed config is TOML");
+        committed().parse().expect("the committed config is TOML");
     config.remove("startup");
+    // AND THE INSTALLS A STARTUP ROW WOULD PLACE: a rule's `environments` (and
+    // its `install_env`) declare an install that only a `[[startup]]` row may
+    // place, and the loader refuses one left unplaced, so a fixture that drops
+    // the rows drops what they placed too (a30ca3d3, CLOUD-2859).
+    if let Some(rules) = config
+        .get_mut("rule")
+        .and_then(toml_edit::Item::as_array_of_tables_mut)
+    {
+        for row in rules.iter_mut() {
+            row.remove("environments");
+            row.remove("install_env");
+        }
+    }
     if let Some(handlers) = config
         .get_mut("hook")
         .and_then(|hook| hook.get_mut("handler"))
@@ -412,7 +441,7 @@ fn starts(repo: &Path, source: &str) {
         repo,
         &serde_json::json!({
             "hook_event_name": "SessionStart",
-            "session_id": "A",
+            "session_id": common::session_id("A"),
             "source": source,
         }),
     );
@@ -573,8 +602,8 @@ fn a_first_sighting_carries_the_rows_reason_and_both_labels() {
 }
 
 /// A live class carrying `doc`, over the real load-time validator (CLOUD-2143).
-fn documented(why: Option<&str>, act: &[&str]) -> batten::verdict::DeclaredVerdict {
-    let mut class = batten::verdict::vendored()
+fn documented(why: Option<&str>, act: &[&str]) -> batten::config_model::DeclaredVerdict {
+    let mut class = batten::config_check::verdict::vendored()
         .into_iter()
         .find(|class| class.id == "tool run loose")
         .expect("a vendored class to dress");
@@ -586,8 +615,8 @@ fn documented(why: Option<&str>, act: &[&str]) -> batten::verdict::DeclaredVerdi
     class
 }
 
-fn loads(class: batten::verdict::DeclaredVerdict) -> Result<(), String> {
-    batten::verdict::validate(&[class], &batten::verdict::Vocabulary::default())
+fn loads(class: batten::config_model::DeclaredVerdict) -> Result<(), String> {
+    batten::verdict::validate(&[class], &batten::config_model::Vocabulary::default())
         .map_err(|error| error.to_string())
 }
 
@@ -695,7 +724,7 @@ fn two_contexts_in_one_clone_each_get_the_full_text() {
 /// no longer proves.
 #[test]
 fn the_session_fixture_carries_no_session_provisioning() {
-    let (startup, handlers) = session_provisioning(COMMITTED);
+    let (startup, handlers) = session_provisioning(&common::committed_config());
     assert!(
         startup > 0,
         "the committed config declares `[[startup]]` rows"
@@ -725,7 +754,7 @@ fn a_session_start_forgets_only_that_contexts_sightings() {
         &repo,
         &serde_json::json!({
             "hook_event_name": "SessionStart",
-            "session_id": "A",
+            "session_id": common::session_id("A"),
             "source": "startup",
         }),
     );
@@ -754,7 +783,7 @@ fn a_compaction_forgets_and_the_next_firing_is_full() {
         &repo,
         &serde_json::json!({
             "hook_event_name": "SessionStart",
-            "session_id": "A",
+            "session_id": common::session_id("A"),
             "source": "compact",
         }),
     );
@@ -811,11 +840,11 @@ fn a_capture_notice_is_a_classed_finding() {
             .unwrap()
             .write_all(value.to_string().as_bytes())
             .unwrap();
-        child.wait_with_output().unwrap()
+        child.streamed_wait().unwrap()
     };
     let unreadable = serde_json::json!({
         "hook_event_name": "PostToolUse",
-        "session_id": "cap",
+        "session_id": common::session_id("cap"),
         "tool_name": "Read",
         "tool_input": { "file_path": "README.md" },
         "tool_response": [{ "not-text": 1 }],
@@ -929,7 +958,7 @@ fn parallel_denials_deliver_one_full_copy() {
 fn an_undelivered_channel_marks_nothing() {
     let repo = fixture("undelivered-marks-nothing");
     assert!(
-        !batten::hook::Harness::ExitCode
+        !batten::config_model::Harness::ExitCode
             .capabilities()
             .advisory_reachable("PreToolUse"),
         "the premise: the exit-code contract has no advisory channel to the model"
@@ -1018,14 +1047,14 @@ fn the_boundary_marks_and_collapses_a_full_arm_in_tool_output() {
         &repo,
         &serde_json::json!({
             "hook_event_name": "PostToolUse",
-            "session_id": "A",
+            "session_id": common::session_id("A"),
             "tool_name": "Bash",
             "tool_input": {"command": "batten check"},
             "tool_response": {"stdout": output, "stderr": "", "interrupted": false},
         }),
     );
     assert_eq!(posted.status.code(), Some(0), "{}", stderr(&posted));
-    let rewrites = batten::hook::Harness::ClaudeCode
+    let rewrites = batten::config_model::Harness::ClaudeCode
         .capabilities()
         .rewrites_tool_output
         .is_capturable();
@@ -1143,13 +1172,15 @@ fn a_second_row_of_a_shared_class_still_gets_its_definition() {
 /// moving a class in or out of the family touches neither side.
 #[test]
 fn every_class_routed_only_into_a_protected_path_is_admissible() {
-    use batten::verdict::{RouteKind, routed_only_into_protection, vendored};
-    let starter = batten::config::parse(batten::init::STARTER, batten::config::CONFIG_FILE)
+    use batten::config_check::verdict::vendored;
+    use batten::preset_catalog::RouteKind;
+    use batten::verdict::routed_only_into_protection;
+    let starter = batten::config::parse(batten::init::STARTER, batten::config_model::CONFIG_FILE)
         .expect("the starter parses");
     let sets = batten::rules::Sets::from_config(&starter).expect("the starter's sets compile");
     let protects = |path: &str| sets.protected.contains(path);
     assert!(
-        protects(batten::config::CONFIG_FILE),
+        protects(batten::config_model::CONFIG_FILE),
         "the starter no longer protects batten.toml, so this gate covers nothing — re-scope it"
     );
 
@@ -1160,7 +1191,7 @@ fn every_class_routed_only_into_a_protected_path_is_admissible() {
         "classes routed only into a protected path with no admission: {stuck:?}"
     );
 
-    let blocker = batten::verdict::Native::ProtectedMutation.id();
+    let blocker = batten::error::Native::ProtectedMutation.id();
     let mut without = registry.clone();
     let entry = without
         .iter_mut()
@@ -1181,7 +1212,7 @@ fn every_class_routed_only_into_a_protected_path_is_admissible() {
         .filter(|entry| {
             entry.routes.len() == 1
                 && entry.routes[0].kind == RouteKind::Document
-                && entry.routes[0].target == batten::config::CONFIG_FILE
+                && entry.routes[0].target == batten::config_model::CONFIG_FILE
         })
         .map(|entry| entry.id.clone())
         .collect();

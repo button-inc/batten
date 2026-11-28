@@ -26,7 +26,8 @@ use crate::common;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use batten::rules::{self, Rule};
+use batten::config_model::Rule;
+use batten::rules;
 
 /// The row as `batten.toml` declares it, deserialized rather than
 /// struct-literalled: `Rule` carries `deny_unknown_fields`, so this goes through
@@ -58,7 +59,7 @@ fn install_module(root: &Path) {
 
 /// A scratch tree carrying the named suites, plus the committed module.
 fn tree(name: &str, suites: &[(&str, &str)]) -> PathBuf {
-    let root = common::scratch(&format!("suite-subjects-{name}"));
+    let root = common::scratch_repo(&format!("suite-subjects-{name}"));
     for (path, body) in suites {
         common::write(&root, path, body);
     }
@@ -173,7 +174,7 @@ fn this_repository_is_clean_today() {
     // reason `findings` states; the scratch name is this case's own, because
     // nextest runs each case in its own process and a shared name is a wipe under
     // another process's read.
-    let only = common::scratch("suite-subjects-vocabulary-real-tree");
+    let only = common::scratch_repo("suite-subjects-vocabulary-real-tree");
     install_module(&only);
     let found = findings_declared_by(&root, &only);
     assert!(

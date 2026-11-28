@@ -180,7 +180,8 @@ use crate::common;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use batten::rules::{self, Rule};
+use batten::config_model::Rule;
+use batten::rules;
 
 /// The row as `batten.toml` declares it, deserialized rather than
 /// struct-literalled: `Rule` carries `deny_unknown_fields`, so this goes through
@@ -420,7 +421,7 @@ const RENOVATE: &str = r#"{
 "#;
 
 fn sound(name: &str) -> PathBuf {
-    let root = common::scratch(&format!("ci-parity-{name}"));
+    let root = common::scratch_repo(&format!("ci-parity-{name}"));
     common::write(&root, ".github/workflows/ci.yml", WORKFLOW);
     common::write(&root, ".github/workflows/land.yml", LANDER);
     common::write(&root, "mise.toml", MANIFEST);
@@ -460,7 +461,7 @@ fn this_repository_is_clean_today() {
     // reason `findings_declared_by` states; the scratch name is this case's own,
     // because nextest runs each case in its own process and a shared name is a
     // wipe under another process's read.
-    let only = common::scratch("ci-parity-vocabulary-real-tree");
+    let only = common::scratch_repo("ci-parity-vocabulary-real-tree");
     install_module(&only);
     let found = findings_declared_by(&root, &only);
     assert!(
@@ -1031,6 +1032,27 @@ fn a_pull_request_job_missing_from_the_roster_is_refused() {
     assert!(
         raised.iter().any(|v| v == "job list missing"),
         "a pull_request job missing from the roster should be refused: {raised:?}"
+    );
+}
+
+/// A workflow declaring its spend (`CI_SPEND_AUTHORISED`) is a publisher, not a
+/// landing check: its jobs need no lease step and no roster entry (CLOUD-2903).
+#[test]
+fn a_workflow_that_declares_its_spend_is_neither_leased_nor_rostered() {
+    let root = sound("spend-declared");
+    common::write(
+        &root,
+        ".github/workflows/publish.yml",
+        "name: publish\non:\n  pull_request:\n    types: [opened]\nenv:\n  \
+         CI_SPEND_AUTHORISED: \"publishes each head\"\njobs:\n  publish:\n    \
+         name: publish\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo publish\n",
+    );
+    let raised = verdicts_raised(&root);
+    assert!(
+        !raised
+            .iter()
+            .any(|v| v == "job list missing" || v == "lease guard absent"),
+        "a declared spend is neither leased nor rostered: {raised:?}"
     );
 }
 
@@ -1638,7 +1660,7 @@ fn a_prefix_named_only_in_a_job_condition_is_not_a_scope() {
 
 #[test]
 fn a_tree_with_no_verify_task_is_not_this_rows_business() {
-    let root = common::scratch("ci-parity-absent");
+    let root = common::scratch_repo("ci-parity-absent");
     install_module(&root);
     assert!(
         findings(&root).is_empty(),

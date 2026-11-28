@@ -37,7 +37,7 @@
 //!
 //! A **corpus** in which every byte a check can read as subject matter is a
 //! distinct canary token, crossed with a **census** over every leaf verb of
-//! [`batten::surface::SURFACE`]. The census is the totality proof: a verb added
+//! [`batten::surface_table::SURFACE`]. The census is the totality proof: a verb added
 //! tomorrow lands in no bucket and fails [`every_leaf_verb_is_classified`] until
 //! somebody says which bucket it is in. That is the property CLOUD-92 asks for —
 //! not "the checks we thought of do not leak", but "no check leaks, and a new one
@@ -57,20 +57,15 @@
 
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
-//MUTANT-SUITE crates/batten/tests/it/pointer_only.rs
-//MUTANT echoed-column-undeclared|s@"verdict...class",@@|no_verb_emits_content_it_merely_read
-//MUTANT echo-arm-unreached|s@args: &\["no-canary-command"]@args: \&["cargo run loose"]@|no_verb_emits_content_it_merely_read
-//MUTANT echo-column-unresolved|s@"fact...command"]@"fact[].command", "rule[].nonesuch"]@|every_echo_declaration_resolves_to_capped_config_leaves
-//MUTANT prose-column-unseeded|s@columns: &\["waiver...reason"]@columns: \&[]@|the_corpus_seeds_every_prose_column
-//MUTANT redirect-arm-undeclared|s@"redirect...read",@@|the_protected_mutation_arm_echoes_only_its_declared_columns
 
 use crate::common;
+use batten::capture::StreamedChild as _;
 
 use std::io::Write as _;
 use std::path::PathBuf;
 use std::process::Stdio;
 
-use batten::surface::SURFACE;
+use batten::surface_table::SURFACE;
 use common::{Fixture, StateHome, batten, scratch};
 
 // -- The canaries ------------------------------------------------------------
@@ -179,6 +174,13 @@ const CONTENT: &[Canary] = &[
         // emit is a path, a line, a unit's declared name and a count; this is the
         // byte that decides it.
         source: "a shell line inside a manifest body or a workflow step the census counts",
+        columns: &[],
+    },
+    Canary {
+        tag: "modsource",
+        // CLOUD-2789. `modules metrics` reads every source file under its root to
+        // draw the graph; it may print its counts, and this is the byte it read.
+        source: "a comment inside a Rust module the module graph reads",
         columns: &[],
     },
 ];
@@ -576,6 +578,27 @@ impl Corpus {
                 ),
             )
             .file("counted.txt", &format!("{}\n", canary("counted")))
+            // A two-module crate `modules metrics` reads (CLOUD-2789): `a` and `b`
+            // reach each other, so the answer is a live count of 2, and the
+            // comment it read past is a content canary it must never print.
+            .file("crate/src/lib.rs", "mod a;\nmod b;\n")
+            .file(
+                "crate/src/a.rs",
+                &format!("// {}\nuse crate::b::B;\npub struct A;\n", canary("modsource")),
+            )
+            .file("crate/src/b.rs", "use crate::a::A;\npub struct B;\n")
+            // The package `modules cut --dry-run` plans from (CLOUD-2812): its
+            // plan holds `a.rs`'s canary in a file it would write, and prints
+            // only that file's path.
+            .file("crate/Cargo.toml", "[package]\nname = \"corpus\"\n")
+            // `modules ratchet --check`'s record over the same crate
+            // (CLOUD-2821). Deliberately loose, so the verb runs to a verdict
+            // and its refusal (two numbers and a metric name) is what the
+            // census reads; never a byte of the source it measured.
+            .file(
+                "modules.lock",
+                "crate/src cycle=99 propagation=10000 impls=99 shims=99\n",
+            )
             // `doctor toolchain`'s manifest (CLOUD-1683). The declared key is a
             // PLAIN name, deliberately: the verdict names a missing declared key
             // as its subject, which `Check::subjects` licenses — an identifier
@@ -690,6 +713,25 @@ impl Corpus {
             .git()
             .base_commit()
             .build();
+        let home = Fixture::at(root.join("home")).build();
+        Corpus { repo, home }
+    }
+
+    /// A private copy of the corpus [`Corpus::build`] makes, under `name`: built
+    /// once per process per `spawning`, then copied whole, `.git` included.
+    ///
+    /// ITS OWN COPY, NEVER A SHARED ONE: a writer still cannot leave state the
+    /// next verb reads. What is no longer paid per verb is the fixture's
+    /// `git add` and `git commit`, two forks for each of ~200 census verbs.
+    fn copied(name: &str, spawning: bool) -> Corpus {
+        static TEMPLATES: [std::sync::OnceLock<PathBuf>; 2] =
+            [std::sync::OnceLock::new(), std::sync::OnceLock::new()];
+        let template = TEMPLATES[usize::from(spawning)].get_or_init(|| {
+            Corpus::build(&format!("pointer-only-template-{spawning}"), spawning).repo
+        });
+        let root = scratch(name);
+        let repo = root.join("repo");
+        common::copy_tree(template, &repo);
         let home = Fixture::at(root.join("home")).build();
         Corpus { repo, home }
     }
@@ -954,6 +996,11 @@ const MAY_ANSWER_COULD_NOT_LOOK: &[&str] = &[
     // either the trunk commit or the comparison — which is the could-not-look
     // this gate is built to fail open on.
     "lease carries",
+    // `step cover` (CLOUD-2788) reads the CI roster from the task runner's
+    // environment, where the consumer declares it (rule 1), and this corpus is
+    // run with no roster: could-not-look, exit 3, is its honest answer. What it
+    // emits then is the variable's name, held to the pointer-only law below.
+    "step cover",
     // `claim merged` joins it for `lease carries`' reason exactly: it reaches
     // the FORGE to read merged pull request bodies, and a corpus with no
     // credential can read none of them. It is also the one verb here whose
@@ -1075,6 +1122,9 @@ const MAY_ANSWER_COULD_NOT_LOOK: &[&str] = &[
     // `release pin` reads the corpus's own `batten.toml`, which may not exist,
     // and that is could-not-look rather than a pin.
     "release pin",
+    // CLOUD-2906: the corpus carries no tag, so `refs/tags/v0.0.1` names no
+    // commit and the honest answer is could-not-look.
+    "release previous",
 ];
 
 /// One entry per leaf verb of [`SURFACE`], asserted total by
@@ -1246,6 +1296,14 @@ const CENSUS: &[Verb] = &[
         stdin: Stdin::Nothing,
         disposition: Disposition::PointerOnly,
     },
+    // `land placed` (CLOUD-2707) prints at most one line naming a short sha and
+    // the next step, on stderr. No field it renders can carry a payload.
+    Verb {
+        path: "land placed",
+        args: &[],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
     // `landed check` (CLOUD-186, CLOUD-1127) reads a tracker payload, which is
     // the widest body on any read surface: a row carries a description an agent
     // wrote and a consumer's own facts sit in it. What it renders is a key, two
@@ -1371,18 +1429,9 @@ const CENSUS: &[Verb] = &[
     // `capture find`'s reason rather than the stronger one its pointer line would
     // earn on its own.
     //
-    // Its RECORD is strictly a pointer, and deliberately on stderr: a handle, a
-    // source id, a disposition and two byte counts, never a byte of what was
-    // stored. But its PRODUCT is a reduction on stdout, and a reduction is
-    // content — the declared fields of a payload the caller asked for. That is
-    // the whole point of the verb, and a `PointerOnly` claim over it would be
-    // false.
-    //
-    // The bound that makes this honest is the DECLARATION rather than this field:
-    // a field no `[[mcp.result]]` row names never leaves the store, and the
-    // `acknowledge` arm additionally refuses anything past a bounded scalar. So
-    // what reaches stdout is what a consumer wrote down, and `Passthrough`'s
-    // count still refuses Batten adding a copy of its own.
+    // Its PRODUCT is the server's whole response on stdout (CLOUD-2956), which
+    // is content the caller asked for, so a `PointerOnly` claim over it would be
+    // false. What reaches a context is bounded by the hook, as for any tool result.
     //
     // **What this corpus does not exercise**, stated for `capture show`'s reason:
     // the sweep's fixture declares no `[[mcp.source]]`, so this answers exit 3
@@ -1394,9 +1443,9 @@ const CENSUS: &[Verb] = &[
         args: &["a-server", "a-method"],
         stdin: Stdin::Nothing,
         disposition: Disposition::Passthrough(
-            "its product is a declared reduction over a payload the caller asked for, which is \
-             content by design — the pointer half is the record on stderr, and what may reach \
-             stdout is bounded by the `[[mcp.result]]` row rather than by this field",
+            "its product is the server's whole response, which the caller asked for and which is \
+             content by design; what reaches a context is bounded by the hook, never by this \
+             verb",
         ),
     },
     // THE TWO BOARD VERBS ARE POINTER-ONLY BY CONSTRUCTION, and it is the property
@@ -1415,6 +1464,15 @@ const CENSUS: &[Verb] = &[
     Verb {
         path: "claim check",
         args: &["--issue", "CLOUD-1"],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    // CLOUD-2826: a session id, a state word, a count and task ids per child,
+    // then a path — never a transcript byte. Here it reaches the refusal for a
+    // server no source declares.
+    Verb {
+        path: "session watch",
+        args: &["--server", "a-server"],
         stdin: Stdin::Nothing,
         disposition: Disposition::PointerOnly,
     },
@@ -1696,7 +1754,7 @@ const CENSUS: &[Verb] = &[
     // a stable token, and a digest is deliberately withheld because it is stable
     // per content but varies per machine, so printing one would defeat §6's
     // byte-stability while telling the reader nothing they can act on. The remedy
-    // is `mise run install:local`, and the verdict is what says whether to run it.
+    // is `batten engine install`, and the verdict is what says whether to run it.
     Verb {
         path: "doctor mediator",
         args: &[],
@@ -2088,6 +2146,57 @@ const CENSUS: &[Verb] = &[
         stdin: Stdin::Nothing,
         disposition: Disposition::PointerOnly,
     },
+    // `step graph run` (CLOUD-2785) names a group and the rows' own codes, never
+    // a byte a row printed: each row's output is the row's, teed by `exec`.
+    Verb {
+        path: "step graph run",
+        args: &["a-group"],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    // `step base` (CLOUD-2787) answers object ids at the merge base, one per
+    // path it was handed: a pointer to the bytes, never the bytes.
+    Verb {
+        path: "step base",
+        args: &["--ref", "main", "--", "."],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    // `step cover` (CLOUD-2788) names roster checks and the variable that maps
+    // them; it reads no file a canary is seeded in, only the pass records.
+    Verb {
+        path: "step cover",
+        args: &[],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    // `step env` (CLOUD-2786) prints the declared variables' values, which ARE
+    // the key the step cache compares: a relay of the caller's own environment.
+    Verb {
+        path: "step env",
+        args: &["--", "HOME"],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::Passthrough(
+            "it prints the values of the variables the caller declared, which are the step \
+             key's own input — the other way to see them is the caller's environment itself",
+        ),
+    },
+    // `step config` (CLOUD-2960) prints one `config <part> <digest>` line per
+    // part it names, never a byte of the config: pointers by construction.
+    Verb {
+        path: "step config",
+        args: &["--", "rule"],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    // `step exists` (CLOUD-2835) prints one `exists <path>` line per index path
+    // its pathspecs select, never a byte of one: pointers by construction.
+    Verb {
+        path: "step exists",
+        args: &["--", "Cargo.toml"],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
     Verb {
         path: "step record",
         args: &["a-step"],
@@ -2097,6 +2206,31 @@ const CENSUS: &[Verb] = &[
     Verb {
         path: "step run",
         args: &["a-step", "--", "true"],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    // `modules metrics` and `modules ratchet` (CLOUD-2821) print one line of
+    // integers per root and a refusal naming a metric and two numbers, never a
+    // byte of source. Interim: both retire into the `rust-quality` preset.
+    Verb {
+        path: "modules metrics",
+        args: &["--root", "crate/src"],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    Verb {
+        path: "modules ratchet",
+        args: &["--record", "modules.lock", "--check"],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    // `modules cut` (CLOUD-2812) prints `write`/`remove` paths, `path:line`
+    // refusal and remainder sites and three counts. The files it would write
+    // carry the moved modules' source, `a.rs`'s canary included; `--dry-run`
+    // keeps the tree, and none of those bytes may reach a channel.
+    Verb {
+        path: "modules cut",
+        args: &["--dry-run", "crate", "cut", "a", "b"],
         stdin: Stdin::Nothing,
         disposition: Disposition::PointerOnly,
     },
@@ -2246,6 +2380,24 @@ const CENSUS: &[Verb] = &[
         stdin: Stdin::Nothing,
         disposition: Disposition::PointerOnly,
     },
+    // CLOUD-2690: with nothing on stdin there is no event, so the verb names
+    // the fault and dispatches nothing; a dispatched event's output is the
+    // exit-code adapter's own pointer.
+    Verb {
+        path: "forge intake",
+        args: &["--event", "pull_request"],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    // CLOUD-2693: a zero interval is a usage error, named and dispatching
+    // nothing. (With no `[[forge.source]]` the round would be could-not-look,
+    // exit 3, which this corpus reads as proving nothing.)
+    Verb {
+        path: "forge poll",
+        args: &["--every", "0"],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
     // The derivations' writer (CLOUD-1991). Driven with `--schema` alone, into a
     // directory of the corpus's own: the verb writes files and says where, one
     // `<kind>=<path>` line, and reads nothing of the caller's tree to do it — the
@@ -2285,8 +2437,9 @@ const CENSUS: &[Verb] = &[
         stdin: Stdin::Nothing,
         disposition: Disposition::PointerOnly,
     },
-    // The session-root registration (CLOUD-2111). Driven with `--check`, which
-    // writes nothing; what it prints is a harness and an event name per line.
+    // The user-level registration (CLOUD-2953). Driven with `--check`, which
+    // writes nothing; what it prints is a harness and a home-relative surface
+    // per line.
     Verb {
         path: "wiring register",
         args: &["--check"],
@@ -2395,6 +2548,21 @@ const CENSUS: &[Verb] = &[
         stdin: Stdin::Nothing,
         disposition: Disposition::PointerOnly,
     },
+    // CLOUD-1544: a ref, a commit id and a count, never a receipt body; `off`
+    // here, because the corpus spawns them with the state repository variable
+    // removed.
+    Verb {
+        path: "receipt publish",
+        args: &[],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    Verb {
+        path: "receipt pull",
+        args: &[],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
     // The API-compatibility gate (CLOUD-1050). It reads a delegated analyser's
     // report and a range of commit messages — two of the content-richest inputs
     // on this surface — and emits the failing LINT IDS and a short sha, never a
@@ -2482,6 +2650,13 @@ const CENSUS: &[Verb] = &[
     },
     Verb {
         path: "mutate sweep",
+        args: &[],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    // A refusal naming the undeclared per-job cost, before anything is spawned.
+    Verb {
+        path: "mutate cargo",
         args: &[],
         stdin: Stdin::Nothing,
         disposition: Disposition::PointerOnly,
@@ -2797,6 +2972,12 @@ const CENSUS: &[Verb] = &[
         disposition: Disposition::PointerOnly,
     },
     Verb {
+        path: "release previous",
+        args: &["--tag", "v0.0.1", "--pattern", "v[0-9]*"],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    Verb {
         path: "release settings",
         args: &[],
         stdin: Stdin::Nothing,
@@ -2932,25 +3113,6 @@ const CENSUS: &[Verb] = &[
     Verb {
         path: "singleton release",
         args: &["land"],
-        stdin: Stdin::Nothing,
-        disposition: Disposition::PointerOnly,
-    },
-    // The per-turn background run (CLOUD-1991). Driven with a pattern no row
-    // declares, which refuses before anything is announced or started — a
-    // corpus run must not leave a detached copy behind.
-    Verb {
-        path: "singleton detach",
-        args: &[
-            "census-detach",
-            "--marker",
-            "detach.marker",
-            "--log",
-            "detach.log",
-            "--pattern",
-            "no-such-pattern-row",
-            "--",
-            "true",
-        ],
         stdin: Stdin::Nothing,
         disposition: Disposition::PointerOnly,
     },
@@ -3165,7 +3327,7 @@ fn run_in(corpus: &Corpus, args: &[&str], stdin: Stdin) -> Run {
     {
         panic!("write stdin: {error:?}");
     }
-    let output = child.wait_with_output().expect("await batten");
+    let output = child.streamed_wait().expect("await batten");
     Run {
         code: output.status.code(),
         stdout: output.stdout,
@@ -3384,7 +3546,7 @@ fn no_verb_emits_content_it_merely_read() {
         // mid-run. Measured: the sweep's `exec` corpus and the passthrough
         // case's shared a name, and the loser reported `. is not inside a git
         // repository`. Local timing hid it; CI did not.
-        let corpus = Corpus::build(
+        let corpus = Corpus::copied(
             &format!("pointer-only-sweep-{}", verb.path.replace(' ', "-")),
             spawning,
         );
@@ -3463,7 +3625,7 @@ fn no_verb_emits_content_it_merely_read() {
 /// Every column an `Echoes` verb declares, and every column a canary is seeded
 /// in, is a capped string leaf of the derived config schema (CLOUD-1643).
 ///
-/// `#MUTANT echo-column-unresolved` reddens here: an invented column has no
+/// A mutant leaving an echoed column unresolved reddens here: an invented column has no
 /// leaf, so the case consults the schema rather than accepting any string.
 #[test]
 fn every_echo_declaration_resolves_to_capped_config_leaves() {
@@ -3517,7 +3679,7 @@ fn every_echo_declaration_resolves_to_capped_config_leaves() {
 
 /// The corpus seeds every `TEXT_CENSUS` path, or names why not (CLOUD-1643).
 ///
-/// `#MUTANT prose-column-unseeded` reddens here.
+/// A mutant leaving a prose column unseeded reddens here.
 #[test]
 fn the_corpus_seeds_every_prose_column() {
     use std::collections::BTreeSet;
@@ -3550,7 +3712,7 @@ fn the_corpus_seeds_every_prose_column() {
 /// The protected-mutation arm of `policy explain`, which the sweep's single
 /// census entry never reaches (CLOUD-1643).
 ///
-/// `#MUTANT redirect-arm-undeclared` reddens here.
+/// A mutant leaving the redirect arm undeclared reddens here.
 #[test]
 fn the_protected_mutation_arm_echoes_only_its_declared_columns() {
     let corpus = Corpus::build("pointer-only-protected-mutation-arm", false);

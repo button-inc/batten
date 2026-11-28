@@ -53,13 +53,14 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
+use batten::capture::StreamedChild as _;
 
 use std::path::{Path, PathBuf};
 use std::process::Output;
 
 use common::{Fixture, at_root, run, stderr, stdout};
 
-/// A repository declaring one repo-relative wiring source and one reduction.
+/// A repository declaring one repo-relative wiring source.
 fn repo_declaring(name: &str, wiring: &str) -> PathBuf {
     Fixture::new(name)
         .config(
@@ -70,11 +71,6 @@ version = 1
 id = "project"
 path = "wiring.json"
 node = "mcpServers"
-
-[[mcp.result]]
-method = "get_thing"
-reduce = "project"
-fields = ["id", "status"]
 "#,
         )
         .file("wiring.json", wiring)
@@ -88,7 +84,7 @@ fn the_verb_is_declared_and_is_not_on_the_read_only_allowlist() {
     // `read` here would widen it silently. The spec is the authority a consumer
     // reads, which is why this asserts over the emitted spec rather than over
     // `SURFACE` — a consumer never sees the constant.
-    let spec = run(Path::new("."), &["spec", "--format", "json"]);
+    let spec = run(common::case_fixture(), &["spec", "--format", "json"]);
     assert!(spec.status.success(), "the spec renders");
     let rendered = stdout(&spec);
     let parsed: serde_json::Value = serde_json::from_str(&rendered).expect("the spec is JSON");
@@ -123,7 +119,7 @@ fn the_verb_names_no_harness_which_is_the_whole_portability_claim() {
     // that claim in the one place a reader would check it, so its ABSENCE is the
     // assertion — and it is asserted rather than reviewed, because a flag added
     // later would arrive quietly.
-    let help = run(Path::new("."), &["mcp", "call", "--help"]);
+    let help = run(common::case_fixture(), &["mcp", "call", "--help"]);
     let rendered = format!("{}{}", stdout(&help), stderr(&help));
     assert!(
         !rendered.contains("--harness"),
@@ -133,7 +129,7 @@ fn the_verb_names_no_harness_which_is_the_whole_portability_claim() {
     // And the roster it must NOT be narrower than: every harness the generator
     // knows still reaches one unconditional dispatch path. Asserted by showing
     // the generator has a roster at all and that this verb is blind to it.
-    let harnesses = run(Path::new("."), &["generate", "hooks", "--help"]);
+    let harnesses = run(common::case_fixture(), &["generate", "hooks", "--help"]);
     let roster = format!("{}{}", stdout(&harnesses), stderr(&harnesses));
     assert!(
         roster.contains("claude-code"),
@@ -212,11 +208,6 @@ id = "project"
 path = "wiring.json"
 node = "mcpServers"
 {credential}
-
-[[mcp.result]]
-method = "get_thing"
-reduce = "project"
-fields = ["id"]
 "#
         ))
         .file(
@@ -266,7 +257,7 @@ fn a_credential_file_that_will_not_read_names_the_variable_and_never_the_path() 
         .args(["mcp", "call", "srv", "get_thing"])
         .current_dir(&repo)
         .env("BATTEN_TEST_TOKEN_FILE", secret_dir.join("absent.txt"))
-        .output()
+        .streamed_output()
         .expect("run batten");
     assert_eq!(answer.status.code(), Some(3));
     let message = stderr(&answer);
@@ -295,7 +286,7 @@ fn a_resolved_credential_reaches_no_output_on_any_path() {
         .args(["mcp", "call", "srv", "get_thing"])
         .current_dir(&repo)
         .env("BATTEN_TEST_TOKEN", token)
-        .output()
+        .streamed_output()
         .expect("run batten");
     assert!(
         !answer.status.success(),
@@ -422,7 +413,10 @@ node = "mcpServers"
         stderr(&answer)
     );
 
-    let empty_fields = Fixture::new("mcp-empty-fields")
+    // A REDUCTION ROW IS REFUSED, not silently ignored (CLOUD-2956): `mcp call`
+    // prints the server's whole answer, so a row that claims to narrow it would
+    // read as a reduction nothing applies.
+    let empty_fields = Fixture::new("mcp-result-row")
         .config(
             r#"
 version = 1
@@ -430,16 +424,17 @@ version = 1
 [[mcp.result]]
 method = "get_thing"
 reduce = "project"
-fields = []
+fields = ["id"]
 "#,
         )
         .git()
         .build();
     let answer = run(&empty_fields, &["config", "lint"]);
+    // An unknown key is refused by the schema, which `config lint` answers `2`.
     assert_eq!(
         answer.status.code(),
-        Some(1),
-        "a reduction over no fields is a dropped payload wearing a projection's costume: {}",
+        Some(2),
+        "an `[[mcp.result]]` row is refused now that nothing reduces: {}",
         stderr(&answer)
     );
 }
@@ -460,7 +455,7 @@ fn a_well_formed_table_loads_which_is_what_makes_the_refusals_above_discriminate
     // actually runs against. `at_root` rather than `.`: a test's cwd is the CRATE
     // directory, which carries no `batten.toml`, so the relative form asserted
     // "no config found" and would have passed over any table at all.
-    let here = run(&at_root("."), &["config", "lint"]);
+    let here = run(common::committed_repo(), &["config", "lint"]);
     assert!(
         here.status.success(),
         "the committed `[mcp]` table must load: {}",
@@ -545,7 +540,7 @@ fn seed_write_response(dir: &Path, home: &Path, document: &serde_json::Value) {
 
     let envelope = serde_json::json!({
         "hook_event_name": "PostToolUse",
-        "session_id": "mcp-suite",
+        "session_id": common::session_id("mcp-suite"),
         "tool_name": "mcp__tracker__save_issue",
         "tool_input": {},
         "tool_response": [{ "type": "text", "text": document.to_string() }],
@@ -566,7 +561,7 @@ fn seed_write_response(dir: &Path, home: &Path, document: &serde_json::Value) {
         .expect("piped stdin")
         .write_all(envelope.as_bytes())
         .expect("write the response");
-    let recorded = child.wait_with_output().expect("record the response");
+    let recorded = child.streamed_wait().expect("record the response");
     assert_eq!(
         recorded.status.code(),
         Some(0),
@@ -642,20 +637,15 @@ fn a_refusal_never_carries_the_arbitrary_data_member() {
 }
 
 #[test]
-fn a_refusal_message_a_server_wrote_as_a_trace_is_cut_to_one_line() {
-    // A server that ignores the SHOULD sends frames. Relaying the whole of one
-    // buries the line a reader needs, which is the second half of the same
-    // defect: the old output printed a backtrace for somebody else's verdict.
+fn a_refusal_message_a_server_wrote_as_a_trace_travels_whole() {
+    // CLOUD-2956: a server's error is relayed whole. Bounding what reaches a
+    // context is the hooks' job, never this verb's.
     let line = refusal(
         "{\"jsonrpc\":\"2.0\",\"id\":1,\"error\":{\"code\":-32000,\"message\":\"bad request\\n  at Foo.bar (/srv/app.js:12)\\n  at Baz\"}}",
     );
     assert!(
-        line.contains("bad request"),
-        "the first line travels: {line}"
-    );
-    assert!(
-        !line.contains("Foo.bar"),
-        "and the frames after it do not: {line}"
+        line.contains("bad request\n  at Foo.bar (/srv/app.js:12)\n  at Baz"),
+        "every line travels: {line}"
     );
 }
 
@@ -689,10 +679,6 @@ fn a_successful_envelope_is_still_a_result_and_not_a_refusal() {
     );
 }
 
-/*
-#MUTANT error-message-dropped|s@            .and_then(serde_json::Value::as_str)@            .and_then(|_unread| None::<\&str>)@|a_refusal_carries_the_servers_own_message_and_not_only_its_code
-*/
-
 // --- a failed result is not a success (CLOUD-1645) ---------------------------
 //
 // THE SAME TIER AND THE SAME REASON AS THE BLOCK ABOVE: no listener. `outcome` is
@@ -707,13 +693,10 @@ fn a_successful_envelope_is_still_a_result_and_not_a_refusal() {
 // row demands, which is the property that makes the extraction faithful rather
 // than convenient: this defect passed a status-only assertion for its whole life.
 
-/// The verdict for a result, with the framing decision taken the way the verb
-/// takes it — through `payload`, never hand-built.
+/// The verdict for a result, as the verb decides it.
 fn outcome_for(result: &serde_json::Value) -> batten::mcp::Outcome {
-    let payload = batten::mcp::payload(result);
     batten::mcp::outcome(
         result,
-        &payload,
         "save_issue",
         "claude-code-remote",
         "response:abc123",
@@ -750,14 +733,16 @@ fn a_tool_level_error_result_exits_non_zero_and_names_the_method() {
 fn a_failed_result_is_never_projected() {
     // THE HALF THAT IS NOT THE EXIT CODE. Projecting an error document is what
     // produced `{}` — an empty success indistinguishable from a write that
-    // changed nothing — so the refusal to project is its own assertion.
+    // changed nothing — so the error document reaching stdout whole is its own
+    // assertion.
     let result = serde_json::json!({
         "content": [{"type": "text", "text": "Invalid input"}],
         "isError": true,
     });
-    assert!(
-        !outcome_for(&result).projectable,
-        "a declared projection must never be applied to a failed result"
+    assert_eq!(
+        report_for("save_issue", &result).stdout,
+        stored_bytes(&result),
+        "a failed result is printed whole, never field-picked"
     );
 }
 
@@ -779,8 +764,9 @@ fn an_error_document_in_an_unrecognised_frame_is_not_projected_either() {
         "status": 400,
     });
     let outcome = outcome_for(&result);
-    assert!(
-        !outcome.projectable,
+    assert_eq!(
+        report_for("get_issue", &result).stdout,
+        stored_bytes(&result),
         "an unrecognised frame is passed through whole, never field-picked"
     );
     // AND IT IS STILL EXIT 0, stated rather than hidden. Nothing in this document
@@ -810,9 +796,10 @@ fn a_successful_call_is_byte_identical() {
         batten::exit::ExitCode::Success,
         "a successful call's exit code is unchanged"
     );
-    assert!(
-        outcome.projectable,
-        "and its declared projection still applies"
+    assert_eq!(
+        report_for("get_issue", &result).stdout,
+        stored_bytes(&result),
+        "and its answer is the stored payload"
     );
     assert!(
         outcome.failure.is_none(),
@@ -843,7 +830,7 @@ fn find_in(dir: &Path, home: &Path, args: &[&str]) -> Output {
     let mut command = common::batten();
     command.args(args).current_dir(dir);
     common::state_home(&mut command, home);
-    command.output().expect("run the capture verb")
+    command.streamed_output().expect("run the capture verb")
 }
 
 #[test]
@@ -874,7 +861,9 @@ fn this_change_introduces_no_consumer_identifier_into_the_crate() {
     // it would be worse than either. What this case owns is that the MCP change
     // adds none of its own.
     let mut hits: Vec<String> = Vec::new();
-    for path in sources(&at_root("crates/batten/src")) {
+    // Every workspace crate's `src/` (CLOUD-2789): a launcher layout cut into
+    // `batten-base` is still in the engine.
+    for path in common::engine_sources() {
         let Ok(source) = std::fs::read_to_string(&path) else {
             continue;
         };
@@ -921,23 +910,6 @@ fn this_change_introduces_no_consumer_identifier_into_the_crate() {
             "mcp.rs must not name a tracker method in code: {needle}"
         );
     }
-}
-
-/// Every `.rs` file under `root`, recursively.
-fn sources(root: &Path) -> Vec<PathBuf> {
-    let mut found = Vec::new();
-    let Ok(entries) = std::fs::read_dir(root) else {
-        return found;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            found.extend(sources(&path));
-        } else if path.extension().and_then(|ext| ext.to_str()) == Some("rs") {
-            found.push(path);
-        }
-    }
-    found
 }
 
 #[test]
@@ -1005,5 +977,137 @@ fn a_reduced_read_points_at_a_view_whose_lines_hold_each_field() {
         field("/c"),
         "null",
         "a string whose text is `null` is content, not emptiness"
+    );
+}
+
+// --- the verb prints the server's whole answer (CLOUD-2956) ------------------
+//
+// Bounding what reaches a context is the hooks' job alone. These drive
+// `mcp::report`, the whole of what `mcp call` writes. Each failed against the
+// bundle tip, where the verb reduced through this repository's `[mcp]` rows.
+
+/// A `tools/call` result carrying `document` as its one text block.
+fn text_result(document: &serde_json::Value) -> serde_json::Value {
+    serde_json::json!({"content": [{"type": "text", "text": document.to_string()}]})
+}
+
+/// The bytes the store holds for `result`: the verb files exactly these.
+fn stored_bytes(result: &serde_json::Value) -> String {
+    String::from_utf8(serde_json::to_vec(&batten::mcp::payload(result).value).expect("serialize"))
+        .expect("utf-8")
+}
+
+fn report_for(method: &str, result: &serde_json::Value) -> batten::mcp::Report {
+    batten::mcp::report(result, method, "claude-code-remote", "response:abc123").expect("a report")
+}
+
+#[test]
+fn a_large_response_is_printed_whole_and_is_the_stored_capture() {
+    // Several times the hook's default 2,000-token bound, under the list method
+    // a row once narrowed.
+    let issues: Vec<serde_json::Value> = (0..40)
+        .map(|n| {
+            serde_json::json!({
+                "id": format!("KEY-{n}"),
+                "title": format!("issue {n}"),
+                "status": "Todo",
+                "description": "a body no reduction may cut. ".repeat(20),
+                "team": "Team",
+            })
+        })
+        .collect();
+    let result = text_result(&serde_json::json!({"issues": issues, "hasNextPage": false}));
+    let report = report_for("list_issues", &result);
+    assert!(
+        report.stdout.len() > 8_000 * 3,
+        "premise: the response is several times the hook's bound"
+    );
+    let parsed: serde_json::Value =
+        serde_json::from_str(&report.stdout).expect("stdout is one JSON document");
+    assert_eq!(parsed, batten::mcp::payload(&result).value);
+    assert_eq!(
+        report.stdout,
+        stored_bytes(&result),
+        "stdout is byte-identical to the stored capture"
+    );
+    assert!(
+        report.stderr.iter().all(|line| !line.contains("emitted")),
+        "no `emitted` line: {:?}",
+        report.stderr
+    );
+    assert_eq!(report.exit, batten::exit::ExitCode::Success);
+}
+
+#[test]
+fn a_field_a_reduction_once_dropped_is_on_stdout() {
+    let description = "the whole description, which jq must be able to read. ".repeat(100);
+    let issue = text_result(&serde_json::json!({
+        "id": "KEY-1",
+        "status": "Todo",
+        "team": "Team",
+        "description": description,
+    }));
+    let read: serde_json::Value =
+        serde_json::from_str(&report_for("get_issue", &issue).stdout).expect("JSON");
+    assert_eq!(
+        read.get("description").and_then(serde_json::Value::as_str),
+        Some(description.as_str()),
+        "get_issue's description is on stdout whole"
+    );
+    assert_eq!(
+        read.get("team").and_then(serde_json::Value::as_str),
+        Some("Team")
+    );
+
+    let content = "a document body. ".repeat(200);
+    let document = text_result(&serde_json::json!({
+        "id": "doc-1",
+        "title": "A document",
+        "content": content,
+    }));
+    let read: serde_json::Value =
+        serde_json::from_str(&report_for("get_document", &document).stdout).expect("JSON");
+    assert_eq!(
+        read.get("content").and_then(serde_json::Value::as_str),
+        Some(content.as_str()),
+        "get_document's content is on stdout whole"
+    );
+}
+
+#[test]
+fn a_servers_error_is_printed_whole() {
+    // A refusal longer than 200 bytes, on two lines: both lines travel, uncut.
+    let first = format!("the server refused this call because {}", "x".repeat(250));
+    let second = "and here is the second line of its reason";
+    let body = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "error": {"code": -32000, "message": format!("{first}\n{second}")},
+    })
+    .to_string();
+    let line = refusal(&body);
+    assert!(
+        line.contains(&first),
+        "the first line travels whole: {line}"
+    );
+    assert!(line.contains(second), "and so does the second: {line}");
+    assert!(!line.contains('…'), "nothing is marked cut: {line}");
+
+    // An `isError` result: its body on stdout, byte for byte, at today's exit.
+    let text = format!("Input validation error: {}", "detail ".repeat(60));
+    let result = serde_json::json!({
+        "content": [{"type": "text", "text": text}],
+        "isError": true,
+    });
+    let report = report_for("save_issue", &result);
+    assert_eq!(report.exit, batten::exit::ExitCode::Usage);
+    assert_eq!(
+        report.stdout,
+        stored_bytes(&result),
+        "the error body is on stdout as stored"
+    );
+    assert!(
+        report.stdout.contains(&text),
+        "with the server's whole text"
     );
 }

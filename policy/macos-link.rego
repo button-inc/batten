@@ -75,8 +75,8 @@ violation contains {
 	startswith(line, "links ")
 	parts := split(trim_space(substring(line, count("links "), -1)), " ")
 	count(parts) == 2
-	name := parts[0]
-	library := parts[1]
+	name = parts[0]
+	library = parts[1]
 }
 
 # --- rule 2: the named set rule 1 cannot see ---------------------------------

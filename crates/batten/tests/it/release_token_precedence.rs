@@ -41,6 +41,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
+use batten::capture::Streamed as _;
 
 /// `GITHUB_TOKEN` as `mise env` resolves it at the repository root, under an
 /// environment holding only the pairs given.
@@ -68,7 +69,9 @@ fn resolved(pairs: &[(&str, &str)]) -> Option<String> {
     for (name, value) in pairs {
         command.env(name, value);
     }
-    let output = command.output().expect("mise resolves the environment");
+    let output = command
+        .streamed_output()
+        .expect("mise resolves the environment");
     assert!(
         output.status.success(),
         "mise env exits 0: {}",

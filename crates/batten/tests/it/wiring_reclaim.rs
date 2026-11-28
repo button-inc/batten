@@ -40,6 +40,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
+use batten::capture::StreamedChild as _;
 
 use std::path::{Path, PathBuf};
 
@@ -113,7 +114,7 @@ impl Bench {
             .args(args)
             .at_home(&self.home)
             .env("BATTEN_ENVIRONMENT", environment)
-            .output()
+            .streamed_output()
             .expect("the binary runs")
     }
 
@@ -329,7 +330,7 @@ fn a_session_start_expires_the_record_which_is_the_restart_this_reports() {
             .expect("stdin is piped")
             .write_all(br#"{"hook_event_name":"SessionStart"}"#)
             .expect("write stdin");
-        child.wait_with_output().expect("wait for batten")
+        child.streamed_wait().expect("wait for batten")
     };
     assert!(outcome.status.success(), "{}", stderr(&outcome));
     assert!(!bench.record().exists());
@@ -368,7 +369,19 @@ fn session_start_in(bench: &Bench, environment: &str) -> std::process::Output {
         .expect("stdin is piped")
         .write_all(br#"{"hook_event_name":"SessionStart"}"#)
         .expect("write stdin");
-    child.wait_with_output().expect("wait for batten")
+    child.streamed_wait().expect("wait for batten")
+}
+
+/// The engine invocation the agent's dispatch runs under, in the same home and
+/// environment kind as [`session_start_in`]'s door (CLOUD-2840): the task, not
+/// the door, runs the repair, so the fact must reach the task.
+#[cfg(unix)]
+fn dispatched_in(bench: &Bench, environment: &str) -> common::Batten {
+    let mut command = common::batten();
+    command
+        .at_home(&bench.home)
+        .env("BATTEN_ENVIRONMENT", environment);
+    command
 }
 
 /// A consumer that DECLARED the repair as a `[[startup]]` row gets it at session
@@ -406,6 +419,11 @@ fn a_declared_repair_takes_the_siblings_at_session_start() {
     );
     let outcome = session_start(&bench);
     assert!(outcome.status.success(), "{}", stderr(&outcome));
+    // THE REPAIR IS THE SETUP TASK'S (CLOUD-2840): the agent dispatches it, in
+    // the session's environment, and the surface is read once it has finished.
+    // `session_start` is unix-only, as is the setup task it dispatches.
+    #[cfg(unix)]
+    let _ = crate::session_start::settle_with(&bench.repo, dispatched_in(&bench, "disposable"));
 
     let surface = bench.surface_text();
     // The same load-bearing positive the verb's own case carries: a `retain` at
@@ -445,6 +463,11 @@ fn a_declared_repair_takes_nothing_on_an_undeclared_machine() {
     );
     let outcome = session_start_in(&bench, "");
     assert!(outcome.status.success(), "{}", stderr(&outcome));
+    // Read only once the setup task finished, or this mirror passes before the
+    // repair could have run at all.
+    // `session_start` is unix-only, as is the setup task it dispatches.
+    #[cfg(unix)]
+    let _ = crate::session_start::settle_with(&bench.repo, dispatched_in(&bench, ""));
 
     let surface = bench.surface_text();
     assert!(
@@ -529,7 +552,7 @@ fn a_checkout_sitting_at_the_home_directory_is_never_its_own_merged_surface() {
         .current_dir(&bench.home)
         .args(["wiring", "reclaim", "-y"])
         .at_home(&bench.home)
-        .output()
+        .streamed_output()
         .expect("the binary runs");
     assert!(outcome.status.success(), "{}", stderr(&outcome));
     let said = format!("{}{}", stdout(&outcome), stderr(&outcome));

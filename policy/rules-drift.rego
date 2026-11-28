@@ -84,7 +84,7 @@ shell_defaults contains [name, value] if {
 	some found in regex.find_n(data.batten.patterns["shell-default"], text, -1)
 	inner := trim_suffix(trim_prefix(found, "${"), "}")
 	halves := split(inner, ":-")
-	name := halves[0]
+	name = halves[0]
 	value := concat(":-", array.slice(halves, 1, count(halves)))
 }
 
@@ -167,8 +167,8 @@ wiring_claims contains {"path": path, "start": start, "end": end, "sentence": se
 	some path, lines in prose_lines
 	some index, text in lines
 	contains(text, "runs on")
-	start := paragraph_start(path, index)
-	end := paragraph_end(path, index)
+	start = paragraph_start(path, index)
+	end = paragraph_end(path, index)
 	body := concat(" ", [lines[at] | some at, _ in lines; at >= start; at <= end])
 
 	# Split on `. `; a code span's dots (`mise.toml`, `.claude/settings.json`)
@@ -271,8 +271,8 @@ named_keys contains {"path": path, "line": index + 1, "surface": surface, "key":
 	some found in regex.find_n(data.batten.patterns["policy-input-key"], text, -1)
 	trimmed := trim_prefix(found, "`input.")
 	halves := split(trimmed, ".")
-	surface := halves[0]
-	key := halves[1]
+	surface = halves[0]
+	key = halves[1]
 }
 
 # AND THE SUBSCRIPTED SPELLING, which the pattern above cannot reach and which
@@ -292,7 +292,7 @@ named_keys contains {"path": path, "line": index + 1, "surface": surface, "key":
 	some found in regex.find_n(data.batten.patterns["policy-input-key-subscripted"], text, -1)
 	trimmed := trim_prefix(found, "`input.")
 	halves := split(trimmed, "[\"")
-	surface := halves[0]
+	surface = halves[0]
 	key := trim_suffix(halves[1], "\"]")
 }
 
@@ -321,7 +321,7 @@ violation contains {
 queried_rules contains name if {
 	some _, text in input.tree.lines["crates/batten/src/policy.rs"]
 	some found in regex.find_n(data.batten.patterns["policy-rule-const"], text, -1)
-	name := split(found, "\"")[1]
+	name = split(found, "\"")[1]
 }
 
 named_rules contains {"path": path, "line": index + 1, "name": name} if {
@@ -465,7 +465,7 @@ authority_needed contains path if {
 
 authority_needed contains path if {
 	some named in named_keys
-	path := schema_path[named.surface]
+	path = schema_path[named.surface]
 }
 
 authority_needed contains "crates/batten/src/policy.rs" if {

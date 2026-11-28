@@ -42,11 +42,13 @@ fn install(home: &Path, path: &[PathBuf], env: &[(&str, &str)]) -> std::process:
     for (name, value) in env {
         command.env(name, value);
     }
-    command.output().expect("run batten engine install")
+    command
+        .streamed_output()
+        .expect("run batten engine install")
 }
 
 /// The file `engine install` places: `batten.exe` on Windows.
-fn binary() -> String {
+pub(crate) fn binary() -> String {
     format!("batten{}", std::env::consts::EXE_SUFFIX)
 }
 
@@ -122,13 +124,13 @@ fn an_off_path_destination_declared_deliberate_is_admitted() {
 }
 
 /// The repository path the TLS fixture serves the release from.
-const REPO: &str = "example/pkg";
+pub(crate) const REPO: &str = "example/pkg";
 
 /// The release a ref's `batten.toml` pins in the fixture, never this binary's own.
-const WANTED: &str = "v9.9.9";
+pub(crate) const WANTED: &str = "v9.9.9";
 
 /// The bytes the fixture release ships as its binary.
-const SHIPPED: &[u8] = b"#!/bin/sh\necho the fixture release\n";
+pub(crate) const SHIPPED: &[u8] = b"#!/bin/sh\necho the fixture release\n";
 
 /// The date `main`'s changelog gives `main`'s own release.
 const MAIN_DATE: &str = "2020-02-01";
@@ -145,19 +147,19 @@ const PROVISION_TARGETS: &[&str] = &[
 /// The stand-in digest the fixture release publishes for another platform's
 /// archive, which no case downloads.
 fn platform_digest(target: &str) -> String {
-    batten::provision::digest(target.as_bytes())
+    batten::digest::sha256_hex(target.as_bytes())
 }
 
 /// The digest the fixture release `tag` served from `home` publishes for
 /// `target`'s archive, read off its `SHA256SUMS`: this build's own is the real
 /// archive's, which a case cannot spell ahead of the build.
-fn published(home: &Path, tag: &str, target: &str) -> String {
+pub(crate) fn published(home: &Path, tag: &str, target: &str) -> String {
     let sums = std::fs::read_to_string(
         home.join("www")
             .join(REPO)
             .join("releases")
             .join("download")
-            .join(tag)
+            .join(batten::engine::forge_tag(tag))
             .join("SHA256SUMS"),
     )
     .unwrap();
@@ -174,7 +176,7 @@ fn ref_release_host(home: &Path) -> (common::TlsWww, Vec<(String, String)>) {
 /// [`ref_release_host`] with `main` pinning `main_pin` and the one published
 /// release `served`, so a case can stand a worktree's pin on either side of
 /// `main`'s.
-fn release_host(
+pub(crate) fn release_host(
     home: &Path,
     main_pin: &str,
     served: &str,
@@ -201,7 +203,7 @@ fn release_host(
         changelog.join("CHANGELOG.md"),
         format!(
             "# Changelog\n\n## [Unreleased]\n\n## [{}](https://example.invalid) - {MAIN_DATE}\n\n### Added\n\n- a thing\n\n## [8.8.8](https://example.invalid) - 2020-01-01\n",
-            main_pin.trim_start_matches('v')
+            batten::version::Tag::parse(main_pin).map_or_else(String::new, |tag| tag.version.to_string())
         ),
     )
     .unwrap();
@@ -232,7 +234,12 @@ fn release_host(
     let bytes = std::fs::read(&archive).unwrap();
 
     let asset = batten::engine::release_asset(served, &batten::engine::running_target());
-    let download = repo.join("releases").join("download").join(served);
+    // Where the forge publishes `served`: a dev pre-release under `dev/`
+    // (CLOUD-2903), a release under its own tag.
+    let download = repo
+        .join("releases")
+        .join("download")
+        .join(batten::engine::forge_tag(served));
     std::fs::create_dir_all(&download).unwrap();
     std::fs::write(download.join(&asset), &bytes).unwrap();
     // EVERY PROVISION PLATFORM'S ASSET, not only this build's (CLOUD-2279): a
@@ -240,7 +247,7 @@ fn release_host(
     // one's digest from this manifest.
     // THIS BUILD'S OWN PLATFORM IS SERVED ONCE, as the real archive: a second
     // line under a stand-in digest is a manifest naming one asset two ways.
-    let mut sums = format!("{}  {asset}\n", batten::provision::digest(&bytes));
+    let mut sums = format!("{}  {asset}\n", batten::digest::sha256_hex(&bytes));
     let running = batten::engine::running_target();
     for &target in PROVISION_TARGETS
         .iter()
@@ -312,9 +319,8 @@ fn the_version_comes_from_the_refs_manifest() {
         "{}",
         stdout(&output)
     );
-    assert_eq!(
-        std::fs::read(named.join(binary())).unwrap(),
-        SHIPPED,
+    assert!(
+        std::fs::read(named.join(binary())).unwrap() == SHIPPED,
         "the installed bytes are the ref's release, not the running binary"
     );
 }
@@ -387,7 +393,7 @@ fn pin_worktree(home: &Path, tag: &str) {
 }
 
 /// `served`'s environment as a case passes it.
-fn served_env(served: &[(String, String)]) -> Vec<(&str, &str)> {
+pub(crate) fn served_env(served: &[(String, String)]) -> Vec<(&str, &str)> {
     served
         .iter()
         .map(|(k, v)| (k.as_str(), v.as_str()))
@@ -425,7 +431,7 @@ fn engine_verb(
     for (name, value) in env {
         command.env(name, value);
     }
-    command.output().expect("run batten engine")
+    command.streamed_output().expect("run batten engine")
 }
 
 /// THE BINARY FOLLOWS THE WORKTREE'S PIN (CLOUD-2287). With neither environment
@@ -457,7 +463,10 @@ fn a_pinned_worktree_installs_its_pin() {
         "{}",
         stdout(&output)
     );
-    assert_eq!(std::fs::read(named.join(binary())).unwrap(), SHIPPED);
+    assert!(
+        std::fs::read(named.join(binary())).unwrap() == SHIPPED,
+        "the installed bytes are the release's"
+    );
 }
 
 /// A named version that disagrees with the worktree's pin is refused, and
@@ -511,7 +520,41 @@ fn the_ref_outranks_the_worktree_pin() {
         "{}",
         stdout(&output)
     );
-    assert_eq!(std::fs::read(named.join(binary())).unwrap(), SHIPPED);
+    assert!(
+        std::fs::read(named.join(binary())).unwrap() == SHIPPED,
+        "the installed bytes are the release's"
+    );
+}
+
+/// A DEV BUILD IS NEVER INSTALLED AS ITS PACKAGE'S RELEASE (CLOUD-2903): a pin
+/// naming `v{CARGO_PKG_VERSION}` is the published release's, so the install
+/// fetches it, and with no host answering nothing is placed. Before this row
+/// `release_bytes` placed the running binary as that release, because every
+/// build reported the package version.
+#[test]
+fn a_dev_build_is_never_installed_as_its_package_release() {
+    let home = common::scratch_repo("engine-install-dev-not-release");
+    pin_worktree(&home, &batten::engine::declared_release());
+    let named = home.join("bin");
+    let named_str = named.display().to_string();
+    let output = install(
+        &home,
+        std::slice::from_ref(&named),
+        &[
+            ("BATTEN_INSTALL_DIR", &named_str),
+            ("BATTEN_RELEASES", "https://localhost:1/example/pkg"),
+        ],
+    );
+    assert!(
+        !output.status.success(),
+        "{}{}",
+        stdout(&output),
+        common::stderr(&output)
+    );
+    assert!(
+        !named.join(binary()).exists(),
+        "no binary is placed as a release it is not"
+    );
 }
 
 /// The bootstrap's download is placed even when the worktree pins exactly the
@@ -520,7 +563,9 @@ fn the_ref_outranks_the_worktree_pin() {
 #[test]
 fn the_bootstrap_places_a_running_pin() {
     let home = common::scratch_repo("engine-install-running-pin");
-    let running = format!("v{}", env!("CARGO_PKG_VERSION"));
+    // THE RUNNING IDENTITY (CLOUD-2903), never the package's release: only the
+    // binary that IS the pin is placed as it, and a test build is a dev build.
+    let running = batten::engine::release();
     pin_worktree(&home, &running);
     let named = home.join("bin");
     let named_str = named.display().to_string();
@@ -540,9 +585,9 @@ fn the_bootstrap_places_a_running_pin() {
         "{}",
         stdout(&output)
     );
-    assert_eq!(
-        std::fs::read(named.join(binary())).unwrap(),
-        std::fs::read(env!("CARGO_BIN_EXE_batten")).unwrap(),
+    assert!(
+        std::fs::read(named.join(binary())).unwrap()
+            == std::fs::read(env!("CARGO_BIN_EXE_batten")).unwrap(),
         "the running binary, which is the pin, was placed"
     );
 }
@@ -583,7 +628,10 @@ fn an_update_moves_an_older_pin_forward_and_installs_it() {
         "{}",
         stdout(&output)
     );
-    assert_eq!(std::fs::read(named.join(binary())).unwrap(), SHIPPED);
+    assert!(
+        std::fs::read(named.join(binary())).unwrap() == SHIPPED,
+        "the installed bytes are the release's"
+    );
 }
 
 /// `engine update` NEVER MOVES A PIN BACKWARD: the name says newer, so a pin
@@ -617,7 +665,39 @@ fn an_update_never_moves_a_pin_backward() {
             .contains(&format!("engine = {{ release = \"{WANTED}\" }}")),
         "the newer pin stands"
     );
-    assert_eq!(std::fs::read(named.join(binary())).unwrap(), SHIPPED);
+    assert!(
+        std::fs::read(named.join(binary())).unwrap() == SHIPPED,
+        "the installed bytes are the release's"
+    );
+}
+
+/// AN UPDATE PRINTS WHAT IT CROSSES BEFORE IT MOVES THE PIN (CLOUD-2660): the
+/// same block `engine outdated` prints, ahead of the config path.
+#[test]
+fn an_update_prints_the_breaking_counts_before_it_moves_the_pin() {
+    if !cfg!(target_os = "linux") {
+        return;
+    }
+    let home = common::scratch_repo("engine-update-breaking");
+    pin_worktree(&home, "v8.8.8");
+    let named = home.join("bin");
+    let named_str = named.display().to_string();
+    let (_host, served) = release_host(&home, WANTED, WANTED);
+    serve_breaking_changelog(&home);
+    let output = engine_verb(
+        "update",
+        &home,
+        std::slice::from_ref(&named),
+        &with_named(&served, &named_str),
+    );
+    assert!(
+        output.status.success(),
+        "{}{}",
+        stdout(&output),
+        common::stderr(&output)
+    );
+    let said = stdout(&output);
+    assert!(said.starts_with(&breaking_block(&served)), "{said}");
 }
 
 /// THE UPDATE INSTALLS ITS OWN TARGET (CLOUD-2418), whatever
@@ -643,7 +723,10 @@ fn an_update_installs_its_target_whatever_the_ref_pins() {
         stdout(&output),
         common::stderr(&output)
     );
-    assert_eq!(std::fs::read(named.join(binary())).unwrap(), SHIPPED);
+    assert!(
+        std::fs::read(named.join(binary())).unwrap() == SHIPPED,
+        "the installed bytes are the release's"
+    );
 }
 
 /// A FAILED INSTALL LEAVES THE MOVED PIN (CLOUD-2418): the write stands, so a
@@ -735,7 +818,7 @@ fn batten_in(home: &Path, args: &[&str], env: &[(&str, &str)]) -> std::process::
     for (name, value) in env {
         command.env(name, value);
     }
-    command.output().expect("run batten")
+    command.streamed_output().expect("run batten")
 }
 
 /// `engine update` BRINGS EVERY COPY TO THE RELEASE (CLOUD-2279): the pin, the
@@ -746,7 +829,7 @@ fn an_update_brings_every_batten_declaration_to_the_release() {
         return;
     }
     let home = common::scratch_repo("engine-update-every-copy");
-    pin_every_copy(&home, "8.8.8", "");
+    pin_every_copy(&home, "0.0.1", "");
     let named = home.join("bin");
     let named_str = named.display().to_string();
     let (_host, served) = release_host(&home, WANTED, WANTED);
@@ -767,8 +850,10 @@ fn an_update_brings_every_batten_declaration_to_the_release() {
         config.contains(&format!("engine = {{ release = \"{WANTED}\" }}")),
         "{config}"
     );
+    // THE FLOOR IS NO LONGER MOVED (CLOUD-2595): `min_batten_version` is retired
+    // and the row is the pin, so an update leaves the key as it found it.
     assert!(
-        config.contains("min_batten_version = \"9.9.9\""),
+        config.contains("min_batten_version = \"0.0.1\""),
         "{config}"
     );
     assert!(config.contains("version = \"9.9.9\"\nbinary"), "{config}");
@@ -796,7 +881,10 @@ fn an_update_brings_every_batten_declaration_to_the_release() {
         config.contains("# the platform's archive"),
         "every other byte is kept"
     );
-    assert_eq!(std::fs::read(named.join(binary())).unwrap(), SHIPPED);
+    assert!(
+        std::fs::read(named.join(binary())).unwrap() == SHIPPED,
+        "the installed bytes are the release's"
+    );
 }
 
 /// A ROW AT THE TARGET VERSION IS STILL REPAIRED (CLOUD-2418): its `version`
@@ -908,8 +996,9 @@ fn an_update_leaves_a_digest_in_another_case() {
     );
 }
 
-/// The floor is RAISED, never lowered: a `min_batten_version` already past the
-/// release is the consumer's own word and stays.
+/// The floor is never moved (CLOUD-2595 retired the raise with the key): a
+/// `min_batten_version` already past the release is the consumer's own word and
+/// stays.
 #[test]
 fn an_update_never_lowers_min_batten_version() {
     if !cfg!(target_os = "linux") {
@@ -1010,9 +1099,14 @@ fn outdated_exits_by_the_pins_distance_from_main() {
     pin_worktree(&home, "v8.8.8");
     let behind = batten_in(&home, &["engine", "outdated"], &env);
     assert_eq!(behind.status.code(), Some(2), "{}", common::stderr(&behind));
+    // The tag's changelog is not served, so `main`'s was read and is the one
+    // pointed at (CLOUD-2660).
     assert_eq!(
         stdout(&behind),
-        format!("v8.8.8 → {WANTED}\nv9.9.9 {MAIN_DATE}\n")
+        format!(
+            "v8.8.8 → {WANTED}\nv9.9.9 {MAIN_DATE} breaking 0\n{}/blob/main/crates/batten/CHANGELOG.md?plain=1#L5-L9\n",
+            served_repository(&served)
+        )
     );
 
     common::write(&home, "batten.toml", "version = 1\n");
@@ -1145,8 +1239,60 @@ fn a_lagging_changelog_dates_main_from_its_own_tag() {
     assert_eq!(behind.status.code(), Some(2), "{}", common::stderr(&behind));
     assert_eq!(
         stdout(&behind),
-        format!("v8.8.8 → {WANTED}\nv9.9.9 {MAIN_DATE}\n")
+        format!(
+            "v8.8.8 → {WANTED}\nv9.9.9 {MAIN_DATE} breaking 0\n{}/blob/{WANTED}/crates/batten/CHANGELOG.md?plain=1#L3-L3\n",
+            served_repository(&served)
+        )
     );
+}
+
+/// The repository `served` names, as the engine reads `BATTEN_RELEASES`.
+fn served_repository(served: &[(String, String)]) -> String {
+    served
+        .iter()
+        .find(|(name, _)| name == "BATTEN_RELEASES")
+        .map(|(_, value)| value.clone())
+        .expect("the host names its repository")
+}
+
+/// The changelog at `WANTED`'s tag the breaking-count cases read (CLOUD-2660):
+/// 9.1.0 carries two breaking entries, the others none. Even lines are blank.
+const BREAKING_CHANGELOG: &str = "# Changelog\n\n## [Unreleased]\n\n## [9.9.9](https://example.invalid) - 2020-02-01\n\n### Fixed\n\n- a fix\n\n## [9.1.0](https://example.invalid) - 2020-01-20\n\n### Changed\n\n- [**breaking**] one\n- [**breaking**] two\n\n## [9.0.0](https://example.invalid) - 2020-01-10\n\n### Added\n\n- a thing\n\n## [8.8.8](https://example.invalid) - 2020-01-01\n";
+
+/// Serve [`BREAKING_CHANGELOG`] at `WANTED`'s tag.
+fn serve_breaking_changelog(home: &Path) {
+    let dir = home
+        .join("www")
+        .join(REPO)
+        .join(WANTED)
+        .join("crates")
+        .join("batten");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("CHANGELOG.md"), BREAKING_CHANGELOG).unwrap();
+}
+
+/// The block both verbs print for [`BREAKING_CHANGELOG`].
+fn breaking_block(served: &[(String, String)]) -> String {
+    format!(
+        "v8.8.8 → {WANTED}\nv9.1.0 2020-01-20 breaking 2\nv9.0.0 2020-01-10 breaking 0\nv9.9.9 2020-02-01 breaking 0\n{}/blob/{WANTED}/crates/batten/CHANGELOG.md?plain=1#L5-L22\n",
+        served_repository(served)
+    )
+}
+
+/// BREAKING RELEASES LEAD, AND ONE LINE POINTS AT THEIR SECTIONS (CLOUD-2660):
+/// a count per release and a pointer, never the notes.
+#[test]
+fn outdated_breaking_releases_lead_and_point_at_their_sections() {
+    if !cfg!(target_os = "linux") {
+        return;
+    }
+    let home = common::scratch_repo("engine-outdated-breaking");
+    let (_host, served) = release_host(&home, WANTED, WANTED);
+    serve_breaking_changelog(&home);
+    pin_worktree(&home, "v8.8.8");
+    let behind = batten_in(&home, &["engine", "outdated"], &served_env(&served));
+    assert_eq!(behind.status.code(), Some(2), "{}", common::stderr(&behind));
+    assert_eq!(stdout(&behind), breaking_block(&served));
 }
 
 /// A MALFORMED PIN IS NAMED AS ONE (CLOUD-2418), with the words every other
@@ -1361,6 +1507,7 @@ mod repair {
     // the case measures the update's wiring and not a compile.
 
     use crate::common;
+    use batten::capture::StreamedChild as _;
 
     use std::path::{Path, PathBuf};
     use std::process::Output;
@@ -1409,11 +1556,24 @@ mod repair {
     }
 
     /// [`run`], standing in `cwd` rather than in the repository.
+    fn run_from(binary: &Path, dir: &Path, cwd: &Path, args: &[&str], stdin: &str) -> Output {
+        run_with(binary, dir, cwd, args, stdin, &[])
+    }
+
+    /// [`run_from`], with `served` set after the case's own environment: a
+    /// fixture release host's address and trust, which the case otherwise strips.
     #[expect(
         clippy::disallowed_types,
         reason = "stays, and test-only: the update replaces the binary it runs, so each case runs a private COPY of the compiled binary, which `common::batten` cannot target"
     )]
-    fn run_from(binary: &Path, dir: &Path, cwd: &Path, args: &[&str], stdin: &str) -> Output {
+    fn run_with(
+        binary: &Path,
+        dir: &Path,
+        cwd: &Path,
+        args: &[&str],
+        stdin: &str,
+        served: &[(String, String)],
+    ) -> Output {
         use std::io::Write as _;
         // THE CASE'S OWN `bin` AND THE SYSTEM'S, NEVER THE CALLER'S `PATH`. An update
         // installs over the `batten` it resolves there (CLOUD-2226), and with the
@@ -1444,6 +1604,7 @@ mod repair {
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());
+        command.envs(served.iter().map(|(name, value)| (name, value)));
         let mut child = common::spawn_copy(&mut command);
         child
             .stdin
@@ -1451,7 +1612,7 @@ mod repair {
             .unwrap()
             .write_all(stdin.as_bytes())
             .unwrap();
-        child.wait_with_output().expect("wait for batten")
+        child.streamed_wait().expect("wait for batten")
     }
 
     fn text(output: &Output) -> String {
@@ -1483,7 +1644,10 @@ mod repair {
             "nothing written, nothing said: {}",
             text(&output)
         );
-        assert_eq!(std::fs::read(&binary).unwrap(), before, "nothing replaced");
+        assert!(
+            std::fs::read(&binary).unwrap() == before,
+            "nothing replaced"
+        );
         assert!(!dir.join("cargo-ran").exists(), "nothing built");
     }
 
@@ -1506,9 +1670,8 @@ mod repair {
         pin_source(&dir, &digest);
         let output = run(&binary, &dir, &["engine", "install"], "");
         assert!(output.status.success(), "{}", text(&output));
-        assert_eq!(
-            std::fs::read(&on_path).unwrap(),
-            b"the built engine\n",
+        assert!(
+            std::fs::read(&on_path).unwrap() == b"the built engine\n",
             "the PATH copy was replaced"
         );
         let stamp = std::fs::read_to_string(engine_stamp(&on_path)).unwrap_or_default();
@@ -1548,13 +1711,95 @@ mod repair {
             !dir.join("cargo-ran").exists(),
             "a current engine is copied, not rebuilt"
         );
-        assert_eq!(
-            std::fs::read(&on_path).unwrap(),
-            std::fs::read(&binary).unwrap(),
+        assert!(
+            std::fs::read(&on_path).unwrap() == std::fs::read(&binary).unwrap(),
             "the stale installed copy became the running engine"
         );
         let stamp = std::fs::read_to_string(engine_stamp(&on_path)).unwrap_or_default();
         assert_eq!(stamp.trim(), digest, "and carries the pin's stamp");
+    }
+
+    /// A RELEASE PIN REWRITES ONLY WHAT DIFFERS (CLOUD-2287). The running engine is
+    /// the pinned release, so it is left alone and not listed; the stale copy on
+    /// `PATH` becomes it and is listed.
+    ///
+    /// Fails by: a target holding the release's bytes rewritten, or a stale
+    /// one skipped, which the sweep on #1276 found unguarded.
+    #[test]
+    fn a_release_pin_rewrites_only_the_copy_that_differs() {
+        let dir = repo("engine-update-release-differs");
+        stub_cargo(&dir);
+        let binary = private_binary(&dir);
+        common::write(
+            &dir,
+            "batten.toml",
+            // The running identity (CLOUD-2903): this runner removes
+            // `BATTEN_ENGINE` and `BATTEN_RELEASES`, and the package's release
+            // is no longer this build, so pinning it would fetch the published
+            // one.
+            &format!(
+                "version = 1\nengine = {{ release = \"{}\" }}\n",
+                batten::engine::release()
+            ),
+        );
+        let on_path = hook_bin(&dir).join("batten");
+        std::fs::create_dir_all(hook_bin(&dir)).unwrap();
+        common::write(&hook_bin(&dir), "batten", "an older engine\n");
+        let before = std::fs::read(&binary).unwrap();
+        let output = run(&binary, &dir, &["engine", "install"], "");
+        assert!(output.status.success(), "{}", text(&output));
+        assert!(
+            std::fs::read(&on_path).unwrap() == before,
+            "the stale copy became the release"
+        );
+        let listed = String::from_utf8_lossy(&output.stdout).into_owned();
+        assert!(
+            listed.contains("hook-bin"),
+            "the rewritten copy is listed: {listed}"
+        );
+        assert_eq!(listed.lines().count(), 1, "and only it: {listed}");
+    }
+
+    /// A STAMPED BUILD AT THE PINNED VERSION IS NOT THE RELEASE (CLOUD-2840). A
+    /// tree build reports the release's version, so the tag alone took it for the
+    /// release and `engine install` rewrote it over itself, exiting 0 with the pin
+    /// unserved: measured on #1276, `~/.local/bin/batten` kept its build stamp
+    /// and bytes after the repair the owner names.
+    ///
+    /// Fails by: the build's own bytes installed in place of the published
+    /// release, or its stamp left beside the release it was replaced with.
+    #[test]
+    fn a_stamped_build_at_the_pinned_version_is_replaced_by_the_release() {
+        if !cfg!(target_os = "linux") {
+            return;
+        }
+        let dir = repo("engine-install-stamped-build");
+        stub_cargo(&dir);
+        let binary = private_binary(&dir);
+        let tag = format!("v{}", env!("CARGO_PKG_VERSION"));
+        common::write(
+            &dir,
+            "batten.toml",
+            &format!("version = 1\nengine = {{ release = \"{tag}\" }}\n"),
+        );
+        let stamp = format!("{}\n", "a".repeat(64));
+        common::write(binary.parent().unwrap(), "batten.source", &stamp);
+        let on_path = hook_bin(&dir).join("batten");
+        std::fs::create_dir_all(hook_bin(&dir)).unwrap();
+        std::fs::copy(&binary, &on_path).unwrap();
+        common::write(&hook_bin(&dir), "batten.source", &stamp);
+        let (_host, served) = super::release_host(&dir, &tag, &tag);
+        let output = run_with(&binary, &dir, &dir, &["engine", "install"], "", &served);
+        assert!(output.status.success(), "{}", text(&output));
+        assert!(
+            std::fs::read(&on_path).unwrap() == super::SHIPPED,
+            "the build on PATH became the published release: {}",
+            text(&output)
+        );
+        assert!(
+            !engine_stamp(&on_path).exists(),
+            "and the build's stamp went with it"
+        );
     }
 
     /// The case's stand-in for `~/.local/bin`: a sibling of the repository, on `PATH`
@@ -1581,9 +1826,8 @@ mod repair {
         let output = run(&binary, &dir, &["engine", "install"], "");
         assert!(output.status.success(), "{}", text(&output));
         assert!(dir.join("cargo-ran").exists(), "the source pin was built");
-        assert_eq!(
-            std::fs::read(&binary).unwrap(),
-            b"the built engine\n",
+        assert!(
+            std::fs::read(&binary).unwrap() == b"the built engine\n",
             "the built engine replaced the running one"
         );
         let stamp = std::fs::read_to_string(dir.join("engine").join("batten.source")).unwrap();
@@ -1611,7 +1855,10 @@ mod repair {
             "a build of this checkout must not rebuild itself: {}",
             text(&output)
         );
-        assert_eq!(std::fs::read(&binary).unwrap(), before, "nothing replaced");
+        assert!(
+            std::fs::read(&binary).unwrap() == before,
+            "nothing replaced"
+        );
         // AND IT LOADS (CLOUD-2232): the checkout's own build answers for the
         // checkout's source pin whatever digest it names — a pin the tree moved
         // off is `engine-pin:check`'s to refuse, never this binary's.
@@ -1840,9 +2087,8 @@ mod repair {
             "the hook must run the pinned release, not refuse: {}",
             text(&output)
         );
-        assert_eq!(
-            std::fs::read(&binary).unwrap(),
-            before,
+        assert!(
+            std::fs::read(&binary).unwrap() == before,
             "following a pin never rewrites the installed binary"
         );
         assert!(!dir.join("cargo-ran").exists(), "nothing built");
@@ -1873,6 +2119,258 @@ mod repair {
             text(&output).contains("batten engine install"),
             "the stale engine refuses and names the update: {}",
             text(&output)
+        );
+    }
+
+    /// The `cargo` the project's toolchain ships: [`stub_cargo`]'s body, as the
+    /// one file of a `.tar.gz` the fixture's lock serves.
+    fn toolchain_tarball() -> Vec<u8> {
+        let script = b"#!/bin/sh\n: > \"$STUB_RAN\"\nmkdir -p \"$CARGO_TARGET_DIR/release\"\nprintf 'the built engine\\n' > \"$CARGO_TARGET_DIR/release/batten\"\n";
+        let mut archive = tar::Builder::new(flate2::write::GzEncoder::new(
+            Vec::new(),
+            flate2::Compression::default(),
+        ));
+        let mut header = tar::Header::new_gnu();
+        header.set_size(script.len() as u64);
+        header.set_mode(0o755);
+        header.set_cksum();
+        archive
+            .append_data(&mut header, "bin/cargo", &script[..])
+            .expect("archive the stub cargo");
+        archive
+            .into_inner()
+            .expect("close the archive")
+            .finish()
+            .expect("compress the archive")
+    }
+
+    /// A loopback HTTP host answering every request with `body`, on a thread
+    /// that ends with the test process. The lock's one reachable URL.
+    fn serve(body: Vec<u8>) -> u16 {
+        use std::io::{Read as _, Write as _};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+        let port = listener.local_addr().expect("the bound port").port();
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { continue };
+                let mut request = Vec::new();
+                let mut chunk = [0_u8; 4096];
+                while !request.windows(4).any(|window| window == b"\r\n\r\n") {
+                    match stream.read(&mut chunk) {
+                        Ok(0) | Err(_) => break,
+                        Ok(read) => request.extend_from_slice(&chunk[..read]),
+                    }
+                }
+                let head = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/gzip\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                );
+                let _ = stream.write_all(head.as_bytes());
+                if !request.starts_with(b"HEAD") {
+                    let _ = stream.write_all(&body);
+                }
+            }
+        });
+        port
+    }
+
+    /// The `mise` this test process was started under, which the case links
+    /// into its own `bin`: the directory it came from may also hold a `batten`
+    /// the repair would install over.
+    fn host_mise() -> PathBuf {
+        std::env::var_os("PATH")
+            .iter()
+            .flat_map(std::env::split_paths)
+            .map(|dir| dir.join("mise"))
+            .find(|candidate| candidate.is_file())
+            .expect("the suite runs under mise, so `mise` is on PATH")
+    }
+
+    /// The fixture's mise manifest and lock: `rust` aliased to a tool the
+    /// loopback host serves, plus a tool whose locked URL nothing answers —
+    /// the stand-in for a tool `mise exec` cannot install in a cold container
+    /// (`aqua:ossf/scorecard`'s SLSA lookup, measured for CLOUD-2881).
+    fn mise_project(dir: &Path, port: u16, checksum: &str) {
+        use std::fmt::Write as _;
+        let toolchain = format!("http://127.0.0.1:{port}/rust.tar.gz");
+        let dead = "http://127.0.0.1:9/unreachable.tar.gz";
+        common::write(
+            dir,
+            "mise.toml",
+            &format!(
+                "[tool_alias]\nrust = \"http:rust\"\n\n[tools]\n\
+                 rust = {{ version = \"1.0.0\", url = '{toolchain}' }}\n\
+                 \"http:unreachable\" = {{ version = \"1.0.0\", url = '{dead}' }}\n"
+            ),
+        );
+        let mut lock = String::new();
+        for (tool, backend, url, sum) in [
+            ("rust", "http:rust", toolchain.as_str(), checksum),
+            (
+                "\"http:unreachable\"",
+                "http:unreachable",
+                dead,
+                &"0".repeat(64)[..],
+            ),
+        ] {
+            write!(
+                lock,
+                "[[tools.{tool}]]\nversion = \"1.0.0\"\nbackend = \"{backend}\"\n\n"
+            )
+            .unwrap();
+            for platform in ["linux-x64", "linux-arm64", "macos-x64", "macos-arm64"] {
+                write!(
+                    lock,
+                    "[tools.{tool}.\"platforms.{platform}\"]\nchecksum = \"sha256:{sum}\"\nurl = '{url}'\n\n"
+                )
+                .unwrap();
+            }
+        }
+        common::write(dir, "mise.lock", &lock);
+    }
+
+    /// `repair` run by a shell standing in `dir`, as the floor admits it, under
+    /// a mise whose data, cache and state are `cold`'s and empty. Every ambient
+    /// `MISE_*` is dropped, so the auto-install defaults are a cold
+    /// container's and not the suite's.
+    #[expect(
+        clippy::disallowed_types,
+        reason = "stays, and test-only: the subject is the shell line the floor admits, run whole by `sh -c`, under a real mise"
+    )]
+    fn run_repair(dir: &Path, cold: &Path, repair: &str) -> Output {
+        let path = std::env::join_paths([
+            dir.join("bin"),
+            hook_bin(dir),
+            PathBuf::from("/usr/bin"),
+            PathBuf::from("/bin"),
+        ])
+        .unwrap();
+        let mut command = std::process::Command::new("sh");
+        for (name, _) in std::env::vars_os() {
+            if name.to_string_lossy().starts_with("MISE_") {
+                command.env_remove(name);
+            }
+        }
+        common::state_dir(&mut command, &dir.join("state"));
+        command
+            .args(["-c", repair])
+            .current_dir(dir)
+            .env("PATH", path)
+            .env("HOME", dir)
+            .env("MISE_DATA_DIR", cold.join("data"))
+            .env("MISE_CACHE_DIR", cold.join("cache"))
+            .env("MISE_STATE_DIR", cold.join("state"))
+            .env("MISE_CONFIG_DIR", cold.join("config"))
+            .env("MISE_CEILING_PATHS", dir.parent().unwrap())
+            .env("MISE_TRUSTED_CONFIG_PATHS", dir)
+            .env("NO_PROXY", "127.0.0.1")
+            .env_remove("HTTPS_PROXY")
+            .env_remove("https_proxy")
+            .env_remove("HTTP_PROXY")
+            .env_remove("http_proxy")
+            .env("CARGO_TARGET_DIR", dir.join("target"))
+            .env("STUB_RAN", dir.join("cargo-ran"))
+            .env("BATTEN_INSTALL_DIR", dir.join("install-dir"))
+            .env_remove("BATTEN_VERSION_FROM_REF")
+            .env_remove("BATTEN_VERSION")
+            .env_remove("BATTEN_RELEASES")
+            .env_remove("BATTEN_ENGINE_UPDATED")
+            .env_remove(batten::engine::LOCAL_ENV)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+        common::spawn_copy(&mut command)
+            .streamed_wait()
+            .expect("wait for the repair")
+    }
+
+    /// CLOUD-2881: THE FLOOR'S LOCKED REPAIR, EXECUTED. Over a source pin the
+    /// installed engine cannot load, the floor admits [`REPAIR_LOCKED`] and
+    /// refuses the rest; run whole against a cold mise, it installs the
+    /// project's toolchain from the lock's URL alone, builds on that
+    /// toolchain's `cargo` (no other is on `PATH`), and installs and stamps the
+    /// engine — while a tool whose locked URL nothing answers sits in the
+    /// manifest. The pinned spelling, under the same cold mise, dies on that
+    /// tool before `batten` starts: the measured failure, kept as the contrast.
+    ///
+    /// [`REPAIR_LOCKED`]: batten::engine::REPAIR_LOCKED
+    #[test]
+    fn the_locked_repair_runs_cold_to_an_installed_engine() {
+        let dir = repo("engine-repair-locked-cold");
+        let tarball = toolchain_tarball();
+        let checksum = batten::digest::sha256_hex(&tarball);
+        let port = serve(tarball);
+        mise_project(&dir, port, &checksum);
+        std::fs::create_dir_all(dir.join("bin")).unwrap();
+        std::os::unix::fs::symlink(host_mise(), dir.join("bin").join("mise")).unwrap();
+        // The installed engine: outside the checkout, on `PATH`, unstamped.
+        let binary = private_binary(&dir);
+        let on_path = hook_bin(&dir).join("batten");
+        std::fs::create_dir_all(hook_bin(&dir)).unwrap();
+        std::fs::copy(&binary, &on_path).unwrap();
+        let digest = text(&run(&binary, &dir, &["engine", "digest"], ""))
+            .trim()
+            .to_owned();
+        pin_source(&dir, &digest);
+        let lock_before = std::fs::read(dir.join("mise.lock")).unwrap();
+
+        // THE FLOOR: the config is one this engine cannot adjudicate, and of
+        // the two spellings only the whole locked repair is admitted.
+        let adjudicate = |command: &str| {
+            let envelope = format!(
+                "{{\"hook_event_name\":\"PreToolUse\",\"tool_name\":\"Bash\",\"tool_input\":{{\"command\":{}}}}}",
+                serde_json::to_string(command).unwrap()
+            );
+            run(
+                &on_path,
+                &dir,
+                &["adjudicate", "--harness", "exit-code"],
+                &envelope,
+            )
+            .status
+            .code()
+        };
+        let locked = batten::engine::REPAIR_LOCKED;
+        assert_eq!(adjudicate("git push"), Some(2), "the floor is up");
+        assert_eq!(adjudicate(locked), Some(0), "the floor admits {locked}");
+
+        // THE CONTRAST: `mise exec` installs every missing tool first, and one
+        // it cannot reach stops it before the command runs.
+        let pinned = run_repair(
+            &dir,
+            &dir.join("cold-pinned"),
+            batten::engine::REPAIR_PINNED,
+        );
+        assert!(!pinned.status.success(), "{}", text(&pinned));
+        assert!(
+            text(&pinned).contains("http:unreachable"),
+            "the pinned spelling dies on the unreachable tool: {}",
+            text(&pinned)
+        );
+        assert!(!dir.join("cargo-ran").exists(), "and builds nothing");
+
+        let output = run_repair(&dir, &dir.join("cold-locked"), locked);
+        assert!(output.status.success(), "{}", text(&output));
+        assert!(
+            dir.join("cargo-ran").exists(),
+            "the build ran on the toolchain the lock served: {}",
+            text(&output)
+        );
+        assert!(
+            !dir.join("cold-locked/data/installs/http-unreachable")
+                .exists(),
+            "and nothing but the toolchain was installed"
+        );
+        assert!(
+            std::fs::read(&on_path).unwrap() == b"the built engine\n",
+            "the installed engine was replaced: {}",
+            text(&output)
+        );
+        let stamp = std::fs::read_to_string(engine_stamp(&on_path)).unwrap_or_default();
+        assert_eq!(stamp.trim(), digest, "and stamped with the pin");
+        assert!(
+            std::fs::read(dir.join("mise.lock")).unwrap() == lock_before,
+            "the lock is read, never written"
         );
     }
 }

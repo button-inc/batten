@@ -114,7 +114,7 @@ fn check(repo: &Path) -> Output {
     batten()
         .current_dir(repo)
         .args(["check", "--rule", "grant check other"])
-        .output()
+        .streamed_output()
         .expect("run batten check")
 }
 
@@ -153,7 +153,7 @@ fn this_repos_own_settings_pass_the_gate_today() {
     // project file together: the coverage this repository's denies rest on is
     // its own `mediated_call` rows.
     let output = common::run(
-        &common::at_root(""),
+        common::committed_repo(),
         &["check", "--rule", "grant check other"],
     );
     passes(&output);

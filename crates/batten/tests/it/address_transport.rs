@@ -8,7 +8,8 @@
 //! the only place the error is visible — every other payload size answers the
 //! same under both spellings.
 
-use batten::capture::{CaptureConfig, DEFAULT_INLINE_MAX_BYTES, Transport, transport_for};
+use batten::capture::{DEFAULT_INLINE_MAX_BYTES, Transport, transport_for};
+use batten::config_model::CaptureConfig;
 use batten::identity::{ADDRESS_RENDERED_LEN, AddressDomain, ContentAddress};
 
 /// A config declaring `bytes` as the inline threshold.

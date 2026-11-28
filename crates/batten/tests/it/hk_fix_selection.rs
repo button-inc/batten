@@ -55,11 +55,13 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
+use batten::capture::Streamed as _;
 
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use batten::rules::{self, Rule};
+use batten::config_model::Rule;
+use batten::rules;
 
 /// The row as `batten.toml` declares it, deserialized rather than
 /// struct-literalled: `Rule` carries `deny_unknown_fields`, so this goes through
@@ -80,7 +82,7 @@ fn row() -> Rule {
 /// A scratch tree carrying a hook config, a manifest and the rules file, plus
 /// the committed module.
 fn tree(name: &str, config: &str, manifest: &str, rules_doc: &str) -> PathBuf {
-    let root = common::scratch(&format!("hk-fix-selection-{name}"));
+    let root = common::scratch_repo(&format!("hk-fix-selection-{name}"));
     common::write(&root, "hk.pkl", config);
     common::write(&root, "mise.toml", manifest);
     common::write(&root, "rules/toolchain.md", rules_doc);
@@ -190,7 +192,7 @@ fn this_repository_is_clean_today() {
     // reason `findings` states; the scratch name is this case's own, because
     // nextest runs each case in its own process and a shared name is a wipe under
     // another process's read.
-    let only = common::scratch("hk-fix-selection-vocabulary-real-tree");
+    let only = common::scratch_repo("hk-fix-selection-vocabulary-real-tree");
     install_module(&only);
     let found = findings_declared_by(&root, &only);
     assert!(
@@ -317,7 +319,7 @@ fn a_tree_with_no_hook_config_is_not_judged() {
     // `task bind undefined`'s measured lesson, one row over: an unguarded module
     // reported seven findings against a fixture that copies this config without
     // its subject. A repository that runs no hk hooks has no selection to judge.
-    let root = common::scratch("hk-fix-selection-foreign");
+    let root = common::scratch_repo("hk-fix-selection-foreign");
     common::write(&root, "mise.toml", SOUND_MANIFEST);
     common::write(&root, "rules/toolchain.md", SOUND_RULES);
     install_module(&root);
@@ -386,23 +388,17 @@ const PKL_ROUTE: &str = "  [\"deno-fmt\"] = gate[\"deno-fmt\"]\n";
 /// Evaluate the committed predicate beside `config`: whether it passed, and
 /// everything it printed.
 fn fix_selection(name: &str, config: &str) -> (bool, String) {
-    let pkl = common::require_tool("pkl");
-    let root = common::scratch(&format!("hk-fix-selection-pkl-{name}"));
+    let root = common::scratch_repo(&format!("hk-fix-selection-pkl-{name}"));
     common::write(&root, "hk.pkl", config);
     fs::copy(
         common::at_root("hk-fix-selection.pkl"),
         root.join("hk-fix-selection.pkl"),
     )
     .expect("install the committed predicate");
-    #[expect(
-        clippy::disallowed_types,
-        reason = "stays — CLOUD-1991: the predicate is evaluated by `pkl`, which the engine does not host; this is the task's own spawn"
-    )]
-    let output = std::process::Command::new(pkl)
-        .arg("eval")
+    let output = common::pkl_command()
         .arg(root.join("hk-fix-selection.pkl"))
         .current_dir(&root)
-        .output()
+        .streamed_output()
         .expect("pkl runs the predicate");
     let mut text = String::from_utf8_lossy(&output.stdout).into_owned();
     text.push_str(&String::from_utf8_lossy(&output.stderr));
@@ -536,7 +532,7 @@ fn this_repositorys_hk_pkl_declares_stash_on_the_pre_commit_hook() {
 /// real fixers, and a fixer confined to the staged list cannot exhibit the defect
 /// at all.
 fn staging_fixture(name: &str, stashing: bool) -> PathBuf {
-    let dir = common::scratch(&format!("pre-commit-staging-{name}"));
+    let dir = common::scratch_repo(&format!("pre-commit-staging-{name}"));
     common::git_in(&dir, &["init", "-q", "-b", "main"]);
     common::git_in(&dir, &["config", "user.name", "Fixture"]);
     common::git_in(&dir, &["config", "user.email", "fixture@example.test"]);

@@ -15,8 +15,8 @@
 //!
 //! It does **not** catch an agent who does not check, and it cannot.
 //! Non-negotiable rule 3 says a gate resolves to a command and an exit code over
-//! an object it decides, never a model verdict — and "did the agent consult the
-//! tree before believing a row" is exactly a model verdict. So that axis is
+//! an object it decides, never a gated-model verdict — and "did the agent consult the
+//! tree before believing a row" is exactly a gated-model verdict. So that axis is
 //! feedforward, the rule says so where it lives, and a §7 claiming otherwise
 //! here would be the defect `rules/scanning.md` already records for its
 //! own case.

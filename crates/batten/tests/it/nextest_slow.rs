@@ -36,7 +36,8 @@ use crate::common;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use batten::rules::{self, Rule};
+use batten::config_model::Rule;
+use batten::rules;
 
 /// The predicate ids the module declares.
 const UNBOUNDED: &str = "suite bind missing";
@@ -65,7 +66,7 @@ const RAISED_BODY: &str =
 /// A fixture tree carrying a runner config with `body`, or none at all when
 /// `body` is `None`.
 fn repo(name: &str, body: Option<&str>) -> PathBuf {
-    let root = common::scratch(name);
+    let root = common::scratch_repo(name);
     fs::create_dir_all(root.join(".config")).expect("scratch config dir");
     if let Some(body) = body {
         fs::write(root.join(CONFIG), body).expect("write the runner config");
@@ -171,6 +172,13 @@ fn an_absent_runner_config_is_refused() {
 fn a_declaration_without_terminate_after_is_refused() {
     let root = repo("nextest-slow-report-only", Some(REPORT_ONLY));
     assert_eq!(rules_fired(&root), vec![UNBOUNDED.to_owned()]);
+    // A PERIOD WITH NO MULTIPLIER is just as unbounded: `kill_seconds` reads the
+    // multiplier by splitting on `terminate-after`, so this line yields no kill.
+    let root = repo(
+        "nextest-slow-period-only",
+        Some("[profile.default]\nslow-timeout = { period = \"10s\" }\n"),
+    );
+    assert_eq!(rules_fired(&root), vec![UNBOUNDED.to_owned()]);
 }
 
 /// THE RATCHET, over the engine. A period above the committed ceiling is refused.
@@ -258,6 +266,24 @@ fn an_override_citing_no_row_is_refused() {
     let root = repo(
         "nextest-slow-unfiled",
         Some(&format!("{ARMED}{UNFILED_THREADS}")),
+    );
+    assert_eq!(rules_fired(&root), vec![UNFILED.to_owned()]);
+}
+
+/// AN OVERRIDE THAT LIFTS THE KILL, citing nothing. A `slow-timeout` with a
+/// period and no `terminate-after` kills nothing, so for the tests it selects it
+/// is the ban switched off — the least bounded exception there is. Read through a
+/// `terminate-after` conjunct it was no override at all and owed no reason
+/// (#1276's sweep, where `terminator-unread` survived because no other case could
+/// observe that conjunct).
+#[test]
+fn an_unterminated_override_citing_no_row_is_refused() {
+    let root = repo(
+        "nextest-slow-unterminated-override",
+        Some(&format!(
+            "{ARMED}\n[[profile.default.overrides]]\nfilter = 'test(heavy)'\n\
+             slow-timeout = {{ period = \"60s\" }}\n"
+        )),
     );
     assert_eq!(rules_fired(&root), vec![UNFILED.to_owned()]);
 }

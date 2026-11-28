@@ -21,11 +21,14 @@
 # 0.20s -> 4.51s. A 22x slowdown on a case with nothing to read is not that
 # case's work.
 #
-# WHY A SETUP SCRIPT AND NOT `scratch` COLLECTING SIBLINGS. nextest runs each case
-# in its own process, concurrently; a fixture deleting a sibling's directory is
-# exactly the "one case deleting another's `.git` mid-run" failure
-# `common/mod.rs` records being repaired one file at a time. A setup script runs
-# ONCE, before any test process exists, so it cannot race one.
+# THE SIBLINGS ARE COLLECTED BY THE CASES NOW, UNDER A LOCK (CLOUD-2789). This
+# header once argued a setup script over `scratch` collecting siblings, because
+# a case deleting a sibling's directory was the "one case deleting another's
+# `.git` mid-run" failure. That holds for a sibling CASE's directory; a sibling
+# RUN's is a different object, and "before any test process exists" held only
+# within one invocation. So a run's directory is removed only by a process that
+# holds its lock exclusively, which no live case of it allows; see
+# `[scripts.setup.clear-scratch]` below for what the script still collects.
 #
 # WHY NOT IN `[tasks."test:cargo"]`. That task is one door — `verify`, `ci` and
 # `mise run test` all reach the suite through it — but `windows`, `macos` and
@@ -36,9 +39,7 @@
 # WIPE AT START, NEVER AT END, which is `cargo-test-support`'s property and worth
 # keeping: a failing case leaves its tree on disk to `cd` into. Collection here is
 # the previous run's, never this one's.
-#
-# The guard is not decoration: this removes a directory tree, so it refuses any
-# path that is not the scratch parent rather than trusting the expansion.
+
 experimental = ["setup-scripts"]
 
 [scripts.setup.clear-scratch]
@@ -50,33 +51,36 @@ experimental = ["setup-scripts"]
 # `got "       0"` while 5006 other cases passed. The contract this publishes is
 # a COUNT, so it is normalised here rather than tolerated at every reader.
 #
-# THE WIPE WAITS FOR EVERY OTHER RUN TO FINISH (CLOUD-1912). "Before any test
-# process exists" holds only within ONE invocation, and `verify` runs several at
-# once (`common/mod.rs`, `scratch`'s CLOUD-1164 note): a later run's `rm -rf`
-# deleted `config_schema`'s 13s case's `current_dir` mid-case, and its next spawn
-# failed `NotFound` — 4 of 5 `verify` runs, 2026-09-25. So the collector counts
-# the OTHER `cargo-nextest` processes alive (its own parent, `$PPID`, excluded)
-# and collects only when there are none; a deferred run publishes 0 and leaves
-# its entries for the next run that is alone. Where `pgrep` does not exist the
-# runner is a fresh CI box running one nextest, and the collection proceeds.
+# `target/`'S SCRATCH IS NOT THIS SCRIPT'S ANY MORE (CLOUD-2789). Each run writes
+# under `<CARGO_TARGET_TMPDIR>/run-<NEXTEST_RUN_ID>`, every case of it holding a
+# shared lock on `run-<id>.lock` for its life, and the first case of the next
+# run removes only entries whose lock it can take exclusively: a finished run's
+# (`tests/it/common/mod.rs`, `target_tmp`). This script used to `rm -rf`
+# `target/tmp` and every `target/*/tmp`, guarded by guessing which other
+# `cargo-nextest` shared the directory (its cwd, its `CARGO_TARGET_DIR`), and
+# each new layout escaped the guess: `batten test replay` builds under
+# `target/replay` from a tree outside the checkout, so a suite started here
+# wiped `target/replay/tmp` under the replay's live cases (CLOUD-1912, -1976,
+# -2716 and #1276 were the earlier escapes). The lock is the owner itself, so
+# no layout escapes it, and no glob here reaches another run's scratch.
 #
-# EVERY `<triple>/tmp` TOO (CLOUD-1976). A `--target <triple>` run's
-# `CARGO_TARGET_TMPDIR` is `target/<triple>/tmp`, never `target/tmp`, so the musl
-# lane's scratch parent was collected by nothing, grew across runs, and rode the
-# `cache-warm-musl` cache into the next job. The glob matches only directories
-# that exist, and cargo creates a target's tmp when it builds the integration
-# targets, before any setup script runs. The unmatched glob's literal is skipped,
-# and so is `tmp/tmp`, which would be a fixture of the native run's own.
+# WHAT IS LEFT IS THE SHARED TEMP ROOT (CLOUD-2716). Unit cases scratch under
+# `std::env::temp_dir()`, which nothing collected: 29,597 entries in `/tmp`
+# filled the disk under a cargo-mutants baseline. Each run gets
+# `${TMPDIR:-/tmp}/batten-suite`, wiped only when no other `cargo-nextest` is
+# alive on the machine (its own parent, `$PPID`, excluded), since any of them
+# may be writing there; a deferred run publishes 0. Where `pgrep` does not exist
+# the runner is a fresh CI box running one nextest, and the collection proceeds.
+# NOT under `target/`: a fixture whose subject is "not a repository" lives in
+# the temp dir precisely because it is outside this checkout
+# (`common::scratch_outside_tree`). `BATTEN_SCRATCH_ROOTS` names it, as a
+# `pwd -P` path, so `scratch_hygiene.rs` can assert a case's temp dir is under it.
 #
 # `BATTEN_ENGINE=local` (CLOUD-2232) is Go's `GOTOOLCHAIN=local`: the suite tests
 # the engine it built, so a branch's SOURCE pin is not enforced on it. The
 # engine-pin cases unset it, since enforcement is what they test; a release pin
 # is enforced either way.
-#
-# `BATTEN_SCRATCH_ROOTS` is what this run COVERS, collected or deferred, as
-# `:`-separated `pwd -P` paths, so `scratch_hygiene.rs` can assert that the
-# parent the running suite writes into is one of them.
-command = """sh -c 'base="${CARGO_TARGET_DIR:-target}"; others=0; if command -v pgrep >/dev/null 2>&1; then others=$(pgrep -x cargo-nextest | grep -cvx "$PPID"); fi; n=0; roots=""; for d in "$base/tmp" "$base"/*/tmp; do case "$d" in "$base/*/tmp"|"$base/tmp/tmp") continue ;; */tmp) ;; *) echo "clear-scratch: refusing $d" >&2; exit 1 ;; esac; if [ "$others" -eq 0 ]; then c=$(ls -1 "$d" 2>/dev/null | wc -l | tr -d "[:space:]"); n=$((n + c)); rm -rf "$d"; fi; mkdir -p "$d" && r=$(cd "$d" && pwd -P) && roots="${roots:+$roots:}$r"; done; echo "BATTEN_SCRATCH_COLLECTED=$n" >> "$NEXTEST_ENV" && echo "BATTEN_SCRATCH_ROOTS=$roots" >> "$NEXTEST_ENV" && echo "BATTEN_ENGINE=local" >> "$NEXTEST_ENV"'"""
+command = """sh -c 'others=0; if command -v pgrep >/dev/null 2>&1; then for p in $(pgrep -x cargo-nextest); do [ "$p" = "$PPID" ] && continue; others=$((others + 1)); done; fi; n=0; suite="${TMPDIR:-/tmp}/batten-suite"; if [ "$others" -eq 0 ]; then n=$(ls -1 "$suite" 2>/dev/null | wc -l | tr -d "[:space:]"); rm -rf "$suite"; fi; mkdir -p "$suite" && suite=$(cd "$suite" && pwd -P) && echo "BATTEN_SCRATCH_COLLECTED=$n" >> "$NEXTEST_ENV" && echo "BATTEN_SCRATCH_ROOTS=$suite" >> "$NEXTEST_ENV" && echo "TMPDIR=$suite" >> "$NEXTEST_ENV" && echo "BATTEN_ENGINE=local" >> "$NEXTEST_ENV"'"""
 
 [[profile.default.scripts]]
 filter = "all()"
@@ -133,6 +137,12 @@ slow-timeout = { period = "10s", terminate-after = 120 }
 # here, once, it covers every invocation that reads this file — including one
 # added later that never heard of the flag.
 fail-fast = false
+# NO RETRIES, STATED RATHER THAN INHERITED (CLOUD-2789). nextest's default is
+# 0 today; a retry turns a case whose result depends on load into a green that
+# hides it, and this repository's gates are only as deterministic as their
+# suite. `narrow` inherits it and `mutants` restates it;
+# `scratch_hygiene::no_profile_retries_a_failure` holds every profile to 0.
+retries = 0
 
 # EVERY RUN LEAVES ITS PER-CASE TIMES BEHIND (CLOUD-2059). nextest writes this to
 # `target/nextest/<profile>/junit.xml`, and `batten record suites` reads it into a
@@ -144,6 +154,17 @@ fail-fast = false
 #MUTANT junit-unwired|s@^path = "junit.xml"$@path = ""@|the_default_profile_writes_a_junit_report
 [profile.default.junit]
 path = "junit.xml"
+
+# CHEAP CASES FIRST. A unit case decides in milliseconds; an `it` case spawns
+# the binary and builds a fixture repository. Scheduling the unit cases first
+# means the first failure, and the mutant it catches under `mutants`'
+# fail-fast, arrives at unit speed whenever a unit case can see it (operator
+# ruling, 2026-11-10: order the tests from cheap to expensive). Priority orders
+# scheduling only; every case still runs under `default`'s no-fail-fast.
+# Overrides on `default` apply to every profile, `mutants` and `narrow` included.
+[[profile.default.overrides]]
+filter = 'kind(lib)'
+priority = 100
 
 # NO `ci` PROFILE (CLOUD-2588). It set nothing of its own and inherited every
 # key from `default`, so selecting it under `$CI` moved only the report
@@ -162,3 +183,11 @@ path = "junit.xml"
 #MUTANT narrow-profile-undeclared|s@^\[profile\.narrow\]$@[profile.narrow-gone]@|a_subset_gate_never_overwrites_the_full_suites_report
 #MUTANT narrow-report-renamed|s@^\[profile\.narrow\]$@[profile.narrow]\njunit = { path = "narrow.xml" }@|every_report_lands_where_record_suites_reads_it
 [profile.narrow]
+
+# cargo-mutants' runs (CLOUD-2253), selected by `mutant:changed`'s
+# `NEXTEST_PROFILE`. A mutant is decided by its first failing case, so the run
+# stops there, and a retry would turn a caught mutant into a flake read as
+# missed. Every other key, the setup script included, is `default`'s.
+[profile.mutants]
+fail-fast = true
+retries = 0

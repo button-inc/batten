@@ -29,7 +29,7 @@ fn run(dir: &Path, args: &[&str]) -> Output {
     common::batten()
         .args(args)
         .current_dir(dir)
-        .output()
+        .streamed_output()
         .expect("run batten")
 }
 

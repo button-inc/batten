@@ -29,6 +29,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
+use batten::capture::StreamedChild as _;
 
 use std::path::PathBuf;
 
@@ -105,7 +106,7 @@ impl Bench {
             .expect("stdin is piped")
             .write_all(payload.as_bytes())
             .expect("write stdin");
-        let outcome = child.wait_with_output().expect("wait for batten");
+        let outcome = child.streamed_wait().expect("wait for batten");
         // STDERR IS CARRIED because a door that REFUSED says so there, and a case
         // asserting only over stdout reports "the row did not select" for a call
         // the engine never adjudicated at all. Two different defects, one failure
@@ -273,7 +274,7 @@ fn a_current_mediator_produces_no_advisory_on_the_same_call() {
 /// A HANDLER READS THE HOST'S OWN BYTES (CLOUD-2224): the payload is spooled as
 /// read, and a handler is handed that spool, never a re-serialized document.
 /// The payload is written in a shape no serializer emits (spacing, key order),
-/// so a re-serialization cannot pass. `#MUTANT handler-bytes-reserialized`.
+/// so a re-serialization cannot pass.
 #[test]
 fn a_handler_reads_the_payload_the_host_sent() {
     use std::io::Write as _;
@@ -320,7 +321,7 @@ expires = "2027-03-31"
         .expect("stdin is piped")
         .write_all(payload.as_bytes())
         .expect("write stdin");
-    let outcome = child.wait_with_output().expect("wait for batten");
+    let outcome = child.streamed_wait().expect("wait for batten");
     let received = std::fs::read_to_string(&got).unwrap_or_else(|_| {
         panic!(
             "the handler ran: {}",
@@ -374,6 +375,165 @@ fn a_write_inside_the_tree_is_selected() {
     assert!(
         bench.spawned(),
         "a tree write is still this row's subject: {} / {}",
+        door.out,
+        door.err
+    );
+}
+
+/// THIS REPOSITORY'S `filed-row-settled` IS THE ROW THE COLUMN WAS BUILT FOR.
+///
+/// Measured on #1276: the row refused a subagent's Write into the session
+/// scratchpad, outside the checkout, because the row never declared the column
+/// the cases above prove; [`TREE_CONFIG`] called itself "the shape
+/// `filed-row-settled` declares" while the authority did not declare it.
+///
+/// Fails by: the committed row dropping `tree_only`, which refuses every write
+/// outside the repository while a filed row is unsettled.
+#[test]
+fn this_repositorys_filed_row_settled_is_tree_only() {
+    use batten::facts::{Format, Look, Node};
+    let text = std::fs::read_to_string(common::committed_config_file("handler_dispatch"))
+        .expect("read the authority");
+    let Look::Is(config) = Format::Toml.read(&text) else {
+        panic!("the authority did not parse");
+    };
+    let Look::Is(Node::List(handlers)) = config.at("hook.handler") else {
+        panic!("the authority declares no handler table");
+    };
+    let row = handlers
+        .iter()
+        .find(|row| matches!(row.at("id"), Look::Is(Node::Text(id)) if id == "filed-row-settled"))
+        .expect("the authority declares filed-row-settled");
+    assert!(
+        matches!(row.at("tree_only"), Look::Is(Node::Bool(true))),
+        "filed-row-settled must declare tree_only = true"
+    );
+}
+
+/// [`TREE_CONFIG`] plus a policy row whose module does not exist: the handler
+/// table still resolves, but the policy it sits beside cannot be built, so the
+/// hook is on its load-fault floor.
+const UNBUILDABLE_CONFIG: &str = r#"version = 1
+
+[[hook.handler]]
+id = "tree-write-check"
+on = "pre-tool"
+run = ["./mediator-advise.sh"]
+matcher = "^(Edit|Write|MultiEdit|NotebookEdit)$"
+tree_only = true
+timeout_ms = 5000
+owner = "CLOUD-2390"
+expires = "2027-03-31"
+
+[[rule]]
+id = "gate run twice"
+no_fix_reason = "a fixture row"
+kind = "policy"
+scope = "mediated_call"
+module = "policy/absent.rego"
+severity = "deny"
+"#;
+
+/// THE REPAIR WRITE IS THE ENGINE'S OWN FLOOR, AND NO HANDLER MAY REFUSE IT.
+///
+/// Measured on #1276: a row naming a missing module left the policy unbuildable,
+/// the floor admitted the `batten.toml` repair write, and `filed-row-settled`, a
+/// handler the half-loaded table still declared, refused that write. The one
+/// mutation that could end the fault was refused, and the session was locked out.
+///
+/// Fails by: handlers dispatched on the floor, so the stub runs.
+#[test]
+fn a_repair_write_on_the_load_fault_floor_runs_no_handler() {
+    let bench = bench_with("handler-floor-repair", UNBUILDABLE_CONFIG, "refused");
+    let target = bench.repo.join("batten.toml");
+    let door = bench.write(target.to_str().unwrap());
+
+    assert!(
+        !bench.spawned(),
+        "the floor's repair write must not dispatch a handler: {} / {}",
+        door.out,
+        door.err
+    );
+}
+
+/// The mutation's target: off the floor the same row still selects the write.
+#[test]
+fn a_config_write_with_rules_loaded_still_runs_the_handler() {
+    let bench = bench_with("handler-loaded-repair", TREE_CONFIG, "");
+    let target = bench.repo.join("batten.toml");
+    // A loadable text, so the unloadable-write gate does not answer first.
+    let door = bench.send(&serde_json::json!({
+        "hook_event_name": "PreToolUse",
+        "tool_name": "Write",
+        "tool_input": { "file_path": target.to_str().unwrap(), "content": TREE_CONFIG },
+    }));
+
+    assert!(
+        bench.spawned(),
+        "with the rules loaded the handler still judges a config write: {} / {}",
+        door.out,
+        door.err
+    );
+}
+
+/// AN EDIT THAT WOULD LEAVE THE CONFIG UNLOADABLE IS REFUSED BEFORE IT LANDS.
+///
+/// Measured on #1276: rows naming modules not yet written made the config
+/// unloadable, and every later call was refused. The write is judged on the
+/// text it lands, loaded exactly as the hook would load it.
+///
+/// Fails by: the write admitted, so the next call is on the floor.
+#[test]
+fn a_config_write_that_would_not_load_is_refused() {
+    let bench = bench_with("config-write-unloadable", "version = 1\n", "");
+    let target = bench.repo.join("batten.toml");
+    let door = bench.send(&serde_json::json!({
+        "hook_event_name": "PreToolUse",
+        "tool_name": "Write",
+        "tool_input": {
+            "file_path": target.to_str().unwrap(),
+            "content": UNBUILDABLE_CONFIG,
+        },
+    }));
+
+    assert!(
+        door.out.contains("config-write-unloadable"),
+        "the write is refused under the engine's id: {} / {}",
+        door.out,
+        door.err
+    );
+    // THE CAUSE, NEVER THE EXCERPT (rule 4): what follows the colon is the load
+    // error's own words, with every `N | source` line and every blank line gone.
+    // Inverting either filter leaves the excerpt alone, or nothing.
+    let cause = door
+        .out
+        .split_once("unable to load: ")
+        .and_then(|(_, rest)| rest.split('"').next())
+        .unwrap_or_default();
+    assert!(
+        cause.chars().any(char::is_alphabetic) && !cause.contains('|'),
+        "the refusal names the cause and no source excerpt: {cause:?} in {}",
+        door.out
+    );
+}
+
+/// The mutation's target: a write that still loads is not refused.
+#[test]
+fn a_config_write_that_still_loads_is_admitted() {
+    let bench = bench_with("config-write-loads", "version = 1\n", "");
+    let target = bench.repo.join("batten.toml");
+    let door = bench.send(&serde_json::json!({
+        "hook_event_name": "PreToolUse",
+        "tool_name": "Write",
+        "tool_input": {
+            "file_path": target.to_str().unwrap(),
+            "content": TREE_CONFIG,
+        },
+    }));
+
+    assert!(
+        !door.out.contains("config-write-unloadable"),
+        "a loadable config write is admitted: {} / {}",
         door.out,
         door.err
     );
@@ -439,4 +599,102 @@ expires = "2027-03-31"
         "the running image answered the row: {}",
         String::from_utf8_lossy(&outcome.stderr)
     );
+}
+
+/// Gemini's `BeforeAgent` is its prompt-submit moment (CLOUD-2695): a handler
+/// on `user-prompt-submit` runs there, and its exit 2 is Gemini's documented
+/// block.
+#[test]
+fn a_gemini_before_agent_reaches_a_prompt_handler() {
+    let dir = scratch("handler-gemini-before-agent");
+    let repo = dir.join("repo");
+    std::fs::create_dir_all(&repo).unwrap();
+    write(
+        &repo,
+        "batten.toml",
+        r#"version = 1
+
+[[hook.handler]]
+id = "prompt-guard"
+on = "user-prompt-submit"
+run = ["sh", "-c", "echo blocked by fixture >&2; exit 2"]
+timeout_ms = 5000
+owner = "CLOUD-2695"
+expires = "2027-03-31"
+"#,
+    );
+    common::init_repo(&repo);
+    let payload = serde_json::json!({
+        "hook_event_name": "BeforeAgent",
+        "session_id": "s",
+        "cwd": repo,
+        "prompt": "x",
+    })
+    .to_string();
+    let output =
+        common::run_with_stdin(&repo, &["adjudicate", "--harness", "gemini-cli"], &payload);
+    let err = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(2), "{err}");
+    assert!(err.contains("hook.handler.prompt-guard"), "{err}");
+}
+
+/// A pre-tool row selecting a connector tool by its final segment.
+const SAVE_ISSUE_ROW: &str = r#"version = 1
+
+[[hook.handler]]
+id = "save-issue-seen"
+on = "pre-tool"
+run = ["./mediator-advise.sh"]
+matcher = "__save_issue$"
+timeout_ms = 5000
+owner = "CLOUD-2789"
+expires = "2027-03-31"
+"#;
+
+/// ONE CALL, EVERY SURFACE (CLOUD-2789): a handler's matcher selects the
+/// connector call made through `batten mcp call` on a shell exactly as it
+/// selects the direct `mcp__<server>__<method>` call.
+///
+/// Fails by: `handler::selects` and `dispatch_writing` matching `raw_tool`
+/// alone, which is `Bash` on the mediated route.
+#[test]
+fn a_handler_runs_for_a_mediated_call_as_for_the_direct_one() {
+    let input = serde_json::json!({"id": "CLOUD-1", "title": "t"});
+    let ran = |name: &str, payload: serde_json::Value| {
+        let bench = bench_with(name, SAVE_ISSUE_ROW, "");
+        let _ = bench.send(&payload);
+        bench.spawned()
+    };
+    let mediated = |method: &str| {
+        serde_json::json!({
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Bash",
+            "tool_input": {"command": format!("batten mcp call Linear {method} '{input}'")},
+        })
+    };
+    assert!(
+        ran(
+            "handler-mediated-direct",
+            serde_json::json!({
+                "hook_event_name": "PreToolUse",
+                "tool_name": "mcp__Linear__save_issue",
+                "tool_input": input,
+            })
+        ),
+        "the direct call selects the row"
+    );
+    assert!(
+        ran("handler-mediated-save", mediated("save_issue")),
+        "the mediated call selects it as the direct one does"
+    );
+    // NEGATIVE CONTROLS: another mediated method, and a plain shell call.
+    assert!(!ran("handler-mediated-get", mediated("get_issue")));
+    assert!(!ran(
+        "handler-mediated-shell",
+        serde_json::json!({
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Bash",
+            "tool_input": {"command": "ls"},
+        })
+    ));
 }

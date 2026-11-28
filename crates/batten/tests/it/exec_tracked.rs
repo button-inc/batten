@@ -28,7 +28,7 @@ fn exec(dir: &Path, args: &[&str]) -> Output {
         .arg("exec")
         .args(args)
         .current_dir(dir)
-        .output()
+        .streamed_output()
         .expect("run batten exec")
 }
 
@@ -74,13 +74,20 @@ fn a_teed_child_is_reaped_when_its_output_cannot_be_written() {
         .join("captures");
     std::fs::create_dir_all(&captures).expect("create the capture store");
     std::fs::write(captures.join("live"), "not a directory").expect("block the spool");
-    // A duration no other process carries, so `sleep`'s own argv is the marker.
-    let marker = format!("3599.{}", std::process::id());
+    // A `$0` no other process carries, so the child's own argv is the marker.
+    // It spins on a builtin WHILE THIS TEST PROCESS LIVES (`kill -0` sends
+    // nothing), so it needs no clock to run long and cannot outlive the case
+    // however the case ends (CLOUD-2789).
+    let marker = format!("exec-reap-marker.{}", std::process::id());
+    let spin = format!(
+        "while kill -0 {} 2>/dev/null; do :; done",
+        std::process::id()
+    );
     let output = common::batten()
-        .args(["exec", "--", "sleep", &marker])
+        .args(["exec", "--", "sh", "-c", &spin, &marker])
         .current_dir(&dir)
         .state_dir(&data)
-        .output()
+        .streamed_output()
         .expect("run batten exec");
     let survivors = carrying(&marker);
     for pid in &survivors {

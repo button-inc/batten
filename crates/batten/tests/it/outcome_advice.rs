@@ -50,7 +50,8 @@ fn measured() -> serde_json::Value {
 /// The signatures the committed config declares, read from it rather than
 /// restated: a copy here would pass while the config said something else.
 fn declared() -> Vec<Signature> {
-    let text = fs::read_to_string(common::at_root("batten.toml")).expect("the config is committed");
+    let text = fs::read_to_string(common::committed_config_file("outcome_advice"))
+        .expect("the config is committed");
     let config: toml::Value = toml::from_str(&text).expect("the config parses");
     let rows = config
         .get("outcome")

@@ -36,7 +36,11 @@ violation contains {
 	# No `split` belongs here: a second tokenizer is a second authority.
 	some program in input.call.programs
 	program.name == "git"
-	"commit" in program.arguments
+
+	# THE SUBCOMMAND, not membership (CLOUD-2813), `linear-history`'s rule: the
+	# engine projects it past git's own options (CLOUD-2354). `"commit" in
+	# arguments` read a `commit` word anywhere in git's argv as the subcommand.
+	program.subcommand == "commit"
 	"--allow-empty" in program.arguments
 }
 
@@ -53,33 +57,48 @@ violation contains {
 # that the predicate would be right if it did. That is what let CLOUD-1382's six
 # bypasses sit under a green suite.
 test_no_empty_commit if {
-	some v in violation with input as {"call": {"programs": [{"program": "git", "name": "git", "arguments": ["commit", "--allow-empty", "-m", "x"], "mediated": false}]}}
+	some v in violation with input as {"call": {"programs": [{"program": "git", "name": "git", "arguments": ["commit", "--allow-empty", "-m", "x"], "subcommand": "commit", "mediated": false}]}}
 	v.rule == "commit ship empty"
 }
 
 test_an_empty_commit_later_in_a_list_is_caught if {
-	some v in violation with input as {"call": {"programs": [
-		{"program": "cd", "name": "cd", "arguments": ["/tmp"], "mediated": false},
-		{"program": "git", "name": "git", "arguments": ["commit", "--allow-empty", "-m", "x"], "mediated": false},
-	]}}
+	some v in violation with input as {"call": {
+		"command": "cd /tmp && git commit --allow-empty -m x",
+		"segments": [{"words": ["cd", "/tmp"]}, {"words": ["git", "commit", "--allow-empty", "-m", "x"]}],
+		"programs": [
+			{"program": "cd", "name": "cd", "arguments": ["/tmp"], "mediated": false},
+			{"program": "git", "name": "git", "arguments": ["commit", "--allow-empty", "-m", "x"], "subcommand": "commit", "mediated": false},
+		],
+	}}
 	v.rule == "commit ship empty"
 }
 
 # The grammar case (CLOUD-1382): the caller wrote `time git commit
 # --allow-empty`, and the walk steps past `time`, so the entry names git.
 test_a_grammar_token_does_not_hide_the_program if {
-	some v in violation with input as {"call": {"programs": [{"program": "git", "name": "git", "arguments": ["commit", "--allow-empty"], "mediated": false}]}}
+	some v in violation with input as {"call": {"programs": [{"program": "git", "name": "git", "arguments": ["commit", "--allow-empty"], "subcommand": "commit", "mediated": false}]}}
 	v.rule == "commit ship empty"
 }
 
 # Reached through a path, still git — what `name` buys over `program`.
 test_git_reached_through_a_path_is_still_git if {
-	some v in violation with input as {"call": {"programs": [{"program": "/usr/bin/git", "name": "git", "arguments": ["commit", "--allow-empty"], "mediated": false}]}}
+	some v in violation with input as {"call": {"programs": [{"program": "/usr/bin/git", "name": "git", "arguments": ["commit", "--allow-empty"], "subcommand": "commit", "mediated": false}]}}
 	v.rule == "commit ship empty"
 }
 
+# A global option before the subcommand does not hide it.
+test_a_global_option_does_not_hide_the_commit if {
+	some v in violation with input as {"call": {"programs": [{"program": "git", "name": "git", "arguments": ["-C", "/w", "commit", "--allow-empty"], "subcommand": "commit", "global-options": ["-C", "/w"], "mediated": false}]}}
+	v.rule == "commit ship empty"
+}
+
+# A `commit` word that is not the subcommand is not a commit.
+test_a_commit_word_elsewhere_is_not_a_commit if {
+	count(violation) == 0 with input as {"call": {"programs": [{"program": "git", "name": "git", "arguments": ["log", "--grep", "commit", "--allow-empty"], "subcommand": "log", "mediated": false}]}}
+}
+
 test_an_ordinary_commit_is_left_alone if {
-	count(violation) == 0 with input as {"call": {"programs": [{"program": "git", "name": "git", "arguments": ["commit", "-m", "x"], "mediated": false}]}}
+	count(violation) == 0 with input as {"call": {"programs": [{"program": "git", "name": "git", "arguments": ["commit", "-m", "x"], "subcommand": "commit", "mediated": false}]}}
 }
 
 # A quoted mention stays one word (CLOUD-269), so the program is `echo`.
@@ -92,7 +111,7 @@ test_a_quoted_mention_does_not_fire if {
 # reading the flag from anywhere would be the defect one level up.
 test_another_programs_flag_is_not_gits if {
 	count(violation) == 0 with input as {"call": {"programs": [
-		{"program": "git", "name": "git", "arguments": ["commit", "-m", "x"], "mediated": false},
+		{"program": "git", "name": "git", "arguments": ["commit", "-m", "x"], "subcommand": "commit", "mediated": false},
 		{"program": "hg", "name": "hg", "arguments": ["commit", "--allow-empty"], "mediated": false},
 	]}}
 }

@@ -573,8 +573,8 @@ const OWED: [&str; 3] = ["simplify", "security-review", "code-review"];
 /// read out of this repository's `batten.toml` with the base re-pointed at the
 /// ref the fixture pins (`common::Fixture::base_commit`).
 fn committed_ready_config() -> String {
-    let text =
-        std::fs::read_to_string(common::at_root("batten.toml")).expect("the committed authority");
+    let text = std::fs::read_to_string(common::committed_config_file("review_receipt_delta"))
+        .expect("the committed authority");
     let authority: toml::Table = text.parse().expect("the committed authority parses");
     let rows = |table: &str, field: &str, names: &[&str]| -> Vec<toml::Value> {
         authority[table]
@@ -725,4 +725,84 @@ fn a_branch_with_no_change_at_all_is_refused_rather_than_allowed() {
     // No `change` call: the branch sits at the base, so the merge-base diff is
     // empty and `branch_patch_id` mints no identity.
     denied(&ready(&dir));
+}
+
+// --- CLOUD-2680: `after_mode = "require"` checks the bridge and leaves it ----
+
+/// A bridge minted by the `bridge` skill, and two `require` dependents on the
+/// `simplify` and `pr-review` skills, all keyed on the delta.
+fn require_fixture(name: &str, dependents: &[(&str, &str)]) -> PathBuf {
+    use std::fmt::Write as _;
+    let mut config = String::from(
+        "version = 1\n\n\
+         [[mint]]\nname = \"gates-passed\"\ntool = \"Skill\"\n\
+         selects_at = \"skill\"\nselects = \"bridge\"\nkey = \"delta\"\n\
+         key_base = \"refs/remotes/origin/main\"\nmode = \"replace\"\n\
+         body = \"{now}\"\n",
+    );
+    for (row, selects) in dependents {
+        let _ = write!(
+            config,
+            "\n[[mint]]\nname = \"{row}\"\ntool = \"Skill\"\n\
+             selects_at = \"skill\"\nselects = \"{selects}\"\n\
+             after = \"gates-passed\"\nafter_mode = \"require\"\nkey = \"delta\"\n\
+             key_base = \"refs/remotes/origin/main\"\nmode = \"replace\"\n\
+             body = \"{{now}}\"\n"
+        );
+    }
+    let dir = common::Fixture::new(name)
+        .config(&config)
+        .file("README.md", "base\n")
+        .git()
+        .base_commit()
+        .build();
+    change(&dir, "fn a() {}\n");
+    dir
+}
+
+/// The receipt `name` minted over this change, if any.
+fn minted(dir: &Path, name: &str) -> bool {
+    dir.join(".git/batten-receipts")
+        .join(format!("{name}.{}", identity(dir)))
+        .is_file()
+}
+
+#[test]
+fn one_bridge_admits_every_require_dependent() {
+    let dir = require_fixture(
+        "require-bridge",
+        &[("simplify", "simplify"), ("pr-review", "pr-review")],
+    );
+    dispatch(&dir, "bridge");
+    dispatch(&dir, "simplify");
+    dispatch(&dir, "pr-review");
+    assert!(minted(&dir, "simplify"), "the first dependent minted");
+    assert!(
+        minted(&dir, "pr-review"),
+        "and the second, over the same bridge"
+    );
+    assert!(
+        minted(&dir, "gates-passed"),
+        "the bridge was read, never spent"
+    );
+}
+
+#[test]
+fn a_require_dependent_with_no_bridge_mints_nothing() {
+    let dir = require_fixture("require-no-bridge", &[("simplify", "simplify")]);
+    dispatch(&dir, "simplify");
+    assert!(!minted(&dir, "simplify"));
+}
+
+#[test]
+fn a_require_dependent_cannot_be_satisfied_by_its_own_call() {
+    // The dependent selects the bridge's own dispatch: the record this call
+    // writes is not one an earlier call left.
+    let dir = require_fixture("require-same-call", &[("simplify", "bridge")]);
+    dispatch(&dir, "bridge");
+    assert!(minted(&dir, "gates-passed"), "the bridge minted");
+    assert!(
+        !minted(&dir, "simplify"),
+        "and did not satisfy its own dependent"
+    );
 }

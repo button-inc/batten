@@ -77,9 +77,28 @@ fn pull(number: &str, head_ref: &str, head_sha: &str) -> Pull {
         head_ref: head_ref.to_owned(),
         head_sha: head_sha.to_owned(),
         title: String::new(),
+        base_ref: "main".to_owned(),
         body: String::new(),
-        log: String::new(),
+        commits: Vec::new(),
     }
+}
+
+/// A competitor's commit messages, joined — what `with_logs` used to store.
+fn log_of(pull: &Pull) -> String {
+    pull.commits
+        .iter()
+        .map(|commit| commit.message.as_str())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// A forge answer of one commit carrying `message`.
+fn one(message: String) -> Vec<race::Commit> {
+    vec![race::Commit {
+        sha: String::new(),
+        identity: None,
+        message,
+    }]
 }
 
 /// THE DEFECT, as the case the retired suite had no way to write.
@@ -95,9 +114,18 @@ fn a_branch_identified_by_head_sha_does_not_race_its_own_pull_request() {
         ..pull("793", "user/proj-843-campaign", "e97703b2")
     }];
     let me = race::identify(&pulls, "e97703b2").expect("the listing carries this head");
-    let mine = race::claimed(&me.head_ref, &me.title, &me.log, &me.body, &Fake);
+    let mine = race::claimed(&me.head_ref, &me.title, &log_of(me), &me.body, &Fake);
     assert_eq!(mine, vec!["PROJ-1170".to_owned()]);
-    assert!(race::races(&mine, &pulls, Some(&me.number), &Fake).is_empty());
+    assert!(
+        race::races(
+            &mine,
+            &pulls,
+            Some(&me.number),
+            &race::Ours::default(),
+            &Fake
+        )
+        .is_empty()
+    );
 }
 
 /// The other half of the pair: the identical input with the subject
@@ -112,7 +140,10 @@ fn the_same_listing_with_no_resolved_self_is_what_produced_the_defect() {
         ..pull("793", "user/proj-843-campaign", "e97703b2")
     }];
     let mine = vec!["PROJ-1170".to_owned()];
-    assert_eq!(race::races(&mine, &pulls, None, &Fake).len(), 1);
+    assert_eq!(
+        race::races(&mine, &pulls, None, &race::Ours::default(), &Fake).len(),
+        1
+    );
 }
 
 // carried: "a key claimed by a different open PR is refused" crates/batten/tests/it/claim_race.rs
@@ -121,7 +152,13 @@ fn the_same_listing_with_no_resolved_self_is_what_produced_the_defect() {
 #[test]
 fn a_key_claimed_by_a_different_open_pull_request_is_refused() {
     let pulls = vec![pull("306", "user/proj-49-someone-else", "aaaa")];
-    let races = race::races(&["PROJ-49".to_owned()], &pulls, Some("471"), &Fake);
+    let races = race::races(
+        &["PROJ-49".to_owned()],
+        &pulls,
+        Some("471"),
+        &race::Ours::default(),
+        &Fake,
+    );
     assert_eq!(races.len(), 1);
     assert_eq!(races[0].key, "PROJ-49");
     assert_eq!(races[0].number, "306");
@@ -138,7 +175,13 @@ fn a_refusal_carries_no_title_and_no_body() {
         body: "a body nobody else should read".to_owned(),
         ..pull("306", "user/proj-49-someone-else", "aaaa")
     }];
-    let races = race::races(&["PROJ-49".to_owned()], &pulls, Some("471"), &Fake);
+    let races = race::races(
+        &["PROJ-49".to_owned()],
+        &pulls,
+        Some("471"),
+        &race::Ours::default(),
+        &Fake,
+    );
     let rendered = format!("{races:?}");
     assert!(!rendered.contains("codename"), "{rendered}");
     assert!(!rendered.contains("nobody else should read"), "{rendered}");
@@ -155,7 +198,16 @@ fn a_competitor_that_merely_cites_the_key_is_allowed() {
         body: "Prior measurement in PROJ-49 said otherwise.".to_owned(),
         ..pull("306", "user/proj-268-attribution", "aaaa")
     }];
-    assert!(race::races(&["PROJ-49".to_owned()], &pulls, Some("471"), &Fake).is_empty());
+    assert!(
+        race::races(
+            &["PROJ-49".to_owned()],
+            &pulls,
+            Some("471"),
+            &race::Ours::default(),
+            &Fake
+        )
+        .is_empty()
+    );
 }
 
 // carried: "our own PR is not a competitor" crates/batten/tests/it/claim_race.rs
@@ -163,7 +215,16 @@ fn a_competitor_that_merely_cites_the_key_is_allowed() {
 #[test]
 fn our_own_pull_request_is_not_a_competitor() {
     let pulls = vec![pull("471", "user/proj-49-the-work", "aaaa")];
-    assert!(race::races(&["PROJ-49".to_owned()], &pulls, Some("471"), &Fake).is_empty());
+    assert!(
+        race::races(
+            &["PROJ-49".to_owned()],
+            &pulls,
+            Some("471"),
+            &race::Ours::default(),
+            &Fake
+        )
+        .is_empty()
+    );
 }
 
 // carried: "a branch claiming nothing is not judged" crates/batten/tests/it/claim_race.rs
@@ -172,7 +233,7 @@ fn our_own_pull_request_is_not_a_competitor() {
 #[test]
 fn a_branch_claiming_nothing_is_not_judged() {
     let pulls = vec![pull("306", "user/proj-49-someone-else", "aaaa")];
-    assert!(race::races(&[], &pulls, Some("471"), &Fake).is_empty());
+    assert!(race::races(&[], &pulls, Some("471"), &race::Ours::default(), &Fake).is_empty());
     assert!(race::claimed("a-branch", "a title", "", "", &Fake).is_empty());
 }
 
@@ -193,7 +254,16 @@ fn a_body_closing_a_different_key_overrides_the_branch_name() {
 #[test]
 fn a_shorter_key_does_not_match_a_longer_one() {
     let pulls = vec![pull("306", "user/proj-49-someone-else", "aaaa")];
-    assert!(race::races(&["PROJ-4".to_owned()], &pulls, Some("471"), &Fake).is_empty());
+    assert!(
+        race::races(
+            &["PROJ-4".to_owned()],
+            &pulls,
+            Some("471"),
+            &race::Ours::default(),
+            &Fake
+        )
+        .is_empty()
+    );
 }
 
 // carried: "outside a checkout there is nothing to judge" crates/batten/tests/it/claim_race.rs
@@ -293,7 +363,7 @@ fn the_retired_variable_no_longer_decides_anything() {
         .args(["claim", "race"])
         .current_dir(&dir)
         .env("BATTEN_CLAIM_RACE_BYPASS", "1")
-        .output()
+        .streamed_output()
         .expect("run batten");
     assert_eq!(
         (plain.status.code(), stdout(&plain)),
@@ -386,37 +456,36 @@ fn listing() -> (Vec<Pull>, Vec<String>) {
 /// because it catches a future refactor that makes the width a soft target,
 /// but the bound itself is held by construction, not by this case.
 ///
-/// **Nothing here asserts on the clock.** The ten-second deadline is an input:
-/// it turns a serial implementation's hang into a failure instead of a hung
-/// suite. A passing run never reaches it. A regression pays it TWICE — once at
-/// the barrier, which the first waiter then opens for everyone, and once at
-/// `"2"`'s order wait, whose condition a sequential fill never satisfies either
-/// — so expect roughly twenty seconds, not ten, when this case is failing.
+/// **Nothing here waits on the clock** (CLOUD-2789). Both waits are on the
+/// EVENT their condition names — the barrier opening, another fetch finishing
+/// — so a serial implementation hangs at the barrier, and the mutation judge's
+/// per-case cut files that as the timeout it is rather than this case racing a
+/// deadline of its own.
 #[test]
 fn competitor_logs_are_fetched_concurrently_once_each_and_returned_in_listing_order() {
     let (pulls, eligible) = listing();
     let seen = std::sync::Mutex::new(Seen::default());
     let bell = std::sync::Condvar::new();
-    let deadline = std::time::Duration::from_secs(10);
-    let fetch = |number: &str| -> Option<String> {
+    let fetch = |number: &str| -> Option<Vec<race::Commit>> {
         {
             // THE WIDTH BARRIER. Every call parks until `FETCH_WIDTH` of them
             // are inside at once, so the peak the case asserts is reached
             // deliberately rather than observed by luck. With the width honoured
             // exactly that many workers exist, all arrive, and the barrier
-            // opens; with a narrower pool nobody ever arrives and the first
-            // waiter gives up, leaving a peak below the width.
+            // opens; with a narrower pool nobody ever arrives, the case hangs
+            // on the barrier, and the mutation judge's per-case cut files that
+            // as the timeout it is (CLOUD-2789). A wait on the EVENT, never on
+            // a clock.
             let mut state = seen.lock().expect("the fixture lock");
             state.asked.push(number.to_owned());
             state.in_flight += 1;
             state.peak = state.peak.max(state.in_flight);
             state.opened |= state.in_flight >= race::FETCH_WIDTH;
             if !state.opened {
-                let (reopened, timeout) = bell
-                    .wait_timeout_while(state, deadline, |state| !state.opened)
-                    .expect("the fixture lock");
-                state = reopened;
-                state.opened |= timeout.timed_out();
+                drop(
+                    bell.wait_while(state, |state| !state.opened)
+                        .expect("the fixture lock"),
+                );
             }
         }
         bell.notify_all();
@@ -426,7 +495,7 @@ fn competitor_logs_are_fetched_concurrently_once_each_and_returned_in_listing_or
         if number == "2" {
             let waiting = seen.lock().expect("the fixture lock");
             drop(
-                bell.wait_timeout_while(waiting, deadline, |state| state.done == 0)
+                bell.wait_while(waiting, |state| state.done == 0)
                     .expect("the fixture lock"),
             );
         }
@@ -436,7 +505,7 @@ fn competitor_logs_are_fetched_concurrently_once_each_and_returned_in_listing_or
             state.done += 1;
         }
         bell.notify_all();
-        Some(format!("Refs: CLOUD-{number}"))
+        Some(one(format!("Refs: CLOUD-{number}")))
     };
 
     let race::Filled {
@@ -462,16 +531,16 @@ fn competitor_logs_are_fetched_concurrently_once_each_and_returned_in_listing_or
     for pull in &filled {
         if eligible.contains(&pull.number) {
             assert_eq!(
-                pull.log,
+                log_of(pull),
                 format!("Refs: CLOUD-{}", pull.number),
                 "each fetched pull carries its own answer"
             );
         } else {
             assert!(
-                pull.log.is_empty(),
+                log_of(pull).is_empty(),
                 "#{} was not eligible and must keep its empty log, not {:?}",
                 pull.number,
-                pull.log
+                log_of(pull)
             );
         }
     }
@@ -526,7 +595,7 @@ fn a_fill_that_lost_a_worker_is_not_complete_and_keeps_the_answers_it_got() {
         unanswered,
     } = race::with_logs(pulls, "1", &[], &Fake, |number| {
         assert!(number != "2", "a deliberate panic inside one worker");
-        Some(format!("Refs: CLOUD-{number}"))
+        Some(one(format!("Refs: CLOUD-{number}")))
     });
 
     assert_eq!(
@@ -535,10 +604,7 @@ fn a_fill_that_lost_a_worker_is_not_complete_and_keeps_the_answers_it_got() {
         "the competitor that was never answered is named, not just counted"
     );
     assert_eq!(
-        filled
-            .iter()
-            .map(|pull| pull.log.as_str())
-            .collect::<Vec<_>>(),
+        filled.iter().map(log_of).collect::<Vec<_>>(),
         ["", "", "Refs: CLOUD-3"],
         "the lost worker costs its own fetch and nothing else, and the order holds"
     );
@@ -576,11 +642,11 @@ fn a_read_that_failed_is_not_a_competitor_that_claims_nothing() {
         "a read that failed leaves the fill a could-not-look, never a verdict"
     );
     assert!(
-        refused.pulls.iter().all(|pull| pull.log.is_empty()),
+        refused.pulls.iter().all(|pull| log_of(pull).is_empty()),
         "and nothing is invented for the competitor that was not read"
     );
 
-    let answered = race::with_logs(pulls, "1", &[], &Fake, |_| Some(String::new()));
+    let answered = race::with_logs(pulls, "1", &[], &Fake, |_| Some(Vec::new()));
     assert!(
         answered.unanswered.is_empty(),
         "an empty log is an ANSWER — a competitor whose commits name no key reads \
@@ -622,7 +688,7 @@ fn a_competitor_whose_cheap_key_collides_is_fetched_and_one_that_collides_with_n
             .lock()
             .expect("the fixture lock")
             .push(number.to_owned());
-        Some(format!("Closes PROJ-{number}0"))
+        Some(one(format!("Closes PROJ-{number}0")))
     });
 
     assert_eq!(
@@ -640,7 +706,14 @@ fn a_competitor_whose_cheap_key_collides_is_fetched_and_one_that_collides_with_n
     // the cheap sources would have reported against PROJ-7 does not survive the
     // answer the widening went and got.
     assert!(
-        race::races(&["PROJ-7".to_owned()], &filled.pulls, Some("1"), &Fake).is_empty(),
+        race::races(
+            &["PROJ-7".to_owned()],
+            &filled.pulls,
+            Some("1"),
+            &race::Ours::default(),
+            &Fake
+        )
+        .is_empty(),
         "a competitor the cheap sources misread must not refuse this branch once its log is in"
     );
 }
@@ -675,7 +748,7 @@ fn a_collider_whose_body_closes_the_key_is_settled_and_not_fetched() {
             .lock()
             .expect("the fixture lock")
             .push(number.to_owned());
-        Some(String::new())
+        Some(Vec::new())
     });
 
     assert_eq!(
@@ -687,9 +760,15 @@ fn a_collider_whose_body_closes_the_key_is_settled_and_not_fetched() {
     // happens to `"3"`, so `!is_empty()` would pass without `"3"` in the list
     // at all — an assertion that cannot fail for the reason its message gives.
     assert!(
-        race::races(&["PROJ-7".to_owned()], &filled.pulls, Some("1"), &Fake)
-            .iter()
-            .any(|race| race.number == "3"),
+        race::races(
+            &["PROJ-7".to_owned()],
+            &filled.pulls,
+            Some("1"),
+            &race::Ours::default(),
+            &Fake
+        )
+        .iter()
+        .any(|race| race.number == "3"),
         "and the settled one still races, on evidence no round trip could improve"
     );
 }
@@ -723,7 +802,7 @@ fn a_body_closing_a_key_nobody_claims_settles_nothing_and_its_commits_are_read()
             .lock()
             .expect("the fixture lock")
             .push(number.to_owned());
-        Some("fix: the real work\n\nCloses PROJ-7".to_owned())
+        Some(one("fix: the real work\n\nCloses PROJ-7".to_owned()))
     });
 
     assert_eq!(
@@ -732,9 +811,15 @@ fn a_body_closing_a_key_nobody_claims_settles_nothing_and_its_commits_are_read()
         "a body closing an unrelated key is not a settled competitor"
     );
     assert!(
-        race::races(&["PROJ-7".to_owned()], &filled.pulls, Some("1"), &Fake)
-            .iter()
-            .any(|race| race.number == "4"),
+        race::races(
+            &["PROJ-7".to_owned()],
+            &filled.pulls,
+            Some("1"),
+            &race::Ours::default(),
+            &Fake
+        )
+        .iter()
+        .any(|race| race.number == "4"),
         "and the log it answered with is what refuses"
     );
 }
@@ -768,7 +853,7 @@ fn a_body_closing_an_unclaimed_key_before_a_claimed_one_is_still_settled() {
             .lock()
             .expect("the fixture lock")
             .push(number.to_owned());
-        Some(String::new())
+        Some(Vec::new())
     });
 
     assert!(
@@ -777,9 +862,15 @@ fn a_body_closing_an_unclaimed_key_before_a_claimed_one_is_still_settled() {
         asked.lock().expect("the fixture lock")
     );
     assert!(
-        race::races(&["PROJ-7".to_owned()], &filled.pulls, Some("1"), &Fake)
-            .iter()
-            .any(|race| race.number == "5"),
+        race::races(
+            &["PROJ-7".to_owned()],
+            &filled.pulls,
+            Some("1"),
+            &race::Ours::default(),
+            &Fake
+        )
+        .iter()
+        .any(|race| race.number == "5"),
         "and it still races, on the body alone"
     );
 }
@@ -1073,7 +1164,7 @@ fn raced(repo: &std::path::Path, forge: &std::path::Path) -> std::process::Outpu
         .args(["claim", "race"])
         .current_dir(repo)
         .env("BATTEN_REST_FIXTURE", forge)
-        .output()
+        .streamed_output()
         .expect("the compiled binary runs")
 }
 
@@ -1089,7 +1180,7 @@ fn raced_speculating(
         .current_dir(repo)
         .env("BATTEN_REST_FIXTURE", forge)
         .env("BATTEN_SPEC_BASE", base)
-        .output()
+        .streamed_output()
         .expect("the compiled binary runs")
 }
 

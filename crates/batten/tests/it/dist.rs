@@ -123,7 +123,7 @@ fn dist(bench: &Bench, args: &[&str], env: &[(&str, &str)]) -> Output {
     for (name, value) in env {
         command.env(name, value);
     }
-    command.output().expect("run batten dist")
+    command.streamed_output().expect("run batten dist")
 }
 
 /// Every stub invocation, in order.
@@ -483,7 +483,7 @@ fn outside_a_workspace_is_could_not_look() {
     let output = batten()
         .current_dir(&dir)
         .args(["dist", "x86_64-unknown-linux-gnu", "--stem"])
-        .output()
+        .streamed_output()
         .expect("run batten dist");
     assert_eq!(output.status.code(), Some(ExitCode::Internal.code()));
     assert!(stdout(&output).is_empty(), "{}", stdout(&output));
@@ -585,5 +585,333 @@ fn every_declared_channel_names_its_generator() {
     assert!(
         at_root("flake.lock").is_file(),
         "the flake's inputs are locked"
+    );
+}
+
+/// One workflow under `.github/workflows/`, parsed.
+fn workflow(name: &str) -> yaml_rust2::Yaml {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../.github/workflows")
+        .join(name);
+    let text = std::fs::read_to_string(&path).expect("the workflow reads");
+    yaml_rust2::YamlLoader::load_from_str(&text)
+        .expect("the workflow parses as YAML")
+        .remove(0)
+}
+
+/// THE RELEASE BUILD IS MARKED BY ITS TAG (CLOUD-2903): `dist.yml`'s `dist` job
+/// carries `BATTEN_RELEASE_TAG` as the draft's tag, job-wide, so the release
+/// build stamps the package version as its identity; and no other workflow
+/// names the marker, so no other build can claim to be the release.
+#[test]
+fn the_release_build_is_marked_by_its_tag() {
+    let dist = workflow("dist.yml");
+    assert_eq!(
+        dist["jobs"]["dist"]["env"]["BATTEN_RELEASE_TAG"].as_str(),
+        Some("${{ inputs.tag }}")
+    );
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.github/workflows");
+    for entry in std::fs::read_dir(&dir).unwrap().flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if name == "dist.yml" {
+            continue;
+        }
+        let text = std::fs::read_to_string(entry.path()).unwrap();
+        assert!(
+            !text.contains(batten::build_identity::RELEASE_MARKER),
+            "{name} names the release marker"
+        );
+    }
+}
+
+/// A DEV PRE-RELEASE IS PUBLISHED UNDER THE `dev/` NAMESPACE (CLOUD-2903),
+/// drafts served, as a draft then a non-latest pre-release; and the tag the
+/// workflow spells is the one `engine::forge_tag` fetches a dev pin from.
+#[test]
+fn a_dev_prerelease_is_published_under_the_dev_namespace() {
+    let dev = workflow("dev-prerelease.yml");
+    assert!(
+        ["resolve", "build", "publish"]
+            .iter()
+            .all(|job| dev["jobs"][*job]["if"]
+                .as_str()
+                .is_none_or(|guard| !guard.contains("draft"))),
+        "drafts are served"
+    );
+    let publish = dev["jobs"]["publish"]["steps"]
+        .as_vec()
+        .unwrap()
+        .iter()
+        .filter_map(|step| step["run"].as_str())
+        .find(|run| run.contains("gh release create"))
+        .expect("a step publishes");
+    let spelled = format!("tag=\"{}v${{version}}\"", batten::engine::DEV_TAG_PREFIX);
+    assert!(
+        publish.lines().any(|line| line.trim() == spelled),
+        "{publish}"
+    );
+    assert!(publish.contains("gh release create"), "{publish}");
+    // The shell's `${identity%%+*}` is `forge_tag`'s drop of the metadata.
+    let identity = "0.0.222-dev.pr1290.20261124120000+abcdef012345";
+    let shell = format!(
+        "{}v{}",
+        batten::engine::DEV_TAG_PREFIX,
+        identity.split('+').next().unwrap()
+    );
+    assert_eq!(batten::engine::forge_tag(&format!("v{identity}")), shell);
+}
+
+/// The `publish` job's steps that carry a `run:` body, in order.
+fn dev_publish_runs() -> Vec<String> {
+    workflow("dev-prerelease.yml")["jobs"]["publish"]["steps"]
+        .as_vec()
+        .unwrap()
+        .iter()
+        .filter_map(|step| step["run"].as_str().map(str::to_owned))
+        .collect()
+}
+
+/// The whitespace-split words of the first line in `body` starting `prefix`.
+fn words_of<'a>(body: &'a str, prefix: &str) -> Vec<&'a str> {
+    body.lines()
+        .map(str::trim)
+        .find(|line| line.starts_with(prefix))
+        .unwrap_or_else(|| panic!("{prefix}: {body}"))
+        .split_whitespace()
+        .collect()
+}
+
+/// `#MUTANT dev-prerelease-flagged` reddens here. A published dev release
+/// flagged a pre-release is read by the released engine's freeze as a release
+/// whose land is owed, and freezes every fast-forward (CLOUD-2954). The draft
+/// keeps its flag; the PUBLISH carries exactly `--draft=false
+/// --prerelease=false --latest=false`, word for word.
+#[test]
+fn a_dev_publish_never_carries_the_flag_the_freeze_reads() {
+    let runs = dev_publish_runs();
+    let publish = runs
+        .iter()
+        .find(|run| run.contains("gh release create"))
+        .expect("a step publishes");
+    assert_eq!(
+        words_of(publish, "gh release edit \"$tag\""),
+        [
+            "gh",
+            "release",
+            "edit",
+            "\"$tag\"",
+            "--draft=false",
+            "--prerelease=false",
+            "--latest=false"
+        ],
+        "{publish}"
+    );
+}
+
+/// `#MUTANT dev-prerelease-on-push` reddens here. A dev build is cut on
+/// request by manual dispatch and on nothing else (CLOUD-2903): no open, push
+/// or ready of a pull request starts one.
+#[test]
+fn the_dev_publish_runs_only_when_dispatched() {
+    let doc = workflow("dev-prerelease.yml");
+    let triggers: Vec<&str> = doc["on"]
+        .as_hash()
+        .expect("the triggers are a map")
+        .keys()
+        .filter_map(yaml_rust2::Yaml::as_str)
+        .collect();
+    assert_eq!(triggers, ["workflow_dispatch"]);
+    let inputs: Vec<&str> = doc["on"]["workflow_dispatch"]["inputs"]
+        .as_hash()
+        .expect("the dispatch takes inputs")
+        .keys()
+        .filter_map(yaml_rust2::Yaml::as_str)
+        .collect();
+    assert_eq!(inputs, ["pr"], "its one input is the pull request number");
+}
+
+/// `#MUTANT dev-prerelease-unnumbered` reddens here. A dispatched run has no
+/// `refs/pull/<N>` in `GITHUB_REF`, so the build step sets `BATTEN_BUILD_PR`
+/// from the input, and the identity is `pr<N>`'s (CLOUD-2903).
+#[test]
+fn a_dispatched_build_carries_the_pull_requests_number() {
+    let doc = workflow("dev-prerelease.yml");
+    let numbered: Vec<&str> = doc["jobs"]["build"]["steps"]
+        .as_vec()
+        .unwrap()
+        .iter()
+        .filter_map(|step| step["env"][batten::build_identity::BUILD_PR].as_str())
+        .collect();
+    assert_eq!(numbered, ["${{ inputs.pr }}"]);
+    let resolve = doc["jobs"]["resolve"]["steps"]
+        .as_vec()
+        .unwrap()
+        .iter()
+        .filter_map(|step| step["run"].as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        resolve.contains("a fork's head is never published"),
+        "{resolve}"
+    );
+}
+
+/// `#MUTANT dev-prerelease-cancels-started` reddens here. A second dispatch
+/// for the same pull request waits behind a started run and never cancels it
+/// (CLOUD-2903); the build it publishes is the head the run resolved when it
+/// started, never the pull request's newest head.
+#[test]
+fn a_second_dispatch_never_cancels_a_started_dev_publish() {
+    let doc = workflow("dev-prerelease.yml");
+    assert_eq!(
+        doc["concurrency"]["cancel-in-progress"].as_bool(),
+        Some(false),
+        "a started dev publish finishes"
+    );
+    assert_eq!(
+        doc["concurrency"]["group"].as_str(),
+        Some("dev-prerelease-${{ inputs.pr }}")
+    );
+    let publish = dev_publish_runs().join("\n");
+    assert!(publish.contains("--target \"$SHA\""), "{publish}");
+    let sha = doc["jobs"]["publish"]["steps"]
+        .as_vec()
+        .unwrap()
+        .iter()
+        .find_map(|step| step["env"]["SHA"].as_str())
+        .expect("the publish names the sha it built");
+    assert_eq!(sha, "${{ needs.resolve.outputs.sha }}");
+}
+
+/// A DEV PIN IS REFUSED AT LAND AS A SOURCE PIN IS (CLOUD-2903): `engine gate
+/// --landing`, which `engine-pin-land-check` runs when `land` readies, answers
+/// a dev pin with the source pin's words and exit, before anything is fetched.
+/// The task is one of the land body gates, so the lap that lands runs it.
+#[test]
+fn a_dev_pin_is_refused_at_land_as_a_source_pin_is() {
+    let dir = crate::common::scratch("dev-pin-never-lands");
+    write(
+        &dir,
+        "batten.toml",
+        "version = 1\nengine = { release = \"v0.0.222-dev.pr1276.20261128054722+52134973caec\" }\n",
+    );
+    crate::common::init_repo(&dir);
+    let out = batten()
+        .args(["engine", "gate", "--landing"])
+        .current_dir(&dir)
+        .output()
+        .expect("run batten");
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert_eq!(out.status.code(), Some(2), "{text}");
+    assert!(
+        text.trim_end().ends_with(
+            "engine pin dev v0.0.222-dev.pr1276.20261128054722+52134973caec never lands: pin a release with `batten engine pin <tag>`"
+        ),
+        "{text}"
+    );
+    let manifest = std::fs::read_to_string(at_root("mise.toml")).unwrap();
+    let gates = manifest
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("LAND_BODY_GATES = "))
+        .expect("the land body gates are declared");
+    assert!(
+        gates
+            .split('|')
+            .any(|gate| gate.trim_matches('"') == "mise run engine-pin-land-check"),
+        "{gates}"
+    );
+    assert!(
+        manifest.contains("engine gate --landing"),
+        "the task asks as the landing lap"
+    );
+}
+
+/// `#MUTANT dev-prerelease-unflag-widened` reddens here. A step ahead of the
+/// publish unflags every published release under `dev/` still flagged a
+/// pre-release (CLOUD-2954), selecting by that prefix and nothing wider.
+#[test]
+fn a_dev_release_already_flagged_is_unflagged_before_the_publish() {
+    let runs = dev_publish_runs();
+    let publish = runs
+        .iter()
+        .position(|run| run.contains("gh release create"))
+        .expect("a step publishes");
+    let unflag = runs
+        .iter()
+        .position(|run| run.contains("gh release list"))
+        .expect("a step lists the releases to unflag");
+    assert!(unflag < publish, "the unflag runs before the publish");
+    let body = &runs[unflag];
+    assert!(
+        words_of(body, "gh release list").contains(&"--exclude-drafts"),
+        "{body}"
+    );
+    assert!(
+        body.contains(
+            "--jq '.[] | select(.isPrerelease) | select(.tagName | startswith(\"dev/\")) | .tagName'"
+        ),
+        "the selection is the dev/ prefix and nothing wider: {body}"
+    );
+    assert_eq!(
+        words_of(body, "gh release edit"),
+        [
+            "gh",
+            "release",
+            "edit",
+            "\"$tag\"",
+            "--prerelease=false",
+            "--latest=false"
+        ],
+        "{body}"
+    );
+}
+
+/// `#MUTANT dev-prerelease-draft-unchecked` reddens here. A run cancelled
+/// between `gh release create --draft` and the publish leaves a DRAFT under the
+/// tag (CLOUD-2903, review of #1291 LOW 6); the next run on the same head must
+/// complete it, never read it as done, or `releases/download/dev/…` 404s for a
+/// pin that names it.
+#[test]
+fn a_cancelled_runs_draft_is_published_not_stranded() {
+    let dev = workflow("dev-prerelease.yml");
+    let publish = dev["jobs"]["publish"]["steps"]
+        .as_vec()
+        .unwrap()
+        .iter()
+        .filter_map(|step| step["run"].as_str())
+        .find(|run| run.contains("gh release create"))
+        .expect("a step publishes");
+    let lines: Vec<&str> = publish.lines().map(str::trim).collect();
+    let at = |needle: &str| {
+        lines
+            .iter()
+            .position(|line| line.starts_with(needle))
+            .unwrap_or_else(|| panic!("{needle}: {publish}"))
+    };
+    assert!(publish.contains("--json isDraft"), "{publish}");
+    let (done, draft, absent, edit) = (at("false)"), at("true)"), at("*)"), at("gh release edit"));
+    assert_eq!(
+        lines[done + 1],
+        "exit 0",
+        "only a PUBLISHED release is done"
+    );
+    // A draft is published only when it carries this run's asset names, and
+    // refused by name otherwise: never overwritten (`--clobber` is the release
+    // guard's alone).
+    let check = at("if [ \"$have\" != \"$want\" ]; then");
+    assert!(
+        draft < check && check < absent,
+        "the draft arm checks its assets: {publish}"
+    );
+    assert_eq!(lines[check + 2], "exit 1", "an incomplete draft is refused");
+    assert!(
+        !lines
+            .iter()
+            .any(|line| line.starts_with("gh release") && line.contains("--clobber")),
+        "{publish}"
+    );
+    assert!(
+        draft < absent && absent < edit,
+        "every arm but `false` reaches the publish"
     );
 }

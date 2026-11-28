@@ -6,8 +6,8 @@
 //! GRANTS, and its module states in as many words that registration happens in
 //! the launcher — outside every gate here. So a session whose harness registers
 //! the connector anyway keeps the raw tool on the model's surface, and the
-//! `[[mcp.result]]` reduction beside it decides nothing: the two routes return
-//! the same payload and the cheaper-looking one wins.
+//! verb beside it decides nothing: the two routes return the same payload and
+//! the cheaper-looking one wins.
 //!
 //! It won. Measured on the grooming session that dispatched this work: raw
 //! `get_issue` 12.2 MB over 755 calls and raw `save_issue` 7.1 MB over 517 —
@@ -56,7 +56,7 @@ use common::{Fixture, run, run_with_stdin, stderr, stdout};
 /// that restated the row would assert over a table this repository does not
 /// ship, which is the one thing a committed-table tier exists to rule out.
 fn repo(name: &str) -> PathBuf {
-    let staged = Fixture::new(name).config(include_str!("../../../../batten.toml"));
+    let staged = Fixture::new(name).config(&common::committed_config());
     let modules = staged.path().join("policy");
     std::fs::create_dir_all(&modules).expect("the fixture's policy directory is creatable");
     let committed = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -112,6 +112,38 @@ fn every_spelling_of_the_raw_read_is_refused() {
             "the raw read must be refused under every registration episode: {tool}"
         );
     }
+}
+
+/// THE ROW'S OWN REMEDY IS NEVER REFUSED BY IT (CLOUD-2789). Since every
+/// selector reads `batten mcp call <server> get_issue` as the `get_issue` it
+/// mediates, a row that steers the raw read ONTO that route must say it is
+/// about the direct route, or it refuses its own remedy: measured, a plan-mode
+/// `batten mcp call Linear get_issue` came back `issue read loose`.
+///
+/// Fails by: the row selecting the mediated read, so the verb it names as the
+/// remedy is refused under the row's own name.
+#[test]
+fn the_mediated_read_the_row_names_is_not_refused_by_it() {
+    let repo = repo("raw-read-mediated");
+    let command = r#"batten mcp call Linear get_issue '{"id":"CLOUD-1"}'"#;
+    let payload = serde_json::json!({
+        "hook_event_name": "PreToolUse",
+        "tool_name": "Bash",
+        "tool_input": {"command": command},
+    })
+    .to_string();
+    let output = run_with_stdin(&repo, &["adjudicate", "--harness", "exit-code"], &payload);
+    let rendered = format!(
+        "{}{}",
+        stderr(&output),
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert!(
+        !rendered.contains("issue read loose"),
+        "the remedy the row names must not be refused by it: {rendered}"
+    );
+    // THE PREMISE: the same read made direct is still refused.
+    assert_eq!(verdict(&repo, "mcp__Linear__get_issue"), Some(2));
 }
 
 /// THE ANTI-VACUITY MIRROR. A row that refused everything would pass every

@@ -71,7 +71,7 @@ fn pointer_output_is_frozen() {
     let output = batten()
         .arg("check")
         .current_dir(&dir)
-        .output()
+        .streamed_output()
         .expect("run");
     assert_eq!(output.status.code(), Some(2), "the fixture must find both");
     insta::assert_snapshot!(stdout_of(&output));
@@ -84,7 +84,7 @@ fn json_output_is_frozen() {
     let output = batten()
         .args(["check", "--json"])
         .current_dir(&dir)
-        .output()
+        .streamed_output()
         .expect("run");
     assert_eq!(output.status.code(), Some(2), "the fixture must find both");
     insta::assert_snapshot!(stdout_of(&output));
@@ -101,7 +101,7 @@ fn a_clean_run_is_frozen_as_silent() {
     let output = batten()
         .arg("check")
         .current_dir(&dir)
-        .output()
+        .streamed_output()
         .expect("run");
     assert_eq!(output.status.code(), Some(0), "nothing to report");
     insta::assert_snapshot!(stdout_of(&output), @"");
@@ -134,7 +134,10 @@ fn golden_exit_code_table() {
 /// derived artifacts happen to render identically.
 #[test]
 fn golden_json_schema() {
-    let output = batten().arg("spec").output().expect("run batten spec");
+    let output = batten()
+        .arg("spec")
+        .streamed_output()
+        .expect("run batten spec");
     assert_eq!(output.status.code(), Some(0), "the spec is an answer");
     insta::assert_snapshot!(stdout_of(&output));
 }

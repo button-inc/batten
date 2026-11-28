@@ -67,7 +67,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Output, Stdio};
 
-use batten::rules::{self, Rule};
+use batten::config_model::Rule;
+use batten::rules;
 use serde_json::Value;
 
 const PIN: &str = "3d3c42e5aac5ba805825da76410c181273ba90b1";
@@ -190,7 +191,7 @@ struct Fixture {
 
 impl Fixture {
     fn new(name: &str) -> Self {
-        let dir = common::scratch(&format!("sbom-producer-{name}"));
+        let dir = common::scratch_repo(&format!("sbom-producer-{name}"));
         let repo = dir.join("repo");
         common::write(
             &repo,
@@ -325,7 +326,11 @@ impl Fixture {
             .env("FIXTURE", &self.dir)
             .env("CARGO_HOME", self.dir.join("cargo-home"))
             .stdin(Stdio::null())
-            .output()
+            .streamed_output_keeping(batten::capture::Keep {
+                stdin: true,
+                stdout: false,
+                stderr: false,
+            })
             .expect("run the producer")
     }
 
@@ -1052,7 +1057,8 @@ fn row() -> Rule {
 }
 
 fn patterns() -> Vec<batten::pattern::NamedPattern> {
-    let config = fs::read_to_string(common::at_root("batten.toml")).expect("the committed config");
+    let config = fs::read_to_string(common::committed_config_file("sbom_producer"))
+        .expect("the committed config");
     let parsed: toml::Value = toml::from_str(&config).expect("batten.toml parses");
     let found: Vec<_> = parsed["pattern"]
         .as_array()
@@ -1070,7 +1076,7 @@ fn patterns() -> Vec<batten::pattern::NamedPattern> {
 
 /// `(verdict, line)` for every finding over a table carrying `rows`.
 fn judged(name: &str, rows: &[&str]) -> Vec<(String, Option<usize>)> {
-    let root = common::scratch(&format!("sbom-actions-{name}"));
+    let root = common::scratch_repo(&format!("sbom-actions-{name}"));
     common::write(&root, TABLE, &format!("{}\n", rows.join("\n")));
     fs::create_dir_all(root.join("policy")).expect("scratch policy dir");
     fs::copy(

@@ -44,7 +44,12 @@ use std::path::Path;
 
 use anyhow::{Context as _, Result};
 
+use crate::config_model::BRANCH_KEYED_RECEIPTS;
+use crate::config_model::LAP_RECORD;
 use crate::gitwrite::{self, Rebase};
+use crate::preset_catalog::RED_HEAD;
+
+pub mod receipts;
 
 /// What one replay did.
 ///
@@ -206,7 +211,6 @@ pub enum Linearity {
 /// the fetch is HTTPS-only (`fetch::get`), and this is the half that decides.
 // A merge commit is a history the integration tier builds, so that tier judges
 // this function's mutants.
-//MUTANT-SUITE crates/batten/tests/it/linear_check.rs
 #[must_use]
 pub fn linearity(root: &Path, tip: &str, head: &str, requires_line: bool) -> Linearity {
     if !gitwrite::carries(root, tip, head) {
@@ -264,8 +268,6 @@ pub fn requires_line(root: &Path) -> Result<bool> {
 /// # Errors
 ///
 /// When the repository cannot be read or the ref cannot be written.
-//MUTANT-SUITE crates/batten/tests/it/land_tracking.rs
-//MUTANT landed-trunk-left-stale|s@^    gitwrite::set_ref(root, \&tracking_ref(reference), \&head)?;$@@|a_landed_branch_leaves_the_tracking_ref_at_the_landed_head
 pub fn record_landed_trunk(root: &Path, reference: &str, branch: &str) -> Result<bool> {
     let Some(head) = crate::git::resolve_ref(root, &format!("refs/heads/{branch}"))? else {
         return Ok(false);
@@ -591,13 +593,105 @@ pub fn record(root: &Path, branch: &str, outcome: &Replay) -> Result<()> {
 }
 
 /// Append the disk watcher's lines (`disk-collected …`, `disk-unlink-ms …`) to
-/// this branch's lap record, once the landing has returned (CLOUD-2197).
+/// this branch's lap record as each collection ends (CLOUD-2197, CLOUD-2782):
+/// the watcher's record sink calls it from the collection's own thread, one
+/// batched append per collection, so its lines never interleave with a lap's.
 ///
 /// # Errors
 ///
 /// A record that cannot be written.
 pub fn record_disk(root: &Path, branch: &str, lines: &[String]) -> Result<()> {
     append(root, branch, lines)
+}
+
+/// Whether `step`'s answer ends a held lap, and with which code (CLOUD-2783).
+///
+/// Only a FINAL verify does: `0` green or `2` refused. A verify's `3` is not a
+/// verdict — a reclaimed or voided gate laps exactly as it does unheld — and no
+/// other step holds, so the replay before it still runs and nothing after it
+/// (the lease, the push, the ready) is ever entered.
+#[must_use]
+pub fn held_after(step: Step, code: crate::exit::ExitCode) -> Option<crate::exit::ExitCode> {
+    use crate::exit::ExitCode;
+    (step == Step::Verify && matches!(code, ExitCode::Success | ExitCode::Violation))
+        .then_some(code)
+}
+
+/// A held lap's record line: its head, then the wall time of its entry and of
+/// each step it ran, in order (CLOUD-2783). The phase that dominates an
+/// unchanged-head lap is read off this line, never guessed.
+#[must_use]
+pub fn held_line(head: &str, entry_ms: u128, phases: &[(Step, u128)]) -> String {
+    phases.iter().fold(
+        format!("held {head} entry-ms={entry_ms}"),
+        |mut line, (step, ms)| {
+            use std::fmt::Write as _;
+            let _ = write!(line, " {}-ms={ms}", step.as_str());
+            line
+        },
+    )
+}
+
+/// `land lap --hold` and its clock (CLOUD-2783): whether a final verify ends
+/// the landing, and what the entry and each step of the last lap cost.
+#[derive(Debug)]
+pub struct Hold {
+    on: bool,
+    started: std::time::Instant,
+    entry_ms: Option<u128>,
+    phases: Vec<(Step, u128)>,
+}
+
+impl Hold {
+    /// A landing that began now, held or not.
+    #[must_use]
+    pub fn new(on: bool) -> Self {
+        Self {
+            on,
+            started: std::time::Instant::now(),
+            entry_ms: None,
+            phases: Vec::new(),
+        }
+    }
+
+    /// A lap opens: the entry is the time to the first one, and each lap's
+    /// phases start afresh.
+    pub fn lap(&mut self) {
+        let started = self.started;
+        self.entry_ms
+            .get_or_insert_with(|| started.elapsed().as_millis());
+        self.phases.clear();
+    }
+
+    /// Run one step, keeping its wall time.
+    pub fn time<T>(&mut self, step: Step, run: impl FnOnce() -> T) -> T {
+        let began = std::time::Instant::now();
+        let answer = run();
+        self.phases.push((step, began.elapsed().as_millis()));
+        answer
+    }
+
+    /// The code a held lap ends with after `step` answered `code`, or `None`.
+    #[must_use]
+    pub fn after(&self, step: Step, code: crate::exit::ExitCode) -> Option<crate::exit::ExitCode> {
+        held_after(step, code).filter(|_| self.on)
+    }
+
+    /// The held lap's record line for `head`.
+    #[must_use]
+    pub fn line(&self, head: &str) -> String {
+        held_line(head, self.entry_ms.unwrap_or_default(), &self.phases)
+    }
+}
+
+/// Append one line (a held lap, an engine use) to this branch's lap record, through the record's
+/// one door.
+///
+/// # Errors
+///
+/// A record that cannot be written.
+pub fn record_line(root: &Path, branch: &str, line: &str) -> Result<()> {
+    append(root, branch, &[line.to_owned()])
 }
 
 /// Append `lines` to this branch's lap record.
@@ -618,7 +712,7 @@ pub fn record_disk(root: &Path, branch: &str, lines: &[String]) -> Result<()> {
 /// lap reading both sides would also produce.
 ///
 /// The one public door is [`record_disk`]: the watcher's lines reach the record
-/// through it, after the landing, so the record keeps one writer.
+/// through it as each collection ends, so the record keeps one writer.
 fn append(root: &Path, branch: &str, lines: &[String]) -> Result<()> {
     let Ok(git_dir) = crate::git::git_dir(root) else {
         return Ok(());
@@ -691,7 +785,7 @@ fn branch_lap_lines(root: &Path, branch: &str) -> Vec<String> {
     files.sort();
     files
         .iter()
-        .filter_map(|(_, path)| std::fs::read_to_string(path).ok())
+        .filter_map(|(_, path)| crate::fsio::read_to_string(path).ok())
         .flat_map(|text| text.lines().map(str::to_owned).collect::<Vec<_>>())
         .collect()
 }
@@ -720,10 +814,6 @@ fn contains(root: &Path, tip: &str, ancestor: &str) -> bool {
 /// An absent remote ref is admitted: there is nothing to lose, and the
 /// receive-pack CAS still refuses if it appears before the swap.
 #[must_use]
-//MUTANT admits-ignored|s@^    if last_pushed.as_deref() == Some(remote) {$@    if true {@|a_sibling_commit_on_the_branch_is_never_admitted
-//MUTANT replay-chain-unfollowed|s@^    for line in lines.iter().rev() {$@    for line in lines.iter() {@|a_branch_replayed_twice_replaces_its_first_pre_rebase_head
-//MUTANT patch-identity-unasked|s@^    if crate::git::patches_contained(root, head, remote) {$@    if false {@|a_hand_pushed_head_replayed_onto_trunk_is_admitted
-//MUTANT lease-reads-one-partition|s@^    let prefix = format!("{name}.");$@    let prefix = format!("{name}.unread.");@|a_replay_recorded_before_a_re_claim_still_admits_its_pre_rebase_head
 pub fn admitted(root: &Path, branch: &str, remote: &str, head: &str) -> bool {
     if remote == crate::lease::ZERO || contains(root, head, remote) {
         return true;
@@ -766,10 +856,6 @@ pub fn admitted(root: &Path, branch: &str, remote: &str, head: &str) -> bool {
     }
     reached[1..].iter().any(|tip| contains(root, tip, remote))
 }
-
-/// The record this module writes, and the one `record::VERB_WRITTEN` names so a
-/// module can read it back.
-pub const LAP_RECORD: &str = "lap";
 
 /// Which arm of the lap's raced wait an answer came from (CLOUD-1338).
 ///
@@ -854,8 +940,9 @@ pub enum Waited {
     /// **THE ARM THAT WAS MISSING, and its absence was not a gap in the type but
     /// an hour of runner time per lap.** The green arm broke only on
     /// `Verdict::Green`, so a red required check was indistinguishable from a
-    /// pending one: the loop asked its whole count — 3600 by default — and then
-    /// reported [`Waited::Unanswered`], which laps. A branch with one failing
+    /// pending one: the loop asked its whole count — 3600 by default, a bound
+    /// since removed (CLOUD-2253 A2) — and then reported no answer, which lapped.
+    /// A branch with one failing
     /// test therefore bought a fresh matrix per lap and waited out an hour on
     /// each. The predecessor stopped on red, and `tests/land.bats` says so in as
     /// many words: *"red CI stops the lap without asking for the merge"*.
@@ -874,31 +961,43 @@ pub enum Waited {
     ///
     /// **THE STATE THAT HELD THE FLEET'S LEASE (CLOUD-497).** Every required check
     /// is terminal and at least one required name's newest run is masked, so the
-    /// reading cannot change without a new event. [`Waited::Unanswered`] laps, and
-    /// lapping this re-asks a question already closed while
+    /// reading cannot change without a new event. Lapping this re-asks a
+    /// question already closed while
     /// `refs/heads/batten-land-lock` renews off a live process rather than off
     /// progress — so one branch in an unrecognised dead end stopped every other
     /// session from landing for as long as its process stayed alive.
     ///
-    /// **Separate from `Unanswered` although both exit `3`,** because the exit
+    /// **Separate from `Unread` although both exit `3`,** because the exit
     /// code is not the discriminator here and never was: `seen` is. That is
     /// already how a red reading is told from a stale one in the same cell, and
     /// [`progress_of`] is the one table over the pair.
     /// The forge answered none of the first
     /// [`crate::pr_watch::UNANSWERED_BEFORE_REFUSING`] asks (CLOUD-1215), so no
-    /// reading was taken at all. Distinct from `Unanswered`, which asked its
-    /// count and read `Pending` every time: that IS a reading, this is not.
+    /// reading was taken at all. A FAULT, never a wait outcome (CLOUD-2253 A2):
+    /// it names the fault and stops, and never re-drafts or cancels.
     Unread,
     DeadEnd {
         /// Which required names are masked, as pointers.
         findings: Vec<crate::checks_green::Finding>,
     },
-    /// Neither question answered inside the lap's bound.
-    ///
-    /// **Exit `3`'s reading, and not an error.** A wait that ran out of asks has
-    /// learned nothing, which is a different state from either answer and from a
-    /// failure — the caller laps again rather than concluding anything.
-    Unanswered,
+    /// The forge refused the checks read outright — `401`, `403` or `404` — on
+    /// the ask it answered so (CLOUD-2253 A2). An answer, not a could-not-look:
+    /// the credential or the repository is wrong, so the wait fails on the first
+    /// one and names its status rather than asking again.
+    Refused {
+        /// The status the forge answered.
+        status: u16,
+    },
+    /// The pull request's head moved off the sha being waited on: somebody
+    /// pushed the branch, so this sha's runs answer about a head nobody will
+    /// land (CLOUD-2253 A2).
+    Moved {
+        /// Where the pull request's head points now.
+        head: String,
+    },
+    /// The branch has no open pull request any more: it was closed or merged
+    /// under the wait (CLOUD-2253 A2). Nothing further will be asked of it.
+    Closed,
 }
 
 /// Whether the undo cancels the runs still spending on this head.
@@ -913,8 +1012,6 @@ pub enum Waited {
 ///
 /// An UNREAD wait keeps its runs too (CLOUD-1215): nobody read them, so nothing
 /// says they are waste.
-//MUTANT-SUITE crates/batten/tests/it/land_lap.rs
-//MUTANT unread-wait-abandons-its-runs|s@    !matches!(seen, Some(TapVerdict::Red \x7c TapVerdict::Unread))@    !matches!(seen, Some(TapVerdict::Red))@|an_unread_wait_neither_re_drafts_nor_cancels
 #[must_use]
 pub const fn abandons_the_runs(seen: Option<TapVerdict>) -> bool {
     !matches!(seen, Some(TapVerdict::Red | TapVerdict::Unread))
@@ -931,10 +1028,10 @@ pub const fn abandons_the_runs(seen: Option<TapVerdict>) -> bool {
 ///
 /// So after a fresh ready, a dead end is believed only once EVERY name it masks
 /// has registered a run the first reading did not hold. Until then it is the
-/// state the wait exists to sit in. A ready whose runs never register spends the
-/// ask count and answers [`Waited::Unanswered`], which laps: that is the honest
-/// reading of a matrix that never started, and it costs asks rather than a false
-/// stop. A count, never a clock, for the reason [`Ledger`] gives.
+/// state the wait exists to sit in. A required name whose run never registers is
+/// decided on the head's check suites instead (`never_emitted`, CLOUD-2253 A2):
+/// every suite registered and concluded with the name absent is a dead end, and
+/// no count of asks stands in for that event.
 ///
 /// **EACH MASKED NAME, NOT ANY REQUIRED ONE** (CLOUD-2189). Believing the dead
 /// end once any required name re-registered stopped a consumer's lap three
@@ -982,57 +1079,69 @@ pub fn registered_since(
 /// answer was always at least one green-arm round trip late. That is the latency
 /// the race exists to remove.
 ///
-/// # The bound is a COUNT
+/// # NO BOUND BUT THE EVENTS (CLOUD-2253 A2)
 ///
-/// `asks` is how many times each arm asks, never a deadline. A wall clock would
-/// reintroduce the VM-reap gap `mem:workflow/landing-loop` records, and
-/// `clippy.toml`'s timer ban is the mechanism that refuses one in this crate. The
-/// delay between asks is the server's own interval — a derived delay bounded by a
-/// real exit condition, which is the shape `run-shape-guard` admits.
+/// Neither arm counts its asks. The wait ends on a terminal reading — Green,
+/// Red, a dead end, the trunk moving, the pull request's head moving, or it
+/// closing — or on a forge fault, named. A budget of asks was a deadline in
+/// other units over a wait CI already bounds itself. The delay between asks is
+/// the server's own interval, conditional requests answered `304`.
 ///
-/// # Errors
+/// `primed` is a check-runs reading of this head the lap already took — Ready's
+/// (CLOUD-2253 A7) — answering the first ask in place of a second read.
+/// `branch` names the pull request whose head and state the wait also reads;
+/// `None` reads neither.
 ///
-/// Only for a stream that will not accept output. **Every failure to reach the
-/// forge is a could-not-look**: the arm reports nothing that cycle and asks
-/// again, because a lap that concluded from an unreachable forge would decide
-/// about the network rather than about the work.
-pub fn wait(
-    config: &crate::pr_watch::Config,
-    roster: &crate::checks_green::Roster,
-    trunk: &crate::main_watch::Config,
-    asks: u32,
-    fresh_ready: bool,
-    heartbeat: &(dyn Fn(u64) + Sync),
-    out: &mut dyn std::io::Write,
-) -> Result<Waited> {
-    wait_reading(config, roster, trunk, asks, fresh_ready, heartbeat, out).map(|(waited, _)| waited)
-}
-
-/// [`wait`], and beside its verdict the [`RedReading`] a red one was taken over
+/// Beside its verdict, the [`RedReading`] a red one was taken over
 /// (CLOUD-2270): which failed runs a push over this head owes a read, and which
 /// checks the stop abandoned still running.
 ///
 /// # Errors
 ///
-/// [`wait`]'s.
+/// Only for a stream that will not accept output. **Every failure to reach the
+/// forge is a could-not-look**: the arm reports nothing that cycle and asks
+/// again, until the forge has answered none of
+/// [`crate::pr_watch::UNANSWERED_BEFORE_REFUSING`] asks.
 pub fn wait_reading(
-    config: &crate::pr_watch::Config,
-    roster: &crate::checks_green::Roster,
-    trunk: &crate::main_watch::Config,
-    asks: u32,
-    fresh_ready: bool,
+    (config, roster, trunk): (
+        &crate::pr_watch::Config,
+        &crate::checks_green::Roster,
+        &crate::main_watch::Config,
+    ),
+    (fresh_ready, branch): (bool, Option<&str>),
+    primed: Option<crate::rest::Answer>,
     heartbeat: &(dyn Fn(u64) + Sync),
     out: &mut dyn std::io::Write,
 ) -> Result<(Waited, RedReading)> {
+    let pulls = branch.map(|branch| {
+        let owner = config.repo.split('/').next().unwrap_or(&config.repo);
+        format!(
+            "repos/{}/pulls?head={owner}:{branch}&state=open&per_page=1",
+            config.repo
+        )
+    });
+    let pull = |etag: Option<&str>| {
+        pulls
+            .as_deref()
+            .and_then(|path| crate::rest::get(path, etag))
+    };
+    let suites_path = format!(
+        "repos/{}/commits/{}/check-suites?per_page=100",
+        config.repo, config.sha
+    );
+    let suites = |etag: Option<&str>| crate::rest::get(&suites_path, etag);
     raced(
         (config, roster, trunk),
-        (asks, fresh_ready),
+        fresh_ready,
         heartbeat,
         out,
         &Waiting {
             checks: &|etag| crate::pr_watch::read(config, etag),
             trunk: &|etag| crate::main_watch::read(trunk, etag),
             pause: &crate::pr_watch::pause_until,
+            primed,
+            pull: pulls.is_some().then_some(&pull as Reader<'_>),
+            suites: Some(&suites),
         },
     )
 }
@@ -1055,6 +1164,322 @@ struct Waiting<'a> {
     trunk: Reader<'a>,
     /// The wait between asks, abandoned when the flag is raised.
     pause: &'a (dyn Fn(f64, &std::sync::atomic::AtomicBool) + Sync),
+    /// A reading of the checks the lap already took, answering the first ask
+    /// (CLOUD-2253 A7). Never after a ready fired: its runs are not in it.
+    primed: Option<crate::rest::Answer>,
+    /// The branch's open pull request, read beside the trunk on its interval:
+    /// its head moving or its closing ends the wait (CLOUD-2253 A2). `None`
+    /// where no branch was named, which reads nothing.
+    pull: Option<Reader<'a>>,
+    /// The head's check suites, read when a required name has no run: every
+    /// suite registered and concluded with the name still absent means no
+    /// workflow emits it for this head (CLOUD-2253 A2). `None` reads nothing.
+    suites: Option<Reader<'a>>,
+}
+
+/// The ids of the check suites a reading names, and whether every one of them
+/// has completed, or `None` where no reading was taken (CLOUD-2253 A2).
+fn suites_reading(
+    answer: Option<&crate::rest::Answer>,
+) -> Option<(std::collections::BTreeSet<u64>, bool)> {
+    let answer = answer.filter(|answer| answer.is_reading())?;
+    let document: serde_json::Value = serde_json::from_str(&answer.body).ok()?;
+    let suites = document.get("check_suites")?.as_array()?;
+    let ids = suites
+        .iter()
+        .filter_map(|suite| suite.get("id").and_then(serde_json::Value::as_u64))
+        .collect();
+    let closed = suites
+        .iter()
+        .all(|suite| suite.get("status").and_then(serde_json::Value::as_str) == Some("completed"));
+    Some((ids, closed))
+}
+
+/// Whether a suites reading proves the unregistered names are emitted by no
+/// workflow for this head (CLOUD-2253 A2): at least one suite, every one
+/// concluded, and — after a fresh ready — one the first reading did not hold,
+/// so the ready's own workflows are among them. `before` is filled from the
+/// first reading after a fresh ready.
+fn never_emitted(
+    reading: Option<(std::collections::BTreeSet<u64>, bool)>,
+    fresh_ready: bool,
+    before: &mut Option<std::collections::BTreeSet<u64>>,
+) -> bool {
+    let Some((ids, closed)) = reading else {
+        return false;
+    };
+    let registered = if fresh_ready {
+        match before {
+            None => {
+                *before = Some(ids.clone());
+                false
+            }
+            Some(seen) => ids.iter().any(|id| !seen.contains(id)),
+        }
+    } else {
+        true
+    };
+    closed && !ids.is_empty() && registered
+}
+
+/// The required names `runs` holds no run of, less the ones the roster lets be
+/// absent (CLOUD-2253 A2): what a head no workflow emits for is missing.
+fn run_less(
+    runs: &[crate::checks_green::Run],
+    roster: &crate::checks_green::Roster,
+) -> Vec<String> {
+    roster
+        .required
+        .iter()
+        .filter(|name| !roster.absent_ok.contains(name))
+        .filter(|name| !runs.iter().any(|run| &run.name == *name))
+        .cloned()
+        .collect()
+}
+
+/// What one reading of the branch's open pull request says about a wait on
+/// `sha` (CLOUD-2253 A2): `Closed` when the forge answered and holds none,
+/// `Moved` when its head is another sha, and `None` — keep waiting — on an
+/// open pull request still at `sha` or a reading that could not be taken.
+fn pull_ended(answer: Option<&crate::rest::Answer>, sha: &str) -> Option<Waited> {
+    let answer = answer.filter(|answer| answer.is_reading())?;
+    let document: serde_json::Value = serde_json::from_str(&answer.body).ok()?;
+    let entries = document.as_array()?;
+    let Some(entry) = entries.first() else {
+        return Some(Waited::Closed);
+    };
+    let head = entry
+        .pointer("/head/sha")
+        .and_then(serde_json::Value::as_str)?;
+    (head != sha).then(|| Waited::Moved {
+        head: head.to_owned(),
+    })
+}
+
+/// Where [`checks_arm`] reports: the race's channel and flag, and the slot a red
+/// verdict's reading rides in.
+struct Report<'a> {
+    /// The race's one channel; the first message is the verdict.
+    send: std::sync::mpsc::Sender<Waited>,
+    /// Raised by whichever arm answers, read by both after every reading.
+    stop: &'a std::sync::atomic::AtomicBool,
+    /// The reading a red verdict was taken over (CLOUD-2270).
+    red: &'a std::sync::Mutex<RedReading>,
+}
+
+impl Report<'_> {
+    /// Answer the race, unless the other arm already did.
+    fn answer(&self, waited: Waited) {
+        if !self.stop.swap(true, std::sync::atomic::Ordering::Relaxed) {
+            drop(self.send.send(waited));
+        }
+    }
+
+    /// Whether the other arm answered.
+    fn answered(&self) -> bool {
+        self.stop.load(std::sync::atomic::Ordering::Relaxed)
+    }
+}
+
+/// The statuses that are the forge refusing the read rather than failing to
+/// answer it (CLOUD-2253 A2): the credential or the repository is wrong, and
+/// asking again changes neither.
+fn refused_read(answer: Option<&crate::rest::Answer>) -> Option<u16> {
+    answer
+        .map(|answer| answer.status)
+        .filter(|status| matches!(status, 401 | 403 | 404))
+}
+
+/// The green arm of [`raced`]: the checks, on the forge's interval, until a
+/// terminal answer or the other arm's.
+///
+/// **NO ASK COUNT ENDS IT** (CLOUD-2253 A2). A budget of asks at a fixed
+/// interval is a deadline in other units, on a wait whose real end is an event:
+/// CI bounds itself (each job's timeout, the forge's own run limits), and a
+/// matrix longer than the budget was abandoned every lap. The arm ends on Green,
+/// Red or a dead end, on a refused read, or on a forge that answered nothing at
+/// all — the last two faults, named, never a wait outcome.
+///
+/// Lifted out of [`raced`] for `clippy::too_many_lines`, the remedy
+/// [`watch_arm`] took for the same lint: one nameable arm of the race.
+fn checks_arm(
+    (config, roster): (&crate::pr_watch::Config, &crate::checks_green::Roster),
+    fresh_ready: bool,
+    heartbeat: &(dyn Fn(u64) + Sync),
+    waiting: &Waiting<'_>,
+    report: &Report<'_>,
+) {
+    let mut poll = crate::pr_watch::Poll::default();
+    // The runs already on the head when a fresh ready's wait first read
+    // it; see `registered_since`. `None` until that first reading.
+    let mut before_ready: Option<std::collections::BTreeSet<u64>> = None;
+    // And the check suites on it then, for `never_emitted`'s reason.
+    let mut suites_before: Option<std::collections::BTreeSet<u64>> = None;
+    // THE FIRST ASK IS ANSWERED BY READY'S READING WHERE THERE IS ONE
+    // (CLOUD-2253 A7): the same head, read moments ago, and its validator makes
+    // the second ask a conditional one.
+    let mut primed = waiting.primed.clone();
+    // EVERY ARM READS ONCE BEFORE IT ASKS WHETHER THE OTHER ANSWERED
+    // (CLOUD-2936): the race decides which verdict is sent, never whether an
+    // arm looked. A check before the first read made that a draw between two
+    // thread starts, and the losing arm's read ran on one recording of
+    // unchanged code and not the next. A late answer is dropped ([`Report::answer`]).
+    loop {
+        // The conditional read is `pr_watch`'s, so the argv, the client
+        // and the empty-string-on-failure posture stay its business and
+        // this arm only decides when to ask.
+        let raw = primed.take().or_else(|| (waiting.checks)(poll.etag()));
+        if let Some(status) = refused_read(raw.as_ref()) {
+            report.answer(Waited::Refused { status });
+            return;
+        }
+        let interval = poll.absorb(raw.as_ref(), config.interval);
+        // THE HOLDER'S HEARTBEAT, AND THIS LOOP IS THE ONLY PLACE THAT
+        // SPENDS REAL TIME (review of #848). A lap acquires its lease
+        // once and then waits out a whole matrix here, so without a beat
+        // the TTL lapses mid-wait and a rival takes a lease this process
+        // still believes it holds. The predecessor backgrounded a
+        // heartbeat process; this is that obligation, in the one loop
+        // whose iterations are seconds rather than microseconds.
+        //
+        // A CALLBACK RATHER THAN A `lease` CALL, because `land` must not
+        // depend on `lease` — `module-layering` refuses the edge, and
+        // the caller is where the terms and this clone's identity
+        // already live. It decides its own cadence; this only says WHEN
+        // there is time to spend.
+        //
+        // IT CARRIES THE READING'S SIGNATURE, WHICH IS WHAT KEEPS A
+        // HEALTHY WAIT FROM READING AS A STALL (CLOUD-1703). The lease's
+        // progress token is a `phase_since`/`sig_at` pair, and neither
+        // moves inside this loop — the phase was pushed once on entry, so
+        // a wait longer than the stall bound published an unchanging
+        // token and a rival could take the lease from a lap that was
+        // healthily watching CI. The signature moves when the CHECK RUNS
+        // move, which is the thing whose gaps that bound was measured
+        // against. Still a number and not a lease call: what the caller
+        // does with it stays the caller's.
+        heartbeat(poll.signature());
+        if fresh_ready && before_ready.is_none() && !poll.runs().is_empty() {
+            before_ready = Some(poll.runs().iter().map(|run| run.id).collect());
+        }
+        // A FORGE THAT ANSWERS NOTHING IS A FAULT, NAMED, NEVER A WAIT OUTCOME
+        // (CLOUD-1215, CLOUD-2253 A2). `pr_watch::watch`'s never-answered bound,
+        // kept only as the fault's exit: it never re-drafts or cancels.
+        if poll.unanswered_from_the_start() >= crate::pr_watch::UNANSWERED_BEFORE_REFUSING {
+            report.answer(Waited::Unread);
+            return;
+        }
+        // EVERY TERMINAL ANSWER ENDS THE WAIT, not only the one the lap
+        // hopes for. Breaking on `Green` alone made a red head
+        // byte-identical to a pending one.
+        match crate::checks_green::decide(poll.runs(), roster) {
+            Ok(crate::checks_green::Verdict::Green) => {
+                report.answer(Waited::Green {
+                    verdict: String::from("green"),
+                });
+                return;
+            }
+            Ok(crate::checks_green::Verdict::Red(findings)) => {
+                let reading = red_runs(poll.runs(), roster, &findings);
+                if let Ok(mut slot) = report.red.lock() {
+                    *slot = reading;
+                }
+                report.answer(Waited::Red { findings });
+                return;
+            }
+            // AND THE THIRD TERMINAL ANSWER (CLOUD-497): a closed required
+            // set with a masked name. Nothing further is coming.
+            Ok(crate::checks_green::Verdict::DeadEnd(findings))
+                if registered_since(before_ready.as_ref(), poll.runs(), &findings) =>
+            {
+                report.answer(Waited::DeadEnd { findings });
+                return;
+            }
+            // A REQUIRED NAME NO WORKFLOW EMITS FOR THIS HEAD (CLOUD-2253 A2):
+            // decided on the event — every suite registered and concluded — and
+            // never by asking until a count runs out. A dead end, with the
+            // names as its pointers.
+            //
+            // ANY PENDING, NOT ONLY `Unregistered`: `decide` reads a head whose
+            // required names have no graded run at all as `Running { 0, 0 }`,
+            // which is exactly the head no workflow emits for — so the names
+            // are read off the runs here rather than off the verdict's arm.
+            Ok(crate::checks_green::Verdict::Pending(_))
+                if !run_less(poll.runs(), roster).is_empty()
+                    && waiting.suites.is_some_and(|suites| {
+                        never_emitted(
+                            suites_reading(suites(None).as_ref()),
+                            fresh_ready,
+                            &mut suites_before,
+                        )
+                    }) =>
+            {
+                let findings = run_less(poll.runs(), roster)
+                    .into_iter()
+                    .map(|check| crate::checks_green::Finding {
+                        check,
+                        conclusion: String::from("never-emitted"),
+                    })
+                    .collect();
+                report.answer(Waited::DeadEnd { findings });
+                return;
+            }
+            // Pending is the state this loop exists to sit in, and a
+            // roster that cannot decide was refused before the loop.
+            Ok(
+                crate::checks_green::Verdict::Pending(_) | crate::checks_green::Verdict::DeadEnd(_),
+            )
+            | Err(_) => {}
+        }
+        // INTERRUPTIBLE, because the OTHER arm may answer during this
+        // wait and `thread::scope` joins this one before the verdict can
+        // be acted on (review of #848).
+        if report.answered() {
+            return;
+        }
+        (waiting.pause)(interval, report.stop);
+    }
+}
+
+/// The staleness arm of [`raced`]: the trunk, and beside it the branch's own
+/// pull request, on the trunk's interval until one of them ends the wait or the
+/// other arm answers (CLOUD-2253 A2: no ask count ends it either).
+fn trunk_arm(
+    (config, trunk): (&crate::pr_watch::Config, &crate::main_watch::Config),
+    waiting: &Waiting<'_>,
+    report: &Report<'_>,
+) {
+    let mut poll = crate::main_watch::Poll::default();
+    // Read once before asking whether the other arm answered, for
+    // [`checks_arm`]'s reason (CLOUD-2936).
+    loop {
+        let raw = (waiting.trunk)(poll.etag());
+        let interval = poll.absorb(raw.as_ref(), trunk.interval);
+        if let Some(moved) = poll.moved(&trunk.base) {
+            report.answer(Waited::Stale {
+                base: moved.to_owned(),
+            });
+            return;
+        }
+        // THE PULL REQUEST'S OWN END: its head moved, or it closed or merged.
+        // A merge by fast-forward also moves the trunk, which the read above
+        // answers first; a close never does.
+        if let Some(ended) = waiting
+            .pull
+            .and_then(|pull| pull_ended(pull(None).as_ref(), &config.sha))
+        {
+            report.answer(ended);
+            return;
+        }
+        // `pr_watch`'s pause deliberately, not a second one: there is one
+        // sleep in this crate and it carries the one `disallowed_methods`
+        // exemption, so a second arm cannot grow a timer of its own.
+        // Interruptible, for the sibling arm's reason.
+        if report.answered() {
+            return;
+        }
+        (waiting.pause)(interval, report.stop);
+    }
 }
 
 /// [`wait_reading`] over the reads and pause `waiting` names.
@@ -1064,7 +1489,7 @@ fn raced(
         &crate::checks_green::Roster,
         &crate::main_watch::Config,
     ),
-    (asks, fresh_ready): (u32, bool),
+    fresh_ready: bool,
     heartbeat: &(dyn Fn(u64) + Sync),
     out: &mut dyn std::io::Write,
     waiting: &Waiting<'_>,
@@ -1087,162 +1512,29 @@ fn raced(
     let red = std::sync::Mutex::new(RedReading::default());
 
     let waited = std::thread::scope(|scope| {
-        let green = tx.clone();
-        let stop = &decided;
-        let red_slot = &red;
+        let report = Report {
+            send: tx.clone(),
+            stop: &decided,
+            red: &red,
+        };
+        let stale = Report {
+            send: tx.clone(),
+            stop: &decided,
+            red: &red,
+        };
         drop(scope.spawn(move || {
-            let mut poll = crate::pr_watch::Poll::default();
-            // The runs already on the head when a fresh ready's wait first read
-            // it; see `registered_since`. `None` until that first reading.
-            let mut before_ready: Option<std::collections::BTreeSet<u64>> = None;
-            for ask in 1..=asks {
-                if stop.load(std::sync::atomic::Ordering::Relaxed) {
-                    return;
-                }
-                // The conditional read is `pr_watch`'s, so the argv, the client
-                // and the empty-string-on-failure posture stay its business and
-                // this arm only decides when to ask.
-                let raw = (waiting.checks)(poll.etag());
-                let interval = poll.absorb(raw.as_ref(), config.interval);
-                // THE HOLDER'S HEARTBEAT, AND THIS LOOP IS THE ONLY PLACE THAT
-                // SPENDS REAL TIME (review of #848). A lap acquires its lease
-                // once and then waits out a whole matrix here, so without a beat
-                // the TTL lapses mid-wait and a rival takes a lease this process
-                // still believes it holds. The predecessor backgrounded a
-                // heartbeat process; this is that obligation, in the one loop
-                // whose iterations are seconds rather than microseconds.
-                //
-                // A CALLBACK RATHER THAN A `lease` CALL, because `land` must not
-                // depend on `lease` — `module-layering` refuses the edge, and
-                // the caller is where the terms and this clone's identity
-                // already live. It decides its own cadence; this only says WHEN
-                // there is time to spend.
-                //
-                // IT CARRIES THE READING'S SIGNATURE, WHICH IS WHAT KEEPS A
-                // HEALTHY WAIT FROM READING AS A STALL (CLOUD-1703). The lease's
-                // progress token is a `phase_since`/`sig_at` pair, and neither
-                // moves inside this loop — the phase was pushed once on entry, so
-                // a wait longer than the stall bound published an unchanging
-                // token and a rival could take the lease from a lap that was
-                // healthily watching CI. The signature moves when the CHECK RUNS
-                // move, which is the thing whose gaps that bound was measured
-                // against. Still a number and not a lease call: what the caller
-                // does with it stays the caller's.
-                heartbeat(poll.signature());
-                if fresh_ready && before_ready.is_none() && !poll.runs().is_empty() {
-                    before_ready = Some(poll.runs().iter().map(|run| run.id).collect());
-                }
-                // AND THE SAME NEVER-ANSWERED BOUND `pr_watch::watch` TAKES
-                // (review of #848). A credential the forge refuses answers a
-                // could-not-look to every request, so this arm would spend its
-                // whole ask count — 3600 by default — learning nothing, while
-                // the lap holds the lease and the operator sees one line. Left
-                // to the `Unanswered` verdict, which is what the lap already
-                // laps on, so the shape of the refusal is unchanged.
-                // NOT `Unanswered` (CLOUD-1215): no request was answered, so no
-                // reading was taken, and `Unanswered` read as `Pending` re-drafted
-                // the head and cancelled its runs on a forge it could not read.
-                if poll.unanswered_from_the_start() >= crate::pr_watch::UNANSWERED_BEFORE_REFUSING {
-                    stop.store(true, std::sync::atomic::Ordering::Relaxed);
-                    drop(green.send(Waited::Unread));
-                    return;
-                }
-                // BOTH TERMINAL ANSWERS END THE WAIT, not only the one the lap
-                // hopes for. Breaking on `Green` alone made a red head
-                // byte-identical to a pending one for the whole ask count.
-                match crate::checks_green::decide(poll.runs(), roster) {
-                    Ok(crate::checks_green::Verdict::Green) => {
-                        stop.store(true, std::sync::atomic::Ordering::Relaxed);
-                        drop(green.send(Waited::Green {
-                            verdict: String::from("green"),
-                        }));
-                        return;
-                    }
-                    Ok(crate::checks_green::Verdict::Red(findings)) => {
-                        stop.store(true, std::sync::atomic::Ordering::Relaxed);
-                        let reading = red_runs(poll.runs(), roster, &findings);
-                        if let Ok(mut slot) = red_slot.lock() {
-                            *slot = reading;
-                        }
-                        drop(green.send(Waited::Red { findings }));
-                        return;
-                    }
-                    // AND THE THIRD TERMINAL ANSWER (CLOUD-497): a closed required
-                    // set with a masked name. It ends the wait for the same reason
-                    // the two above do — nothing further is coming — and it must
-                    // end it HERE rather than by running out of asks, because
-                    // running out spells `Unanswered`, which laps.
-                    Ok(crate::checks_green::Verdict::DeadEnd(findings))
-                        if registered_since(before_ready.as_ref(), poll.runs(), &findings) =>
-                    {
-                        stop.store(true, std::sync::atomic::Ordering::Relaxed);
-                        drop(green.send(Waited::DeadEnd { findings }));
-                        return;
-                    }
-                    // Pending is the state this loop exists to sit in, and a
-                    // roster that cannot decide was refused before the loop.
-                    Ok(
-                        crate::checks_green::Verdict::Pending(_)
-                        | crate::checks_green::Verdict::DeadEnd(_),
-                    )
-                    | Err(_) => {}
-                }
-                // INTERRUPTIBLE, because the OTHER arm may answer during this
-                // wait and `thread::scope` joins this one before the verdict can
-                // be acted on. Checking the flag only at the loop head held a
-                // finished landing for a whole interval — survivable at the
-                // poll's one second, and not once `wait_for` began honouring a
-                // rate-limit backoff measured in minutes (review of #848).
-                // NO PAUSE AFTER THE LAST ASK: there is nothing left to wait
-                // for, and a rate-limit backoff measured in minutes would hold
-                // an unanswered race that long (CLOUD-2113's test hang).
-                if ask < asks {
-                    (waiting.pause)(interval, stop);
-                }
-            }
+            checks_arm((config, roster), fresh_ready, heartbeat, waiting, &report);
         }));
-
-        let stale = tx.clone();
-        drop(scope.spawn(move || {
-            let mut poll = crate::main_watch::Poll::default();
-            for ask in 1..=asks {
-                if stop.load(std::sync::atomic::Ordering::Relaxed) {
-                    return;
-                }
-                let raw = (waiting.trunk)(poll.etag());
-                let interval = poll.absorb(raw.as_ref(), trunk.interval);
-                if let Some(moved) = poll.moved(&trunk.base) {
-                    stop.store(true, std::sync::atomic::Ordering::Relaxed);
-                    drop(stale.send(Waited::Stale {
-                        base: moved.to_owned(),
-                    }));
-                    return;
-                }
-                // `pr_watch`'s pause deliberately, not a second one: there is one
-                // sleep in this crate and it carries the one `disallowed_methods`
-                // exemption, so a second arm cannot grow a timer of its own.
-                //
-                // Interruptible for the reason the sibling arm states: this arm
-                // loses the race most of the time, and holding the scope open
-                // through its last interval delays every verdict the other one
-                // reaches.
-                // NO PAUSE AFTER THE LAST ASK: there is nothing left to wait
-                // for, and a rate-limit backoff measured in minutes would hold
-                // an unanswered race that long (CLOUD-2113's test hang).
-                if ask < asks {
-                    (waiting.pause)(interval, stop);
-                }
-            }
-        }));
-
-        // THE LAST LIVE SENDER MUST BE DROPPED OR THE RECV BELOW NEVER RETURNS.
-        // Both arms exhausting `asks` without answering closes their clones; this
-        // one is the outer handle and would keep the channel open forever.
+        drop(scope.spawn(move || trunk_arm((config, trunk), waiting, &stale)));
+        // THE LAST LIVE SENDER MUST BE DROPPED OR THE RECV BELOW NEVER RETURNS
+        // once both arms have ended; this one is the outer handle.
         drop(tx);
         rx.recv().ok()
     });
 
-    let waited = waited.unwrap_or(Waited::Unanswered);
+    // EVERY ARM ENDS BY ANSWERING, so the channel closes unanswered only if
+    // both arms died; that is could-not-look, the fault, never a pending wait.
+    let waited = waited.unwrap_or(Waited::Unread);
     let reading = match &waited {
         Waited::Red { .. } => red.into_inner().unwrap_or_default(),
         _ => RedReading::default(),
@@ -1311,17 +1603,6 @@ pub fn record_wait(root: &Path, branch: &str, answers: &[Answered]) -> Result<()
     )
 }
 
-/// The receipt family recording a head whose wait stopped red (CLOUD-2270).
-///
-/// Branch-keyed, `red-head.<slug>`, and REPLACED rather than appended: it
-/// answers "what does this branch's head owe a push", which is current state,
-/// never history. `red-head` reads it as a mediated fact.
-///
-/// Also the PRESET's name, by construction rather than coincidence: the
-/// manifest spells itself with this constant, so the landing's "is the preset
-/// enabled" lookup and the record cannot be renamed apart.
-pub const RED_HEAD: &str = "red-head";
-
 /// A red reading's two pointer lists: each failed required check's newest run
 /// as `(id, name)`, and each required check whose newest run is still going.
 ///
@@ -1355,7 +1636,6 @@ pub fn red_runs(
 /// record and every name a single path component.
 // The record's writer, reader and clear are judged over the compiled binary and
 // the real post-tool mint, which only the integration tier runs (CLOUD-2270).
-//MUTANT-SUITE crates/batten/tests/it/head_push_unread.rs
 #[must_use]
 pub fn red_head_slug(branch: &str) -> String {
     branch.replace('%', "%25").replace('/', "%2F")
@@ -1495,7 +1775,7 @@ fn read_red_head(root: &Path, branch: &str) -> crate::facts::Look<RedHead> {
     let Some(path) = red_head_path(root, branch) else {
         return crate::facts::Look::CouldNotLook;
     };
-    let text = match std::fs::read_to_string(&path) {
+    let text = match crate::fsio::read_to_string(&path) {
         Ok(text) => text,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             return crate::facts::Look::IsNot;
@@ -1631,6 +1911,56 @@ impl Pushed {
 /// resolve. A rejected update is [`Pushed::Raced`] rather than an error.
 pub fn push(root: &Path, remote: &str, branch: &str) -> Result<Pushed> {
     let head = crate::git::head_commit(root).context("land: read this clone's HEAD")?;
+    push_commit(root, remote, branch, head)
+}
+
+/// The head this branch's most recent gate run passed, or `None` when its
+/// most recent run did not pass or it has none (#1276).
+///
+/// **THE LATEST VERDICT, NOT THE LATEST PASS:** a head that passed and was
+/// then refused is not one to publish, so a refused or stalled run after a
+/// clean one answers `None`.
+#[must_use]
+pub fn last_verified(root: &Path, branch: &str) -> Option<String> {
+    let lines = branch_lap_lines(root, branch);
+    let latest = lines
+        .iter()
+        .rev()
+        .find(|line| line.starts_with("verify "))?;
+    let mut columns = latest.split_whitespace().skip(1);
+    match (columns.next(), columns.next()) {
+        (Some("clean"), Some(sha)) => Some(sha.to_owned()),
+        _ => None,
+    }
+}
+
+/// Push the head this lap's gate passed — never whatever `HEAD` is by the time
+/// the push runs (#1276).
+///
+/// The lap used to push `HEAD`, so a commit made mid-gate was published,
+/// readied and spent a matrix on with no local verdict at all. A remote someone
+/// pushed past the verified head refuses the swap ([`Pushed::Raced`]), and the
+/// lap goes round again.
+///
+/// **A COMMIT MADE WHILE THE GATE RUNS IS NOT A WORKFLOW** (CLOUD-2781). This
+/// doc used to call pushing a draft mid-lap the workflow, which held for the
+/// push and not for the gate: every stage reads the working tree, so the edit
+/// reached the stages still to run and the verdict judged a tree no stage saw
+/// whole. [`verify`] now voids a gate whose tree moved ([`tree_moved`]), and a
+/// live lap refuses writes into its checkout.
+///
+/// # Errors
+///
+/// No passing verdict on record for this branch, or [`push`]'s.
+pub fn push_verified(root: &Path, remote: &str, branch: &str) -> Result<Pushed> {
+    let verified = last_verified(root, branch).with_context(|| {
+        format!("land: {branch}'s latest gate run did not pass, so there is no head to push")
+    })?;
+    push_commit(root, remote, branch, verified)
+}
+
+/// Push `head` to `branch`'s own ref under receive-pack's compare-and-swap.
+fn push_commit(root: &Path, remote: &str, branch: &str, head: String) -> Result<Pushed> {
     let reference = format!("refs/heads/{branch}");
     let admit = |old: &str| admitted(root, branch, old, &head);
     let outcome = crate::lease::push(remote, root, &reference, &head, &admit)
@@ -1645,6 +1975,49 @@ pub fn push(root: &Path, remote: &str, branch: &str) -> Result<Pushed> {
     };
     append(root, branch, std::slice::from_ref(&pushed.line()))?;
     Ok(pushed)
+}
+
+/// The variable the lap's own gate runs under (CLOUD-2707): set by
+/// `run_land_verify_seen` on the gate it spawns, and read by `land placed`, so
+/// the lap's own gate is never advised to run the lap.
+pub const LAP_GATE: &str = "BATTEN_LAND_GATE";
+
+/// The pid of the lap whose gate a process runs under (CLOUD-2783): set by
+/// `run_land_verify_seen` beside [`LAP_GATE`], and read by the write hold so a
+/// call is exempt only from ITS OWN lap. Not a marker but an identity: a suite
+/// case that takes the singleton with its own pid is still held by it, and the
+/// suite's scrub of [`LAP_GATE`] (CLOUD-2707) does not reach it.
+pub const LAP_PID: &str = "BATTEN_LAND_LAP";
+
+/// Where a gate run stands relative to `land` (CLOUD-2707).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Placement {
+    /// The lap itself is running the gate.
+    Lap,
+    /// The head is still being iterated: uncommitted work, or commits on no
+    /// remote, or a clone whose remotes could not be read.
+    Iterating,
+    /// A committed, pushed head outside the lap: the run is legitimate, and
+    /// `land` is the step after it, answering this head from the run's receipt.
+    BeforeLand,
+}
+
+/// Decide where a gate run stands (CLOUD-2707). It only chooses whether to
+/// advise; nothing here refuses, and could-not-look is iterating, so an
+/// unreadable remote says nothing rather than something false.
+#[must_use]
+pub const fn placement(
+    under_lap: bool,
+    uncommitted: usize,
+    on_a_remote: Option<bool>,
+) -> Placement {
+    if under_lap {
+        Placement::Lap
+    } else if uncommitted > 0 || !matches!(on_a_remote, Some(true)) {
+        Placement::Iterating
+    } else {
+        Placement::BeforeLand
+    }
 }
 
 /// What the lap's verification said about this head.
@@ -1746,6 +2119,38 @@ pub enum Refusal {
         /// composed here: which reclaim to run is that repository's vocabulary.
         remedy: String,
     },
+    /// **THE CHECKOUT MOVED UNDER THE GATE, WHICH LAPS RATHER THAN STOPPING**
+    /// (CLOUD-2781). Every stage the gate dispatches reads the working tree, so a
+    /// commit or an edit made while it ran reached the stages after it: its
+    /// verdict is about a tree no stage saw whole. Not a refusal of the tree,
+    /// so it laps like [`Self::Moved`]; and never clean, so the moved head is
+    /// never recorded as verified.
+    Voided {
+        /// HEAD when the gate returned, or `-` where it could not be read.
+        to: String,
+        /// Paths dirty when the gate returned; `usize::MAX` where unreadable.
+        dirty: usize,
+    },
+}
+
+/// Whether the checkout moved under a gate that started at HEAD `start` with
+/// `start_dirty` dirty paths: HEAD read at its return differs, or the dirty
+/// count does. A lap's entry refuses a dirty tree, so under `land` the start is
+/// always 0 and this is "any path dirty at return"; [`verify`] is public, so the
+/// count is compared rather than assumed. A reading that could not be taken is a
+/// move, since a verdict over a tree nobody could read back is not one to record.
+#[must_use]
+pub fn tree_moved(
+    (start, start_dirty): (&str, Option<usize>),
+    end: Option<String>,
+    dirty: Option<usize>,
+) -> Option<Refusal> {
+    let to = end.unwrap_or_else(|| String::from("-"));
+    let unmoved = to == start && dirty.is_some() && dirty == start_dirty;
+    (!unmoved).then_some(Refusal::Voided {
+        to,
+        dirty: dirty.unwrap_or(usize::MAX),
+    })
 }
 
 impl Verified {
@@ -1841,7 +2246,7 @@ pub fn verify(
     branch: &str,
     command: &[String],
     published: &[(String, String)],
-    environment: &[crate::outputs::OutputPattern],
+    environment: &[crate::config_model::OutputPattern],
 ) -> Result<Verified> {
     if command.is_empty() {
         return Err(crate::error::UsageError::raise(String::from(
@@ -1909,6 +2314,13 @@ pub fn verify(
     // sibling that answers it. Both readings from one function would produce
     // opposite verdicts over identical bytes.
     let mut log = Vec::new();
+    // THE TREE IT STARTS ON, READ BEFORE IT RUNS (CLOUD-2780). Read after, the
+    // start count equalled the end count, so an edit left by the gate's own
+    // stages compared unmoved and was recorded against HEAD.
+    let start = head.clone();
+    let start_dirty = crate::git::uncommitted(&started).ok();
+    // THE GATE'S OWN WINDOW: the low-water mark it is judged by is read from here.
+    crate::low_water::reset();
     let classified =
         crate::exec::classify_in_env(&started, command, environment, &VERIFY_SETTINGS, published)
             .map(|(code, found, handles)| {
@@ -1916,8 +2328,17 @@ pub fn verify(
                 (code, found)
             });
     let verified = match classified {
-        Ok(ran) => gate_said(head, ran, environment),
+        Ok(ran) => gate_said(head, ran, environment, crate::low_water::read()),
         Err(problem) => return Err(problem.context("land: run the configured verify command")),
+    };
+    // THE TREE THE GATE JUDGED MUST BE THE TREE IT STARTED ON (CLOUD-2781).
+    let verified = match tree_moved(
+        (&start, start_dirty),
+        crate::git::head_commit(root).ok(),
+        crate::git::uncommitted(&started).ok(),
+    ) {
+        Some(cause) => Verified::Refused { sha: start, cause },
+        None => verified,
     };
     let mut lines = vec![verified.line()];
     if !log.is_empty() {
@@ -1934,11 +2355,22 @@ pub fn verify(
 /// a restated default is a field whose deletion changes nothing (CLOUD-2509);
 /// the assertion below pins it at compile time, so a default flipped for
 /// another caller cannot stream a gate log into the lap.
-const VERIFY_SETTINGS: crate::exec::ExecConfig = crate::exec::ExecConfig {
+const VERIFY_SETTINGS: crate::config_model::ExecConfig = crate::config_model::ExecConfig {
     manage_process_group: true,
-    ..crate::exec::ExecConfig::DEFAULT
+    // EACH STAGE'S RESULT AS IT LANDS (#1276): the log stays stored and named
+    // by a pointer at the end, but a lap that ran an hour said nothing until
+    // then. One line per stage and per mutant row, never the payload.
+    progress: crate::config_model::ExecProgress::Echo,
+    ..crate::config_model::ExecConfig::DEFAULT
 };
-const _: () = assert!(VERIFY_SETTINGS.manage_process_group && !VERIFY_SETTINGS.tee);
+const _: () = assert!(
+    VERIFY_SETTINGS.manage_process_group
+        && !VERIFY_SETTINGS.tee
+        && matches!(
+            VERIFY_SETTINGS.progress,
+            crate::config_model::ExecProgress::Echo
+        )
+);
 
 /// What a gate that RAN said about `head`: its exit code first, then the
 /// declared patterns its output matched.
@@ -1948,7 +2380,8 @@ const _: () = assert!(VERIFY_SETTINGS.manage_process_group && !VERIFY_SETTINGS.t
 fn gate_said(
     head: String,
     ran: (i32, Vec<crate::outputs::Hit>),
-    environment: &[crate::outputs::OutputPattern],
+    environment: &[crate::config_model::OutputPattern],
+    low_water: Option<u64>,
 ) -> Verified {
     match ran {
         (0, _) => Verified::Clean(head),
@@ -1986,6 +2419,20 @@ fn gate_said(
                 ),
             },
         },
+        // A FULL VOLUME IS MEASURED, NEVER MATCHED IN TEXT (#1276). The disk
+        // watcher read the volume throughout the gate ([`disk_watch::low_water`]);
+        // a gate that refused while free space reached zero refused for the
+        // environment, whatever its log says, and one that refused with space to
+        // spare refused the tree, whatever its log says. The `disk-full` text row
+        // matched a mutant's diff on #1276 while the watcher read gigabytes free.
+        (_, _) if low_water == Some(0) => Verified::Refused {
+            sha: head,
+            cause: Refusal::Environment {
+                remedy: String::from(
+                    "the volume's free space reached 0 MiB while the gate ran, as the disk watcher measured it, so this is the environment rather than your branch: free space outside the declared [prune] roots, or lower [prune] max_free_mb so collection starts sooner",
+                ),
+            },
+        },
         (_, found) => Verified::Refused {
             sha: head,
             // THE FIRST DECLARED ROW THAT MATCHED, in declaration order, and one
@@ -2014,8 +2461,6 @@ const VERIFY_LOG: &str = "verify-log";
 /// The gate's output is stored, not streamed: measured on #1132, one task log
 /// read whole was 57,764 tokens, of which two lines were the verdict. This is the
 /// pointer the driver prints in its place.
-//MUTANT-SUITE crates/batten/tests/it/land_verify_advice.rs
-//MUTANT verify-log-unrecorded|s@^        lines.push(format!("{VERIFY_LOG} {} {}", verified.sha(), log.join(" ")));$@        drop(log.join(" "));@|a_gate_s_output_is_stored_and_pointed_at
 #[must_use]
 pub fn verify_log(root: &Path, branch: &str, sha: &str) -> Vec<String> {
     branch_lap_lines(root, branch)
@@ -2054,7 +2499,7 @@ pub fn verify_log(root: &Path, branch: &str, sha: &str) -> Vec<String> {
 ///
 /// # NO NEW TIMER, WHICH IS A CONSTRAINT RATHER THAN A CONVENIENCE
 ///
-/// This is [`wait`]'s shape reused, deliberately: one `thread::scope`, one
+/// This is [`wait_reading`]'s shape reused, deliberately: one `thread::scope`, one
 /// channel, `recv` taking whichever arm answers first, and one `stop` flag both
 /// arms read. The watcher's pause is [`crate::pr_watch::pause_until`] — *"there
 /// is one sleep in this crate and it carries the one `disallowed_methods`
@@ -2064,7 +2509,7 @@ pub fn verify_log(root: &Path, branch: &str, sha: &str) -> Vec<String> {
 /// waiver.
 ///
 /// **The watcher's loop is bounded by the gate, not by an ask count**, and that
-/// is the difference from [`wait`]'s arms. A watcher outliving its gate would be
+/// is the difference from [`wait_reading`]'s arms. A watcher outliving its gate would be
 /// the unbounded loop CLOUD-1338 refuses; here the sibling's completion sets
 /// `stop`, which is a real terminal state rather than a guess at one.
 ///
@@ -2089,7 +2534,7 @@ pub fn verify_raced(
     branch: &str,
     command: &[String],
     published: &[(String, String)],
-    environment: &[crate::outputs::OutputPattern],
+    environment: &[crate::config_model::OutputPattern],
     trunk: Option<(&crate::main_watch::Config, &str)>,
     stall: Option<&Stall>,
 ) -> Result<Verified> {
@@ -2249,6 +2694,24 @@ fn settle_race(settle: &Settle<'_>, raced: Option<Raced>) -> Result<Verified> {
             )?;
             Ok(verified)
         }
+        // A GATE STEP ANSWERED RED FROM ITS RECEIPT (CLOUD-2253) is a refusal
+        // of this tree, recorded with the step and whether the cancel landed.
+        Some(Raced::Red(step)) => {
+            let verified = Verified::Refused {
+                sha: settle.head.clone(),
+                cause: Refusal::Tree,
+            };
+            let reclaimed = settle.reclaimed.try_recv().unwrap_or(false);
+            append(
+                settle.root,
+                settle.branch,
+                &[
+                    verified.line(),
+                    format!("{LAP_RECORD} gate-red {step} {reclaimed}"),
+                ],
+            )?;
+            Ok(verified)
+        }
         // BOTH ARMS CLOSED WITHOUT ANSWERING is could-not-look about the RACE,
         // never a clean tree: the gate is the arm that cannot abstain, so this is
         // reachable only if its thread died without sending.
@@ -2283,8 +2746,6 @@ fn settle_race(settle: &Settle<'_>, raced: Option<Raced>) -> Result<Verified> {
 /// claim is unconfirmed and the refusal stays the tree's. A lap that stopped
 /// where it could have lapped costs one re-run; a lap that lapped a refused tree
 /// costs the whole budget, which is the defect this exists to keep closed.
-//MUTANT-SUITE crates/batten/src/land.rs
-//MUTANT unconfirmed-move-laps|s@                cause: if moved { Refusal::Moved } else { Refusal::Tree },@                cause: Refusal::Moved,@|an_unconfirmed_move_is_a_refusal_of_the_tree
 fn confirmed(
     verified: Verified,
     watched: Option<&(&crate::main_watch::Config, String)>,
@@ -2353,8 +2814,6 @@ pub fn still(run: Option<Still>, seen: Option<String>) -> Option<Still> {
 /// reports no step under the task leaves the stamp as it found it however long
 /// it runs, so a still stamp is evidence of a stall only from a gate that has
 /// shown it reports at all.
-//MUTANT self-stall-never-wins|s@^    beats > 0 \&\& matches!(run, Some(run) if run.reported \&\& run.beats >= beats)$@    false@|a_frozen_advance_stalls_and_a_moving_one_does_not
-//MUTANT self-stall-on-silence|s@ if run.reported \&\& @ if @|a_frozen_advance_stalls_and_a_moving_one_does_not
 #[must_use]
 pub const fn stalled(run: Option<&Still>, beats: u32) -> bool {
     beats > 0 && matches!(run, Some(run) if run.reported && run.beats >= beats)
@@ -2389,8 +2848,6 @@ pub enum Reconcile {
 ///   diverged branch, and could-not-tell is never a cancel. `Leave`.
 /// - Ready on a strict ancestor: this branch's own superseded push, whose runs
 ///   grade a tree it will never land. `AbandonAndRedraft`.
-//MUTANT reconcile-ignores-a-stale-head|s@if head != local_head \&\& superseded@if head != local_head \&\& false@|entry_reconcile_cancels_only_a_superseded_ready_head
-//MUTANT reconcile-cancels-a-foreign-head|s@if head != local_head \&\& superseded@if head != local_head@|entry_reconcile_cancels_only_a_superseded_ready_head
 #[must_use]
 pub fn entry_reconcile(pr: Option<(bool, &str)>, local_head: &str, superseded: bool) -> Reconcile {
     match pr {
@@ -2419,6 +2876,9 @@ pub struct Stall {
     /// whole seconds and a step can start within the second the lap entered
     /// verify.
     pub progress: fn(&std::path::Path, u32) -> Option<String>,
+    /// The gate step answered from a failure receipt under the task, if any
+    /// (CLOUD-2253): read each beat, it cancels the gate at once.
+    pub red: fn(&std::path::Path, u32) -> Option<String>,
 }
 
 /// Which arm of a raced gate answered. The gate's `Result` travels whole so a
@@ -2427,6 +2887,8 @@ enum Raced {
     Gate(Result<Verified>),
     Moved(String),
     Stalled(u32),
+    /// A gate step answered from its failure receipt (CLOUD-2253).
+    Red(String),
 }
 
 /// Where the racing arms (watcher and stall) report, bundled so their
@@ -2539,14 +3001,53 @@ fn win(root: &Path, arms: &Arms<'_>, raced: Raced) {
 /// gate it watches.
 fn stall_arm(root: &Path, stall: &Stall, seed: Option<Still>, arms: &Arms<'_>) {
     let mut run = seed;
+    // THE RED SLOT HAS ITS OWN CADENCE (CLOUD-2253 C12). It was read once a
+    // beat, so a red step stopped the gate up to a whole beat — 30 s by
+    // default — after it was filed. It is a file read, so it is read every
+    // `RED_EVERY`, and the stall's progress keeps the beat: one progress
+    // reading per `ticks` red readings.
+    let tick = stall.beat.min(RED_EVERY);
+    let ticks = ticks_per_beat(stall.beat, tick);
+    let mut tick_of_beat = 0_u32;
     while !arms.stop.load(std::sync::atomic::Ordering::Relaxed) {
-        run = still(run, (stall.progress)(&stall.git_dir, stall.pid));
-        if stalled(run.as_ref(), stall.beats) {
-            win(root, arms, Raced::Stalled(stall.beats));
+        // A KNOWN-RED STEP ENDS THE GATE AT ONCE (CLOUD-2253): its siblings'
+        // minutes would only say red again, so the lap does not wait for them.
+        if let Some(step) = (stall.red)(&stall.git_dir, stall.pid) {
+            win(root, arms, Raced::Red(step));
             return;
         }
-        crate::pr_watch::pause_until(stall.beat.as_secs_f64(), arms.stop);
+        if tick_of_beat == 0 {
+            run = still(run, (stall.progress)(&stall.git_dir, stall.pid));
+            if stalled(run.as_ref(), stall.beats) {
+                win(root, arms, Raced::Stalled(stall.beats));
+                return;
+            }
+        }
+        tick_of_beat = next_tick(tick_of_beat, ticks);
+        crate::pr_watch::pause_until(tick.as_secs_f64(), arms.stop);
     }
+}
+
+/// The red slot's cadence: a file read, so cheap enough to ask each second
+/// (CLOUD-2253 C12).
+const RED_EVERY: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// The tick after `at` in a beat of `ticks`, wrapping to `0` where the next
+/// beat starts: the stall's progress is read on tick `0` alone, so once a beat
+/// and never once a red reading (CLOUD-2253 C12).
+const fn next_tick(at: u32, ticks: u32) -> u32 {
+    (at + 1) % ticks
+}
+
+/// How many `tick`s make one `beat`, never fewer than one, so the stall's
+/// progress is still read once a beat whatever the red cadence is.
+fn ticks_per_beat(beat: std::time::Duration, tick: std::time::Duration) -> u32 {
+    if tick.is_zero() {
+        return 1;
+    }
+    u32::try_from(beat.as_millis() / tick.as_millis().max(1))
+        .unwrap_or(u32::MAX)
+        .max(1)
 }
 
 /// Has the base moved since this lap replayed onto it?
@@ -2565,7 +3066,7 @@ fn stall_arm(root: &Path, stall: &Stall, seed: Option<Still>, arms: &Arms<'_>) {
 /// result is then discarded if the base moved. So the gate's minutes are still
 /// spent where the predecessor could reclaim them; what is saved is the CI matrix
 /// and the fast-forward round trip behind it, which is the metered half. Aborting
-/// early needs a poller that can be stopped mid-wait; [`wait`] now has that shape
+/// early needs a poller that can be stopped mid-wait; [`wait_reading`] now has that shape
 /// (a scoped pair over a stop flag), and applying it to the GATE is a different
 /// problem — the gate is a spawn, not a poll — so CLOUD-423's other half stays
 /// open rather than being claimed here.
@@ -2575,7 +3076,7 @@ fn stall_arm(root: &Path, stall: &Stall, seed: Option<Still>, arms: &Arms<'_>) {
 /// This is [`crate::main_watch`]'s poll asked exactly once, not ref discovery. A
 /// single unconditional ref advertisement is affordable in isolation — that is
 /// what made an earlier revision of this function look fine — but it is the same
-/// question [`wait`] asks in a loop, and answering one question two ways is how
+/// question [`wait_reading`] asks in a loop, and answering one question two ways is how
 /// the two readings drift. The first ask carries no validator and costs a full
 /// body; every later lap's does, because the [`crate::main_watch::Poll`] is the
 /// lap's.
@@ -2803,8 +3304,6 @@ impl Basis {
 /// Pure, and free-standing rather than a branch inside the lap, so the cell can
 /// be decided in a test instead of only through a git resolution and a
 /// filesystem write.
-//MUTANT-SUITE crates/batten/tests/it/lease_lifecycle.rs
-//MUTANT poison-never-recorded|s@    matches!(@    !matches!(@|a_red_wait_on_this_clones_own_base_is_what_poisons_it
 #[must_use]
 pub const fn poisons_this_clone(
     step: Step,
@@ -2831,8 +3330,6 @@ pub const fn poisons_this_clone(
 /// CI checks reading, latched across steps and read by the tap and the undo, and
 /// a local gate that stalled is not a fact about any check. Only the verify
 /// raises it; the same exit 3 without it is a reclaimed gate, which laps.
-//MUTANT-SUITE crates/batten/src/land.rs
-//MUTANT stall-laps|s@^    if gate_stalled {$@    if false {@|a_stalled_verify_stops_the_landing
 #[must_use]
 pub const fn lap_progress(
     step: Step,
@@ -2880,6 +3377,15 @@ pub const fn progress_of(
     // so the stop IS the release, and inventing a variant that did not unwind
     // would have fixed the poll and kept the fleet-scale half of the defect.
     if let (Step::Wait, crate::exit::ExitCode::Internal, Some(TapVerdict::DeadEnd)) =
+        (step, code, seen)
+    {
+        return Progress::Stop;
+    }
+    // AND A FORGE FAULT STOPS, NAMED, where it used to lap (CLOUD-2253 A2). A
+    // wait that took no reading because the forge answered nothing is not a
+    // wait outcome another lap improves: the lap re-asks the same forge. Same
+    // code, told apart by `seen`, as the dead end one cell up.
+    if let (Step::Wait, crate::exit::ExitCode::Internal, Some(TapVerdict::Unread)) =
         (step, code, seen)
     {
         return Progress::Stop;
@@ -3134,49 +3640,6 @@ pub struct Retired {
     pub receipts: usize,
 }
 
-/// The receipt families keyed by BRANCH NAME rather than by sha.
-///
-/// **A sha-keyed receipt dies with its sha and needs no sweep; these do not.**
-/// Each of these records something about a branch's whole filing history, so the
-/// next piece of work to reuse the name would be judged against rows that belong
-/// to the last one (CLOUD-774).
-///
-/// `filed-here-nudged` and `filed-set-nudged` are no longer written: the Stop
-/// ladder stopped withholding its pointers (CLOUD-2078). They stay listed so a
-/// clone that ran an older engine still has its leftovers swept when the branch
-/// lands, rather than keeping them forever.
-/// `unlanded-nudged` was missing once (CLOUD-1390). `unlanded_pointer` writes
-/// `unlanded-nudged.<slug>` under this same directory, keyed by the completion
-/// finding's own fingerprint, and `turn mint ahead` reads it as its
-/// `while_marker`: the claim was told.
-///
-/// **What a missed family costs is a marker that outlives the work it was
-/// about.** Left behind, the next piece of work to reuse the name inherits it,
-/// and is judged as though it had already been told what the last one was.
-///
-/// **`pub(crate)` because a `while_marker` row is validated against it**
-/// (CLOUD-1390). A marker that landing does not sweep is a refusal with no spend:
-/// the row fires, the work lands, the file survives, and the next branch to reuse
-/// the name is denied for a punt it did not commit. `Rule::validate_marker`
-/// refuses that row at load rather than letting the pair drift, which is the same
-/// discipline this list's own header records having needed twice already.
-pub(crate) const BRANCH_KEYED_RECEIPTS: &[&str] = &[
-    "board-writes",
-    "filed-here-nudged",
-    "filed-set-nudged",
-    "unlanded-nudged",
-    "unlanded-spoken",
-    // The Stop refusal's bound and its dispatch excuse (CLOUD-2441): left behind,
-    // a reused branch name would inherit a spent refusal or a free Stop.
-    "unlanded-refused",
-    "land-dispatched",
-    // `pr-open`, minted from `create_pull_request`'s own result: this branch has an
-    // unlanded pull request, so opening a second one is the bundle split
-    // AGENTS.md's "one PR all of it" refuses. Landing sweeps it here, which is what
-    // lets the NEXT branch open its one PR.
-    "pr-open",
-];
-
 /// Retire a branch whose pull request has merged.
 ///
 /// # This is only ever reached from the LANDED path, and that is the whole guard
@@ -3333,8 +3796,17 @@ pub enum Admitted {
 /// **An UNDECLARED set is a pass**, on [`ready`]'s asymmetry: naming no entry
 /// gates is a legitimate configuration, and naming one that cannot run is a dead
 /// gate.
+///
+/// `published` reaches each gate's environment, as [`ready`]'s does: the lap's
+/// engine as `BATTEN_BIN` (CLOUD-2924), so a gate spelling batten through the
+/// consumer's runner does not rebuild-check it.
 #[must_use]
-pub fn admits_the_landing(root: &Path, gates: &[Vec<String>], pr: &str) -> Admitted {
+pub fn admits_the_landing(
+    root: &Path,
+    gates: &[Vec<String>],
+    pr: &str,
+    published: &[(String, Option<String>)],
+) -> Admitted {
     for argv in gates {
         let Some(first) = argv.first() else {
             continue;
@@ -3356,9 +3828,13 @@ pub fn admits_the_landing(root: &Path, gates: &[Vec<String>], pr: &str) -> Admit
         // run rather than as this engine's own spelling (review of #848).
         let gate = with_pr.join(" ");
         with_pr.push(pr.to_owned());
-        let Some((code, output)) =
-            crate::exec::piped_argv(root, &with_pr, "", crate::exec::Diagnostics::Keep, &[])
-        else {
+        let Some((code, output)) = crate::exec::piped_argv(
+            root,
+            &with_pr,
+            "",
+            crate::exec::Diagnostics::Keep,
+            published,
+        ) else {
             // AN ADVISORY GATE THAT WILL NOT RUN IS NOT A REFUSAL EITHER, which
             // is the same reading one line down rather than a separate decision:
             // `|| true` swallowed an unrunnable command exactly as it swallowed a
@@ -3476,8 +3952,6 @@ pub struct Ledger {
     pub fresh_ready: bool,
 }
 
-//MUTANT-SUITE crates/batten/tests/it/land.rs
-//MUTANT lease-loss-charges-a-lap|s@^        self.laps < budget$@        self.laps.saturating_add(self.lease_waits) < budget@|a_lap_lost_to_the_lease_leaves_the_lap_budget_unchanged
 impl Ledger {
     /// Open a lap.
     pub const fn attempt(&mut self) {
@@ -3870,24 +4344,27 @@ pub fn closes_the_tap(state: &Tap) -> bool {
 /// **`Stale` is `None`, and that is the load-bearing arm.** The staleness arm
 /// won the race, so the green arm was voided UNREAD — no checks reading was
 /// taken, and [`closes_the_tap`] must not be handed a verdict nobody looked up.
-/// `Unanswered` is the opposite case and must not be collapsed into it: the
-/// green arm asked its full count and never saw a terminal answer, which IS a
-/// reading, and is precisely what `Pending` means.
+/// The pull request's own end — its head moved, or it closed — is `None` for
+/// the same reason: the checks were not read to an answer.
 ///
-/// Pure, and separate from [`wait`] for the reason [`worthless`] is separate
+/// Pure, and separate from [`wait_reading`] for the reason [`worthless`] is separate
 /// from [`abandon`]: the mapping is the decision, and a decision reachable only
 /// through a network call is a decision nothing tests.
-//MUTANT-SUITE crates/batten/tests/it/land_lap.rs
-//MUTANT unread-wait-reads-as-pending|s@        Waited::Unread => Some(TapVerdict::Unread),@        Waited::Unread => Some(TapVerdict::Pending),@|an_unread_wait_neither_re_drafts_nor_cancels
 #[must_use]
 pub const fn tap_verdict(waited: &Waited) -> Option<TapVerdict> {
     match waited {
         Waited::Green { .. } => Some(TapVerdict::Green),
         Waited::Red { .. } => Some(TapVerdict::Red),
-        Waited::Unanswered => Some(TapVerdict::Pending),
-        Waited::Unread => Some(TapVerdict::Unread),
+        // A FAULT IS UNREAD (CLOUD-2253 A2): a refused read and a forge that
+        // answered nothing both took no reading of the checks, so neither
+        // re-drafts the head nor cancels its runs.
+        Waited::Unread | Waited::Refused { .. } => Some(TapVerdict::Unread),
+        // THE PULL REQUEST ENDED THE WAIT, not the checks: no reading was taken
+        // to re-draft on. A moved head's runs on this sha are waste, which the
+        // undo's `None` already reads as abandon. A stale base likewise took no
+        // reading of this head's checks.
+        Waited::Moved { .. } | Waited::Closed | Waited::Stale { .. } => None,
         Waited::DeadEnd { .. } => Some(TapVerdict::DeadEnd),
-        Waited::Stale { .. } => None,
     }
 }
 
@@ -4165,7 +4642,7 @@ mod mutate_tests {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod forge_tests {
     use super::*;
-
+    #[cfg(test)]
     #[test]
     fn a_draft_state_mutation_takes_by_graphql_or_else_by_the_proxy_route() {
         let took =
@@ -4291,11 +4768,32 @@ mod forge_tests {
         )
     }
 
+    /// What a race reads besides the checks: Ready's reading, the pull
+    /// request's, and the head's check suites (CLOUD-2253 A2, A7).
+    #[derive(Default)]
+    struct Beside {
+        primed: Option<crate::rest::Answer>,
+        pull: Option<String>,
+        suites: Vec<String>,
+    }
+
     /// One race over `answers` (the checks arm's reads, the last repeating), a
     /// trunk that never moves, and a pause that only records: the verdict, the
-    /// red reading, and every pause asked for, the checks arm's at 7s and the
-    /// trunk arm's at 9s.
-    fn race(answers: &[String], asks: u32, fresh_ready: bool) -> (Waited, RedReading, Vec<f64>) {
+    /// red reading, and every pause the checks arm asked for (7s; the trunk
+    /// arm's 9s pauses race it and are not counted).
+    fn race(answers: &[String], fresh_ready: bool) -> (Waited, RedReading, Vec<f64>) {
+        let (waited, red, paused, _) = race_beside(answers, fresh_ready, Beside::default());
+        (waited, red, paused)
+    }
+
+    /// [`race`] with `beside` read too, and how many times the checks arm
+    /// actually read the forge. A single answer may carry a status of its own
+    /// as `"<status> <body>"`.
+    fn race_beside(
+        answers: &[String],
+        fresh_ready: bool,
+        beside: Beside,
+    ) -> (Waited, RedReading, Vec<f64>, usize) {
         let config = crate::pr_watch::Config {
             sha: String::from("s"),
             repo: String::from("o/r"),
@@ -4313,52 +4811,274 @@ mod forge_tests {
         let paused = std::sync::Mutex::new(Vec::new());
         let checks = |_: Option<&str>| {
             let n = asked.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            Some(reading(&answers[n.min(answers.len() - 1)]))
+            let answer = &answers[n.min(answers.len() - 1)];
+            Some(match answer.split_once(' ') {
+                Some((status, body)) if status.parse::<u16>().is_ok() => {
+                    super::mutate_tests::answer(status.parse().unwrap(), body)
+                }
+                _ => reading(answer),
+            })
         };
-        let trunk_read =
-            |_: Option<&str>| Some(reading(&format!(r#"{{"object":{{"sha":"{BASE}"}}}}"#)));
-        let pause = |seconds: f64, _: &std::sync::atomic::AtomicBool| {
-            paused.lock().unwrap().push(seconds);
+        // A RACE NO ARM ENDS FAILS RATHER THAN HANGS: with no ask count left in
+        // the wait, a regression would spin forever, so the trunk "moves" after
+        // far more asks than any case makes and the verdict assertion names it.
+        // Its asks are paced on the checks arm's (the pause below), so the count
+        // is the checks arm's too.
+        let trunk_asked = std::sync::atomic::AtomicUsize::new(0);
+        let trunk_read = |_: Option<&str>| {
+            let n = trunk_asked.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let sha = if n > 100_000 { "runaway" } else { BASE };
+            Some(reading(&format!(r#"{{"object":{{"sha":"{sha}"}}}}"#)))
+        };
+        // THE TRUNK ARM PACES ON THE CHECKS ARM, NOT ON A CLOCK (CLOUD-2253 A2):
+        // a no-op pause let it spin past the runaway guard while the checks arm
+        // was still on an honest ask (`Stale { base: "runaway" }` at 82e566618).
+        // It asks again only once the checks arm has, or once the race is
+        // decided, so it reaches the guard only behind a checks arm that ran away.
+        let pause = |seconds: f64, decided: &std::sync::atomic::AtomicBool| {
+            if (seconds - 7.0).abs() < f64::EPSILON {
+                paused.lock().unwrap().push(seconds);
+                return;
+            }
+            let seen = asked.load(std::sync::atomic::Ordering::Relaxed);
+            while asked.load(std::sync::atomic::Ordering::Relaxed) == seen
+                && !decided.load(std::sync::atomic::Ordering::Relaxed)
+            {
+                std::thread::yield_now();
+            }
+        };
+        let Beside {
+            primed,
+            pull: pull_body,
+            suites: suite_bodies,
+        } = beside;
+        let pull = |_: Option<&str>| pull_body.as_deref().map(reading);
+        let suites_asked = std::sync::atomic::AtomicUsize::new(0);
+        let suites = |_: Option<&str>| {
+            let n = suites_asked.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            suite_bodies
+                .get(n.min(suite_bodies.len().saturating_sub(1)))
+                .map(|body| reading(body))
         };
         let (waited, red) = raced(
             (&config, &roster, &trunk),
-            (asks, fresh_ready),
+            fresh_ready,
             &|_| {},
             &mut Vec::new(),
             &Waiting {
                 checks: &checks,
                 trunk: &trunk_read,
                 pause: &pause,
+                primed,
+                pull: pull_body.is_some().then_some(&pull as Reader<'_>),
+                suites: (!suite_bodies.is_empty()).then_some(&suites as Reader<'_>),
             },
         )
         .unwrap();
-        let mut paused = paused.into_inner().unwrap();
-        paused.sort_by(f64::total_cmp);
-        (waited, red, paused)
+        let paused = paused.into_inner().unwrap();
+        (
+            waited,
+            red,
+            paused,
+            asked.load(std::sync::atomic::Ordering::Relaxed),
+        )
     }
 
+    /// READY'S READING ANSWERS THE WAIT'S FIRST ASK (CLOUD-2253 A7): a green
+    /// head Ready already read is green without reading the forge again, and a
+    /// pending one reads only from the second ask on.
+    ///
+    /// Fails by: the reading Ready took thrown away and the forge read twice
+    /// for one fact.
+    #[test]
+    fn ready_s_reading_answers_the_first_ask() {
+        let primed = |answer: &str| Beside {
+            primed: Some(reading(answer)),
+            ..Beside::default()
+        };
+        let (waited, _, _, asked) =
+            race_beside(&[check("", 1)], false, primed(&check("success", 1)));
+        assert!(matches!(waited, Waited::Green { .. }), "{waited:?}");
+        assert_eq!(asked, 0, "the forge was not read again");
+        let (_, _, _, asked) = race_beside(&[check("success", 1)], false, primed(&check("", 1)));
+        assert_eq!(asked, 1, "every ask after the first reads the forge");
+        let (_, _, _, asked) = race_beside(
+            &[check("", 1), check("success", 1)],
+            false,
+            Beside::default(),
+        );
+        assert_eq!(asked, 2, "unprimed, every ask reads");
+    }
+
+    /// The checks arm pauses between asks and never after the answer that
+    /// ends the wait.
     #[test]
     fn each_arm_pauses_between_its_asks_and_never_after_the_last() {
-        let (waited, _, paused) = race(&[check("", 1)], 3, false);
-        assert_eq!(waited, Waited::Unanswered);
-        assert_eq!(paused, vec![7.0, 7.0, 9.0, 9.0]);
+        let (waited, _, paused) = race(&[check("", 1), check("", 1), check("success", 1)], false);
+        assert!(matches!(waited, Waited::Green { .. }), "{waited:?}");
+        assert_eq!(paused, vec![7.0, 7.0]);
+    }
+
+    /// NO ASK COUNT ENDS THE WAIT (CLOUD-2253 A2): a matrix running for more
+    /// asks than the 3600 the wait once allowed is still waited on, and its
+    /// green answers. The end is the event, never a budget.
+    ///
+    /// Fails by: any count of asks ending a wait whose runs are still coming,
+    /// which abandoned every CI path longer than the budget.
+    #[test]
+    fn a_wait_outlasts_any_former_ask_budget() {
+        let mut answers = vec![check("", 1); 3_601];
+        answers.push(check("success", 1));
+        let (waited, _, _, asked) = race_beside(&answers, false, Beside::default());
+        assert!(matches!(waited, Waited::Green { .. }), "{waited:?}");
+        assert_eq!(asked, 3_602);
+    }
+
+    /// A REFUSED READ IS A FAULT, NAMED ON THE FIRST ASK (CLOUD-2253 A2): a
+    /// `401` is the credential, never a reading to wait out, and the fault
+    /// neither re-drafts the head nor cancels its runs.
+    ///
+    /// Fails by: a refused credential polled until something else ends the
+    /// wait, or read as a pending verdict.
+    #[test]
+    fn a_refused_read_is_a_named_fault_on_the_first_ask() {
+        let (waited, _, _, asked) =
+            race_beside(&[String::from("401 {}")], false, Beside::default());
+        assert_eq!(waited, Waited::Refused { status: 401 });
+        assert_eq!(asked, 1);
+        let seen = tap_verdict(&waited);
+        assert!(!abandons_the_runs(seen), "no run is cancelled");
+        let tap = Tap {
+            landed: false,
+            singleton_held: true,
+            is_draft: Some(false),
+            verdict: seen,
+        };
+        assert!(!closes_the_tap(&tap), "the head is not re-drafted");
+        let (waited, _, _, _) = race_beside(
+            &[String::from("500 {}"), check("success", 1)],
+            false,
+            Beside::default(),
+        );
+        assert!(
+            matches!(waited, Waited::Green { .. }),
+            "a server error is could-not-look, asked again: {waited:?}"
+        );
+    }
+
+    /// THE PULL REQUEST'S OWN END ENDS THE WAIT (CLOUD-2253 A2): its head moving
+    /// off the waited sha, or no open pull request for the branch.
+    ///
+    /// Fails by: a wait outliving the pull request it was about.
+    #[test]
+    fn the_pull_request_moving_or_closing_ends_the_wait() {
+        let pull = |body: &str| Beside {
+            pull: Some(body.to_owned()),
+            ..Beside::default()
+        };
+        let (waited, _, _, _) = race_beside(&[check("", 1)], false, pull("[]"));
+        assert_eq!(waited, Waited::Closed);
+        let (waited, _, _, _) = race_beside(
+            &[check("", 1)],
+            false,
+            pull(r#"[{"number":7,"head":{"sha":"t"}}]"#),
+        );
+        assert_eq!(
+            waited,
+            Waited::Moved {
+                head: String::from("t")
+            }
+        );
+        let (waited, _, _, _) = race_beside(
+            &[check("", 1), check("success", 1)],
+            false,
+            pull(r#"[{"number":7,"head":{"sha":"s"}}]"#),
+        );
+        assert!(
+            matches!(waited, Waited::Green { .. }),
+            "an open pull request still at the sha keeps the wait: {waited:?}"
+        );
+    }
+
+    /// A REQUIRED NAME NO WORKFLOW EMITS IS DECIDED ON REGISTRATION (CLOUD-2253
+    /// A2): every check suite on the head registered and concluded, the name
+    /// still without a run, is a dead end naming it — and a suite still running
+    /// keeps the wait.
+    ///
+    /// Fails by: a name no workflow emits waited on forever, or one refused
+    /// while a suite that may emit it is still running.
+    #[test]
+    fn a_required_name_no_workflow_emits_is_a_dead_end_once_the_suites_conclude() {
+        let other = r#"{"check_runs":[{"status":"completed","conclusion":"success","name":"other","id":1}]}"#;
+        let suite = |id: u64, status: &str| {
+            format!(r#"{{"check_suites":[{{"id":{id},"status":"{status}"}}]}}"#)
+        };
+        let (waited, _, _, asked) = race_beside(
+            &[other.to_owned()],
+            false,
+            Beside {
+                suites: vec![suite(1, "in_progress"), suite(1, "completed")],
+                ..Beside::default()
+            },
+        );
+        assert_eq!(asked, 2, "the running suite kept the wait one ask");
+        assert_eq!(
+            waited,
+            Waited::DeadEnd {
+                findings: vec![crate::checks_green::Finding {
+                    check: String::from("ci"),
+                    conclusion: String::from("never-emitted"),
+                }]
+            }
+        );
+        let mut before = None;
+        let closed = Some((std::collections::BTreeSet::from([1]), true));
+        assert!(
+            !never_emitted(closed.clone(), true, &mut before),
+            "after a fresh ready, the first reading is the draft-era suites"
+        );
+        assert!(
+            !never_emitted(closed, true, &mut before),
+            "no new suite yet"
+        );
+        let fresh = Some((std::collections::BTreeSet::from([1, 2]), true));
+        assert!(never_emitted(fresh, true, &mut before));
+        let mut unused = None;
+        assert!(
+            !never_emitted(
+                Some((std::collections::BTreeSet::new(), true)),
+                false,
+                &mut unused
+            ),
+            "no suite at all is no registration"
+        );
     }
 
     #[test]
     fn a_red_verdict_carries_the_failed_run_it_was_read_over() {
-        let (waited, red, _) = race(&[check("failure", 5)], 3, false);
+        let (waited, red, _) = race(&[check("failure", 5)], false);
         assert!(matches!(waited, Waited::Red { .. }), "{waited:?}");
         assert_eq!(red.failed, vec![(5, String::from("ci"))]);
     }
 
     #[test]
     fn a_dead_end_after_a_fresh_ready_waits_for_the_ready_s_own_run() {
-        let (waited, _, _) = race(&[check("skipped", 1)], 2, false);
+        let (waited, _, _) = race(&[check("skipped", 1)], false);
         assert!(matches!(waited, Waited::DeadEnd { .. }), "{waited:?}");
-        let (waited, _, _) = race(&[check("skipped", 1)], 2, true);
-        assert_eq!(waited, Waited::Unanswered);
-        let (waited, _, _) = race(&[check("skipped", 1), check("skipped", 2)], 3, true);
+        let (waited, _, _, asked) = race_beside(
+            &[
+                check("skipped", 1),
+                check("skipped", 1),
+                check("skipped", 2),
+            ],
+            true,
+            Beside::default(),
+        );
         assert!(matches!(waited, Waited::DeadEnd { .. }), "{waited:?}");
+        assert_eq!(
+            asked, 3,
+            "believed only once the ready's own run registered"
+        );
     }
 
     /// The watcher arm over `trunks` (the trunk ref's reads, the last
@@ -4405,7 +5125,7 @@ mod forge_tests {
         drop(arms);
         let moved = won.try_iter().find_map(|answer| match answer {
             Raced::Moved(base) => Some(base),
-            Raced::Gate(_) | Raced::Stalled(_) => None,
+            Raced::Gate(_) | Raced::Stalled(_) | Raced::Red(_) => None,
         });
         (moved, paused.into_inner())
     }
@@ -4423,9 +5143,105 @@ mod forge_tests {
         );
     }
 
+    /// A FULL VOLUME IS WHAT THE WATCHER MEASURED, NOT WHAT THE LOG SAYS (#1276).
+    ///
+    /// Fails by: the measured arm removed (a full volume reads as the tree's), or
+    /// the comparison loosened (a volume with space read as full). The text that
+    /// misread lap 2 has no row to match any more (CLOUD-2781), so a gate whose
+    /// log says `No space left on device` over a volume with room is the tree's.
+    #[test]
+    fn a_full_volume_is_measured_and_never_read_from_the_log() {
+        let tree = |verified: Verified| {
+            matches!(
+                verified,
+                Verified::Refused {
+                    cause: Refusal::Tree,
+                    ..
+                }
+            )
+        };
+        let measured_full = |verified: Verified| {
+            matches!(
+                verified,
+                Verified::Refused { cause: Refusal::Environment { ref remedy }, .. }
+                    if remedy.contains("disk watcher measured")
+            )
+        };
+        // The volume filled, and the log never said so.
+        assert!(measured_full(gate_said(
+            String::from("h"),
+            (1, Vec::new()),
+            &[],
+            Some(0)
+        )));
+        // A megabyte left is not full.
+        assert!(tree(gate_said(
+            String::from("h"),
+            (1, Vec::new()),
+            &[],
+            Some(1)
+        )));
+        // The log says full, no row reads it, and the volume had room: the tree's.
+        assert!(tree(gate_said(
+            String::from("h"),
+            (1, Vec::new()),
+            &[],
+            Some(5_000)
+        )));
+        // Unwatched decides nothing about the volume.
+        assert!(tree(gate_said(
+            String::from("h"),
+            (1, Vec::new()),
+            &[],
+            None
+        )));
+        // A clean gate is clean on a full volume.
+        assert!(matches!(
+            gate_said(String::from("h"), (0, Vec::new()), &[], Some(0)),
+            Verified::Clean(_)
+        ));
+    }
+
+    /// A GATE JUDGES THE TREE IT STARTED ON (CLOUD-2781): a head that moved, a
+    /// path left dirty, or a reading that could not be taken voids it.
+    ///
+    /// Fails by: the comparison skipped (a moved tree passes), the dirty count
+    /// ignored, or an unreadable state read as unmoved.
+    #[test]
+    fn a_gate_whose_tree_moved_is_voided() {
+        let clean = ("h1", Some(0));
+        let h1 = || Some(String::from("h1"));
+        assert_eq!(tree_moved(clean, h1(), Some(0)), None);
+        // A tree that started dirty and stayed so is unmoved (a direct `verify`).
+        assert_eq!(tree_moved(("h1", Some(2)), h1(), Some(2)), None);
+        assert!(matches!(
+            tree_moved(clean, Some(String::from("h2")), Some(0)),
+            Some(Refusal::Voided { ref to, dirty: 0 }) if to == "h2"
+        ));
+        assert!(matches!(
+            tree_moved(clean, h1(), Some(3)),
+            Some(Refusal::Voided { dirty: 3, .. })
+        ));
+        assert!(matches!(
+            tree_moved(clean, None, Some(0)),
+            Some(Refusal::Voided { ref to, .. }) if to == "-"
+        ));
+        assert!(matches!(
+            tree_moved(("h1", None), h1(), Some(0)),
+            Some(Refusal::Voided { .. })
+        ));
+        assert!(matches!(
+            tree_moved(clean, h1(), None),
+            Some(Refusal::Voided {
+                dirty: usize::MAX,
+                ..
+            })
+        ));
+    }
+
     #[test]
     fn a_gate_that_could_not_judge_is_an_environment_refusal_and_not_the_tree_s() {
-        let said = |code: i32| gate_said(String::from("h"), (code, Vec::new()), &[]);
+        let said = |code: i32| gate_said(String::from("h"), (code, Vec::new()), &[], None);
         assert!(matches!(said(0), Verified::Clean(_)));
         assert!(matches!(
             said(2),
@@ -4526,6 +5342,31 @@ mod forge_tests {
 mod lap_tests {
     use super::{Basis, Progress, Step, lap_progress, progress, progress_of, stalled, still};
     use crate::exit::ExitCode::{Internal, Success, Usage, Violation};
+
+    /// CLOUD-2707: only a committed, pushed head outside the lap is advised
+    /// toward `land`; the lap, a dirty tree, an unpushed head and an unreadable remote
+    /// each run the gate.
+    #[test]
+    fn only_a_clean_pushed_head_outside_the_lap_is_before_land() {
+        use super::{Placement, placement};
+        assert_eq!(placement(false, 0, Some(true)), Placement::BeforeLand);
+        assert_eq!(placement(true, 0, Some(true)), Placement::Lap, "the lap");
+        assert_eq!(
+            placement(false, 1, Some(true)),
+            Placement::Iterating,
+            "dirty"
+        );
+        assert_eq!(
+            placement(false, 0, Some(false)),
+            Placement::Iterating,
+            "unpushed"
+        );
+        assert_eq!(
+            placement(false, 0, None),
+            Placement::Iterating,
+            "unreadable"
+        );
+    }
 
     /// CLOUD-2371: only this branch's own superseded ready head is cancelled
     /// and re-drafted; every other state is left as it was.
@@ -4677,7 +5518,7 @@ mod lap_tests {
     }
 
     /// **A GATE'S `2` WITH NO BASE TO READ IS A REFUSAL OF THE TREE** (CLOUD-843),
-    /// and `#MUTANT unconfirmed-move-laps` reddens here.
+    /// and a mutant that laps on an unconfirmed move reddens here.
     ///
     /// The consumer's `verify` no longer re-numbers a policy verdict to `1`, so a
     /// `2` is not by itself evidence that trunk moved; reading it as that is
@@ -4835,21 +5676,13 @@ mod lap_tests {
     /// would burn a lap per network hiccup.
     #[test]
     fn a_race_neither_arm_answers_returns_rather_than_waiting_on_a_sender() {
-        // THIS CASE DIALS, so it needs the credential a real run would have
-        // (CLOUD-1622). The engine used to name two variables itself, and this
-        // test inherited that for free; now a consumer declares them, and a
-        // process that declared none reads unauthenticated. MEASURED: without
-        // this line the case stops failing and starts HANGING — the unauthenticated
-        // request is swallowed rather than refused, so the arms never exhaust and
-        // the very hang this case exists to pin is what it produces. `declare`
-        // ignores a later call, so whichever test in this binary reaches it first
-        // sets the same names.
-        crate::rest::declare(crate::rest::Forge {
-            credential_names: vec![String::from("GH_TOKEN"), String::from("GITHUB_TOKEN")],
-            query: Vec::new(),
-            probe: Vec::new(),
-            nothing_graded: None,
-        });
+        // THE FORGE IS THE CASE'S, NOT THE NETWORK'S (CLOUD-2936). Dialled for
+        // real, whichever arm's first read came back first decided whether the
+        // trunk arm reached its pause: on two recordings of unchanged code it
+        // ran `pause_until`'s sleep on one and not the other. Through the
+        // race's own seam each read is an answer the case chose and the pause
+        // returns at once, so an arm that loses runs nothing the winner's
+        // order could add.
         let config = crate::pr_watch::Config {
             sha: String::from("0000000000000000000000000000000000000000"),
             repo: String::from("nobody/nothing"),
@@ -4868,15 +5701,38 @@ mod lap_tests {
             base: String::from("1111111111111111111111111111111111111111"),
             interval: 1,
         };
-
-        let mut out = Vec::new();
-        // `Ok(_)` matched rather than unwrapped: the only `Err` here is a stream
-        // that will not accept output, and a `Vec` always accepts, so a panic
-        // would be reporting the impossible case as the interesting one.
-        assert_eq!(
-            super::wait(&config, &roster, &trunk, 1, false, &|_| (), &mut out).ok(),
-            Some(super::Waited::Unanswered),
-            "an unreachable forge is a could-not-look, never a verdict about the work"
+        // NO ASK COUNT ENDS IT ANY MORE (CLOUD-2253 A2): a repository the forge
+        // will not serve is a refusal, named on the first ask, and a forge that
+        // answers nothing at all is the could-not-look fault. Neither is a
+        // verdict about the work.
+        let race = |checks: &(dyn Fn(Option<&str>) -> Option<crate::rest::Answer> + Sync)| {
+            let unread = |_: Option<&str>| -> Option<crate::rest::Answer> { None };
+            super::raced(
+                (&config, &roster, &trunk),
+                false,
+                &|_| (),
+                &mut Vec::new(),
+                &super::Waiting {
+                    checks,
+                    trunk: &unread,
+                    pause: &|_: f64, _: &std::sync::atomic::AtomicBool| (),
+                    primed: None,
+                    pull: None,
+                    suites: None,
+                },
+            )
+            .ok()
+            .map(|(waited, _)| waited)
+        };
+        let refused = race(&|_: Option<&str>| Some(super::mutate_tests::answer(404, "{}")));
+        assert!(
+            matches!(refused, Some(super::Waited::Refused { status: 404 })),
+            "a repository the forge will not serve is a refusal: {refused:?}"
+        );
+        let silent = race(&|_: Option<&str>| -> Option<crate::rest::Answer> { None });
+        assert!(
+            matches!(silent, Some(super::Waited::Unread)),
+            "a forge that answers nothing is could-not-look: {silent:?}"
         );
     }
 
@@ -4913,6 +5769,90 @@ mod lap_tests {
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
+
+    /// THE STALL'S PROGRESS IS READ ONCE A BEAT, NOT ONCE A RED READING: under a
+    /// four-second beat and the one-second red cadence, tick `0` comes round
+    /// every fourth tick and on no other, and a one-tick beat reads it every
+    /// tick (CLOUD-2253 C12).
+    ///
+    /// Fails by: the tick never advancing, so progress is read every red tick
+    /// and a gate stalls after `beats` seconds rather than `beats` beats
+    /// (CLOUD-2789).
+    #[test]
+    fn the_stalls_progress_is_read_once_a_beat() {
+        use super::{RED_EVERY, next_tick, ticks_per_beat};
+        let ticks = ticks_per_beat(std::time::Duration::from_secs(4), RED_EVERY);
+        assert_eq!(ticks, 4);
+        let read: Vec<u32> = std::iter::successors(Some(0), |&at| Some(next_tick(at, ticks)))
+            .take(9)
+            .collect();
+        assert_eq!(read, [0, 1, 2, 3, 0, 1, 2, 3, 0]);
+        assert_eq!(next_tick(0, 1), 0, "a one-tick beat reads every tick");
+    }
+
+    #[cfg(test)]
+    /// A HELD LAP ENDS ONLY ON A FINAL VERIFY (CLOUD-2783): green holds with
+    /// `0`, refused with `2`; a verify's `3` laps as it does unheld, and no
+    /// other step holds, so the replay still runs and nothing after the verify
+    /// is entered.
+    ///
+    /// Fails by: a hold on a could-not-look verify (it would report a lap that
+    /// decided nothing), or on any step but verify.
+    #[test]
+    fn held_after_ends_a_held_lap_only_on_a_final_verify() {
+        use super::{Step, held_after};
+        use crate::exit::ExitCode;
+        assert_eq!(
+            held_after(Step::Verify, ExitCode::Success),
+            Some(ExitCode::Success)
+        );
+        assert_eq!(
+            held_after(Step::Verify, ExitCode::Violation),
+            Some(ExitCode::Violation)
+        );
+        assert_eq!(held_after(Step::Verify, ExitCode::Internal), None);
+        assert_eq!(held_after(Step::Verify, ExitCode::Usage), None);
+        for step in [
+            Step::Replay,
+            Step::Lease,
+            Step::Push,
+            Step::Ready,
+            Step::Wait,
+        ] {
+            assert_eq!(held_after(step, ExitCode::Success), None, "{step:?}");
+        }
+    }
+
+    /// Fails by: `Hold::after` answering `None` for a held landing, so a
+    /// final verify never ends a held lap; or answering for an unheld one
+    /// (CLOUD-2789).
+    #[test]
+    fn only_a_held_landing_ends_on_its_final_verify() {
+        use super::{Hold, Step};
+        use crate::exit::ExitCode;
+        assert_eq!(
+            Hold::new(true).after(Step::Verify, ExitCode::Violation),
+            Some(ExitCode::Violation)
+        );
+        assert_eq!(
+            Hold::new(false).after(Step::Verify, ExitCode::Success),
+            None
+        );
+    }
+
+    /// The held line names the head, the entry, and each step in the order run.
+    #[test]
+    fn a_held_line_carries_every_phase_in_order() {
+        use super::{Step, held_line};
+        assert_eq!(
+            held_line("abc", 12, &[(Step::Replay, 34), (Step::Verify, 56)]),
+            format!(
+                "held abc entry-ms=12 {}-ms=34 {}-ms=56",
+                Step::Replay.as_str(),
+                Step::Verify.as_str()
+            )
+        );
+    }
 
     /// EVERY STEP HAS A DISTINCT, STABLE PHASE TOKEN.
     ///
@@ -5003,7 +5943,15 @@ mod tests {
     /// because a lap would report a gate as clean having run something else.
     #[test]
     fn an_unconfigured_verify_command_refuses_rather_than_guessing() {
-        let Err(problem) = verify(Path::new("."), "work", &[], &[], &[]) else {
+        let Err(problem) = verify(
+            &crate::fixture_root::fixture_root(
+                "an_unconfigured_verify_command_refuses_rather_than_guessing",
+            ),
+            "work",
+            &[],
+            &[],
+            &[],
+        ) else {
             panic!("an empty command must refuse rather than run something");
         };
         assert!(
@@ -5366,9 +6314,87 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    /// Fails by: a line handed to the record's public door never written, so
+    /// the branch's lap record reads back without it.
+    #[test]
+    fn a_recorded_line_reads_back_from_the_branchs_lap_record() {
+        let root = crate::scratch::scratch("land-record-line");
+        crate::gitwrite::init_on_main(&root).unwrap();
+        crate::gitwrite::commit_paths(&root, &[], "base").unwrap();
+        assert!(super::branch_lap_lines(&root, "work").is_empty());
+        super::record_line(&root, "work", "engine used x").unwrap();
+        assert_eq!(
+            super::branch_lap_lines(&root, "work"),
+            [String::from("engine used x")]
+        );
+    }
+
     /// A remote this clone never saw is refused; one it pushed, or one a
     /// recorded replay of this head rewrote, is admitted. Only a well-formed
     /// line of the right kind admits.
+    #[test]
+    fn the_verified_head_is_the_latest_verdict_and_only_a_clean_one() {
+        let root = crate::scratch::scratch("land-verified");
+        crate::gitwrite::init_on_main(&root).unwrap();
+        crate::gitwrite::commit_paths(&root, &[], "base").unwrap();
+        let verified = |lines: &[String]| {
+            super::record_disk(&root, "work", lines).unwrap();
+            super::last_verified(&root, "work")
+        };
+        assert_eq!(super::last_verified(&root, "work"), None, "no run, no head");
+        assert_eq!(
+            verified(&[Verified::Clean(String::from("aaa")).line()]).as_deref(),
+            Some("aaa")
+        );
+        // A push line between does not hide the verdict before it.
+        assert_eq!(
+            verified(&[String::from("push landed bbb -")]).as_deref(),
+            Some("aaa")
+        );
+        assert_eq!(
+            verified(&[Verified::Clean(String::from("ccc")).line()]).as_deref(),
+            Some("ccc"),
+            "a later pass supersedes an earlier one"
+        );
+        assert_eq!(
+            verified(&[String::from("verify refused ddd -")]),
+            None,
+            "a refusal after a pass leaves nothing to publish"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A draft pushed while the gate ran is never rewound by the lap's push of
+    /// the verified head (#1276): the swap is not admitted, so it races and the
+    /// lap verifies the newer head instead. The same head, pushed once verified,
+    /// is admitted.
+    #[test]
+    fn a_head_pushed_mid_gate_is_raced_never_rewound_by_the_verified_push() {
+        let root = crate::scratch::scratch("land-mid-gate");
+        crate::gitwrite::init_on_main(&root).unwrap();
+        let tip = || crate::git::resolve_ref(&root, "HEAD").unwrap().unwrap();
+        std::fs::write(root.join("a.txt"), "verified\n").unwrap();
+        crate::gitwrite::commit_paths(&root, &[String::from("a.txt")], "verified").unwrap();
+        let verified = tip();
+        super::record_disk(&root, "work", &[Verified::Clean(verified.clone()).line()]).unwrap();
+        std::fs::write(root.join("b.txt"), "pushed mid-gate\n").unwrap();
+        crate::gitwrite::commit_paths(
+            &root,
+            &[String::from("a.txt"), String::from("b.txt")],
+            "mid-gate",
+        )
+        .unwrap();
+        let newer = tip();
+        assert_eq!(super::last_verified(&root, "work"), Some(verified.clone()));
+        assert!(
+            !super::admitted(&root, "work", &newer, &verified),
+            "the verified push would rewind a head pushed while the gate ran"
+        );
+        super::record_disk(&root, "work", &[Verified::Clean(newer.clone()).line()]).unwrap();
+        assert!(super::admitted(&root, "work", &verified, &newer));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     #[test]
     fn a_remote_is_admitted_only_by_this_clone_s_own_record_of_it() {
         let root = crate::scratch::scratch("land-admit");
@@ -5568,16 +6594,48 @@ mod tests {
         let root = std::env::current_dir().unwrap();
         let gate = |word: &str| vec![vec![String::from(word)]];
         assert!(matches!(
-            super::admits_the_landing(&root, &gate("false"), "7"),
+            super::admits_the_landing(&root, &gate("false"), "7", &[]),
             super::Admitted::Refused { .. }
         ));
         assert!(matches!(
-            super::admits_the_landing(&root, &gate(&format!("{}false", super::ADVISORY)), "7"),
+            super::admits_the_landing(&root, &gate(&format!("{}false", super::ADVISORY)), "7", &[]),
             super::Admitted::Clear
         ));
         assert!(matches!(
-            super::admits_the_landing(&root, &gate("true"), "7"),
+            super::admits_the_landing(&root, &gate("true"), "7", &[]),
             super::Admitted::Clear
+        ));
+    }
+
+    /// An entry gate reads what the lap publishes to it (CLOUD-2253 A5): the
+    /// lap's engine as `BATTEN_BIN`, which it never received before.
+    ///
+    /// Fails by: the publication dropped before the spawn, so the gate falls
+    /// back to building the engine itself.
+    #[test]
+    fn an_entry_gate_reads_what_the_lap_publishes() {
+        if !cfg!(unix) {
+            return;
+        }
+        let root = std::env::current_dir().unwrap();
+        let gate = vec![vec![
+            String::from("sh"),
+            String::from("-c"),
+            String::from("test \"$BATTEN_BIN\" = /lap/engine"),
+            String::from("sh"),
+        ]];
+        let published = [(
+            String::from("BATTEN_BIN"),
+            Some(String::from("/lap/engine")),
+        )];
+        assert!(matches!(
+            super::admits_the_landing(&root, &gate, "7", &published),
+            super::Admitted::Clear
+        ));
+        let other = [(String::from("BATTEN_BIN"), Some(String::from("/elsewhere")))];
+        assert!(matches!(
+            super::admits_the_landing(&root, &gate, "7", &other),
+            super::Admitted::Refused { .. }
         ));
     }
 
@@ -6212,12 +7270,65 @@ mod tests {
         }
     }
 
+    /// A FORGE FAULT STOPS THE LAP AT THE WAIT, AND NOWHERE ELSE (CLOUD-2253
+    /// A2): `(Wait, Internal, Unread)` is `Stop`, and an unread reading leaves
+    /// every other cell as the table reads it.
+    ///
+    /// Fails by: the fault lapping back into the same unanswering forge, or the
+    /// unread reading stopping a step whose own exit the table already reads.
+    #[test]
+    fn a_forge_fault_stops_at_the_wait_and_moves_no_other_cell() {
+        use crate::exit::ExitCode::{Internal, Success, Usage, Violation};
+
+        assert_eq!(
+            progress_of(Step::Wait, Internal, Some(TapVerdict::Unread), Basis::Own),
+            Progress::Stop,
+            "another lap re-asks the forge that answered nothing"
+        );
+        assert_eq!(
+            progress(Step::Wait, Internal),
+            Progress::Lap,
+            "the cell the reading moves laps on the bare code"
+        );
+        for step in [
+            Step::Replay,
+            Step::Verify,
+            Step::Ready,
+            Step::Push,
+            Step::Wait,
+            Step::FastForward,
+        ] {
+            for code in [Success, Usage, Violation, Internal] {
+                if step == Step::Wait && code == Internal {
+                    continue;
+                }
+                assert_eq!(
+                    progress_of(step, code, Some(TapVerdict::Unread), Basis::Own),
+                    progress(step, code),
+                    "{step:?}/{code:?} is not the wait's fault"
+                );
+            }
+        }
+    }
+
     #[test]
     fn a_wait_that_read_nothing_is_not_a_pending_reading() {
+        // NO WAIT ENDS PENDING ANY MORE (CLOUD-2253 A2): with no ask count, a
+        // wait that took no reading ended on a fault, and a fault is unread.
         assert_eq!(
-            tap_verdict(&Waited::Unanswered),
-            Some(TapVerdict::Pending),
-            "asking the full count and seeing nothing terminal IS a reading"
+            tap_verdict(&Waited::Unread),
+            Some(TapVerdict::Unread),
+            "a forge that answered nothing took no reading"
+        );
+        assert_eq!(
+            tap_verdict(&Waited::Refused { status: 403 }),
+            Some(TapVerdict::Unread),
+            "a refused read took no reading either"
+        );
+        assert_eq!(
+            tap_verdict(&Waited::Closed),
+            None,
+            "the checks were not read"
         );
         assert_eq!(
             tap_verdict(&Waited::Stale {
@@ -6315,12 +7426,17 @@ mod tests {
         );
     }
 
-    /// And the mapping reaches the decision: a lap that ran out of asks over a
-    /// pull request it owns closes the tap, and one whose base moved does not.
+    /// And the mapping reaches the decision: a dead end over a pull request the
+    /// lap owns closes the tap, and a fault or a moved base does not
+    /// (CLOUD-2253 A2: no wait runs out of asks any more).
     #[test]
-    fn an_unanswered_lap_closes_the_tap_and_a_stale_one_does_not() {
-        let unanswered = tap_verdict(&Waited::Unanswered);
-        assert!(closes_the_tap(&tap(false, true, Some(false), unanswered)));
+    fn a_dead_end_closes_the_tap_and_a_fault_or_a_stale_one_does_not() {
+        let dead = tap_verdict(&Waited::DeadEnd {
+            findings: Vec::new(),
+        });
+        assert!(closes_the_tap(&tap(false, true, Some(false), dead)));
+        let fault = tap_verdict(&Waited::Unread);
+        assert!(!closes_the_tap(&tap(false, true, Some(false), fault)));
 
         let stale = tap_verdict(&Waited::Stale {
             base: String::from("0000000"),
@@ -6523,5 +7639,87 @@ mod tests {
             1,
             "so a caller that could not read the remote must not call this"
         );
+    }
+}
+
+/// The held landing's timings (CLOUD-2783).
+#[cfg(test)]
+mod hold_tests {
+    use super::{Hold, Step};
+    #[cfg(test)]
+    /// Fails by: a lap that keeps the last lap's phases, or records no entry.
+    #[test]
+    fn a_lap_opens_with_its_entry_and_no_phases() {
+        let mut hold = Hold::new(true);
+        hold.time(Step::Verify, || ());
+        assert_eq!(hold.phases.len(), 1);
+        hold.lap();
+        assert!(hold.phases.is_empty(), "each lap's phases start afresh");
+        assert!(
+            hold.entry_ms.is_some(),
+            "the entry is the time to the first lap"
+        );
+    }
+
+    /// Fails by: the held lap's record line replaced, so the head, the entry
+    /// and each step's cost are not what the record carries.
+    #[test]
+    fn a_held_line_names_the_head_the_entry_and_each_step() {
+        let mut hold = Hold::new(true);
+        hold.entry_ms = Some(5);
+        hold.phases = vec![(Step::Verify, 7)];
+        assert_eq!(
+            hold.line("abc"),
+            format!("held abc entry-ms=5 {}-ms=7", Step::Verify.as_str())
+        );
+    }
+
+    /// Fails by: a hold's record line emptied, or not the held line of its own
+    /// entry and phases.
+    #[test]
+    fn a_holds_line_is_the_held_line_of_its_entry_and_phases() {
+        let mut hold = Hold::new(true);
+        hold.entry_ms = Some(7);
+        hold.phases = vec![(Step::Verify, 3)];
+        assert_eq!(
+            hold.line("abc"),
+            super::held_line("abc", 7, &[(Step::Verify, 3)])
+        );
+        assert!(hold.line("abc").starts_with("held abc entry-ms=7 "));
+    }
+
+    /// Fails by: `Hold::after` answering `None`, so a held lap never ends on
+    /// its final verify and runs on as if unheld.
+    #[test]
+    fn a_held_lap_ends_on_its_final_verify_and_an_unheld_one_does_not() {
+        use crate::exit::ExitCode;
+        assert_eq!(
+            Hold::new(true).after(Step::Verify, ExitCode::Success),
+            Some(ExitCode::Success)
+        );
+        assert_eq!(
+            Hold::new(true).after(Step::Verify, ExitCode::Violation),
+            Some(ExitCode::Violation)
+        );
+        assert_eq!(
+            Hold::new(false).after(Step::Verify, ExitCode::Success),
+            None
+        );
+    }
+
+    /// A beat holds as many ticks as divide it, never fewer than one
+    /// (CLOUD-2789).
+    ///
+    /// Fails by: one tick a beat whatever the cadence, or a remainder taken for
+    /// the quotient.
+    #[test]
+    fn a_beat_holds_as_many_ticks_as_divide_it() {
+        use super::ticks_per_beat;
+        use std::time::Duration;
+        let s = Duration::from_secs;
+        assert_eq!(ticks_per_beat(s(10), s(1)), 10);
+        assert_eq!(ticks_per_beat(s(7), s(2)), 3);
+        assert_eq!(ticks_per_beat(s(1), s(2)), 1, "a tick longer than the beat");
+        assert_eq!(ticks_per_beat(s(10), Duration::ZERO), 1);
     }
 }

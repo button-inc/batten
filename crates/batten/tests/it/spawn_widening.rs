@@ -37,7 +37,8 @@ use crate::common;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use batten::rules::{self, Rule};
+use batten::config_model::Rule;
+use batten::rules;
 
 /// The row as `batten.toml` declares it, deserialized rather than
 /// struct-literalled: `Rule` carries `deny_unknown_fields`, so this goes through
@@ -46,14 +47,19 @@ use batten::rules::{self, Rule};
 /// **BOTH SOURCE KEYS, because they fill different halves and the module
 /// subtracts one from the other.** A row carrying only one of them is defect 2
 /// or 3 above, and both reported clean.
+///
+/// **THE COMMITTED GLOBS, READ RATHER THAN RESTATED** (CLOUD-2789): the copy
+/// here named `crates/batten/src/*.rs` long after the row read every crate,
+/// recursively, so a row narrowed back stayed green under this suite.
 fn row() -> Rule {
+    let sources = |key| crate::source_scope::committed_rule_sources("spawn add other", key);
     serde_json::from_value(serde_json::json!({
         "id": "spawn add other",
         "kind": "policy",
         "scope": "tree",
         "base": "origin/main",
-        "delta_sources": ["crates/batten/src/*.rs", "policy/spawn-adapters.rego"],
-        "line_sources": ["crates/batten/src/*.rs", "policy/spawn-adapters.rego"],
+        "delta_sources": sources("delta_sources"),
+        "line_sources": sources("line_sources"),
         "module": "policy/spawn-widening.rego",
         "severity": "deny",
     }))
@@ -171,6 +177,33 @@ fn an_added_spawn_escape_is_refused() {
         verdicts(&root),
         vec![String::from("spawn add other")],
         "an escape this change added is the whole subject of the rule"
+    );
+}
+
+/// CLOUD-2789: an escape added to a crate cut out of `batten` is the same
+/// widening. The fixture row's globs are the committed row's, so a row narrowed
+/// back to `crates/batten/src` — or a module whose `engine_source` reads one
+/// crate — goes red here.
+#[test]
+fn an_added_spawn_escape_in_another_crate_is_refused() {
+    let root = repo(
+        "escape-added-other-crate",
+        &[
+            ("crates/batten-core/src/thing.rs", CLEAN_MODULE),
+            ("policy/spawn-adapters.rego", ADAPTERS),
+        ],
+        &Head {
+            written: &[(
+                "crates/batten-core/src/thing.rs",
+                "fn ordinary() {}\n#[expect(clippy::disallowed_types)]\nfn spawner() {}\n",
+            )],
+            removed: &[],
+        },
+    );
+    assert_eq!(
+        verdicts(&root),
+        vec![String::from("spawn add other")],
+        "an escape added outside crates/batten is still an added escape"
     );
 }
 

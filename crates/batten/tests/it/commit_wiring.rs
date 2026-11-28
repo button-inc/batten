@@ -50,6 +50,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
+use batten::capture::Streamed as _;
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -63,7 +64,8 @@ fn root() -> PathBuf {
 
 /// The committed `batten.toml`, parsed.
 fn authority() -> toml::Value {
-    let text = fs::read_to_string(common::at_root("batten.toml")).expect("the committed config");
+    let text = fs::read_to_string(common::committed_config_file("commit_wiring"))
+        .expect("the committed config");
     toml::from_str(&text).expect("batten.toml parses as TOML")
 }
 
@@ -252,7 +254,8 @@ fn the_variable_is_gone_no_conventional_re_survives_in_mise_toml() {
 
 #[test]
 fn the_pattern_lives_in_batten_toml_and_exactly_once() {
-    let text = fs::read_to_string(common::at_root("batten.toml")).expect("the committed config");
+    let text = fs::read_to_string(common::committed_config_file("commit_wiring"))
+        .expect("the committed config");
     let declared = text
         .lines()
         .filter(|line| line.starts_with("subject_pattern = "))
@@ -332,7 +335,7 @@ fn this_repos_own_history_satisfies_its_committed_convention() {
     // passing over nothing, on every shallow clone (CLOUD-2059).
     let root = root();
     let parent = common::git_command(&root, &["rev-parse", "HEAD~1"])
-        .output()
+        .streamed_output()
         .expect("run git");
     let parents = common::git_in(&root, &["cat-file", "-p", "HEAD"])
         .lines()

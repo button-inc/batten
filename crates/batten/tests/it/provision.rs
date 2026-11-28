@@ -15,6 +15,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
+use batten::capture::Streamed as _;
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -26,7 +27,7 @@ use common::{Fixture, StateHome, batten, git_in, scratch};
 /// it — through the binary's own helper, so a fixture cannot pin a digest the
 /// engine would never produce.
 fn digest(bytes: &[u8]) -> String {
-    batten::provision::digest(bytes)
+    batten::digest::sha256_hex(bytes)
 }
 
 /// A repository plus an isolated `HOME`/`XDG_DATA_HOME`, so the out-of-tree
@@ -72,7 +73,7 @@ impl Env {
             .state_home(&self.home)
             .args(args)
             .current_dir(&self.repo)
-            .output()
+            .streamed_output()
             .expect("run batten")
     }
 
@@ -183,7 +184,7 @@ fn apply_installs_out_of_tree_and_leaves_the_repository_untouched() {
     // Installed where `state.rs` resolves, which is outside the repository by
     // construction — the acceptance's "never committed" as a property rather
     // than a promise.
-    let installed = env.state_dir().join("provision/demo/1.2.3/bin/demo");
+    let installed = env.state_dir().join(exe("provision/demo/1.2.3/bin/demo"));
     assert!(
         installed.is_file(),
         "the binary is cached at the version-encoded path"
@@ -242,7 +243,7 @@ fn a_reinstall_replaces_the_cached_binary_rather_than_writing_through_it() {
     env.config(&manifest(&url, &sha));
     assert_eq!(env.run(&["provision", "apply"]).status.code(), Some(0));
 
-    let installed = env.state_dir().join("provision/demo/1.2.3/bin/demo");
+    let installed = env.state_dir().join(exe("provision/demo/1.2.3/bin/demo"));
     let mut held = fs::File::open(&installed).expect("hold the installed binary open");
 
     let (next_url, next_sha) = env.artifact("demo2", SECOND);
@@ -476,7 +477,7 @@ fn a_tar_gz_artifact_yields_the_named_binary_from_a_nested_path() {
     // that directory — which would pin the version in two places.
     let env = Env::new("provision-targz");
     let tarball = tar_gz(&[
-        ("demo-1.2.3/bin/demo", BINARY),
+        (&exe("demo-1.2.3/bin/demo"), BINARY),
         ("demo-1.2.3/README", b"docs"),
     ]);
     let (url, sha) = env.artifact("demo.tar.gz", &tarball);
@@ -490,9 +491,98 @@ fn a_tar_gz_artifact_yields_the_named_binary_from_a_nested_path() {
         String::from_utf8_lossy(&output.stderr)
     );
     assert_eq!(
-        fs::read(env.state_dir().join("provision/demo/1.2.3/bin/demo")).unwrap(),
+        fs::read(env.state_dir().join(exe("provision/demo/1.2.3/bin/demo"))).unwrap(),
         BINARY
     );
+}
+
+#[test]
+fn a_zip_artifact_yields_the_named_binary_from_a_nested_path() {
+    // The Windows builds of uv, zizmor and actionlint are published only as
+    // zips, so a five-platform pin needs this unpack.
+    let env = Env::new("provision-zip");
+    let archive = zip(&[
+        (&exe("demo-1.2.3/bin/demo"), BINARY),
+        ("demo-1.2.3/README", b"docs"),
+    ]);
+    let (url, sha) = env.artifact("demo.zip", &archive);
+    env.config(&format!("{}unpack = \"zip\"\n", manifest(&url, &sha)));
+
+    let output = env.run(&["provision", "apply"]);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{:?}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        fs::read(env.state_dir().join(exe("provision/demo/1.2.3/bin/demo"))).unwrap(),
+        BINARY
+    );
+}
+
+#[test]
+fn a_platform_row_names_its_own_unpack() {
+    // A tarball for every Unix target and a zip for Windows is the common
+    // release shape; the entry says `tar_gz` and this host's row overrides it.
+    let env = Env::new("provision-platform-unpack");
+    let archive = zip(&[(&exe("demo"), BINARY)]);
+    let (url, sha) = env.artifact("demo.zip", &archive);
+    let host = batten::config_check::provision::platform_key();
+    env.config(&format!(
+        "version = 1\n\n[[provision]]\nname = \"demo\"\nversion = \"1.2.3\"\n\
+         binary = \"demo\"\nunpack = \"tar_gz\"\n\n[provision.platforms.{host}]\n\
+         url = '{url}'\nsha256 = \"{sha}\"\nunpack = \"zip\"\n"
+    ));
+
+    let output = env.run(&["provision", "apply"]);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{:?}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        fs::read(env.state_dir().join(exe("provision/demo/1.2.3/bin/demo"))).unwrap(),
+        BINARY
+    );
+}
+
+#[test]
+fn a_zip_without_the_binary_is_refused_by_name() {
+    let env = Env::new("provision-zip-missing");
+    let archive = zip(&[("demo-1.2.3/README", b"docs")]);
+    let (url, sha) = env.artifact("demo.zip", &archive);
+    env.config(&format!("{}unpack = \"zip\"\n", manifest(&url, &sha)));
+
+    let output = env.run(&["provision", "apply"]);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains(&format!(
+            "the artifact contains no entry named {}",
+            exe("demo")
+        )),
+        "{:?}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+/// `name` as this platform names a program: `.exe` on Windows, bare elsewhere.
+fn exe(name: &str) -> String {
+    format!("{name}{}", std::env::consts::EXE_SUFFIX)
+}
+
+/// Build a zip in memory from `(path, bytes)` pairs, deflated.
+fn zip(entries: &[(&str, &[u8])]) -> Vec<u8> {
+    let mut writer = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let options = zip::write::SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Deflated)
+        .unix_permissions(0o755);
+    for (path, bytes) in entries {
+        writer.start_file(*path, options).unwrap();
+        std::io::Write::write_all(&mut writer, bytes).unwrap();
+    }
+    writer.finish().unwrap().into_inner()
 }
 
 /// Build a gzipped tarball in memory from `(path, bytes)` pairs.
@@ -509,6 +599,318 @@ fn tar_gz(entries: &[(&str, &[u8])]) -> Vec<u8> {
     let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
     std::io::Write::write_all(&mut encoder, &tar).unwrap();
     encoder.finish().unwrap()
+}
+
+// --- subtrees (CLOUD-2682) ------------------------------------------------------
+
+/// One raw tar entry: a file (path, bytes) or a symlink (path, target).
+enum Raw<'a> {
+    File(&'a str, &'a [u8]),
+    Link(&'a str, &'a str),
+}
+
+/// A gzipped tarball whose names are written raw, so a `..` survives:
+/// `append_data` refuses one, which is the entry these cases need.
+fn tar_gz_raw(entries: &[Raw<'_>]) -> Vec<u8> {
+    let mut builder = tar::Builder::new(Vec::new());
+    for entry in entries {
+        let mut header = tar::Header::new_old();
+        let (name, data): (&str, &[u8]) = match entry {
+            Raw::File(name, data) => (name, data),
+            Raw::Link(name, _) => (name, &[]),
+        };
+        header.as_old_mut().name[..name.len()].copy_from_slice(name.as_bytes());
+        header.set_mode(0o755);
+        header.set_size(data.len() as u64);
+        match entry {
+            Raw::File(..) => header.set_entry_type(tar::EntryType::Regular),
+            Raw::Link(_, target) => {
+                header.set_entry_type(tar::EntryType::Symlink);
+                header.set_link_name_literal(target).unwrap();
+            }
+        }
+        header.set_cksum();
+        builder.append(&header, data).unwrap();
+    }
+    let tar = builder.into_inner().unwrap();
+    let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+    std::io::Write::write_all(&mut encoder, &tar).unwrap();
+    encoder.finish().unwrap()
+}
+
+/// A tool whose binary reads a file beside its own real path, plus an
+/// in-tree symlink: Node's `npm` shape.
+const TOOL: &[u8] = b"#!/bin/sh\ncat \"$(dirname \"$0\")/../lib/data\"\n";
+
+fn tool_tarball(data: &[u8]) -> Vec<u8> {
+    tar_gz_raw(&[
+        Raw::File("tool-1.0/bin/tool", TOOL),
+        Raw::File("tool-1.0/lib/data", data),
+    ])
+}
+
+/// `manifest` plus subtree keys.
+fn subtree_manifest(url: &str, sha: &str, keys: &str) -> String {
+    format!("{}unpack = \"tar_gz\"\n{keys}", manifest(url, sha))
+}
+
+impl Env {
+    /// The entry's cache directory.
+    fn entry(&self) -> PathBuf {
+        self.state_dir().join("provision/demo/1.2.3")
+    }
+
+    /// Every path under the cache, for "nothing escaped".
+    fn cache_paths(&self) -> Vec<String> {
+        self.cache_contents()
+            .into_iter()
+            .map(|(path, _)| path)
+            .collect()
+    }
+}
+
+#[test]
+fn a_subtree_entry_runs_its_binary_beside_its_files() {
+    // A `#!` script and a symlink are the subject: unix only, decided in the case.
+    if !cfg!(unix) {
+        return;
+    }
+    let env = Env::new("provision-subtree");
+    let archive = tar_gz_raw(&[
+        Raw::File("tool-1.0/bin/tool", TOOL),
+        Raw::File("tool-1.0/lib/data", b"payload\n"),
+        Raw::Link("tool-1.0/bin/alias", "tool"),
+    ]);
+    let (url, sha) = env.artifact("tool.tar.gz", &archive);
+    env.config(&subtree_manifest(
+        &url,
+        &sha,
+        "strip = 1\nbin = \"bin/tool\"\n",
+    ));
+    let output = env.run(&["provision", "apply"]);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    #[expect(
+        clippy::disallowed_types,
+        reason = "stays: the fixture IS a spawn of the cached binary, and only a real run shows it reads the files beside its own path (CLOUD-2682)"
+    )]
+    let ran = std::process::Command::new(env.entry().join("tree/bin/tool"))
+        .streamed_output()
+        .unwrap();
+    assert_eq!(String::from_utf8_lossy(&ran.stdout), "payload\n");
+    assert!(
+        env.entry().join("tree/bin/alias").is_file(),
+        "the in-tree link resolves"
+    );
+}
+
+#[test]
+fn an_entry_climbing_out_of_the_tree_is_refused() {
+    let env = Env::new("provision-subtree-escape");
+    let archive = tar_gz_raw(&[
+        Raw::File("a/../../escape", b"out"),
+        Raw::File("a/tool", TOOL),
+    ]);
+    let (url, sha) = env.artifact("tool.tar.gz", &archive);
+    env.config(&subtree_manifest(
+        &url,
+        &sha,
+        "strip = 0\nbin = \"a/tool\"\n",
+    ));
+    let output = env.run(&["provision", "apply"]);
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        !env.cache_paths()
+            .iter()
+            .any(|path| path.ends_with("escape")),
+        "{:?}",
+        env.cache_paths()
+    );
+    assert!(!env.entry().join("artifact").exists());
+}
+
+#[test]
+fn a_symlink_climbing_out_of_the_tree_is_refused() {
+    // A `#!` script and a symlink are the subject: unix only, decided in the case.
+    if !cfg!(unix) {
+        return;
+    }
+    let env = Env::new("provision-subtree-link-escape");
+    let archive = tar_gz_raw(&[
+        Raw::File("tool-1.0/bin/tool", TOOL),
+        Raw::Link("tool-1.0/bin/out", "../../../outside"),
+    ]);
+    let (url, sha) = env.artifact("tool.tar.gz", &archive);
+    env.config(&subtree_manifest(
+        &url,
+        &sha,
+        "strip = 1\nbin = \"bin/tool\"\n",
+    ));
+    let output = env.run(&["provision", "apply"]);
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(!env.entry().join("tree").exists());
+}
+
+#[test]
+fn a_zip_entry_climbing_out_is_refused() {
+    let env = Env::new("provision-subtree-zip-escape");
+    let archive = zip(&[("../escape", b"out".as_slice()), ("tool", TOOL)]);
+    let (url, sha) = env.artifact("tool.zip", &archive);
+    env.config(&format!(
+        "{}unpack = \"zip\"\nbin = \"tool\"\n",
+        manifest(&url, &sha)
+    ));
+    let output = env.run(&["provision", "apply"]);
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn a_bin_path_missing_after_strip_is_refused() {
+    let env = Env::new("provision-subtree-no-bin");
+    let (url, sha) = env.artifact("tool.tar.gz", &tool_tarball(b"payload\n"));
+    env.config(&subtree_manifest(
+        &url,
+        &sha,
+        "strip = 0\nbin = \"bin/tool\"\n",
+    ));
+    let output = env.run(&["provision", "apply"]);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(1), "{stderr}");
+    assert!(stderr.contains("bin/tool"), "{stderr}");
+    assert!(!env.entry().join("tree").exists());
+    assert!(!env.entry().join("artifact").exists());
+}
+
+#[test]
+fn a_subtree_entry_links_a_launcher_onto_path() {
+    // A `#!` script and a symlink are the subject: unix only, decided in the case.
+    if !cfg!(unix) {
+        return;
+    }
+    let env = Env::new("provision-subtree-link");
+    let (url, sha) = env.artifact("tool.tar.gz", &tool_tarball(b"payload\n"));
+    let dest = env.home.join("linked");
+    env.config(&subtree_manifest(
+        &url,
+        &sha,
+        &format!(
+            "strip = 1\nbin = \"bin/tool\"\nlink = '{}'\n",
+            dest.display()
+        ),
+    ));
+    let output = env.run(&["provision", "apply"]);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    #[expect(
+        clippy::disallowed_types,
+        reason = "stays: the fixture IS a spawn of the linked launcher, and only a real run shows it reaches the tree through the kernel's `#!` handling (CLOUD-2682)"
+    )]
+    let ran = std::process::Command::new(dest.join("demo"))
+        .streamed_output()
+        .unwrap();
+    assert_eq!(
+        String::from_utf8_lossy(&ran.stdout),
+        "payload\n",
+        "{}",
+        String::from_utf8_lossy(&ran.stderr)
+    );
+}
+
+#[test]
+fn a_reinstalled_subtree_replaces_the_old_tree() {
+    let env = Env::new("provision-subtree-reinstall");
+    let (url, sha) = env.artifact("one.tar.gz", &tool_tarball(b"one"));
+    env.config(&subtree_manifest(
+        &url,
+        &sha,
+        "strip = 1\nbin = \"bin/tool\"\n",
+    ));
+    assert_eq!(env.run(&["provision", "apply"]).status.code(), Some(0));
+    let (url, sha) = env.artifact("two.tar.gz", &tool_tarball(b"two"));
+    env.config(&subtree_manifest(
+        &url,
+        &sha,
+        "strip = 1\nbin = \"bin/tool\"\n",
+    ));
+    let output = env.run(&["provision", "apply"]);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(fs::read(env.entry().join("tree/lib/data")).unwrap(), b"two");
+    let leftovers: Vec<String> = fs::read_dir(env.entry())
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .filter(|name| name.starts_with(".tree."))
+        .collect();
+    assert!(leftovers.is_empty(), "{leftovers:?}");
+}
+
+#[test]
+fn a_platform_row_names_its_own_strip_and_bin() {
+    let env = Env::new("provision-subtree-platform");
+    let archive = zip(&[
+        ("tool-1.0/tool", TOOL),
+        ("tool-1.0/data", b"data".as_slice()),
+    ]);
+    let (url, sha) = env.artifact("tool.zip", &archive);
+    let host = batten::config_check::provision::platform_key();
+    env.config(&format!(
+        "version = 1\n\n[[provision]]\nname = \"demo\"\nversion = \"1.2.3\"\n\
+         binary = \"demo\"\nunpack = \"tar_gz\"\nbin = \"wrong\"\n\n\
+         [provision.platforms.{host}]\nurl = '{url}'\nsha256 = \"{sha}\"\n\
+         unpack = \"zip\"\nstrip = 1\nbin = \"tool\"\n"
+    ));
+    let output = env.run(&["provision", "apply"]);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(fs::read(env.entry().join("tree/tool")).unwrap(), TOOL);
+    assert_eq!(fs::read(env.entry().join("tree/data")).unwrap(), b"data");
+}
+
+#[test]
+fn a_subtree_key_without_an_archive_is_refused_at_load() {
+    let env = Env::new("provision-subtree-no-archive");
+    env.config(&format!(
+        "{}bin = \"bin/tool\"\n",
+        manifest("file:///nonexistent/tool", &"0".repeat(64))
+    ));
+    let output = env.run(&["provision", "apply"]);
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 // --- byte-stability -------------------------------------------------------------
@@ -599,13 +1001,7 @@ fn a_server_that_accepts_and_never_answers_times_out_rather_than_hanging() {
     // shipped minute. `BATTEN_FETCH_TIMEOUT_MS` moves how long a wait waits and
     // nothing else — the shortest value is the strictest, so it cannot admit
     // anything, which is what separates it from a bypass.
-    let output = batten()
-        .state_home(&env.home)
-        .args(["provision", "apply"])
-        .current_dir(&env.repo)
-        .env("BATTEN_FETCH_TIMEOUT_MS", "750")
-        .output()
-        .expect("run batten");
+    let output = apply_within_its_bound(&env, "750");
 
     assert_eq!(
         output.status.code(),
@@ -623,6 +1019,28 @@ fn a_server_that_accepts_and_never_answers_times_out_rather_than_hanging() {
         "and the cause is the bound, named: {}",
         String::from_utf8_lossy(&output.stderr)
     );
+}
+
+/// `provision apply` in `env` with the fetch bound shrunk to `millis`, and the
+/// bound that ended it read off the CAUSE (CLOUD-2789). An override the fetch
+/// IGNORED waits out the shipped minute and still ends `timed out`, so the
+/// verdict is not the wall clock: the cause names the bound that fired, and
+/// one naming anything but `millis` fails here. Waited on the child's exit,
+/// never on a deadline of the case's own.
+fn apply_within_its_bound(env: &Env, millis: &str) -> Output {
+    let output = batten()
+        .state_home(&env.home)
+        .args(["provision", "apply"])
+        .current_dir(&env.repo)
+        .env("BATTEN_FETCH_TIMEOUT_MS", millis)
+        .streamed_output()
+        .expect("run batten");
+    let said = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        said.contains(&format!("fetch: timed out after {millis}ms")),
+        "`BATTEN_FETCH_TIMEOUT_MS={millis}` is the bound that ended the fetch: {said}"
+    );
+    output
 }
 
 /// The same listener, judged the other way round.
@@ -653,13 +1071,7 @@ fn the_timeout_is_what_ends_it_rather_than_an_instant_failure() {
         &digest(BINARY),
     ));
 
-    let output = batten()
-        .state_home(&env.home)
-        .args(["provision", "apply"])
-        .current_dir(&env.repo)
-        .env("BATTEN_FETCH_TIMEOUT_MS", "1500")
-        .output()
-        .expect("run batten");
+    let output = apply_within_its_bound(&env, "1500");
 
     assert_eq!(output.status.code(), Some(3));
     let said = String::from_utf8_lossy(&output.stderr);
@@ -750,31 +1162,35 @@ fn host_ca_configuration_reaches_the_fetch() {
             "-key",
             "key.pem",
             "-WWW",
-            "-quiet",
         ])
         .current_dir(&tls)
-        .stdout(Stdio::null())
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .spawn()
         .expect("start the local TLS listener");
 
-    // Wait for the listener rather than sleeping a guessed interval.
+    // WAIT FOR THE LISTENER ON ITS OWN WORD, never on a clock (CLOUD-2789):
+    // `s_server` says `ACCEPT` on stdout once it is listening, which is the
+    // event, so this blocks on that line. An EOF before it is a listener that
+    // never came up. Without `-quiet`, because that is what silences it.
+    let mut said = std::io::BufReader::new(server.stdout.take().expect("piped stdout"));
+    let mut line = String::new();
     let mut ready = false;
-    for _ in 0..100 {
-        if TcpListener::bind(("127.0.0.1", port)).is_err() {
+    while std::io::BufRead::read_line(&mut said, &mut line).unwrap_or(0) > 0 {
+        if line.trim() == "ACCEPT" {
             ready = true;
             break;
         }
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "the interval of the poll the comment above names: the exit condition is \
-                      `TcpListener::bind` failing because the listener took the `port`, and the \
-                      100-iteration bound is what turns a listener that never came up into a \
-                      failed assertion rather than a hang (CLOUD-1177)"
-        )]
-        std::thread::sleep(std::time::Duration::from_millis(50));
+        line.clear();
     }
     assert!(ready, "the TLS listener never came up");
+    // Drained to its end, so a chatty listener never blocks on a full pipe;
+    // the thread ends with the listener's EOF when the case stops it.
+    std::thread::spawn(move || {
+        let mut rest = [0_u8; 4096];
+        while std::io::Read::read(&mut said, &mut rest).unwrap_or(0) > 0 {}
+    });
 
     // The CA is passed as an environment value rather than a flag, because that
     // is the surface under test: `fetch.rs` reads `SSL_CERT_FILE`, and a case
@@ -793,7 +1209,7 @@ fn host_ca_configuration_reaches_the_fetch() {
             .env("SSL_CERT_FILE", ca)
             .args(["provision", "apply"])
             .current_dir(&env.repo)
-            .output()
+            .streamed_output()
             .expect("run batten")
     };
 
@@ -818,7 +1234,7 @@ fn host_ca_configuration_reaches_the_fetch() {
         String::from_utf8_lossy(&trusted.stderr)
     );
     assert_eq!(
-        fs::read(env.state_dir().join("provision/demo/1.2.3/bin/demo")).unwrap(),
+        fs::read(env.state_dir().join(exe("provision/demo/1.2.3/bin/demo"))).unwrap(),
         BINARY,
         "the artifact fetched over https is what was installed"
     );
@@ -893,7 +1309,7 @@ fn an_entry_declaring_no_environment_is_still_a_plain_copy() {
     let out = env.run(&["provision", "apply"]);
     assert_eq!(out.status.code(), Some(0), "{out:?}");
     assert_eq!(
-        fs::read(dest.join("demo")).unwrap(),
+        fs::read(dest.join(exe("demo"))).unwrap(),
         b"#not-a-launcher\n",
         "an entry with no `env` rows must be linked byte-for-byte, as it always was"
     );
@@ -916,7 +1332,7 @@ fn a_launcher_hands_the_tool_an_environment_a_manifest_could_not() {
     let out = env.run(&["provision", "apply"]);
     assert_eq!(out.status.code(), Some(0), "{out:?}");
 
-    let linked = dest.join("demo");
+    let linked = dest.join(exe("demo"));
     let text = fs::read_to_string(&linked).unwrap();
     assert!(
         text.starts_with("#!") && text.lines().next().unwrap().ends_with(" provision-exec"),
@@ -934,7 +1350,7 @@ fn a_launcher_hands_the_tool_an_environment_a_manifest_could_not() {
         .env("DEMO_FALLBACK", "from-the-fallback")
         .env_remove("DEMO_PRIMARY")
         .env_remove("DEMO_TOKEN")
-        .output()
+        .streamed_output()
         .expect("run the launcher");
     assert_eq!(ran.status.code(), Some(0), "{ran:?}");
     let all = String::from_utf8_lossy(&ran.stdout);
@@ -970,6 +1386,9 @@ fn a_launcher_hands_the_tool_an_environment_a_manifest_could_not() {
 #[cfg(unix)]
 #[test]
 fn a_launcher_reached_through_a_symlink_hands_the_tool_that_name() {
+    // The one `streamed_wait` in the file, so its trait rides with this unix case.
+    use batten::capture::StreamedChild as _;
+
     let bash = ["/bin/bash", "/usr/bin/bash"]
         .into_iter()
         .map(PathBuf::from)
@@ -983,7 +1402,7 @@ fn a_launcher_reached_through_a_symlink_hands_the_tool_that_name() {
     assert_eq!(env.run(&["provision", "apply"]).status.code(), Some(0));
 
     let shim = dest.join("named-shim");
-    std::os::unix::fs::symlink(dest.join("demo"), &shim).expect("link a shim to the launcher");
+    std::os::unix::fs::symlink(dest.join(exe("demo")), &shim).expect("link a shim to the launcher");
     #[expect(
         clippy::disallowed_types,
         reason = "stays: as above, the launcher must be spawned to be exercised (CLOUD-320)"
@@ -1000,7 +1419,7 @@ fn a_launcher_reached_through_a_symlink_hands_the_tool_that_name() {
             .write_all(b"echo \"$0\"\n")
             .expect("hand bash its one command");
     }
-    let ran = child.wait_with_output().expect("wait for the shim");
+    let ran = child.streamed_wait().expect("wait for the shim");
     assert_eq!(ran.status.code(), Some(0), "{ran:?}");
     assert_eq!(
         String::from_utf8_lossy(&ran.stdout).trim(),
@@ -1027,9 +1446,9 @@ fn the_prepend_adds_nothing_it_already_carries() {
         clippy::disallowed_types,
         reason = "stays: as above, the launcher must be spawned to be exercised (CLOUD-320)"
     )]
-    let ran = std::process::Command::new(dest.join("demo"))
+    let ran = std::process::Command::new(dest.join(exe("demo")))
         .env("NO_PROXY", "api.example.invalid,localhost")
-        .output()
+        .streamed_output()
         .expect("run the launcher");
     let seen = String::from_utf8_lossy(&ran.stdout);
     assert!(
@@ -1057,11 +1476,11 @@ fn a_credential_no_source_carries_is_left_unset() {
         clippy::disallowed_types,
         reason = "stays: as above, the launcher must be spawned to be exercised (CLOUD-320)"
     )]
-    let ran = std::process::Command::new(dest.join("demo"))
+    let ran = std::process::Command::new(dest.join(exe("demo")))
         .env_remove("DEMO_PRIMARY")
         .env_remove("DEMO_FALLBACK")
         .env_remove("DEMO_TOKEN")
-        .output()
+        .streamed_output()
         .expect("run the launcher");
     let seen = String::from_utf8_lossy(&ran.stdout);
     assert!(
@@ -1090,7 +1509,7 @@ fn a_launcher_naming_a_missing_interpreter_is_reported_as_missing() {
     );
 
     fs::write(
-        dest.join("demo"),
+        dest.join(exe("demo")),
         "#!/nowhere/at/all/batten provision-exec\n{}\n",
     )
     .unwrap();
@@ -1229,13 +1648,13 @@ fn a_conditioned_row_applies_only_where_the_trust_bundle_names_that_authority() 
             clippy::disallowed_types,
             reason = "stays: the launcher must be spawned for the condition to be exercised (CLOUD-320)"
         )]
-        let ran = std::process::Command::new(dest.join("demo"))
+        let ran = std::process::Command::new(dest.join(exe("demo")))
             .env("SSL_CERT_FILE", &bundle)
             .env_remove("CURL_CA_BUNDLE")
             .env_remove("REQUESTS_CA_BUNDLE")
             .env("PROBE_SOURCE", "scoped")
             .env_remove("PROBE_SCOPED")
-            .output()
+            .streamed_output()
             .expect("run the launcher");
         String::from_utf8_lossy(&ran.stdout).into_owned()
     };
@@ -1278,7 +1697,7 @@ fn an_unreadable_trust_bundle_does_not_apply_the_bypass() {
         clippy::disallowed_types,
         reason = "stays: as above, the launcher must be spawned (CLOUD-320)"
     )]
-    let ran = std::process::Command::new(dest.join("demo"))
+    let ran = std::process::Command::new(dest.join(exe("demo")))
         .env(
             "SSL_CERT_FILE",
             env.repo.parent().unwrap().join("nowhere.pem"),
@@ -1287,7 +1706,7 @@ fn an_unreadable_trust_bundle_does_not_apply_the_bypass() {
         .env_remove("REQUESTS_CA_BUNDLE")
         .env("PROBE_SOURCE", "scoped")
         .env_remove("PROBE_SCOPED")
-        .output()
+        .streamed_output()
         .expect("run the launcher");
     let seen = String::from_utf8_lossy(&ran.stdout);
     assert!(
@@ -1344,34 +1763,15 @@ fn forbidden_fragments() -> Vec<(String, &'static str)> {
     // here, because a ban on the constant would ban the convention.
 }
 
-/// Every `.rs` under `crates/batten/src`, which is what rule 1 binds.
+/// Every `.rs` under EVERY workspace crate's `src/`, which is what rule 1
+/// binds since the split (CLOUD-2789): a consumer word cut into `batten-base`
+/// is still in the core.
 ///
 /// `src` alone, deliberately: `tests/` is this repository's own corpus and is
 /// entitled to name this repository, which is why the fragments above are
 /// assembled rather than spelled.
 fn engine_sources() -> Vec<PathBuf> {
-    fn walk(at: &Path, into: &mut Vec<PathBuf>) {
-        let Ok(entries) = fs::read_dir(at) else {
-            return;
-        };
-        let mut paths: Vec<PathBuf> = entries.flatten().map(|entry| entry.path()).collect();
-        // Sorted so a finding is reported at the same place on every run, which
-        // is what makes the output byte-stable (house style §6).
-        paths.sort();
-        for path in paths {
-            if path.is_dir() {
-                walk(&path, into);
-            } else if path.extension().is_some_and(|ext| ext == "rs") {
-                into.push(path);
-            }
-        }
-    }
-    let mut found = Vec::new();
-    walk(
-        &Path::new(env!("CARGO_MANIFEST_DIR")).join("src"),
-        &mut found,
-    );
-    found
+    common::engine_sources()
 }
 
 /// `path:line why` for every forbidden fragment in `text`.
@@ -1432,7 +1832,7 @@ fn the_engine_names_no_consumer_of_its_own() {
 /// asserts the round trip rather than the declaration.
 #[test]
 fn the_credential_table_carries_the_names_the_engine_dropped() {
-    let declared: batten::provision::CredentialProbe = toml::from_str(
+    let declared: batten::config_model::CredentialProbe = toml::from_str(
         "probe_url = \"https://example.invalid/probe\"\nnames = [\"A_TOKEN\", \"B_TOKEN\"]\n",
     )
     .expect("the `[credential]` table parses");
@@ -1442,7 +1842,7 @@ fn the_credential_table_carries_the_names_the_engine_dropped() {
     // a probe and no names still loads — the engine reports and authorises no
     // removal — because refusing the config would make a launcher that cannot
     // start over a field it could have reported.
-    let bare: batten::provision::CredentialProbe =
+    let bare: batten::config_model::CredentialProbe =
         toml::from_str("probe_url = \"https://example.invalid/probe\"\n")
             .expect("names is optional");
     assert!(bare.names.is_empty());
@@ -1485,7 +1885,7 @@ fn launch(env: &Env, dest: &Path, rows: &str, vars: &[(&str, &str)]) -> Output {
     for (name, value) in vars {
         command.env(name, value);
     }
-    command.output().expect("run the launcher")
+    command.streamed_output().expect("run the launcher")
 }
 
 /// An `unset` row behind a declared credential, applied, and the launcher run

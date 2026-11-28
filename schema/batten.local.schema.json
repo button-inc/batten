@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "OverrideConfig",
-  "description": "The override surface: exactly what `batten.local.toml` may carry.\n\nA **second type**, not a second reading of [`Config`], and that is the whole\npoint (CLOUD-239). The subset used to exist only as `local.*` reads inside\n[`crate::resolve`] — invisible to a validator, so the published schema\nvouched for keys the loader silently dropped and for one it refused outright.\nWith the surface written as a type, the schema derives from it and the two\ncannot disagree.\n\n`deny_unknown_fields` is what makes the refusal total and free: every\nauthority-only key (`epoch`, `marker`, `verb`, `budget`, `must_land_on`,\n`judge`, `ci`, `defects`, `provision`, `transcript`, `design`) becomes a hard\nparse error here rather than a silently discarded tightening. A hand-maintained\nrefusal list would be a second authority, and would drift the moment a field\nis added to [`Config`]. `hook` is\nauthority-only for a sharper one (CLOUD-91): an action *runs a command*, and\nthere is no reading of §8's raise-only rule under which an uncommitted file\nadding one is a tightening.\n\nEvery key here is **raise-only**; [`crate::resolve`] holds that invariant,\nand the per-field docs say which direction \"raise\" means.",
+  "description": "The override surface: exactly what `batten.local.toml` may carry.\n\nA **second type**, not a second reading of [`Config`], and that is the whole\npoint (CLOUD-239). The subset used to exist only as `local.*` reads inside\n[`crate::resolve`] — invisible to a validator, so the published schema\nvouched for keys the loader silently dropped and for one it refused outright.\nWith the surface written as a type, the schema derives from it and the two\ncannot disagree.\n\n`deny_unknown_fields` is what makes the refusal total and free: every\nauthority-only key (`epoch`, `marker`, `verb`, `budget`, `must_land_on`, `landed_by`,\n`judge`, `ci`, `defects`, `provision`, `transcript`, `design`) becomes a hard\nparse error here rather than a silently discarded tightening. A hand-maintained\nrefusal list would be a second authority, and would drift the moment a field\nis added to [`Config`]. `hook` is\nauthority-only for a sharper one (CLOUD-91): an action *runs a command*, and\nthere is no reading of §8's raise-only rule under which an uncommitted file\nadding one is a tightening.\n\nEvery key here is **raise-only**; [`crate::resolve`] holds that invariant,\nand the per-field docs say which direction \"raise\" means.",
   "type": "object",
   "properties": {
     "engine": {
@@ -132,6 +132,16 @@
         }
       ]
     },
+    "CallEvent": {
+      "description": "An event a call raises, which the engine resolves on every route it knows\n(CLOUD-2662). A row names the event, never the routes: `gh pr ready`, a\nnon-draft `gh pr create`, a reopen, the ready mutation through `gh api`, and\nthe forge connector's create and undraft all raise `pull-request-ready`.",
+      "oneOf": [
+        {
+          "description": "A call that can leave a pull request open and not a draft.",
+          "type": "string",
+          "const": "pull-request-ready"
+        }
+      ]
+    },
     "CaptureQuery": {
       "description": "One `[[rule.captured]]` row: what to reduce out of an already-captured\nresponse, and how (CLOUD-1188).\n\n**The row declares a reduction, not a read.** That asymmetry with every other\ndeclared-read family here is the point: the others name a subject and the\nmodule decides what to make of it, and this one cannot, because the subject is\na tracker payload and handing a module one would put its prose on the policy\ninput. Rule 4 is therefore decided by the declaration's shape rather than by\nevery consumer remembering it.",
       "type": "object",
@@ -184,6 +194,11 @@
           "description": "How many **tracked** repository artifacts the projection names.\n\nThe reading manifest: path-shaped tokens intersected with the tracked set,\nplus resolvable memory references. Tracked is the whole of it — a spawn\nnaming a path this repository does not carry is naming nothing it can be\nmade to read, so it does not count, and a URL or a branch name drops out\nby construction rather than by an allowlist somebody has to tune.\n\n**This unit is the one that acquires.** It needs the tracked set, which is\na property of a checkout and not of the envelope, so it is resolved at the\nboundary and reaches [`crate::hook::adjudicate`] as a fact — never opened\nfrom inside the decision, which stays pure.",
           "type": "string",
           "const": "tracked_artifacts"
+        },
+        {
+          "description": "How many attributes in a Rust file escape the lint [`Rule::pattern`]\nnames: each `#[expect(..)]` or `#[allow(..)]` whose list carries it, read\noff the parsed syntax tree by [`crate::codemod::lint_escapes`] (#1276).\n\n**A RATCHET'S FILE MEASURE, never a call ceiling.** Counted over a glob\nagainst a base, it makes an inventory of escapes (a spawn census) a\nnumber that may only fall: whatever `main` carries is the baseline, so\nno site needs approving, and a branch that adds one has to retire one.",
+          "type": "string",
+          "const": "lint_escapes"
         }
       ]
     },
@@ -650,6 +665,21 @@
           "description": "A config row changed by a context that has not read its history\n(CLOUD-2144).",
           "type": "string",
           "const": "history"
+        },
+        {
+          "description": "A `&` job nothing in the same call waits on, where the harness has a\nsupported background option instead (CLOUD-2667).",
+          "type": "string",
+          "const": "detach"
+        },
+        {
+          "description": "A mediated `git commit` whose message subject breaks\n`[commit].subject_pattern` (CLOUD-2683).",
+          "type": "string",
+          "const": "commit-subject"
+        },
+        {
+          "description": "A call that reaches a repository other than its session's home\n(CLOUD-2672). Opt-in: armed only where the home declares a row.",
+          "type": "string",
+          "const": "repository-reach"
         }
       ]
     },
@@ -807,7 +837,7 @@
           "const": "named"
         },
         {
-          "description": "Keyed to the identity of the branch's whole CHANGE against\n[`Rule::key_base`] (CLOUD-1547) — the read side of [`crate::mint::MintKey::Delta`].\n\n**The fourth keying, and it exists because the other three price a review\nat the wrong rate.** [`ReceiptKey::Head`] expires on every commit AND on\nevery rebase, so a landing loop that rebases per lap re-buys the receipt\neach lap for a change that did not move — the false-positive rate\n[`ReceiptKey::Branch`]'s own doc says gets a guard bypassed.\n[`ReceiptKey::Branch`] goes the other way and expires on nothing but a\nrestart, so a branch reviewed once may then push anything. Neither is\n*these bytes, however they were replayed*.\n\nThe subject is [`crate::git::branch_patch_id`] — a merge-base diff over\nCOMMITTED bytes with line numbers excluded — so a rebase that changes no\ncontent resolves to the same name and the receipt still answers, while a\nsingle changed line files it under a name nothing looks up.\n\n**Read through the one identity the mint writes under, never re-derived.**\nA second notion of *the same change* is free to disagree with the first\nabout exactly the rebase this keying turns on, which is the class\n`.claude/rules/policy-modules.md` records for `base-delta` and the reason\n`receipt::delta_subject` and `mint::render` resolve through the same\nfunction rather than through two readings of one rule.\n\nAn identity that does not resolve — no `key_base`, an unresolvable base\nref, or an EMPTY diff — is could-not-look, and a rule keyed on it answers\n[`crate::receipt::Validity::Missing`] rather than fabricating a subject. A branch that\nchanged nothing has no identity, and minting one would let two empty\nchanges compare equal.",
+          "description": "Keyed to the identity of the branch's whole CHANGE against\n[`Rule::key_base`] (CLOUD-1547) — the read side of [`MintKey::Delta`].\n\n**The fourth keying, and it exists because the other three price a review\nat the wrong rate.** [`ReceiptKey::Head`] expires on every commit AND on\nevery rebase, so a landing loop that rebases per lap re-buys the receipt\neach lap for a change that did not move — the false-positive rate\n[`ReceiptKey::Branch`]'s own doc says gets a guard bypassed.\n[`ReceiptKey::Branch`] goes the other way and expires on nothing but a\nrestart, so a branch reviewed once may then push anything. Neither is\n*these bytes, however they were replayed*.\n\nThe subject is [`crate::git::branch_patch_id`] — a merge-base diff over\nCOMMITTED bytes with line numbers excluded — so a rebase that changes no\ncontent resolves to the same name and the receipt still answers, while a\nsingle changed line files it under a name nothing looks up.\n\n**Read through the one identity the mint writes under, never re-derived.**\nA second notion of *the same change* is free to disagree with the first\nabout exactly the rebase this keying turns on, which is the class\n`.claude/rules/policy-modules.md` records for `base-delta` and the reason\n`receipt::delta_subject` and `mint::render` resolve through the same\nfunction rather than through two readings of one rule.\n\nAn identity that does not resolve — no `key_base`, an unresolvable base\nref, or an EMPTY diff — is could-not-look, and a rule keyed on it answers\n[`crate::receipt::Validity::Missing`] rather than fabricating a subject. A branch that\nchanged nothing has no identity, and minting one would let two empty\nchanges compare equal.",
           "type": "string",
           "const": "delta"
         }
@@ -973,7 +1003,7 @@
       ]
     },
     "Rewrite": {
-      "description": "One reference-to-path rewrite for a [`CeilingUnit::TrackedArtifacts`] ceiling\n(CLOUD-925).\n\nBoth fields are the **consumer's**. A shorthand a repository writes in its own\nprompts to name its own files is a property of that repository, so naming\neither half in `crates/batten` would be the consumer-specific identifier\nnon-negotiable rule 1 forbids — the same split\n[`crate::budget::EmbeddedDecl`] already makes for a config key it counts.",
+      "description": "One reference-to-path rewrite for a [`CeilingUnit::TrackedArtifacts`] ceiling\n(CLOUD-925).\n\nBoth fields are the **consumer's**. A shorthand a repository writes in its own\nprompts to name its own files is a property of that repository, so naming\neither half in `crates/batten` would be the consumer-specific identifier\nnon-negotiable rule 1 forbids — the same split\n[`crate::config_model::EmbeddedDecl`] already makes for a config key it counts.",
       "type": "object",
       "properties": {
         "path": {
@@ -1193,6 +1223,17 @@
             "maxLength": 1536
           }
         },
+        "environments": {
+          "description": "The tool environments the enabled preset installs at startup, by name\n(CLOUD-2633). Only a preset declaring an install takes it.\n\n**A consumer fact, passed rather than discovered**: an agent environment\nis not a CI one is not a dev one, so the install loads the base\nconfiguration plus exactly these, never every environment file present.\nA `[[startup]]` row naming the same `preset` places the install in the\nstartup sequence. `Some(empty)` is refused at load rather than read as\n\"base only\", and so is a name the repository configures nothing for.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string",
+            "maxLength": 1536
+          }
+        },
         "except": {
           "description": "Modules of the enabled preset this row does NOT compile, by name — the\nfile stem, as `plan-mode-refuses-writes` (CLOUD-2290).\n\nThe half of ejecting a module that the binary owns: a local copy declares\nthe ids the vendored module did, and `claim_ids` refuses one id from two\nbundles, so the vendored module has to step aside for the copy to load.\n`batten preset eject` writes this key; it is ordinary config, so a\nconsumer may write it by hand too.\n\nA name the preset does not ship is refused at load (exit `1`), never\nignored: an `except` that excepts nothing would leave the vendored module\nrunning beside the copy that was meant to replace it.",
           "type": "array",
@@ -1331,6 +1372,14 @@
             "maxLength": 1536
           }
         },
+        "install_env": {
+          "description": "`NAME=VALUE` assignments the derived install runs under (CLOUD-2633) —\nhow this repository's tool must install, such as from its lockfile.\nRequires `environments`; it may not set the preset's own selector, which\n`environments` owns.",
+          "type": "array",
+          "items": {
+            "type": "string",
+            "maxLength": 1536
+          }
+        },
         "interprets": {
           "description": "The script interpreters whose script FILE operand must resolve inside the\nrepository, for a [`RuleKind::Pipeline`] row (CLOUD-2304).\n\nThe third family, and `substitutes`' mirror: the same first-stage walk,\nthe same pipe bound, the containment test pointed the other way. A\nscript file carries its writes in its own body, where no edit guard\nreads them, so one outside the tree is refused and one the tree holds —\nreviewed code — runs. A plain name list, the consumer's fact: which\nprograms run a file operand varies by repository.",
           "type": [
@@ -1370,7 +1419,7 @@
           ]
         },
         "key_base": {
-          "description": "Which ref a [`ReceiptKey::Delta`] receipt's identity is taken against\n(CLOUD-1547) — the read-side twin of [`crate::mint::Declared::key_base`].\n\nRequired by that key and refused without it, and refused ON any other:\nthe identity is a diff and a diff needs two sides, so a `delta` row with\nno base has no subject, and a base on a `head` row is a column the engine\nwould silently never read.\n\nA CONSUMER's ref name, so it lives on the row rather than as a constant in\nthe crate (non-negotiable rule 1): which branch a repository lands on is\nthat repository's business, and `must_land_on` already answers it for a\ndifferent question rather than for this one.",
+          "description": "Which ref a [`ReceiptKey::Delta`] receipt's identity is taken against\n(CLOUD-1547) — the read-side twin of [`MintDeclared::key_base`].\n\nRequired by that key and refused without it, and refused ON any other:\nthe identity is a diff and a diff needs two sides, so a `delta` row with\nno base has no subject, and a base on a `head` row is a column the engine\nwould silently never read.\n\nA CONSUMER's ref name, so it lives on the row rather than as a constant in\nthe crate (non-negotiable rule 1): which branch a repository lands on is\nthat repository's business, and `must_land_on` already answers it for a\ndifferent question rather than for this one.",
           "type": [
             "string",
             "null"
@@ -1378,7 +1427,7 @@
           "maxLength": 1536
         },
         "key_from": {
-          "description": "Which projection supplies the subject for a [`ReceiptKey::Named`] receipt\n(CLOUD-987).\n\nRequired by that key and refused without it: a `named` receipt with no\nprojection has no subject to file under, and a receipt keyed on nothing\nwould read the same file for every call — which is\n[`ReceiptKey::Branch`] wearing a different name, and the exact collapse\nthat variant's doc refuses.\n\nA [`crate::hook::Field`] rather than a free-form key, for the reason the\nallowlist exists: the subject of a receipt is about to become a path\ncomponent under `$GIT_DIR`, so which values can reach it must be a closed\nset somebody enumerated.",
+          "description": "Which projection supplies the subject for a [`ReceiptKey::Named`] receipt\n(CLOUD-987).\n\nRequired by that key and refused without it: a `named` receipt with no\nprojection has no subject to file under, and a receipt keyed on nothing\nwould read the same file for every call — which is\n[`ReceiptKey::Branch`] wearing a different name, and the exact collapse\nthat variant's doc refuses.\n\nA [`Field`] rather than a free-form key, for the reason the\nallowlist exists: the subject of a receipt is about to become a path\ncomponent under `$GIT_DIR`, so which values can reach it must be a closed\nset somebody enumerated.",
           "anyOf": [
             {
               "$ref": "#/$defs/Field"
@@ -1425,7 +1474,7 @@
           }
         },
         "max": {
-          "description": "The per-CALL ceiling: the largest measurement that still passes\n(CLOUD-925).\n\n**A ceiling whose subject is one call, which `[budget.<name>]` structurally\ncannot express** — that table is a file set, `files` globs plus\n`max_tokens`, evaluated over the tree by `policy budget`. So the bound\n`fanout-guard` carries (count the prompt, count the reading manifest,\nrefuse past a cap) had no spelling as a row, and CLOUD-312's row 6 read\n\"config\" with no mechanism behind it.\n\n**The boundary is `<=`: exactly at the cap passes.** Inherited from\n[`crate::budget::Report::over_budget`] rather than decided again, because\nCLOUD-925 §1 requires one authority for what a ceiling *is* — a second\ncomparison semantics for the same word is how the two would drift, and\nwhich side of the boundary is inclusive is precisely the kind of detail\nthat drifts silently.\n\n**A modifier, not a keying column.** The row still selects on its own\nterms — `tool` for a structured call (CLOUD-924), `pattern` for a shell\none — and this decides whether that selection refuses. Same shape\n[`Rule::requires_key`] already carries, and for the same reason: the\nselection half is unchanged.\n\nRule 4 holds structurally: a breach reports the measurement, the cap and\nthe row id. Never a byte of what was measured — which is the argument\n[`crate::hook::Field::Prompt`] already carries for counting bytes it may\nnot echo.",
+          "description": "The per-CALL ceiling: the largest measurement that still passes\n(CLOUD-925).\n\n**A ceiling whose subject is one call, which `[budget.<name>]` structurally\ncannot express** — that table is a file set, `files` globs plus\n`max_tokens`, evaluated over the tree by `policy budget`. So the bound\n`fanout-guard` carries (count the prompt, count the reading manifest,\nrefuse past a cap) had no spelling as a row, and CLOUD-312's row 6 read\n\"config\" with no mechanism behind it.\n\n**The boundary is `<=`: exactly at the cap passes.** Inherited from\n[`crate::budget::Report::over_budget`] rather than decided again, because\nCLOUD-925 §1 requires one authority for what a ceiling *is* — a second\ncomparison semantics for the same word is how the two would drift, and\nwhich side of the boundary is inclusive is precisely the kind of detail\nthat drifts silently.\n\n**A modifier, not a keying column.** The row still selects on its own\nterms — `tool` for a structured call (CLOUD-924), `pattern` for a shell\none — and this decides whether that selection refuses. Same shape\n[`Rule::requires_key`] already carries, and for the same reason: the\nselection half is unchanged.\n\nRule 4 holds structurally: a breach reports the measurement, the cap and\nthe row id. Never a byte of what was measured — which is the argument\n[`Field::Prompt`] already carries for counting bytes it may\nnot echo.",
           "type": [
             "integer",
             "null"
@@ -1443,7 +1492,7 @@
           "minimum": 0
         },
         "measures": {
-          "description": "The envelope projection a [`Rule::max`] ceiling measures (CLOUD-925).\n\nA [`crate::hook::Field`], reusing the existing named allowlist rather than\nminting a second vocabulary for the same thing — and inheriting its safety\nargument, which is what makes this admissible at all: the allowlist can\nnever name `Envelope::input` wholesale, so a ceiling can only ever be\npointed at a projection somebody deliberately exposed.\n\nRequired with `max` and `counts`, refused without them: a projection named\nwith no cap measures something and decides nothing.",
+          "description": "The envelope projection a [`Rule::max`] ceiling measures (CLOUD-925).\n\nA [`Field`], reusing the existing named allowlist rather than\nminting a second vocabulary for the same thing — and inheriting its safety\nargument, which is what makes this admissible at all: the allowlist can\nnever name `Envelope::input` wholesale, so a ceiling can only ever be\npointed at a projection somebody deliberately exposed.\n\nRequired with `max` and `counts`, refused without them: a projection named\nwith no cap measures something and decides nothing.",
           "anyOf": [
             {
               "$ref": "#/$defs/Field"
@@ -1477,7 +1526,7 @@
           "maxLength": 512
         },
         "no_retry_reason": {
-          "description": "Why a declared repair does NOT hand the call back to be re-issued\n(CLOUD-1639).\n\nRequired on a row whose class declares\n[`crate::verdict::Applicability::Silent`], and rejected on every other\nrow — the same both-directions shape [`Rule::no_fix_reason`] has, and for\na sharper reason. `retry` is the posture the field supports: pre-commit\nfails the run when a hook modifies files, Ruff makes the caller opt in,\nand the one measurement of silent server-side rewrite put it 22.3% down\non utility. So proceeding without telling the caller to re-issue is the\nexception, and an exception with no stated reason is a default wearing\none.\n\nIt is NOT [`Rule::no_fix_reason`]'s sibling in meaning: that one says why\na row declares no repair at all, this says why a repair that RAN does not\nowe a re-issue. A row can honestly carry both.",
+          "description": "Why a declared repair does NOT hand the call back to be re-issued\n(CLOUD-1639).\n\nRequired on a row whose class declares\n[`Applicability::Silent`], and rejected on every other\nrow — the same both-directions shape [`Rule::no_fix_reason`] has, and for\na sharper reason. `retry` is the posture the field supports: pre-commit\nfails the run when a hook modifies files, Ruff makes the caller opt in,\nand the one measurement of silent server-side rewrite put it 22.3% down\non utility. So proceeding without telling the caller to re-issue is the\nexception, and an exception with no stated reason is a default wearing\none.\n\nIt is NOT [`Rule::no_fix_reason`]'s sibling in meaning: that one says why\na row declares no repair at all, this says why a repair that RAN does not\nowe a re-issue. A row can honestly carry both.",
           "type": [
             "string",
             "null"
@@ -1492,6 +1541,17 @@
           ],
           "maxLength": 1536
         },
+        "on": {
+          "description": "Select a `shape` or `receipt` row by the event a call raises rather than\nby its spelling (CLOUD-2662). One selector of `pattern`, `content`,\n`tool` and `on` per row.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CallEvent"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "pattern": {
           "description": "The literal shape this rule bans — one meaning, two domains.\n\nFor [`RuleKind::Forbid`] it is a substring banned from matched *files*.\nFor [`RuleKind::Shape`] it is a banned *command line*: the first word is\nthe effective program (matched after wrapper look-through) and the rest\nare the adjacent non-flag words that must follow it, so\n`pattern = \"gh pr merge\"` reads exactly as a reviewer would say it aloud.\nRequired by both kinds, rejected by [`RuleKind::Command`].",
           "type": [
@@ -1499,6 +1559,10 @@
             "null"
           ],
           "maxLength": 1536
+        },
+        "per_file": {
+          "description": "Judge a ratchet per matched file rather than on the sum (CLOUD-2663).\n\nEach path present at `base` is held to its OWN base count, so one file\nshrinking can no longer pay for another growing. A path absent at base is\nnot judged: a per-file ceiling is that file's count at base, and a file\nthe branch creates has none. A path deleted since base counts `0`.\n\nRefused with `retires_with` and `conserves`, which both buy an AGGREGATE\ndecrease that a per-file row does not have.",
+          "type": "boolean"
         },
         "plan": {
           "description": "The adopted gate runner's EFFECTIVE plan, per declared surface\n(CLOUD-949).\n\nEach row becomes an entry of `input.tree.plan` under its own `id`,\ncarrying what the runner said it would run — acquired from the runner\nitself, never re-derived from its config, because the runner owns its\nselector and a second derivation is a second authority on which files a\nstep runs over.\n\n**Acquired fresh rather than read back, which is the difference from\n`tools`.** A verdict is a statement about bytes that have a digest; a plan\nis a statement about a WORKING TREE, whose dirty and index state move\nwithout HEAD. Keying a stored plan would mean comparing every binding\nfield before trusting it, and a comparison a caller can forget is the\nstaleness class this avoids by simply taking the plan now.",
@@ -1526,7 +1590,7 @@
           }
         },
         "preset": {
-          "description": "The vendored preset this rule enables, by name (CLOUD-836).\n[`RuleKind::Policy`] only, and the third of the three mutually-exclusive\nsources — [`Rule::module`] is one file, [`Rule::bundle`] one folder, this\none a bundle compiled into the binary.\n\n**A preset is not an authority; it is content the authority enables.**\nThat is what keeps it clear of CLOUD-29's one-committed-authority rule,\nand why enabling one is explicit here rather than default-on: a consumer\nwho enables nothing gets nothing, so this adds no implicit behaviour for\n§8 to have an opinion about.\n\nThe valid names are [`crate::policy::preset_names`], derived from the\nembedded set — an unknown name is a config error at load (exit `1`),\nnever a silent no-op, and the published schema's enum is generated from\nthe same list so the two cannot disagree.",
+          "description": "The vendored preset this rule enables, by name (CLOUD-836).\n[`RuleKind::Policy`] only, and the third of the three mutually-exclusive\nsources — [`Rule::module`] is one file, [`Rule::bundle`] one folder, this\none a bundle compiled into the binary.\n\n**A preset is not an authority; it is content the authority enables.**\nThat is what keeps it clear of CLOUD-29's one-committed-authority rule,\nand why enabling one is explicit here rather than default-on: a consumer\nwho enables nothing gets nothing, so this adds no implicit behaviour for\n§8 to have an opinion about.\n\nThe valid names are [`preset_names`], derived from the\nembedded set — an unknown name is a config error at load (exit `1`),\nnever a silent no-op, and the published schema's enum is generated from\nthe same list so the two cannot disagree.",
           "type": [
             "string",
             "null"
@@ -1542,14 +1606,20 @@
             "pinned-toolchain",
             "release-hygiene",
             "engine-hygiene",
+            "rego-hygiene",
             "shell-hygiene",
             "tracker-hygiene",
             "supply-chain",
+            "lease-asserted",
             "trunk-based",
             "linear-history",
+            "rust-quality",
+            "rust",
             "red-head",
             "git",
-            "claude-code-plan"
+            "claude-code-plan",
+            "claude-code-dispatch",
+            "claude-code-state"
           ]
         },
         "produces": {
@@ -1564,7 +1634,7 @@
           ]
         },
         "provider": {
-          "description": "The CI provider this repository runs, where the enabled preset reads one\n(CLOUD-1625).\n\n**A consumer fact, so it lives in the consumer's config** — which is\nnon-negotiable rule 1 applied to the seam that broke it. The engine\ndeclares which provider's language a preset's modules read\n([`crate::preset::Manifest::provider`]); this declares which one is in\nuse here; and the two are compared at load. Neither guesses the other.\n\nOmitted is the ordinary case: six of the seven presets read no provider's\nlanguage, so a row enabling one needs nothing here. A row enabling a\npreset that DOES read one, and naming no provider or a different one, is\nrefused before compilation — because the alternative is the preset\nevaluating over an empty document set and reporting clean.\n\nON THIS ROW rather than in `[ci]`: that table is \"this repository's\ncommitted copy of the host's contract\" (`crate::ci::Ci`), a mirror of the\nhost's branch protection that `ci-drift` polices key by key, and a key\nwith no host counterpart breaks the mirror. `[host]` is the host's repo\nsettings and is no better a fit. One optional key beside the `preset` it\nqualifies keeps the configuration narrow, which is rule 6.",
+          "description": "The CI provider this repository runs, where the enabled preset reads one\n(CLOUD-1625).\n\n**A consumer fact, so it lives in the consumer's config** — which is\nnon-negotiable rule 1 applied to the seam that broke it. The engine\ndeclares which provider's language a preset's modules read\n([`crate::preset_catalog::Manifest::provider`]); this declares which one is in\nuse here; and the two are compared at load. Neither guesses the other.\n\nOmitted is the ordinary case: six of the seven presets read no provider's\nlanguage, so a row enabling one needs nothing here. A row enabling a\npreset that DOES read one, and naming no provider or a different one, is\nrefused before compilation — because the alternative is the preset\nevaluating over an empty document set and reporting clean.\n\nON THIS ROW rather than in `[ci]`: that table is \"this repository's\ncommitted copy of the host's contract\" (`crate::ci::Ci`), a mirror of the\nhost's branch protection that `ci-drift` polices key by key, and a key\nwith no host counterpart breaks the mirror. `[host]` is the host's repo\nsettings and is no better a fit. One optional key beside the `preset` it\nqualifies keeps the configuration narrow, which is rule 6.",
           "type": [
             "string",
             "null"
@@ -1761,7 +1831,7 @@
           ]
         },
         "tool": {
-          "description": "The tool a `mediated_call` row is **about** — matched exactly, or as a\n`__`-delimited suffix (CLOUD-924).\n\n**The third way to key a mediated row**, beside [`Rule::pattern`] (a\ncommand line) and [`Rule::content`] (what a write would land), and the\nonly one a *structured* call can satisfy. `adjudicate` returns `Allow`\nthe moment `envelope.command` is empty, and an MCP call, a `Read` and a\n`Task` spawn all carry an empty command — so before this column the two\nconnector guards had nothing to retire onto, which is CLOUD-312's rows 4\nand 5. It reads [`crate::hook::Envelope::raw_tool`], the host's own word,\nand never the normalized [`crate::hook::Event`] (CLOUD-779's split).\n\n# Why a suffix, and why not a bare one\n\n**The suffix half is not a convenience.** A host mints the prefix of an\nMCP tool name and rotates it: CLOUD-665 and CLOUD-684 are the same\nmeasured failure twice, a rule naming a server label the host never\nregisters under, matching nothing, silently. A consumer that already\nkeyed its own hook matchers on a trailing pattern did so for exactly that\nreason. An exact-only selector here would rebuild the defect those two\nrows closed.\n\n**A bare suffix over-matches, so the delimiter is load-bearing.**\n`tool = \"Edit\"` would select `NotebookEdit`, and `tool = \"Read\"` any tool\nwhose name happens to end in those bytes — a row selecting a neighbouring\ntool nobody named is the widening direction a policy engine may never\ndrift in. So a match is the whole name, or the whole final `__`-delimited\nsegment of it, which is `board-payloads`' own rule (`endswith(\"__get_issue\")`)\nand carries its reasoning: MCP names are `mcp__<server>__<tool>`, and the\ntool is the last segment. `save_issue` therefore selects\n`mcp__Linear__save_issue` and `mcp__cc451d34-…__save_issue` alike, and\n`Edit` selects `Edit` alone.\n\nPermitted on [`RuleKind::Shape`] and [`RuleKind::Receipt`] — the kinds a\nrow can key on a tool with no command in hand. **Not** on\n[`RuleKind::Pipeline`], whose predicate is the operators *between* a\ncommand's segments: a structured call has none, so the column would load,\nmatch nothing, and read as coverage.",
+          "description": "The tool a `mediated_call` row is **about** — matched exactly, or as a\n`__`-delimited suffix (CLOUD-924).\n\n**The third way to key a mediated row**, beside [`Rule::pattern`] (a\ncommand line) and [`Rule::content`] (what a write would land), and the\nonly one a *structured* call can satisfy. `adjudicate` returns `Allow`\nthe moment `envelope.command` is empty, and an MCP call, a `Read` and a\n`Task` spawn all carry an empty command — so before this column the two\nconnector guards had nothing to retire onto, which is CLOUD-312's rows 4\nand 5. It reads [`crate::hook::Envelope::raw_tool`], the host's own word,\nand never the normalized [`Event`] (CLOUD-779's split).\n\n# Why a suffix, and why not a bare one\n\n**The suffix half is not a convenience.** A host mints the prefix of an\nMCP tool name and rotates it: CLOUD-665 and CLOUD-684 are the same\nmeasured failure twice, a rule naming a server label the host never\nregisters under, matching nothing, silently. A consumer that already\nkeyed its own hook matchers on a trailing pattern did so for exactly that\nreason. An exact-only selector here would rebuild the defect those two\nrows closed.\n\n**A bare suffix over-matches, so the delimiter is load-bearing.**\n`tool = \"Edit\"` would select `NotebookEdit`, and `tool = \"Read\"` any tool\nwhose name happens to end in those bytes — a row selecting a neighbouring\ntool nobody named is the widening direction a policy engine may never\ndrift in. So a match is the whole name, or the whole final `__`-delimited\nsegment of it, which is `board-payloads`' own rule (`endswith(\"__get_issue\")`)\nand carries its reasoning: MCP names are `mcp__<server>__<tool>`, and the\ntool is the last segment. `save_issue` therefore selects\n`mcp__Linear__save_issue` and `mcp__cc451d34-…__save_issue` alike, and\n`Edit` selects `Edit` alone.\n\nPermitted on [`RuleKind::Shape`] and [`RuleKind::Receipt`] — the kinds a\nrow can key on a tool with no command in hand. **Not** on\n[`RuleKind::Pipeline`], whose predicate is the operators *between* a\ncommand's segments: a structured call has none, so the column would load,\nmatch nothing, and read as coverage.",
           "type": [
             "string",
             "null"
@@ -1786,8 +1856,24 @@
             }
           ]
         },
+        "unit_sources": {
+          "description": "The source files this policy row reads as **units**, glob-selected\n(CLOUD-1008): every function, comment and string in a Rust file, and every\nfunction and `:=` binding in a Rego module, as D4 nodes with counts.\n\nGlob-only, without a literal sibling column, deliberately: a gate over\ncode units is a gate over every file of a language by construction, and\nhouse style §8 keeps configuration narrow. Only a row declaring it pays a\nparse; nothing is acquired for a row that does not.",
+          "type": "array",
+          "items": {
+            "type": "string",
+            "maxLength": 1536
+          }
+        },
         "unless_contains": {
           "description": "A literal whose presence **exempts** the command from a\n[`RuleKind::Shape`] row that would otherwise fire (CLOUD-1477's sibling).\n\n[`Rule::contains`]'s twin in the other polarity, and it exists for the\nsame structural reason rather than as a general escape hatch: the operand\nmatcher drops flags before comparing, so a row cannot distinguish two\ncommands that differ only by a flag. `contains` is how a row DEMANDS one;\nthis is how a row EXCLUDES one, and without it the only expressible\npredicate over a flag is \"must be present\".\n\n**The measured case is `git rebase`.** `patch run loose` bans a\nhand-driven landing lap — `git rebase origin/main` — by asking whether the\nline names `origin/main`. But `git rebase --onto origin/main <upstream>\n<branch>` names it too, and is not a lap at all: `--onto` moves a range\nsomewhere else, which is a history edit the landing loop cannot perform,\nso the row refused an operation its own remedy does not offer and declared\nno route to it. A lap never spells itself with `--onto`, because a lap has\nno upstream to name.\n\nMatched against the raw text of the same line as `contains`, quotes\nincluded, and for the same reason: line one's text must not exempt line\ntwo's command.\n\n**The permissive direction is the one to fear here**, which is why it is\n`shape` only and a literal rather than a regex. A `contains` that is wrong\nmakes a row fire less often than it reads; so does this — but this is the\ncolumn whose whole job is to switch a deny off, so it stays the narrowest\nthing that can do the job and is named in the row's `reason` wherever it\nis used.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 1536
+        },
+        "unless_word": {
+          "description": "The exempting polarity of [`Rule::word`]: a line whose argv carries a\nmatching word does not fire. Line-scoped, like `unless_contains`.",
           "type": [
             "string",
             "null"
@@ -1828,7 +1914,7 @@
           }
         },
         "when_absent": {
-          "description": "Narrow a `mediated_call` row to a call whose named projection is\n**absent** (CLOUD-987).\n\nA MODIFIER, not a selector: the row still selects on its own terms —\n`tool` for a structured call, `pattern` for a shell one — and this decides\nwhether that selection refuses. The same shape [`Rule::requires_key`] and\n[`Rule::require_via`] already carry, and it is listed in `permits` rather\nthan `requires` for the reason `require_via` gives: a modifier that\nnarrowed by DEFAULT would silently change every row that never asked.\n\n**It exists because the absence is the predicate.** CLOUD-312's row 1\ngates *creating* a tracker row and must not gate *editing* one, and the\ntwo differ only in whether the call named an id. Its own header:\n*\"Denying an update would demand a search before every edit to an issue,\nwhich is absurd and would get the guard switched off within a day.\"* A row\nthat could not say \"only when this is absent\" would be that guard.\n\nAbsent means the projection read `None` — which for\n[`crate::hook::Field`] collapses missing, null, empty and\nwrong-typed, exactly as every other reader of that allowlist sees it. One\ndefinition of absence, in the decoder, rather than a second one here.",
+          "description": "Narrow a `mediated_call` row to a call whose named projection is\n**absent** (CLOUD-987).\n\nA MODIFIER, not a selector: the row still selects on its own terms —\n`tool` for a structured call, `pattern` for a shell one — and this decides\nwhether that selection refuses. The same shape [`Rule::requires_key`] and\n[`Rule::require_via`] already carry, and it is listed in `permits` rather\nthan `requires` for the reason `require_via` gives: a modifier that\nnarrowed by DEFAULT would silently change every row that never asked.\n\n**It exists because the absence is the predicate.** CLOUD-312's row 1\ngates *creating* a tracker row and must not gate *editing* one, and the\ntwo differ only in whether the call named an id. Its own header:\n*\"Denying an update would demand a search before every edit to an issue,\nwhich is absurd and would get the guard switched off within a day.\"* A row\nthat could not say \"only when this is absent\" would be that guard.\n\nAbsent means the projection read `None` — which for\n[`Field`] collapses missing, null, empty and\nwrong-typed, exactly as every other reader of that allowlist sees it. One\ndefinition of absence, in the decoder, rather than a second one here.",
           "anyOf": [
             {
               "$ref": "#/$defs/Field"
@@ -1858,7 +1944,7 @@
           "maxLength": 1536
         },
         "while_marker": {
-          "description": "A branch-keyed marker whose PRESENCE is this row's firing condition\n(CLOUD-1390).\n\n**The third modifier polarity, and the one the other two cannot express.**\n[`Rule::when_absent`] and [`Rule::when_present`] condition on a projection\nof the CALL — what the harness handed over. This conditions on a fact about\nthe BRANCH that an earlier turn left behind, which no field of this call\ncarries.\n\n**It exists because a punt is the absence of an action.** A gate refuses\nactions, and at the moment a turn ends by offering work instead of doing it\nthere is no action to refuse — CLOUD-97 and CLOUD-219 each ruled out making\nthe turn's end a deny, because committing and pushing is what survives a\ncontainer reclaim and that path must stay free. So the observation is made\nwhere the evidence is and the refusal lands where a refusal is allowed: the\nnext mediated write. `ready-guard` and `claim read unread` are the same\nshape one surface over.\n\n**Presence, never validity**, and the distinction is what keeps this from\nbeing a second opinion about receipts. [`crate::receipt::validity`] decides\nwhether a receipt PROVES something; this asks only whether a marker file\nexists. A marker is not a proof and carries no conclusion to be stale.\n\n**The spend is deletion, by the sweep that already runs.** A row named here\nmust be one of [`crate::land::BRANCH_KEYED_RECEIPTS`], so landing clears it\nand nothing else has to know how it is retired — which is also what stops\nthis from becoming a state machine with its own lifecycle.\n\nAbsent on every row that predates this column, which then behaves exactly\nas before: the modifiers are additive, and absent means \"this row is about\nthe selection alone\".",
+          "description": "A branch-keyed marker whose PRESENCE is this row's firing condition\n(CLOUD-1390).\n\n**The third modifier polarity, and the one the other two cannot express.**\n[`Rule::when_absent`] and [`Rule::when_present`] condition on a projection\nof the CALL — what the harness handed over. This conditions on a fact about\nthe BRANCH that an earlier turn left behind, which no field of this call\ncarries.\n\n**It exists because a punt is the absence of an action.** A gate refuses\nactions, and at the moment a turn ends by offering work instead of doing it\nthere is no action to refuse — CLOUD-97 and CLOUD-219 each ruled out making\nthe turn's end a deny, because committing and pushing is what survives a\ncontainer reclaim and that path must stay free. So the observation is made\nwhere the evidence is and the refusal lands where a refusal is allowed: the\nnext mediated write. `ready-guard` and `claim read unread` are the same\nshape one surface over.\n\n**Presence, never validity**, and the distinction is what keeps this from\nbeing a second opinion about receipts. [`crate::receipt::validity`] decides\nwhether a receipt PROVES something; this asks only whether a marker file\nexists. A marker is not a proof and carries no conclusion to be stale.\n\n**The spend is deletion, by the sweep that already runs.** A row named here\nmust be one of [`BRANCH_KEYED_RECEIPTS`], so landing clears it\nand nothing else has to know how it is retired — which is also what stops\nthis from becoming a state machine with its own lifecycle.\n\nAbsent on every row that predates this column, which then behaves exactly\nas before: the modifiers are additive, and absent means \"this row is about\nthe selection alone\".",
           "type": [
             "string",
             "null"
@@ -1868,6 +1954,14 @@
         "while_unpushed": {
           "description": "Fire only while `HEAD` exists in this clone and on no remote-tracking ref\n(CLOUD-843).\n\n**The harm a punt row names, measured rather than proxied.** `turn mint\nahead` refuses because work \"committed nowhere but this container\" dies\nwith a reclaim, and its remedy says a push is what makes stopping safe —\nbut nothing it selected on read a push. Its only lever was a `verify`\nreceipt for `HEAD`, and on a tree that compiles only after edits that\nreceipt cannot be earned without the writes the row refuses: a deadlock\nwhose sole exit, a head-bound admission, every commit voids.\n\nConjoined with the other modifiers, so a row carrying `while_marker` too\nfires while the marker exists AND `HEAD` is unpushed. Could-not-look\nselects the row, the direction `while_marker`'s own unreadable arms take:\nan unknown answer must not switch a refusal off.",
           "type": "boolean"
+        },
+        "word": {
+          "description": "Narrow a [`RuleKind::Shape`] deny to a line whose argv carries a WORD\nmatching this expression (CLOUD-2669), anchored as `^(?:…)$`.\n\nThe words are this line's argv after the effective program, minus its\nredirections, unquoted by the segmenter: `-m \"never use --no-verify\"` is\none word and holds no `--no-verify` word, where `contains` sees one. A\nregex rather than a literal so a bundled short flag (`-anm`) is\nexpressible; anchoring is what keeps it a word test.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 1536
         }
       },
       "additionalProperties": false,
@@ -1983,28 +2077,15 @@
       ]
     },
     "RuleSeverity": {
-      "description": "Config-time rule severity — *what fails a check* (cargo-deny's model,\nCLOUD-61).\n\nDeclared weakest-first: derived [`Ord`] is the severity rank.",
-      "oneOf": [
-        {
-          "description": "The rule is configured off: a match is not a finding at all.",
-          "type": "string",
-          "const": "allow"
-        },
-        {
-          "description": "A match is reported but does not by itself fail the run (it can be\npromoted by `--fail-on-warning`, CLOUD-49).",
-          "type": "string",
-          "const": "warn"
-        },
-        {
-          "description": "A match blocks the call and hands the decision to a human (CLOUD-340).\n\n**A DISPOSITION AT `Deny`'S RANK, NOT A FOURTH RANK.** It blocks exactly\nas `deny` does; what differs is who decides, which is orthogonal to how\nbad the finding is. That is why it maps to `deny`'s row rather than\ngetting one of its own — see the module header, where the bijection this\nbreaks is corrected rather than quietly widened.\n\nMediated-call rules only. A tree-scoped rule has no caller to ask, so\n`ask` there is a config error rather than a silent downgrade, refused by\n`rules::validate`.",
-          "type": "string",
-          "const": "ask"
-        },
-        {
-          "description": "A match fails the run.",
-          "type": "string",
-          "const": "deny"
-        }
+      "description": "Config-time rule severity: `allow` (off), `record` (a trial, recorded and never spoken), `advise` (spoken, never refusing; `warn` is its pre-CLOUD-2707 spelling), `ask` (escalates to a human), `deny` (refuses).",
+      "type": "string",
+      "enum": [
+        "allow",
+        "record",
+        "advise",
+        "ask",
+        "deny",
+        "warn"
       ]
     },
     "Sink": {
@@ -2188,7 +2269,7 @@
           "maxLength": 1536
         },
         "path": {
-          "description": "A glob narrowing the waiver to some of the rule's findings.\n\nAbsent means the whole rule, which is the widest a waiver can be and\ntherefore the one that must be typed deliberately rather than reached by\nomitting a field nobody noticed. Matched with\n[`crate::rules::glob_match`], so a waiver's path vocabulary is the one the\nrules use and not a second dialect.",
+          "description": "A glob narrowing the waiver to some of the rule's findings.\n\nAbsent means the whole rule, which is the widest a waiver can be and\ntherefore the one that must be typed deliberately rather than reached by\nomitting a field nobody noticed. Matched with\n[`crate::selector::glob_match`], so a waiver's path vocabulary is the one the\nrules use and not a second dialect.",
           "type": [
             "string",
             "null"
@@ -2201,7 +2282,7 @@
           "maxLength": 1536
         },
         "rule": {
-          "description": "The [`crate::rules::Rule::id`] this waiver suppresses findings of.",
+          "description": "The [`crate::config_model::Rule::id`] this waiver suppresses findings of.",
           "type": "string",
           "maxLength": 1536
         }

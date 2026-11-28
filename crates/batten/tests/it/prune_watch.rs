@@ -6,23 +6,16 @@
 //! never the running engine, and never a unit a live build has used. The watcher spans the
 //! whole run it is hosted by; the hook collects before each mediated call.
 
-// The rows this suite kills, declared beside the code they mutate and mirrored
-// here so a board obligation naming this file binds:
-/*
-#MUTANT-SUITE crates/batten/tests/it/prune_watch.rs
-#MUTANT reclaim-under-held-lock|s@^            Err(std::fs::TryLockError::WouldBlock) => return None,$@            Err(std::fs::TryLockError::WouldBlock) => {}@|a_tree_a_build_holds_is_never_collected
-#MUTANT reclaim-unlink-unmeasured|s@^            format!("disk-unlink-ms {}", self.wall_ms),$@@|the_arm_watches_past_the_gate
-#MUTANT arm-ends-with-the-gate|s@^    while !stop.load(Ordering::Relaxed) {$@    for _ in 0..1 {@|the_arm_watches_past_the_gate
-*/
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
+use batten::capture::StreamedChild as _;
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
-use batten::prune::Prune;
+use batten::config_model::Prune;
 
 /// A `[prune]` table rooted at `root`, with no band: a case sets its own.
 fn rules(root: &str) -> Prune {
@@ -34,6 +27,7 @@ fn rules(root: &str) -> Prune {
         regrowable: None,
         min_free_mb: None,
         max_free_mb: None,
+        caches: Vec::new(),
     }
 }
 
@@ -57,22 +51,19 @@ fn artifact(deps: &Path, stem: &str, hash: &str, age: u64) {
 /// `lock()` and here shares the open file description, and with it the `flock`,
 /// until its child execs. Measured on #1132: the released reclaim found the lock
 /// still held and kept all three copies, while the case alone passed every time.
+/// So this takes the lock through `lock_wait::acquire`, which waits on the
+/// event itself — the sibling's exec releasing the shared description — and
+/// lets it go at once (CLOUD-2789).
 fn released(lock: &std::path::Path) {
-    for _ in 0..200 {
-        let probe = std::fs::File::open(lock).unwrap();
-        if probe.try_lock().is_ok() {
-            return;
-        }
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "bounded by a real terminal state: the sibling's child execs and closes the shared description, capped at `200` tries"
-        )]
-        std::thread::sleep(std::time::Duration::from_millis(10));
-    }
-    panic!(
-        "{} stayed locked after this case released it",
-        lock.display()
-    );
+    let probe = std::fs::File::open(lock).unwrap();
+    let taken = batten_facts::lock_wait::acquire(
+        probe,
+        lock,
+        batten_facts::lock_wait::Mode::Exclusive,
+        None,
+    )
+    .expect("the lock is taken once the sibling's child execs");
+    drop(taken);
 }
 
 // --- the disk collector (CLOUD-2197) -----------------------------------------
@@ -117,7 +108,12 @@ fn request<'a>(
         need_bytes: need,
         deadline: None,
         wait: false,
+        stop: None,
         live_since: None,
+        copies: None,
+        fixtures_since: None,
+        traces: None,
+        caches: &[],
     }
 }
 
@@ -126,6 +122,7 @@ fn request<'a>(
 fn request_under_a_live_build(trees: &[PathBuf], need: u64) -> batten::collect::Request<'_> {
     let mut ask = request(trees, &[], need);
     ask.live_since = Some(SystemTime::now() - Duration::from_secs(60));
+    ask.fixtures_since = ask.live_since;
     ask
 }
 
@@ -149,7 +146,7 @@ fn aged_dir(dir: &Path, age: u64) {
 /// THE INCREMENTAL CACHE IS RANKED (CLOUD-2197): measured on #1132, 8.1GB of
 /// `incremental` sat outside every pass while 865 units freed 159MB. A stale
 /// crate cache goes; one written inside the working set — the edit loop's own —
-/// stays while a live build has used it. `#MUTANT incremental-unranked` leaves both.
+/// stays while a live build has used it. A mutant that skips ranking it leaves both.
 #[test]
 fn a_stale_incremental_cache_is_collected_and_a_fresh_one_kept() {
     let root = common::scratch("collect-incremental");
@@ -178,8 +175,8 @@ fn a_stale_incremental_cache_is_collected_and_a_fresh_one_kept() {
 
 /// TEST SCRATCH IS RANKED TOO: cargo's `CARGO_TARGET_TMPDIR` held 4.1GB of
 /// fixtures on #1132 that nothing removed until the next run's setup. A stale
-/// fixture goes; a running suite's fresh one stays. `#MUTANT scratch-unranked`
-/// leaves both.
+/// fixture goes; a running suite's fresh one stays. A mutant that skips ranking
+/// scratch leaves both.
 #[test]
 fn a_stale_test_scratch_entry_is_collected() {
     let root = common::scratch("collect-scratch");
@@ -193,10 +190,70 @@ fn a_stale_test_scratch_entry_is_collected() {
     assert!(tree.join("tmp/live-fixture").exists());
 }
 
+/// A FIXTURE A FINISHED SUITE WROTE GOES, EVEN INSIDE A LIVE BUILD'S WINDOW
+/// (#1276): the `cargo run` hosting a lap lives as long as the lap, and every
+/// fixture its suites wrote read as live until the mutation stage filled the
+/// volume. With no suite running, nothing roots a fixture.
+///
+/// Fails by: fixtures judged by the build window rather than their own.
+#[test]
+fn a_fixture_no_running_suite_wrote_is_collected_inside_a_builds_window() {
+    let root = common::scratch("collect-finished-suite");
+    let tree = root.join("target");
+    aged_dir(&tree.join("tmp/finished-suite-fixture"), 1);
+    let trees = [tree.clone()];
+    let mut ask = request_under_a_live_build(&trees, u64::MAX);
+    ask.fixtures_since = None;
+    let units = batten::collect::collect(&ask).removed;
+    assert_eq!(
+        units, 1,
+        "the finished suite's fixture is outside every window"
+    );
+    assert!(!tree.join("tmp/finished-suite-fixture").exists());
+}
+
+/// A COPY A KILLED SWEEP LEFT IN THE TEMP DIRECTORY IS COLLECTED, AND A LIVE
+/// SWEEP'S IS NOT (#1276). cargo-mutants removes its copy only on a clean exit,
+/// and a lap began 4.5GB down beside its own live 12GB copy on a volume whose
+/// every ranked tree was under the checkout.
+///
+/// THE LIVE COPY IS WRITTEN TWO LEVELS DOWN AND NOWHERE ELSE, because that is how
+/// a sweep writes: a shallow date reads it as idle since it was staged.
+///
+/// Fails by: no copies read; any directory in the temp directory taken; a copy
+/// dated shallow, which collects the live one.
+#[test]
+fn a_stale_mutant_copy_is_collected_and_a_live_one_kept() {
+    let root = common::scratch("collect-mutant-copies");
+    let temp = root.join("temp");
+    let stale = temp.join("cargo-mutants-batten-AAAAAA.tmp");
+    aged_dir(&stale.join("target/debug"), 7200);
+    aged_dir(&stale.join("target"), 7200);
+    aged_dir(&stale, 7200);
+    let live = temp.join("cargo-mutants-batten-BBBBBB.tmp");
+    aged_dir(&live.join("src/deep"), 1);
+    aged_dir(&live.join("src"), 7200);
+    aged_dir(&live, 7200);
+    let other = temp.join("somebody-elses.tmp");
+    aged_dir(&other, 7200);
+    let tree = root.join("target");
+    std::fs::create_dir_all(&tree).unwrap();
+    let trees = [tree];
+    let mut ask = request_under_a_live_build(&trees, u64::MAX);
+    ask.copies = Some(&temp);
+    let _ = batten::collect::collect(&ask);
+    assert!(!stale.exists(), "a copy no live sweep writes goes");
+    assert!(
+        live.exists(),
+        "a copy written since the live build began stays"
+    );
+    assert!(other.exists(), "only cargo-mutants' own copies are taken");
+}
+
 /// A BUILD INSIDE FRESH SCRATCH IS THE SCRATCH ENTRY'S, NOT A UNIT OF ITS OWN:
 /// a suite's fixture tree under `tmp/` carries units of any age, and the entry
-/// that holds them is what a live build's root judges. `#MUTANT scratch-unit-ranked`
-/// collects the nested unit.
+/// that holds them is what a live build's root judges. A mutant ranking the unit
+/// itself collects the nested unit.
 #[test]
 fn a_build_inside_fresh_scratch_is_never_collected() {
     let root = common::scratch("collect-nested-scratch");
@@ -214,8 +271,8 @@ fn a_build_inside_fresh_scratch_is_never_collected() {
 
 /// A NESTED BUILD TREE'S SCRATCH IS RANKED LIKE THE CHECKOUT'S (CLOUD-2286):
 /// measured on #1132, `target/replay/tmp` held 555 MB of fixtures that no pass
-/// could see, because only `target/tmp` was scratch. `#MUTANT
-/// nested-scratch-unseen` leaves the stale fixture.
+/// could see, because only `target/tmp` was scratch. A mutant that misses nested
+/// scratch leaves the stale fixture.
 #[test]
 fn a_nested_build_trees_stale_scratch_is_collected() {
     let root = common::scratch("collect-nested-build-scratch");
@@ -245,8 +302,8 @@ fn a_nested_build_trees_stale_scratch_is_collected() {
 /// measured on #1132, `target/mutate` held 511 MB idle since the day before
 /// while a lap removed the dependencies of the profiles the next lap built.
 /// An idle copy goes before a built profile's older-looking unit; a copy a
-/// running sweep just wrote stays whole. `#MUTANT staged-copy-unranked` takes
-/// the dependency instead.
+/// running sweep just wrote stays whole. A mutant that skips ranking the copy
+/// takes the dependency instead.
 #[test]
 fn an_idle_staged_copy_goes_before_a_built_profiles_units() {
     let root = common::scratch("collect-staged-copy");
@@ -295,6 +352,17 @@ fn the_least_recently_used_live_unit_goes_first() {
     );
 }
 
+/// Returns once the process `pid` is blocked reading a pipe, which the kernel
+/// names in `/proc/<pid>/wchan` (`pipe_read`, `anon_pipe_read` on newer
+/// kernels): a fact about the process, never a clock. Off Linux, or once the
+/// process is gone, it answers at once.
+fn await_reading_a_pipe(pid: u32) {
+    let wchan = PathBuf::from(format!("/proc/{pid}/wchan"));
+    while std::fs::read_to_string(&wchan).is_ok_and(|now| !now.trim().ends_with("pipe_read")) {
+        std::thread::yield_now();
+    }
+}
+
 #[test]
 fn a_unit_a_running_program_executes_is_never_collected() {
     // Measured on #1132: a hook collecting during a nextest run removed the
@@ -330,6 +398,11 @@ fn a_unit_a_running_program_executes_is_never_collected() {
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null());
     let mut running = common::spawn_copy(&mut command);
+    // THE RUNNER IS AT ITS READ BEFORE THE COLLECTOR LOOKS (CLOUD-2936). It is
+    // the engine, so it records what it runs; killed wherever its start had
+    // reached, it ran 13 functions fewer on one recording of unchanged code
+    // than on the other.
+    await_reading_a_pipe(running.id());
     let kept = batten::collect::engine_kept();
     let trees = [root.join("target")];
     let _ = batten::collect::collect(&request(&trees, &kept, u64::MAX));
@@ -398,6 +471,15 @@ fn with_no_live_build_a_recent_unit_is_collected() {
 /// the installed engine hands every call to, so it survives with nothing
 /// running it. It shares its inode with the unit's artifact, as cargo's uplift
 /// does.
+/// A pass bound no case reaches. An unbounded pass also takes every
+/// `cargo-mutants-*.tmp` copy in the temp directory whole, and the suite's
+/// temp directory is shared: a stale copy a nested sweep left there was
+/// collected by a case that never made it, and freed first, it decided what
+/// else the pass took (CLOUD-2789). Bounded, a pass reads no copies.
+fn unreached() -> std::time::Instant {
+    std::time::Instant::now() + Duration::from_secs(3600)
+}
+
 #[test]
 fn the_checkout_build_is_never_collected() {
     let repo = common::scratch("collect-checkout-build");
@@ -408,8 +490,15 @@ fn the_checkout_build_is_never_collected() {
     let mut config = rules("target");
     config.min_free_mb = Some(10);
     config.max_free_mb = Some(1 << 30);
-    let done =
-        batten::collect::collect_toward_max(&repo, &config, &[], 0, &mut || Ok(0), None, false);
+    let done = batten::collect::collect_toward_max(
+        &repo,
+        &config,
+        &[],
+        0,
+        &mut || Ok(0),
+        Some(unreached()),
+        false,
+    );
     assert!(done.is_some());
     assert!(
         present(&profile, "batten", "cdcdcdcdcdcdcdcd"),
@@ -604,7 +693,8 @@ fn a_tree_a_build_holds_is_never_collected() {
     let profile = tree.join("debug");
     unit(&profile, "busy", "6666666666666666", 3600, 4096);
     let lock = std::fs::File::create(profile.join(".cargo-lock")).unwrap();
-    lock.lock().unwrap();
+    lock.try_lock()
+        .expect("hold the build lock, free in a fresh fixture");
     let trees = [tree.clone()];
     let _ = batten::collect::collect(&request(&trees, &[], u64::MAX));
     assert!(
@@ -618,6 +708,44 @@ fn a_tree_a_build_holds_is_never_collected() {
         !present(&profile, "busy", "6666666666666666"),
         "released, it is collectable"
     );
+}
+
+/// A BUILD DIRECTORY ANOTHER TARGET'S BUILD HOLDS IS NEVER COLLECTED
+/// (CLOUD-2789). A mutation sweep builds with `CARGO_BUILD_BUILD_DIR` at the
+/// checkout's `target` and its own `CARGO_TARGET_DIR`, so cargo holds only
+/// `.cargo-build-lock` in `target/debug`, never `.cargo-lock`; reading the
+/// latter alone, a pass removed the rlibs the sweep was about to link. Each of
+/// cargo's three profile locks, held alone, keeps the profile.
+///
+/// Fails by: a profile read as free while any one of cargo's locks is held.
+#[test]
+fn a_profile_any_cargo_lock_holds_is_never_collected() {
+    for (at, name) in [".cargo-build-lock", ".cargo-artifact-lock", ".cargo-lock"]
+        .into_iter()
+        .enumerate()
+    {
+        let root = common::scratch(&format!("collect-held-by-{}", name.trim_start_matches('.')));
+        let tree = root.join("target");
+        let profile = tree.join("debug");
+        let hash = format!("{at}abcabcabcabcabc");
+        unit(&profile, "linked", &hash, 3600, 4096);
+        let lock = std::fs::File::create(profile.join(name)).unwrap();
+        lock.try_lock()
+            .expect("hold the lock, free in a fresh fixture");
+        let trees = [tree.clone()];
+        let _ = batten::collect::collect(&request(&trees, &[], u64::MAX));
+        assert!(
+            present(&profile, "linked", &hash),
+            "{name} held: a building profile loses nothing"
+        );
+        drop(lock);
+        released(&profile.join(name));
+        let _ = batten::collect::collect(&request(&trees, &[], u64::MAX));
+        assert!(
+            !present(&profile, "linked", &hash),
+            "{name} released: it is collectable"
+        );
+    }
 }
 
 #[test]
@@ -684,9 +812,15 @@ fn a_sibling_worktrees_units_are_ranked_with_the_checkouts() {
     rules.min_free_mb = Some(1);
     rules.max_free_mb = Some(2);
     let mut pressed = || Ok(0);
-    let collected =
-        batten::collect::collect_if_pressed(&repo, &rules, &[], &mut pressed, None, false)
-            .expect("below the minimum, it collects");
+    let collected = batten::collect::collect_if_pressed(
+        &repo,
+        &rules,
+        &[],
+        &mut pressed,
+        Some(unreached()),
+        false,
+    )
+    .expect("below the minimum, it collects");
     assert!(collected.units >= 1);
     assert!(
         !present(&sibling.join("target/debug"), "far", "bbbbbbbbbbbbbbbb"),
@@ -716,7 +850,7 @@ fn the_arm_watches_past_the_gate() {
     config.max_free_mb = Some(11);
     // ABOVE, ABOVE, then BELOW: the fall arrives on the third sample, after the
     // first step has returned.
-    let samples = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let samples = std::sync::Arc::new(Samples::default());
     let counted = std::sync::Arc::clone(&samples);
     let fallen = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let fall = std::sync::Arc::clone(&fallen);
@@ -724,7 +858,7 @@ fn the_arm_watches_past_the_gate() {
         repo: repo.clone(),
         config: &config,
         free_mb: Box::new(move || {
-            let n = counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let n = counted.take();
             Ok(
                 if fall.load(std::sync::atomic::Ordering::SeqCst) && n >= 1 {
                     9
@@ -734,21 +868,20 @@ fn the_arm_watches_past_the_gate() {
             )
         }),
         kept: Vec::new(),
+        copies: own_copies(&repo),
+        record: None,
     };
     let ((), lines) = batten::disk_watch::around(Some(watch), || {
         // THE FIRST STEP: the volume is fine while it runs, and it returns.
-        wait_for(|| samples.load(std::sync::atomic::Ordering::SeqCst) >= 1);
+        samples.wait_until(|taken| taken >= 1);
         // A LATER STEP: the volume falls now, and the watcher must still be there.
         fallen.store(true, std::sync::atomic::Ordering::SeqCst);
-        // Every read from here on is the fallen volume. Two more mean a whole
-        // pass has run over it: the sample that started it and the reading it
-        // takes once it has removed what it will. So the wait ends on the
-        // unit going or on a pass that did not take it, never on the bound.
-        let fell_at = samples.load(std::sync::atomic::Ordering::SeqCst);
-        wait_for(|| {
-            !present(&profile, "stale", "eeeeeeeeeeeeeeee")
-                || samples.load(std::sync::atomic::Ordering::SeqCst) >= fell_at + 2
-        });
+        // Every read from here on is the fallen volume, and the wait ends on
+        // THE EVENT, the unit going (CLOUD-2789). Not on a count of samples:
+        // the watcher samples every millisecond, so two more say nothing about
+        // a pass having finished. A watcher that left with the gate never takes
+        // it, and the case hangs for the judge's cut to file as a timeout.
+        samples.wait_until(|_| !present(&profile, "stale", "eeeeeeeeeeeeeeee"));
     });
     assert!(!present(&profile, "stale", "eeeeeeeeeeeeeeee"), "LRU went");
     assert!(
@@ -780,6 +913,25 @@ fn banded(name: &str) -> (PathBuf, PathBuf, Prune) {
     (repo, profile, config)
 }
 
+/// A temp directory of the case's own for a spawned engine, whose unbounded
+/// pass reads cargo-mutants copies from `TMPDIR`: a lap or a sweep under the
+/// suite's shared one frees a copy another suite's sweep staged there
+/// (CLOUD-2789).
+fn own_temp(dir: &Path) -> PathBuf {
+    let name = dir
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("case");
+    common::scratch(&format!("{name}-tmp"))
+}
+
+/// The directory a case's watcher reads cargo-mutants copies from: its own
+/// and never created, so the unbounded pass frees no copy another suite's
+/// sweep staged in the shared temp directory (CLOUD-2789).
+fn own_copies(repo: &Path) -> PathBuf {
+    repo.join("no-mutant-copies")
+}
+
 /// Watch `repo` under `config` with `free_mb` answering each sample by its
 /// count, until `done` holds over the samples taken and what is present.
 fn watched(
@@ -788,20 +940,18 @@ fn watched(
     free_mb: impl Fn(usize) -> u64 + Send + 'static,
     done: impl Fn(usize) -> bool,
 ) -> Vec<String> {
-    let samples = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let samples = std::sync::Arc::new(Samples::default());
     let counted = std::sync::Arc::clone(&samples);
     let watch = batten::disk_watch::DiskWatch {
         repo: repo.to_path_buf(),
         config,
-        free_mb: Box::new(move || {
-            Ok(free_mb(
-                counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst),
-            ))
-        }),
+        free_mb: Box::new(move || Ok(free_mb(counted.take()))),
         kept: Vec::new(),
+        copies: own_copies(repo),
+        record: None,
     };
     let ((), lines) = batten::disk_watch::around(Some(watch), || {
-        wait_for(|| done(samples.load(std::sync::atomic::Ordering::SeqCst)));
+        samples.wait_until(&done);
     });
     lines
 }
@@ -817,7 +967,13 @@ fn a_sample_at_the_minimum_collects_nothing() {
     // reads `stop`, and `around` joins any collection it started.
     let lines = watched(&repo, &config, |_| 10, |taken| taken >= 1);
     assert!(present(&profile, "stale", STALE), "{lines:?}");
-    assert!(lines.is_empty(), "{lines:?}");
+    // Only the watcher's armed line (CLOUD-2782): no collection ran.
+    assert!(
+        lines
+            .iter()
+            .all(|line| line.starts_with("disk-watch-armed ")),
+        "{lines:?}"
+    );
 }
 
 /// The FIRST sample below the minimum collects, when no collection is already
@@ -835,7 +991,9 @@ fn the_first_sample_below_the_minimum_collects() {
         &repo,
         &config,
         |taken| if taken == 0 { 9 } else { 50 },
-        move |taken| !present(&gone, "stale", STALE) || taken >= 3,
+        // THE EVENT, the unit going: the watcher samples every millisecond, so a
+        // count of samples says nothing about a pass having finished.
+        move |_| !present(&gone, "stale", STALE),
     );
     assert!(!present(&profile, "stale", STALE), "{lines:?}");
     assert!(
@@ -844,38 +1002,44 @@ fn the_first_sample_below_the_minimum_collects() {
     );
 }
 
-/// How many 50 ms polls [`wait_for`] takes before giving up: four of the
-/// watcher's 5 s ticks, the longest a live watcher can take to act.
+/// The samples a case's watcher has taken, and the EVENT each one is
+/// (CLOUD-2789): the watcher's `free_mb` calls [`Samples::take`], which rings
+/// the bell, and a case waits on that bell rather than on a clock or a count
+/// of polls.
 ///
-/// **HALVING THIS WAS A WRONG FIX AND IS RECORDED AS ONE (CLOUD-2376).** When
-/// `collect_toward_max -> None` made `the_arm_watches_past_the_gate` take a
-/// SIGTERM at 43.4s, this budget looked like the cost — it is spent in full
-/// exactly when the watcher never acts. Halving it moved the number by 2s,
-/// which is what proved it wrong: the bound WAS being reached, `wait_for` WAS
-/// panicking on schedule, and the case then hung anyway, past 100s when
-/// measured alone. [`batten::disk_watch::around`] skipped its `stop.store` on
-/// the unwind, so the scope's join waited on a watcher that could never stop.
-///
-/// Four ticks stands, because the real path genuinely needs one: this file's
-/// `the_arm_watches_past_the_gate` passes in a measured 6.018s. A failure budget
-/// is only a cost when a failure cannot terminate, and that is fixed where it
-/// was broken rather than here.
-const WAIT_POLLS: u32 = 400;
+/// No bound, deliberately. A watcher that never acts leaves the case waiting
+/// on a sample that never satisfies it, and the mutation judge's per-case cut
+/// files that as the timeout it is. CLOUD-2376 is why that is safe now:
+/// [`batten::disk_watch::around`] stops its watcher on an unwind too, so a
+/// case that fails cannot hang past its own failure.
+#[derive(Default)]
+struct Samples {
+    taken: std::sync::Mutex<usize>,
+    bell: std::sync::Condvar,
+}
 
-/// Wait until `done`, counted rather than clocked: at most [`WAIT_POLLS`]
-/// polls, then the case fails on the outcome it was waiting for.
-fn wait_for(done: impl Fn() -> bool) {
-    for _ in 0..WAIT_POLLS {
-        if done() {
-            return;
-        }
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "bounded by a count: at most `WAIT_POLLS` polls, four of the watcher's own ticks"
-        )]
-        std::thread::sleep(Duration::from_millis(50));
+impl Samples {
+    /// Count one sample and ring the bell; the count BEFORE this one.
+    fn take(&self) -> usize {
+        let mut taken = self.taken.lock().expect("the samples lock");
+        let before = *taken;
+        *taken += 1;
+        drop(taken);
+        self.bell.notify_all();
+        before
     }
-    panic!("the watcher did not act within `WAIT_POLLS` polls");
+
+    /// Wait until `done` holds over the samples taken, re-asked at every
+    /// sample. What `done` reads besides the count (a unit gone) is settled by
+    /// the time the sample after it rings.
+    fn wait_until(&self, done: impl Fn(usize) -> bool) {
+        let taken = self.taken.lock().expect("the samples lock");
+        drop(
+            self.bell
+                .wait_while(taken, |taken| !done(*taken))
+                .expect("the samples lock"),
+        );
+    }
 }
 
 /// A band undeclared is the DEFAULT band, never the arm switched off
@@ -890,21 +1054,29 @@ fn an_undeclared_band_watches_at_the_default() {
         let profile = repo.join("target/debug");
         unit(&profile, "stale", "eeeeeeeeeeeeeeee", 7200, 2 << 20);
         let config = rules("target");
-        let samples = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let samples = std::sync::Arc::new(Samples::default());
         let counted = std::sync::Arc::clone(&samples);
         let watch = batten::disk_watch::DiskWatch {
             repo: repo.clone(),
             config: &config,
             free_mb: Box::new(move || {
-                counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                counted.take();
                 Ok(free)
             }),
             kept: Vec::new(),
+            copies: own_copies(&repo),
+            record: None,
         };
+        // A floor the volume is under waits for THE EVENT, the unit going; one it
+        // is above waits for two samples, which is all "watched and kept" can be.
+        let collects = free < 100;
         let ((), lines) = batten::disk_watch::around(Some(watch), || {
-            wait_for(|| {
-                samples.load(std::sync::atomic::Ordering::SeqCst) >= 2
-                    || !present(&profile, "stale", "eeeeeeeeeeeeeeee")
+            samples.wait_until(|taken| {
+                if collects {
+                    !present(&profile, "stale", "eeeeeeeeeeeeeeee")
+                } else {
+                    taken >= 2
+                }
             });
         });
         (present(&profile, "stale", "eeeeeeeeeeeeeeee"), lines)
@@ -955,7 +1127,7 @@ fn hook(dir: &Path, event: &str, env: &[(&str, &str)]) -> std::process::Output {
     use std::io::Write as _;
     let payload = serde_json::json!({
         "hook_event_name": event,
-        "session_id": "disk",
+        "session_id": common::session_id("disk"),
         "source": "startup",
         "tool_name": "Read",
         "tool_input": { "file_path": "Cargo.toml" },
@@ -978,7 +1150,7 @@ fn hook(dir: &Path, event: &str, env: &[(&str, &str)]) -> std::process::Output {
         .take()
         .expect("stdin is piped")
         .write_all(payload.as_bytes());
-    child.wait_with_output().expect("wait for batten")
+    child.streamed_wait().expect("wait for batten")
 }
 
 #[test]
@@ -1024,9 +1196,72 @@ fn a_session_start_re_arms_every_fingerprint() {
     );
 }
 
+/// A WATCHER COVERS ITS OWN WORKTREE, NEVER ANOTHER (CLOUD-2789). A step
+/// publishes the worktree its watcher watches, and a compile below the floor
+/// defers to it only there. Every disk case under `test:cargo` runs inside
+/// that step's command, over a fixture repository of its own: told only
+/// "watched", each skipped its own collection and its own watcher, and the
+/// land's lap went red on two and hung on four.
+///
+/// Fails by: a compile in another worktree deferring, or one in the watched
+/// worktree collecting inside the step.
+#[test]
+fn a_compile_defers_only_to_the_watcher_of_its_own_worktree() {
+    if !cfg!(unix) {
+        return;
+    }
+    let compile = |name: &str, watched: &dyn Fn(&Path) -> PathBuf| {
+        let dir = hooked(name, true);
+        let bin = dir.join("fake-bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let rustc = bin.join("rustc");
+        std::fs::write(&rustc, "#!/bin/sh\nexit 0\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            std::fs::set_permissions(&rustc, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let ran = common::batten()
+            .current_dir(&dir)
+            .arg(&rustc)
+            .args(["--crate-name", "probe", "--out-dir"])
+            .arg(dir.join("target/debug/deps"))
+            .env("TARGET_PRUNE_FREE_MB", "50")
+            .env("BATTEN_DISK_WATCHED", watched(&dir))
+            .stdin(std::process::Stdio::null())
+            .streamed_output_keeping(batten::capture::Keep {
+                stdin: true,
+                stdout: false,
+                stderr: false,
+            })
+            .expect("the binary runs");
+        assert_eq!(ran.status.code(), Some(0), "{}", common::stderr(&ran));
+        present(&dir.join("target/debug"), "aged", "dddddddddddddddd")
+    };
+    let elsewhere = common::scratch("watched-elsewhere");
+    assert!(
+        !compile("compile-watched-elsewhere", &|_| elsewhere.clone()),
+        "a watcher over another worktree covers nothing here: the unit went"
+    );
+    assert!(
+        compile("compile-watched-here", &Path::to_path_buf),
+        "the watcher over this worktree collects for it: the compile left the unit"
+    );
+}
+
 /// A `step run` build is watched (CLOUD-2197): it is not a tool call, so only
-/// the watcher around it can collect while it runs. The step waits, bounded,
-/// for the aged unit to go — which only the watcher can make happen.
+/// the watcher around it can collect while it runs.
+///
+/// THE STEP ENDS AT THE PASS'S OWN END, `disk-pass` (CLOUD-2789), never at the
+/// unit going. The pass removes a unit's fingerprint first, so a step spinning
+/// on the fingerprint returned mid-pass, its stop ended the pass, and the
+/// record read `disk-stopped 0 1` or `disk-collected` by the scheduler's draw:
+/// red once in 40 under CPU, memory and disk pressure, with no code changed. A
+/// watcher that never collects never traces `disk-pass`, so it hangs the case,
+/// and the runner's cut files that as the timeout it is.
+///
+/// Fails by: no watcher around the step, a pass that leaves the unit, or a
+/// finished pass recorded as stopped.
 #[test]
 fn a_step_run_build_is_watched() {
     if !cfg!(unix) {
@@ -1034,35 +1269,665 @@ fn a_step_run_build_is_watched() {
     }
     let dir = hooked("step-run-watched", true);
     let profile = dir.join("target/debug");
-    // 200 x 0.05s = 10s, which is TWO full `disk_watch::TICK`s against a MEASURED
-    // 1.092s for the real path (nextest, this suite) — the watcher samples at
-    // startup rather than after a tick, so the collection lands in about a
-    // second. It was 400, which is 18x a path that takes one second, and the
-    // excess is spent only when the collection never comes.
-    //
-    // NOT WHY THE SWEEP TIMED OUT, stated because this comment first said it
-    // was and measurement refuted it. That was `disk_watch::around` skipping its
-    // stop on an unwind (CLOUD-2376), which hung the case outright rather than
-    // making it slow. This number is proportion to a measured path, nothing
-    // more.
-    let waits = "for i in $(seq 1 200); do \
-                 [ -e target/debug/.fingerprint/aged-dddddddddddddddd ] || exit 0; \
-                 sleep 0.05; done; exit 1";
-    let ran = common::batten()
-        .current_dir(&dir)
-        .args(["step", "run", "probe", "--", "sh", "-c", waits])
-        .env("TARGET_PRUNE_FREE_MB", "50")
-        .stdin(std::process::Stdio::null())
-        .output()
-        .expect("the binary runs");
-    let said = common::stderr(&ran);
-    assert_eq!(
-        ran.status.code(),
-        Some(0),
-        "the unit went while it ran: {said}"
-    );
+    let (code, said) = step_released_at("step-run-watched", &dir, "disk-pass ");
+    assert_eq!(code, Some(0), "{said}");
     assert!(!present(&profile, "aged", "dddddddddddddddd"), "{said}");
     assert!(said.contains("step run probe: disk-collected "), "{said}");
+}
+
+/// [`hooked`]'s checkout with a linked worktree beside it, holding an aged
+/// unit of its own; the worktree.
+fn linked(name: &str) -> PathBuf {
+    let repo = hooked(name, true);
+    common::git_in(&repo, &["worktree", "add", "-q", "../linked"]);
+    let linked = repo
+        .parent()
+        .expect("the fixture has a parent")
+        .join("linked");
+    unit(
+        &linked.join("target/debug"),
+        "aged",
+        "eeeeeeeeeeeeeeee",
+        7200,
+        4096,
+    );
+    linked
+}
+
+/// `batten step run probe` in `dir` below the floor, its command blocked on a
+/// FIFO until the engine traces `event`: the test reads the trace as it is
+/// written and releases the step at the first line `event` begins —
+/// `disk-sample`, written on the wake that spawns the pass, or `disk-wait`,
+/// written as the pass parks on a held tree. No clock decides
+/// when the step ends, and none bounds it (CLOUD-2789): the case waits on the
+/// engine's own exit, and a hang is the runner's to report.
+///
+/// The exit code and everything the engine wrote to stderr.
+#[expect(
+    clippy::disallowed_types,
+    reason = "stays, and test-only: the step's command waits on a FIFO `mkfifo` makes, and the engine is read as it writes"
+)]
+fn step_released_at(case: &str, dir: &Path, event: &str) -> (Option<i32>, String) {
+    use std::io::{BufRead as _, Write as _};
+    // THE CASE'S OWN temp directory: `own_temp` names one after the fixture's
+    // last component, `repo` for every hooked fixture, and a case running
+    // beside this one remade it with the FIFO in it.
+    let temp = common::scratch(&format!("{case}-tmp"));
+    let fifo = temp.join("release");
+    let made = std::process::Command::new("mkfifo")
+        .arg(&fifo)
+        .status()
+        .expect("mkfifo runs");
+    assert!(made.success(), "mkfifo {}", fifo.display());
+    let mut step = common::batten();
+    step.current_dir(dir)
+        .env("TMPDIR", &temp)
+        .env("TARGET_PRUNE_FREE_MB", "50")
+        .env("BATTEN_DISK_TRACE", "1")
+        .args(["step", "run", "probe", "--", "sh", "-c"])
+        // The command lets go of the engine's pipes first, so the engine's
+        // stderr reaches EOF when the engine exits, whatever the command does.
+        .arg("exec >/dev/null 2>&1; read _ < \"$1\"")
+        .arg("sh")
+        .arg(&fifo);
+    let mut child = step
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("the binary runs");
+    let mut lines = std::io::BufReader::new(child.stderr.take().expect("stderr is piped")).lines();
+    let mut said = String::new();
+    for line in lines.by_ref() {
+        let line = line.expect("read the engine's stderr");
+        said.push_str(&line);
+        said.push('\n');
+        if line.starts_with(event) {
+            // The event the case waits for: let the step's command return.
+            std::fs::OpenOptions::new()
+                .write(true)
+                .open(&fifo)
+                .and_then(|mut release| release.write_all(b"\n"))
+                .expect("release the step");
+            break;
+        }
+    }
+    for line in lines {
+        said.push_str(&line.expect("read the engine's stderr"));
+        said.push('\n');
+    }
+    let status = child.wait().expect("wait for the engine");
+    (status.code(), said)
+}
+
+/// FROM A LINKED WORKTREE, EACH TREE ONCE (CLOUD-2789): git lists the worktree
+/// a command runs in among the linked ones, so its `target/` came twice, and
+/// a pass locked it and then waited on itself.
+///
+/// Fails by: the trees not deduplicated by identity.
+#[test]
+fn trees_from_a_linked_worktree_name_each_directory_once() {
+    let linked = linked("trees-once");
+    let trees = batten::collect::trees(&linked, &rules("target"));
+    let mut seen: Vec<PathBuf> = trees
+        .iter()
+        .map(|tree| std::fs::canonicalize(tree).expect("a listed tree exists"))
+        .collect();
+    let listed = seen.len();
+    seen.sort();
+    seen.dedup();
+    assert_eq!(seen.len(), listed, "a directory listed twice: {trees:?}");
+    assert!(
+        seen.contains(&std::fs::canonicalize(linked.join("target")).unwrap()),
+        "the worktree's own tree is ranked: {trees:?}"
+    );
+}
+
+/// A WATCHED STEP IN A LINKED WORKTREE EXITS (CLOUD-2789). Shard 6 printed a
+/// step's result and hung until it was killed: the watcher's pass locked the
+/// worktree's tree under one name and blocked on its second.
+///
+/// Fails by: a pass that holds one lock while it blocks on another, or a
+/// watcher whose join waits on a pass without bound.
+///
+/// RELEASED ONCE THE PASS HAS WALKED, AT `disk-pass` (CLOUD-2936): released at
+/// `disk-sample`, when the pass is only spawned, the step's stop raced the
+/// pass, and how far it walked before it read the stop was the scheduler's
+/// draw: one reach recording ran the prune functions and the next did not, with
+/// no code changed. A pass blocked on its second lock never says `disk-pass`,
+/// so the hang this case exists for still hangs it. A stop observed mid-pass
+/// is [`a_held_tree_does_not_hold_a_watched_step_open`]'s.
+#[test]
+fn a_step_run_in_a_linked_worktree_exits_under_pressure() {
+    if !cfg!(target_os = "linux") {
+        return;
+    }
+    let linked = linked("step-run-linked");
+    let (code, said) = step_released_at("step-run-linked", &linked, "disk-pass ");
+    assert_eq!(code, Some(0), "{said}");
+    assert!(said.contains("step run probe: disk-watch-armed "), "{said}");
+}
+
+/// A TREE ANOTHER PROCESS HOLDS DOES NOT HOLD THE STEP (CLOUD-2789): the
+/// watcher's pass waits on it only while the step runs, then stops and says
+/// so, and the step exits.
+///
+/// Fails by: a blocking wait on the tree's lock, a pass that ignores its stop
+/// flag, a stopped pass that reports nothing, or one left to the grace.
+#[test]
+fn a_held_tree_does_not_hold_a_watched_step_open() {
+    if !cfg!(target_os = "linux") {
+        return;
+    }
+    let dir = hooked("step-run-held", true);
+    let holder = std::fs::File::open(dir.join("target")).expect("open the tree");
+    holder
+        .try_lock()
+        .expect("hold the tree as another collector would");
+    let (code, said) = step_released_at("step-run-held", &dir, "disk-wait ");
+    drop(holder);
+    assert_eq!(code, Some(0), "{said}");
+    // STOPPED: the pass ends because it observed the stop, and the step's
+    // exit waits on nothing else.
+    assert!(
+        said.contains("step run probe: disk-stopped "),
+        "the pass observed the stop and said so: {said}"
+    );
+    assert!(
+        present(&dir.join("target/debug"), "aged", "dddddddddddddddd"),
+        "nothing under a held tree is collected: {said}"
+    );
+}
+
+/// `target prune` under the same two conditions (CLOUD-2789): from a linked
+/// worktree it collects and exits, and a tree another process holds is WAITED
+/// FOR — on the holder's release, an event, never a clock. The case releases
+/// its holder at the `disk-wait <tree>` the engine traces as it parks, and the
+/// unit under that tree is then collected.
+///
+/// Fails by: a duplicated tree, a blocking wait on a held one, a wait that
+/// skips the tree, or one that never parks.
+#[test]
+fn a_forced_collection_exits_from_a_worktree_and_waits_out_a_held_tree() {
+    use std::io::BufRead as _;
+    if !cfg!(target_os = "linux") {
+        return;
+    }
+    let forced = |dir: &Path| {
+        let mut prune = common::batten();
+        prune
+            .current_dir(dir)
+            .env("TARGET_PRUNE_FREE_MB", "50")
+            .env("BATTEN_DISK_TRACE", "1")
+            .args(["target", "prune", "-y"]);
+        prune
+    };
+    let linked = linked("prune-linked");
+    let ran = forced(&linked)
+        .stdin(std::process::Stdio::null())
+        .streamed_output_keeping(batten::capture::Keep {
+            stdin: true,
+            stdout: false,
+            stderr: false,
+        })
+        .expect("the binary runs");
+    let said = format!("{}{}", common::stdout(&ran), common::stderr(&ran));
+    assert_eq!(ran.status.code(), Some(0), "{said}");
+    assert!(
+        !present(&linked.join("target/debug"), "aged", "eeeeeeeeeeeeeeee"),
+        "the worktree's unit was collected: {said}"
+    );
+
+    let dir = hooked("prune-held", true);
+    let holder = std::fs::File::open(dir.join("target")).expect("open the tree");
+    holder
+        .try_lock()
+        .expect("hold the tree as another collector would");
+    let mut holder = Some(holder);
+    let mut prune = forced(&dir);
+    let mut child = prune
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("the binary runs");
+    let mut said = String::new();
+    let stderr = std::io::BufReader::new(child.stderr.take().expect("stderr is piped"));
+    for line in stderr.lines() {
+        let line = line.expect("read the engine's stderr");
+        if line.starts_with("disk-wait ") {
+            // The pass parked on the held tree: let it go.
+            drop(holder.take());
+        }
+        said.push_str(&line);
+        said.push('\n');
+    }
+    let status = child.wait().expect("wait for the engine");
+    assert!(holder.is_none(), "the pass never parked: {said}");
+    assert_eq!(status.code(), Some(0), "{said}");
+    assert!(
+        !present(&dir.join("target/debug"), "aged", "dddddddddddddddd"),
+        "the tree released mid-wait was collected: {said}"
+    );
+}
+
+/// A COLLECTION IS NEVER CHARGED TO THE STEP IT RUNS BENEATH (CLOUD-2925).
+/// Below the floor, a watched step's command is a compile through the rustc
+/// wrapper, itself under `strace`, which records every path the command's
+/// process tree opens: the trace a step's undeclared-read gate reads. The
+/// wrapper collected there, and its walk of the build tree was charged to the
+/// step; the step's own watcher collects from outside the command instead.
+///
+/// Fails by: a compile under a watched step collecting inside the command.
+#[test]
+fn a_collection_is_never_charged_to_the_step_it_runs_beneath() {
+    if !cfg!(unix) {
+        return;
+    }
+    let dir = hooked("step-run-uncharged", true);
+    let bin = dir.join("fake-bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let rustc = bin.join("rustc");
+    std::fs::write(&rustc, "#!/bin/sh\nexit 0\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(&rustc, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    // THE CASE'S OWN temp directory, made once: `own_temp` names one after the
+    // fixture's last component, `repo`, which a case beside this one remakes.
+    let temp = common::scratch("step-run-uncharged-tmp");
+    let engine = common::batten().get_program().to_owned();
+    // THE COMMAND'S WRAPPER READS BELOW THE FLOOR, so it would walk the build
+    // tree were it not told a watcher covers it: the discriminating half.
+    let compile = |step: &mut common::Batten| {
+        step.args(["env", "TARGET_PRUNE_FREE_MB=50"])
+            .arg(&engine)
+            .arg(&rustc)
+            .args(["--crate-name", "probe", "--out-dir"])
+            .arg(dir.join("target/debug/deps"));
+    };
+    // THE STEP'S OWN WATCHER READS ABOVE THE BAND'S 100 MB FLOOR (CLOUD-2936),
+    // so it arms, tells its command, and never collects. Below it, whether the
+    // watcher sampled before a millisecond command ended was a draw: recorded
+    // twice over unchanged code, one run walked and reclaimed the tree and the
+    // other did not. The watcher's collection is not this case's subject.
+    let mut step = common::batten();
+    step.current_dir(&dir)
+        .env("TMPDIR", &temp)
+        .env("TARGET_PRUNE_FREE_MB", "150")
+        .args(["step", "run", "probe", "--"]);
+    // TRACED OR NOT, BY THE HOST ([`common::traced`]), and each branch asserts.
+    let traced = common::traced();
+    let record = temp.join(if traced { "command.strace" } else { "watched" });
+    if traced {
+        // The command under `strace`, which records every path its process
+        // tree opens: what a step's undeclared-read gate reads.
+        step.args(["strace", "-f", "-e", "trace=open,openat", "-o"])
+            .arg(&record);
+        compile(&mut step);
+    } else {
+        // Untraced, the mechanism itself: the command is told a watcher
+        // outside it collects, which is what the wrapper defers to.
+        step.args([
+            "sh",
+            "-c",
+            "printf %s \"$BATTEN_DISK_WATCHED\" > \"$1\"",
+            "sh",
+        ])
+        .arg(&record);
+    }
+    let ran = step
+        .stdin(std::process::Stdio::null())
+        .streamed_output_keeping(batten::capture::Keep {
+            stdin: true,
+            stdout: false,
+            stderr: false,
+        })
+        .expect("the binary runs");
+    let said = common::stderr(&ran);
+    assert_eq!(ran.status.code(), Some(0), "{said}");
+    let recorded = std::fs::read_to_string(&record).expect("the command ran");
+    if traced {
+        assert!(
+            recorded.contains(&rustc.display().to_string()),
+            "THE PREMISE: the trace saw the command's compile: {recorded}"
+        );
+        assert!(
+            !recorded.contains(".fingerprint"),
+            "the command's process tree walked the build tree: {}",
+            recorded
+                .lines()
+                .filter(|line| line.contains(".fingerprint"))
+                .take(3)
+                .collect::<Vec<_>>()
+                .join("\n")
+        );
+    } else {
+        assert_eq!(
+            std::fs::canonicalize(&recorded).ok(),
+            std::fs::canonicalize(&dir).ok(),
+            "the watched step told its command which worktree it watches: {recorded:?} {said}"
+        );
+    }
+}
+
+/// A four-crate cargo workspace over `dir`: the binary `app` uses `dep` and
+/// `other`, and the library `top`, which nothing uses, uses `other`. Path
+/// dependencies only, so a build needs no registry. `top` is a root that is no
+/// executable, which a live run's own rule would otherwise spare.
+fn cargo_workspace(dir: &Path) {
+    let write = |path: &str, text: &str| {
+        let path = dir.join(path);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, text).unwrap();
+    };
+    write(
+        "Cargo.toml",
+        "[workspace]\nmembers = [\"app\", \"dep\", \"other\", \"top\"]\nresolver = \"2\"\n",
+    );
+    for leaf in ["dep", "other"] {
+        write(
+            &format!("{leaf}/Cargo.toml"),
+            &format!("[package]\nname = \"{leaf}\"\nversion = \"0.1.0\"\nedition = \"2021\"\n"),
+        );
+        write(
+            &format!("{leaf}/src/lib.rs"),
+            "pub fn value() -> u8 { 1 }\n",
+        );
+    }
+    write(
+        "app/Cargo.toml",
+        "[package]\nname = \"app\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\
+         [dependencies]\ndep = { path = \"../dep\" }\nother = { path = \"../other\" }\n",
+    );
+    write(
+        "top/Cargo.toml",
+        "[package]\nname = \"top\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\
+         [dependencies]\nother = { path = \"../other\" }\n",
+    );
+    write(
+        "top/src/lib.rs",
+        "pub fn value() -> u8 { other::value() }\n",
+    );
+    write(
+        "app/src/main.rs",
+        "fn main() { println!(\"{}\", dep::value() + other::value()); }\n",
+    );
+}
+
+/// `cargo build --offline` in `dir`, into `dir/target`, with nothing
+/// redirecting it; the packages it compiled, sorted.
+#[expect(
+    clippy::disallowed_types,
+    reason = "stays, and test-only: the case is what a real cargo rebuilds after a collection, so it runs cargo"
+)]
+fn cargo_build(dir: &Path) -> Vec<String> {
+    use batten::capture::Streamed as _;
+    let built = std::process::Command::new(env!("CARGO"))
+        .current_dir(dir)
+        .args(["build", "--offline", "--message-format=json"])
+        .env_remove("CARGO_TARGET_DIR")
+        .env_remove("CARGO_BUILD_BUILD_DIR")
+        .env_remove("CARGO_BUILD_TARGET_DIR")
+        .env_remove("RUSTC_WRAPPER")
+        .env_remove("RUSTC_WORKSPACE_WRAPPER")
+        .env_remove("CARGO_BUILD_RUSTC_WRAPPER")
+        .stdin(std::process::Stdio::null())
+        .streamed_output_keeping(batten::capture::Keep {
+            stdin: true,
+            stdout: false,
+            stderr: false,
+        })
+        .expect("cargo runs");
+    let said = common::stderr(&built);
+    assert!(built.status.success(), "cargo build: {said}");
+    // CARGO'S OWN ACCOUNT, never its progress lines, which a quiet terminal
+    // setting hides: an artifact that is not `fresh` was compiled.
+    let mut compiled: Vec<String> = common::stdout(&built)
+        .lines()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .filter(|message| message["reason"] == "compiler-artifact" && message["fresh"] == false)
+        .filter_map(|message| message["target"]["name"].as_str().map(str::to_owned))
+        .collect();
+    compiled.sort();
+    compiled
+}
+
+/// `batten target prune -y` in `dir` below the floor: the collection run to
+/// `max_free_mb`, with no floor of its own (CLOUD-2198); what it said.
+fn collected_below_the_floor(dir: &Path) -> String {
+    let ran = common::batten()
+        .current_dir(dir)
+        .env("TMPDIR", own_temp(dir))
+        .env("TARGET_PRUNE_FREE_MB", "50")
+        .args(["target", "prune", "-y"])
+        .stdin(std::process::Stdio::null())
+        .streamed_output_keeping(batten::capture::Keep {
+            stdin: true,
+            stdout: false,
+            stderr: false,
+        })
+        .expect("the binary runs");
+    let said = format!("{}{}", common::stdout(&ran), common::stderr(&ran));
+    assert_eq!(ran.status.code(), Some(0), "{said}");
+    said
+}
+
+/// A WARM TARGET COLLECTED UNDER PRESSURE STAYS WARM (CLOUD-2789). Every unit a
+/// built workspace holds is in its current build graph, so a collection that
+/// cannot reach the band from anything else stops there and says so, and the
+/// next no-op build compiles nothing. Measured on #1276: ranked by mtime, which
+/// cargo never moves for a unit it reuses, the stable dependencies went first
+/// and the next build recompiled 67 units.
+///
+/// Fails by: a unit of the current graph collected for its age.
+#[test]
+fn a_warm_target_collected_under_pressure_rebuilds_nothing() {
+    if !cfg!(unix) {
+        return;
+    }
+    let dir = hooked("collect-warm-graph", true);
+    cargo_workspace(&dir);
+    assert_eq!(
+        cargo_build(&dir),
+        ["app", "dep", "other", "top"],
+        "THE PREMISE: a cold build compiles every package"
+    );
+    let said = collected_below_the_floor(&dir);
+    assert!(
+        said.contains("disk-live"),
+        "the pass stopped at the graph and said so: {said}"
+    );
+    assert!(
+        !present(&dir.join("target/debug"), "aged", "dddddddddddddddd"),
+        "what is outside the graph still goes: {said}"
+    );
+    assert_eq!(
+        cargo_build(&dir),
+        Vec::<String>::new(),
+        "a no-op build after the collection: {said}"
+    );
+}
+
+/// AFTER A ONE-CRATE EDIT, ONLY THAT CRATE AND ITS DEPENDENTS REBUILD
+/// (CLOUD-2789). The collection runs between the edit and the build: the graph
+/// it reads is the pre-edit one, every unit of which the next build reuses but
+/// the edited crate's and its dependents'.
+///
+/// Fails by: a dependency the edit did not touch collected, so it recompiles.
+#[test]
+fn a_collection_after_an_edit_costs_only_the_edited_crate_and_its_dependents() {
+    if !cfg!(unix) {
+        return;
+    }
+    let dir = hooked("collect-edit-graph", true);
+    cargo_workspace(&dir);
+    assert_eq!(
+        cargo_build(&dir),
+        ["app", "dep", "other", "top"],
+        "THE PREMISE"
+    );
+    std::fs::write(dir.join("dep/src/lib.rs"), "pub fn value() -> u8 { 2 }\n").unwrap();
+    let said = collected_below_the_floor(&dir);
+    assert_eq!(
+        cargo_build(&dir),
+        ["app", "dep"],
+        "the edited crate and its dependent, and nothing else: {said}"
+    );
+}
+
+/// A COLLECTION AFTER A REBUILD KEEPS THE REBUILT GRAPH, NOT THE ONE IT
+/// REPLACED (CLOUD-2789). A version bump gives a package a new unit, so after
+/// its build two roots of one kind stand: the library as it was and as it is.
+/// The newer is current and the older is not. (An edit to a path crate's
+/// source rebuilds into the SAME unit, so it leaves one root, not two.)
+///
+/// Fails by: the older root read as current, so the build that just ran is
+/// collected and the next one repeats it.
+#[test]
+fn a_collection_after_a_rebuild_keeps_the_rebuilt_graph() {
+    if !cfg!(unix) {
+        return;
+    }
+    let dir = hooked("collect-rebuilt-graph", true);
+    cargo_workspace(&dir);
+    assert_eq!(
+        cargo_build(&dir),
+        ["app", "dep", "other", "top"],
+        "THE PREMISE"
+    );
+    let manifest = dir.join("top/Cargo.toml");
+    let bumped = std::fs::read_to_string(&manifest)
+        .unwrap()
+        .replace("version = \"0.1.0\"", "version = \"0.2.0\"");
+    std::fs::write(&manifest, bumped).unwrap();
+    assert_eq!(cargo_build(&dir), ["top"], "THE PREMISE: the bump's build");
+    let said = collected_below_the_floor(&dir);
+    assert_eq!(
+        cargo_build(&dir),
+        Vec::<String>::new(),
+        "a no-op build after the collection: {said}"
+    );
+}
+
+/// `BATTEN_DISK_TRACE=1` writes each sample the watcher takes to stderr, the
+/// one record of how often the volume was read.
+///
+/// Fails by: the trace line never written, so a trace-on run reads as one the
+/// watcher never sampled.
+#[test]
+fn a_traced_watch_writes_its_samples_to_stderr() {
+    if !cfg!(unix) {
+        return;
+    }
+    let dir = hooked("step-run-traced", true);
+    // The step runs until the watcher has ACTED, an event that follows a
+    // sample, rather than for a guessed half second (CLOUD-2789): under
+    // pressure the watcher collects the aged unit, and a sample came first.
+    let waits = "while [ -e target/debug/.fingerprint/aged-dddddddddddddddd ]; do :; done";
+    let ran = common::batten()
+        .current_dir(&dir)
+        .env("TMPDIR", own_temp(&dir))
+        .args(["step", "run", "probe", "--", "sh", "-c", waits])
+        .env("TARGET_PRUNE_FREE_MB", "50")
+        .env("BATTEN_DISK_TRACE", "1")
+        .stdin(std::process::Stdio::null())
+        .streamed_output_keeping(batten::capture::Keep {
+            stdin: true,
+            stdout: false,
+            stderr: false,
+        })
+        .expect("the binary runs");
+    let said = common::stderr(&ran);
+    assert_eq!(ran.status.code(), Some(0), "{said}");
+    assert!(said.contains("disk-sample"), "{said}");
+}
+
+/// A RUNNING SUITE KEEPS ITS FIXTURE THROUGH A PASS THAT KEEPS EVERY RUNNING
+/// PROGRAM (CLOUD-2789). [`batten::collect::engine_kept`] names every program
+/// running on the host, so a running test binary is in the kept set a hook or a
+/// compile hands its pass. The fixture window excluded kept executables, so no
+/// suite rooted anything, the window opened at the scan, and a running case's
+/// fixture went whole: below the floor, a hand-back's mirror and target under
+/// `target/tmp/state-<pid>` were removed mid-run (`classic/src/lib.rs does not
+/// exist`), twice at 4.3-4.5 GB free.
+///
+/// The suite is a running program under the tree's `deps/`, started before
+/// the fixture it roots was last written; a stale fixture beside it shows the
+/// pass ran and took what no suite roots.
+///
+/// Fails by: a kept executable excluded from the fixture window, so the live
+/// fixture goes with the stale one.
+#[test]
+#[expect(
+    clippy::disallowed_types,
+    reason = "stays, and test-only: the running suite is a real process under the tree's `deps/`, which the collector reads from the host's process table"
+)]
+fn a_running_suites_fixture_outlives_a_pass_that_keeps_every_running_program() {
+    use std::io::Write as _;
+    if !cfg!(target_os = "linux") {
+        return;
+    }
+    let repo = common::scratch("fixture-suite-kept");
+    common::init_repo(&repo);
+    let tree = repo.join("target");
+    let deps = tree.join("debug").join("deps");
+    std::fs::create_dir_all(&deps).unwrap();
+    let suite = deps.join("suite");
+    std::fs::copy("/bin/sh", &suite).expect("stand a suite binary under deps/");
+    let mut running = std::process::Command::new(&suite)
+        .args(["-c", "read _"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("the suite runs");
+    // Written after the suite started, and dated so: the suite roots it.
+    let written = SystemTime::now();
+    let live = tree.join("tmp").join("live");
+    let stale = tree.join("tmp").join("stale");
+    std::fs::create_dir_all(&live).unwrap();
+    std::fs::create_dir_all(&stale).unwrap();
+    common::set_times(&live, std::fs::FileTimes::new().set_modified(written));
+    common::set_times(
+        &stale,
+        std::fs::FileTimes::new().set_modified(written - Duration::from_secs(7200)),
+    );
+    let mut config = rules("target");
+    config.min_free_mb = Some(10);
+    config.max_free_mb = Some(11);
+    let kept = batten::collect::engine_kept();
+    // A bounded pass, as a hook's or a compile's is: it reads no mutant copy
+    // from the shared temp directory.
+    let bound = std::time::Instant::now() + Duration::from_secs(3600);
+    let done = batten::collect::collect_toward_max(
+        &repo,
+        &config,
+        &kept,
+        1,
+        &mut || Ok(1),
+        Some(bound),
+        false,
+    );
+    let _ = running
+        .stdin
+        .take()
+        .expect("stdin is piped")
+        .write_all(b"\n");
+    let _ = running.wait();
+    // THE STALE FIXTURE GONE IS THE PROOF A PASS RAN, so nothing asserts on
+    // `done`: it is the result of a pass bounded by a clock read, and an
+    // assertion over it reads the clock (`wall_clock`), where the outcome it
+    // stood in for is already asserted here.
+    assert!(
+        !stale.exists(),
+        "a pass ran, and a fixture no running suite roots is taken: {done:?}"
+    );
+    assert!(
+        live.exists(),
+        "the running suite's fixture is kept: {done:?}"
+    );
 }
 
 /// Cargo's `RUSTC_WRAPPER` (CLOUD-2197): every compile unit, whoever started
@@ -1096,7 +1961,11 @@ fn a_wrapped_compile_collects_under_pressure() {
             .arg(&out_dir)
             .env("TARGET_PRUNE_FREE_MB", free)
             .stdin(std::process::Stdio::null())
-            .output()
+            .streamed_output_keeping(batten::capture::Keep {
+                stdin: true,
+                stdout: false,
+                stderr: false,
+            })
             .expect("the binary runs");
         let seen = std::fs::read_to_string(bin.join("ran")).unwrap_or_default();
         (dir, ran, seen)
@@ -1124,6 +1993,72 @@ fn a_wrapped_compile_collects_under_pressure() {
         "aged",
         "dddddddddddddddd"
     ));
+}
+
+/// A compile in a linked worktree reads `[prune]` from the WORKTREE's
+/// `batten.toml` (CLOUD-2532). The main checkout declares no `[prune]`, so a
+/// read through `repo_root` — the main checkout from a worktree — finds no band
+/// and collects nothing; the worktree's own table is what arms it.
+#[test]
+fn a_wrapped_compile_in_a_worktree_reads_the_worktrees_prune() {
+    if !cfg!(unix) {
+        return;
+    }
+    let base = common::scratch("rustc-wrapped-worktree");
+    let main = common::Fixture::at(base.join("repo"))
+        .config("version = 1\n")
+        .file("Cargo.toml", "[workspace]\n")
+        .git()
+        .base_commit()
+        .build();
+    let linked = base.join("linked");
+    common::git_in(
+        &main,
+        &[
+            "worktree",
+            "add",
+            "--quiet",
+            "-b",
+            "linked",
+            linked.to_str().unwrap_or_default(),
+            "HEAD",
+        ],
+    );
+    common::write(&linked, "batten.toml", &hook_config(true));
+    unit(
+        &linked.join("target/debug"),
+        "aged",
+        "dddddddddddddddd",
+        7200,
+        4096,
+    );
+    let rustc = main.join("rustc");
+    std::fs::write(&rustc, "#!/bin/sh\nexit 0\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(&rustc, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let out_dir = linked.join("target/debug/deps");
+    std::fs::create_dir_all(&out_dir).unwrap();
+    let ran = common::batten()
+        .current_dir(&linked)
+        .arg(&rustc)
+        .arg("--out-dir")
+        .arg(&out_dir)
+        .env("TARGET_PRUNE_FREE_MB", "50")
+        .stdin(std::process::Stdio::null())
+        .streamed_output_keeping(batten::capture::Keep {
+            stdin: true,
+            stdout: false,
+            stderr: false,
+        })
+        .expect("the binary runs");
+    assert_eq!(ran.status.code(), Some(0), "{}", common::stderr(&ran));
+    assert!(
+        !present(&linked.join("target/debug"), "aged", "dddddddddddddddd"),
+        "the worktree's own [prune] band armed the collection"
+    );
 }
 
 /// Above the default floor a wrapped compile reads no config at all: resolving
@@ -1161,13 +2096,348 @@ fn a_wrapped_compile_above_the_floor_reads_no_config() {
         .arg(dir.join("target/debug/deps"))
         .env("TARGET_PRUNE_FREE_MB", "5000")
         .stdin(std::process::Stdio::null())
-        .output()
+        .streamed_output_keeping(batten::capture::Keep {
+            stdin: true,
+            stdout: false,
+            stderr: false,
+        })
         .expect("the binary runs");
     assert_eq!(ran.status.code(), Some(0), "{}", common::stderr(&ran));
     assert!(
         present(&dir.join("target/debug"), "aged", "dddddddddddddddd"),
         "5000 MB is above the default floor, so the declared 6000 was never read"
     );
+}
+
+/// A workspace wrapper between this one and the compiler, as cargo runs
+/// `RUSTC_WRAPPER RUSTC_WORKSPACE_WRAPPER rustc …` for `cargo auditable`
+/// (CLOUD-2789): the wrapper runs, with the compiler and its argv after it,
+/// and the compile's own exit code comes back.
+///
+/// Fails by: the wrapper's path parsed as a verb and refused, which failed
+/// every local `mise run dist`; or the wrapper skipped and the compiler run
+/// directly, dropping what it adds (the dependency list an SBOM reads).
+#[test]
+fn a_workspace_wrapper_between_is_run_with_the_compiler() {
+    if !cfg!(unix) {
+        return;
+    }
+    let dir = common::scratch_repo("rustc-workspace-wrapped");
+    let bin = dir.join("fake-bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let wrapper = bin.join("cargo-auditable");
+    let rustc = bin.join("rustc");
+    std::fs::write(
+        &wrapper,
+        "#!/bin/sh\necho wrapped > \"$(dirname \"$0\")/wrapped\"\nexec \"$@\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        &rustc,
+        "#!/bin/sh\necho \"$@\" > \"$(dirname \"$0\")/ran\"\nexit 7\n",
+    )
+    .unwrap();
+    #[cfg(unix)]
+    for program in [&wrapper, &rustc] {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(program, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let ran = common::batten()
+        .current_dir(&dir)
+        .arg(&wrapper)
+        .arg(&rustc)
+        .args(["-vV"])
+        .stdin(std::process::Stdio::null())
+        .streamed_output_keeping(batten::capture::Keep {
+            stdin: true,
+            stdout: false,
+            stderr: false,
+        })
+        .expect("the binary runs");
+    assert_eq!(
+        ran.status.code(),
+        Some(7),
+        "the compiler's own code: {}",
+        common::stderr(&ran)
+    );
+    assert!(bin.join("wrapped").is_file(), "the workspace wrapper ran");
+    let seen = std::fs::read_to_string(bin.join("ran")).unwrap_or_default();
+    assert_eq!(seen.trim(), "-vV", "the compiler's own argv");
+    // A BARE NAME, as `RUSTC_WORKSPACE_WRAPPER=sccache` reaches it: no path
+    // separator, so only the environment naming it marks it a wrapper.
+    std::fs::remove_file(bin.join("wrapped")).unwrap();
+    let inherited = std::env::var_os("PATH").unwrap_or_default();
+    let path =
+        std::env::join_paths(std::iter::once(bin.clone()).chain(std::env::split_paths(&inherited)))
+            .expect("a PATH entry carries no separator");
+    let bare = common::batten()
+        .current_dir(&dir)
+        .arg("cargo-auditable")
+        .arg(&rustc)
+        .args(["-vV"])
+        .env("PATH", &path)
+        .env("RUSTC_WORKSPACE_WRAPPER", "cargo-auditable")
+        .stdin(std::process::Stdio::null())
+        .streamed_output_keeping(batten::capture::Keep {
+            stdin: true,
+            stdout: false,
+            stderr: false,
+        })
+        .expect("the binary runs");
+    assert_eq!(bare.status.code(), Some(7), "{}", common::stderr(&bare));
+    assert!(bin.join("wrapped").is_file(), "the bare-named wrapper ran");
+    // THE SAME BARE NAME, UNNAMED by the environment: one path component and
+    // no `RUSTC_WORKSPACE_WRAPPER` naming it, so it is a verb, never a
+    // wrapper, and is neither run nor handed the compiler (CLOUD-2789).
+    std::fs::remove_file(bin.join("wrapped")).unwrap();
+    let unnamed = common::batten()
+        .current_dir(&dir)
+        .arg("cargo-auditable")
+        .arg(&rustc)
+        .args(["-vV"])
+        .env("PATH", path)
+        .env_remove("RUSTC_WORKSPACE_WRAPPER")
+        .stdin(std::process::Stdio::null())
+        .streamed_output_keeping(batten::capture::Keep {
+            stdin: true,
+            stdout: false,
+            stderr: false,
+        })
+        .expect("the binary runs");
+    assert_ne!(
+        unnamed.status.code(),
+        Some(7),
+        "{}",
+        common::stderr(&unnamed)
+    );
+    assert!(
+        !bin.join("wrapped").exists(),
+        "a bare name the environment does not name is not a wrapper"
+    );
+}
+
+/// A path whose next argument is no compiler is no workspace wrapper: it is
+/// argv for a verb, and batten never runs it (CLOUD-2789).
+///
+/// Fails by: the wrapper test's `compiles(next) && !compiles(first)` joined by
+/// `||`, so any path-shaped first argument is executed as a wrapper.
+#[test]
+fn a_path_not_followed_by_a_compiler_is_not_run_as_a_wrapper() {
+    if !cfg!(unix) {
+        return;
+    }
+    let dir = common::scratch_repo("rustc-not-wrapped");
+    let bin = dir.join("fake-bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let program = bin.join("not-a-wrapper");
+    std::fs::write(
+        &program,
+        "#!/bin/sh\necho ran > \"$(dirname \"$0\")/ran\"\nexit 7\n",
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let refused = common::batten()
+        .current_dir(&dir)
+        .arg(&program)
+        .args(["-vV"])
+        .stdin(std::process::Stdio::null())
+        .streamed_output_keeping(batten::capture::Keep {
+            stdin: true,
+            stdout: false,
+            stderr: false,
+        })
+        .expect("the binary runs");
+    assert_ne!(
+        refused.status.code(),
+        Some(7),
+        "{}",
+        common::stderr(&refused)
+    );
+    assert!(
+        !bin.join("ran").exists(),
+        "a path batten was not asked to wrap ran"
+    );
+}
+
+/// What one wrapped compile did with a declared next wrapper (CLOUD-2907).
+struct Chained {
+    exit: Option<i32>,
+    /// The next wrapper's argv, or empty where it never ran.
+    next_argv: String,
+    /// Whether the compiler stub ran.
+    compiled: bool,
+    compiler: PathBuf,
+    out_dir: PathBuf,
+}
+
+/// One compile through `batten`, as cargo issues it: `compiler` is the stub's
+/// name, the unit's manifest sits under a fake `CARGO_HOME` when `registry`,
+/// and `next` is what `BATTEN_RUSTC_NEXT` holds (`None` unsets it). The next
+/// wrapper stub records its argv and runs the rest, as a cache does on a miss.
+fn chained(name: &str, compiler: &str, registry: bool, next: Option<&str>) -> Chained {
+    // Outside the checkout: a compile under `CARGO_HOME` has no repository.
+    let dir = common::scratch_outside_tree("prune_watch", name);
+    let home = dir.join("cargo-home");
+    let manifest = if registry {
+        home.join("registry/src/index.crates.io-0000/dep-1.0.0")
+    } else {
+        dir.join("workspace/crates/dep")
+    };
+    std::fs::create_dir_all(&manifest).unwrap();
+    let stub = |path: &Path, body: &str| {
+        std::fs::write(path, body).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+    };
+    let compiler = dir.join(compiler);
+    stub(&compiler, "#!/bin/sh\necho ran > \"$0.ran\"\n");
+    let recorder = dir.join("next");
+    stub(
+        &recorder,
+        "#!/bin/sh\necho \"$@\" > \"$0.argv\"\nexec \"$@\"\n",
+    );
+    let out_dir = dir.join("target/debug/deps");
+    let mut command = common::batten();
+    command
+        .current_dir(&manifest)
+        .arg(&compiler)
+        .arg("--out-dir")
+        .arg(&out_dir)
+        .env("CARGO_HOME", &home)
+        .env("CARGO_MANIFEST_DIR", &manifest)
+        // Above the default floor: the guard reads nothing and collects nothing.
+        .env("TARGET_PRUNE_FREE_MB", "500000")
+        .stdin(std::process::Stdio::null());
+    match next {
+        Some("recorder") => command.env(batten::RUSTC_NEXT, &recorder),
+        Some(other) => command.env(batten::RUSTC_NEXT, dir.join(other)),
+        None => command.env_remove(batten::RUSTC_NEXT),
+    };
+    let ran = command
+        .streamed_output_keeping(batten::capture::Keep {
+            stdin: true,
+            stdout: false,
+            stderr: false,
+        })
+        .expect("the binary runs");
+    let mut ran_marker = compiler.clone().into_os_string();
+    ran_marker.push(".ran");
+    Chained {
+        exit: ran.status.code(),
+        next_argv: std::fs::read_to_string(dir.join("next.argv")).unwrap_or_default(),
+        compiled: Path::new(&ran_marker).exists(),
+        compiler,
+        out_dir,
+    }
+}
+
+/// Fails by: a registry unit compiled without its declared next wrapper, the
+/// wrapper handed anything but `<compiler> <args>`, or the guard skipped by
+/// the chain (CLOUD-2907).
+#[test]
+fn a_registry_unit_reaches_the_declared_next_wrapper_after_the_guard() {
+    if !cfg!(unix) {
+        return;
+    }
+    let done = chained("rustc-chain-registry", "rustc", true, Some("recorder"));
+    assert_eq!(done.exit, Some(0));
+    assert_eq!(
+        done.next_argv.trim(),
+        format!(
+            "{} --out-dir {}",
+            done.compiler.display(),
+            done.out_dir.display()
+        )
+    );
+    assert!(done.compiled, "the next wrapper ran the compiler");
+}
+
+/// Fails by: a unit a compiler cache cannot share handed to it anyway — a
+/// workspace unit, a `clippy-driver` check — or a compile with nothing declared
+/// chained at all.
+#[test]
+fn only_a_registry_rustc_unit_is_chained() {
+    if !cfg!(unix) {
+        return;
+    }
+    for (name, compiler, registry, next) in [
+        ("rustc-chain-workspace", "rustc", false, Some("recorder")),
+        (
+            "rustc-chain-clippy",
+            "clippy-driver",
+            true,
+            Some("recorder"),
+        ),
+        ("rustc-chain-undeclared", "rustc", true, None),
+    ] {
+        let done = chained(name, compiler, registry, next);
+        assert_eq!(done.exit, Some(0), "{name}");
+        assert!(done.next_argv.is_empty(), "{name}: {}", done.next_argv);
+        assert!(done.compiled, "{name}: the compiler ran directly");
+    }
+}
+
+/// Fails by: a declared next wrapper that cannot start failing the build. The
+/// cache is an accelerator: without it the unit compiles directly.
+#[test]
+fn an_unstartable_next_wrapper_compiles_directly() {
+    if !cfg!(unix) {
+        return;
+    }
+    let done = chained(
+        "rustc-chain-missing",
+        "rustc",
+        true,
+        Some("no-such-wrapper"),
+    );
+    assert_eq!(done.exit, Some(0));
+    assert!(done.compiled);
+}
+
+/// Fails by: the chain decided on anything but the compiler, a manifest under
+/// an absolute `CARGO_HOME`, and a declared, non-empty next wrapper.
+#[test]
+fn the_chain_decision_names_its_four_inputs() {
+    let next = std::ffi::OsStr::new("sccache");
+    let home = Path::new("/home/u/.cargo");
+    let dep = Path::new("/home/u/.cargo/registry/src/i/dep-1.0.0");
+    let ours = Path::new("/home/u/repo/crates/dep");
+    assert_eq!(
+        batten::chained_wrapper("rustc", Some(dep), Some(home), Some(next)),
+        Some(next)
+    );
+    for (stem, manifest, cargo_home, declared) in [
+        ("clippy-driver", Some(dep), Some(home), Some(next)),
+        ("rustc", Some(ours), Some(home), Some(next)),
+        ("rustc", None, Some(home), Some(next)),
+        ("rustc", Some(dep), None, Some(next)),
+        (
+            "rustc",
+            Some(Path::new(".cargo/registry/x")),
+            Some(Path::new(".cargo")),
+            Some(next),
+        ),
+        (
+            "rustc",
+            Some(dep),
+            Some(home),
+            Some(std::ffi::OsStr::new("")),
+        ),
+        ("rustc", Some(dep), Some(home), None),
+    ] {
+        assert_eq!(
+            batten::chained_wrapper(stem, manifest, cargo_home, declared),
+            None,
+            "{stem} {manifest:?} {cargo_home:?} {declared:?}"
+        );
+    }
 }
 
 /// The probe `mise.toml` sets `RUSTC_WRAPPER` from: this binary answers with
@@ -1177,7 +2447,11 @@ fn the_wrapper_probe_answers_with_this_binary() {
     let probed = common::batten()
         .args(["rustc", batten::RUSTC_WRAPPER_PROBE])
         .stdin(std::process::Stdio::null())
-        .output()
+        .streamed_output_keeping(batten::capture::Keep {
+            stdin: true,
+            stdout: false,
+            stderr: false,
+        })
         .expect("the binary runs");
     assert_eq!(probed.status.code(), Some(0), "{}", common::stderr(&probed));
     let path = String::from_utf8_lossy(&probed.stdout).trim().to_owned();
@@ -1190,11 +2464,16 @@ fn a_sweep_that_cannot_be_brought_above_the_minimum_stops_before_building() {
     let sweep = |free: &str| {
         common::batten()
             .current_dir(&dir)
+            .env("TMPDIR", own_temp(&dir))
             .args(["mutate", "sweep"])
             .env("MUTANT_GATES", "engine-fixture")
             .env("TARGET_PRUNE_FREE_MB", free)
             .stdin(std::process::Stdio::null())
-            .output()
+            .streamed_output_keeping(batten::capture::Keep {
+                stdin: true,
+                stdout: false,
+                stderr: false,
+            })
             .expect("the binary runs")
     };
     let stopped = sweep("5");
@@ -1222,10 +2501,11 @@ fn a_lap_whose_volume_cannot_be_freed_stops_before_the_gate() {
     let verify = |free: &str| {
         common::batten()
             .current_dir(&dir)
+            .env("TMPDIR", own_temp(&dir))
             .args(["land", "verify"])
             .env("LAND_VERIFY", "git tag gate-ran")
             .env("TARGET_PRUNE_FREE_MB", free)
-            .output()
+            .streamed_output()
             .expect("the binary runs")
     };
     let stopped = verify("5");
@@ -1248,8 +2528,8 @@ fn a_lap_whose_volume_cannot_be_freed_stops_before_the_gate() {
 /// refused. Here the case holds `target/debug/.cargo-lock` and a live process
 /// (this one) holds a singleton: the step blocks on the build lock, the case
 /// lets go once the first pass has reported, and the second pass admits. With
-/// no singleton the same volume refuses as before. `#MUTANT singleton-unwaited`
-/// refuses both.
+/// no singleton the same volume refuses as before. A mutant that does not wait
+/// on the singleton refuses both.
 #[test]
 fn a_lap_below_the_floor_waits_for_its_own_background_build() {
     use std::io::BufRead as _;
@@ -1257,11 +2537,13 @@ fn a_lap_below_the_floor_waits_for_its_own_background_build() {
     let marker = dir.join(".git/refs/tags/gate-ran");
     let build_lock = dir.join("target/debug/.cargo-lock");
     let lock = std::fs::File::create(&build_lock).unwrap();
-    lock.lock().unwrap();
+    lock.try_lock()
+        .expect("hold the build lock, free in a fresh fixture");
     let verify = || {
         let mut command = common::batten();
         command
             .current_dir(&dir)
+            .env("TMPDIR", own_temp(&dir))
             .args(["land", "verify"])
             .env("LAND_VERIFY", "git tag gate-ran")
             // The first pass reads 5 twice; the pass after the wait reads 500.
@@ -1272,7 +2554,7 @@ fn a_lap_below_the_floor_waits_for_its_own_background_build() {
         command
     };
 
-    let alone = verify().output().expect("the binary runs");
+    let alone = verify().streamed_output().expect("the binary runs");
     let said = common::stderr(&alone);
     assert_eq!(alone.status.code(), Some(2), "{said}");
     assert!(!said.contains("disk-waited"), "{said}");
@@ -1283,44 +2565,21 @@ fn a_lap_below_the_floor_waits_for_its_own_background_build() {
     std::fs::write(singleton.join("pid"), std::process::id().to_string()).unwrap();
     let mut child = verify().spawn().expect("the binary runs");
     let taken = child.stderr.take().unwrap();
-    // READ ON A THREAD, WITH A BOUND, BECAUSE THE CASE AND THE CHILD WAIT ON
-    // EACH OTHER (CLOUD-2376). The child blocks on the build lock this case
+    // THE CASE AND THE CHILD WAIT ON EACH OTHER (CLOUD-2376), AND THE WAIT IS
+    // ON THE EVENT (CLOUD-2789). The child blocks on the build lock this case
     // holds, and this case only lets go once the first pass has REPORTED. When
-    // that line never comes the pair deadlocks — and mutating the collection
-    // away is exactly what stops it coming, so `collect_toward_max -> None` hung
-    // the suite instead of being caught: `cargo-mutants` reported
-    // `suite-timed-out`, which is could-not-look (CLOUD-1267), over a mutant
-    // this case does catch. Measured: it ran a full 300s bound where the
-    // baseline tests in 9s, which is what proved it a hang rather than a slow
-    // catch.
-    //
-    // THE BOUND MUST STAY UNDER THE SUITE'S MUTATION BUDGET, which is the
-    // non-obvious part: cargo-mutants derives a per-mutant bound from the
-    // unmutated baseline, so a wait long enough to exceed that just reproduces
-    // `suite-timed-out` by another route — and this is not the only case the
-    // mutation makes wait. `a_step_run_build_is_watched` polls four
-    // `disk_watch::TICK`s, 20s, for the same reason, and the two are summed
-    // against one bound.
-    //
-    // Five seconds against a MEASURED 0.188s for the real path (nextest, this
-    // suite) is ~26x margin and leaves the mutated suite near 34s against a
-    // bound derived at ~46s from a 9s baseline. Raising it buys nothing: the
-    // line either arrives in a fifth of a second or it is never coming.
-    let waited = Duration::from_secs(5);
-    let (lines, from_child) = std::sync::mpsc::channel();
-    let reader = std::thread::spawn(move || {
-        let mut stderr = std::io::BufReader::new(taken);
-        let mut line = String::new();
-        while stderr.read_line(&mut line).unwrap_or(0) > 0 {
-            if lines.send(std::mem::take(&mut line)).is_err() {
-                break;
-            }
-        }
-    });
+    // that line never comes the pair deadlocks — mutating the collection away
+    // is exactly what stops it coming — and the case hangs on the read below.
+    // That is the honest verdict: the mutation judge's per-case cut files it
+    // as a timeout. A clock here would only race that cut, and the line either
+    // arrives or it is never coming; an EOF before it fails the assertion.
+    let mut stderr = std::io::BufReader::new(taken);
     let mut seen = String::new();
-    while let Ok(line) = from_child.recv_timeout(waited) {
-        seen.push_str(&line);
-        if line.contains("land verify: disk-collected ") {
+    let mut line = String::new();
+    while stderr.read_line(&mut line).unwrap_or(0) > 0 {
+        let reported = line.contains("land verify: disk-collected ");
+        seen.push_str(&std::mem::take(&mut line));
+        if reported {
             break;
         }
     }
@@ -1329,12 +2588,10 @@ fn a_lap_below_the_floor_waits_for_its_own_background_build() {
         "the first pass reported before the wait: {seen}"
     );
     drop(lock);
-    // The rest arrives through the same bound: the child runs to completion once
-    // the lock is gone, closing stderr, which ends the reader and the channel.
-    while let Ok(line) = from_child.recv_timeout(waited) {
-        seen.push_str(&line);
-    }
-    let _ = reader.join();
+    // The rest arrives once the lock is gone: the child runs to completion and
+    // closes stderr, which is the EOF this read ends on.
+    let _ = std::io::Read::read_to_string(&mut stderr, &mut line);
+    seen.push_str(&line);
     let _ = child.wait().unwrap();
     assert!(
         !seen.contains("min_free_mb 100"),

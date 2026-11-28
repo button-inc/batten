@@ -101,6 +101,42 @@ fn steps(name: &str) -> Vec<String> {
     }
 }
 
+/// `verify:gated`'s steps in the order they run (CLOUD-2904): its one
+/// `--continue-on-error` fan is expanded, a `verify:` node into its own run
+/// steps (the graph call, the dist leg, `step cover`) and any other node into
+/// `mise run <task>`, then the entries after the fan.
+fn lap() -> Vec<String> {
+    steps("verify:gated")
+        .into_iter()
+        .flat_map(|step| {
+            if !step.starts_with("mise run --continue-on-error") {
+                return vec![step];
+            }
+            members(&step)
+                .into_iter()
+                .flat_map(|node| match node.as_str() {
+                    "verify:tiers" | "verify:dist" | "verify:cover" => steps(&node),
+                    _ => vec![format!("mise run {node}")],
+                })
+                .collect()
+        })
+        .collect()
+}
+
+/// THE LAP IS ONE FAN THAT STOPS AT NO RED (CLOUD-2904): every node runs
+/// whatever an earlier one decided, in order (`--jobs 1`), and only the
+/// receipt, which attests every node, follows it as its own entry.
+#[test]
+fn the_lap_is_one_ordered_fan_and_the_receipt_follows_it() {
+    let gated = steps("verify:gated");
+    assert_eq!(gated.len(), 2, "{gated:?}");
+    assert!(
+        gated[0].starts_with("mise run --continue-on-error --jobs 1 "),
+        "{gated:?}"
+    );
+    assert!(gated[1].ends_with(" receipt record verify"), "{gated:?}");
+}
+
 /// The position of the one step that `contains` the needle.
 fn step_at(all: &[String], needle: &str) -> usize {
     let found: Vec<usize> = all
@@ -149,7 +185,7 @@ fn the_verify_sequence_was_found_at_all() {
     let verify = steps("verify");
     // Toolchain, claim, linearity, gate set: the four the order case reads.
     assert!(verify.len() >= 4, "{verify:?}");
-    let gated = steps("verify:gated");
+    let gated = lap();
     assert!(
         gated
             .iter()
@@ -158,14 +194,18 @@ fn the_verify_sequence_was_found_at_all() {
     );
 }
 
-/// NO SHELL GROWS BACK. Each step is judged by the census's own grammar — the
-/// reading `policy/shell-banned.rego` shares — so a step that needed a shell to
-/// run would be counted, and this reds before the census does.
+/// NO SHELL GROWS BACK. Each step is judged by the one shell detector the
+/// census and the `shell-hygiene` preset's `no-new-shell` module both read
+/// (`batten::shell_logic::logic`, CLOUD-2625), so a step that needed a shell to run
+/// would be counted, and this reds before the census does.
 #[test]
 fn every_step_is_argv() {
     for name in [
         "verify",
         "verify:gated",
+        "verify:tiers",
+        "verify:dist",
+        "verify:cover",
         "verify:commit-lint",
         "verify:config-lint",
         "target-prune",
@@ -176,9 +216,10 @@ fn every_step_is_argv() {
         "test:filter",
     ] {
         for step in steps(name) {
+            let verdict = batten::shell_logic::logic(&step);
             assert!(
-                !batten::census::shell_syntax(&step),
-                "[tasks.{name}] runs a step that needs a shell: {step}"
+                matches!(verdict, batten::shell_logic::Verdict::Argv(_)),
+                "[tasks.{name}] runs a step that needs a shell ({verdict:?}): {step}"
             );
         }
     }
@@ -221,6 +262,29 @@ fn the_pkl_validator_runs_only_after_its_package_is_fetched() {
             "[tasks.{caller}] resolves the hk package, so it depends on pkl-package: {depends:?}"
         );
     }
+}
+
+/// CLOUD-2849: the scheduled sweep judges the whole Rust tree, not only the
+/// declared Rego, Pkl and manifest gates. `mutant` declares `MUTANT_WHOLE_TREE`
+/// for the subtasks it starts, names `mutant:rust` beside `mutant:declared`, and
+/// carries no base. Fails by: the cargo runner dropped from the schedule, the
+/// whole-tree switch blanked, or a base that narrows it to one change.
+#[test]
+fn the_scheduled_sweep_judges_the_whole_rust_tree() {
+    assert!(
+        !env_of("mutant", "MUTANT_WHOLE_TREE").trim().is_empty(),
+        "mutant sets MUTANT_WHOLE_TREE to a value"
+    );
+    let run = steps("mutant");
+    step_at(&run, "mutant:rust");
+    step_at(&run, "mutant:declared");
+    assert!(
+        task("mutant")
+            .get("env")
+            .and_then(|env| env.get("MUTANT_CHANGED_SINCE"))
+            .is_none(),
+        "the whole-tree sweep carries no base"
+    );
 }
 
 /// CLOUD-2311: the CA bundle names `vars.pkl_ca` reads must come from the
@@ -272,15 +336,381 @@ fn verify_declares_no_depends() {
     );
 }
 
+/// The tasks one `mise run` step reaches: each `:::` member's first word, past
+/// the run's own flags (`--continue-on-error`, `--jobs N`).
+fn members(step: &str) -> Vec<String> {
+    step.trim_start_matches("mise run ")
+        .split(" ::: ")
+        .filter_map(|task| {
+            let mut words = task.split_whitespace();
+            while let Some(word) = words.next() {
+                if word == "--jobs" {
+                    words.next();
+                } else if !word.starts_with('-') {
+                    return Some(word.to_owned());
+                }
+            }
+            None
+        })
+        .collect()
+}
+
+/// THE GATES RUN IN TIERS, CHEAPEST FIRST, AND A TIER GATES THE NEXT (owner
+/// rulings, 2026-11-11). `ci`, `cross-check`, `darwin-link`, `zizmor` and
+/// `semver` were `depends`, which ran before the body; one fan then started them
+/// all at once, so seconds-long gates refused a head while the suite and its
+/// mutants ran on for 41 minutes. A tier reports every failure it holds, and a
+/// tier starts only once every earlier tier passed. Fails by: a build or the
+/// suite moved into a cheaper tier, or the tiers collapsed back into one step.
+///
+/// THE TIERS ARE GRAPH GROUPS SINCE CLOUD-2785, AND ONE CALL'S GROUPS SINCE
+/// CLOUD-2789: `batten step graph run <group>...` runs its groups in order, so
+/// a task's tier is the position of the group holding a row running it. A red
+/// group skips only the rows that depend on its reds (CLOUD-2904).
 #[test]
-fn verify_gated_carries_the_depends_verify_gave_up() {
-    let depends = depends_of("verify:gated");
-    for needed in ["tree-clean", "ci", "cross-check"] {
-        assert!(
-            depends.iter().any(|entry| entry == needed),
-            "verify:gated depends on {needed}: {depends:?}"
+fn verify_gated_runs_its_gates_in_tiers_cheapest_first() {
+    let gated = lap();
+    let graphs: Vec<&String> = gated
+        .iter()
+        .filter(|step| !common::graph_groups(step).is_empty())
+        .collect();
+    assert_eq!(
+        graphs.len(),
+        1,
+        "every tier is a group of one call: {gated:?}"
+    );
+    let tiers = common::graph_groups(graphs[0]);
+    let position = |task: &str| {
+        tiers
+            .iter()
+            .position(|group| {
+                common::group_rows(group)
+                    .iter()
+                    .any(|row| row.task.as_deref() == Some(task))
+            })
+            .unwrap_or_else(|| panic!("verify:gated runs {task}: {tiers:?}"))
+    };
+    let seconds = [
+        "verify:commit-lint",
+        "verify:config-lint",
+        "prose-only-check",
+        "engine-pin-check",
+        "zizmor",
+        "deny",
+    ];
+    let minutes = ["semver", "verify:test-replay", "cross-check", "darwin-link"];
+    let tier_one = position(seconds[0]);
+    let tier_two = position(minutes[0]);
+    for task in seconds {
+        assert_eq!(
+            position(task),
+            tier_one,
+            "{task} is in the seconds tier: {gated:?}"
         );
     }
+    for task in minutes {
+        assert_eq!(
+            position(task),
+            tier_two,
+            "{task} is in the minutes tier: {gated:?}"
+        );
+    }
+    assert!(tier_one < tier_two, "seconds, then minutes: {gated:?}");
+    // THE SUITE TIER IS A RUN ENTRY AFTER THE GRAPH (CLOUD-2789): `test:traced`
+    // first, so its traced cases redden the tier in a minute rather than after
+    // the suite and the mutants.
+    let graph = gated
+        .iter()
+        .position(|step| !common::graph_groups(step).is_empty())
+        .expect("one graph call");
+    let suite = gated
+        .iter()
+        .position(|step| step.contains("verify:ci-suite"))
+        .unwrap_or_else(|| panic!("verify:gated runs the suite: {gated:?}"));
+    assert!(graph < suite, "the graph, then the suite: {gated:?}");
+    let tier: Vec<&str> = gated[suite - 1..suite + 3]
+        .iter()
+        .map(|step| step.trim_start_matches("mise run "))
+        .collect();
+    assert_eq!(
+        tier,
+        [
+            "test:traced",
+            "verify:ci-suite",
+            "verify:mutant-changed",
+            "verify:ci-slow-needed"
+        ],
+        "the suite is its own tier, the mutant gate beside it and untraced: {gated:?}"
+    );
+    assert!(
+        common::task_body("verify:ci-suite").contains("step run ci-suite -- mise run ci"),
+        "the suite node runs `ci` through its keyed row"
+    );
+    assert_eq!(depends_of("verify:gated"), ["tree-clean"]);
+}
+
+/// `hk check`'s steps as `hk.pkl` resolves them: each step's name, its profiles
+/// and its `check` text (`""` for a builtin whose check is not a string).
+///
+/// `BATTEN_BIN` is removed for the evaluation, so `\(batten)` resolves to its
+/// own fallback and an engine-run check reads the same under `verify` as alone.
+fn hk_check_steps() -> std::collections::BTreeMap<String, (Vec<String>, String)> {
+    use batten::capture::Streamed as _;
+    let mut command = common::pkl_command();
+    command
+        .args(["-f", "json", "hk.pkl"])
+        .env_remove("BATTEN_BIN")
+        .current_dir(common::at_root("."));
+    let output = command.streamed_output().expect("pkl evaluates hk.pkl");
+    assert!(
+        output.status.success(),
+        "pkl eval hk.pkl failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let config: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("`-f json` prints one JSON document");
+    config["hooks"]["check"]["steps"]
+        .as_object()
+        .expect("hk.pkl declares a `check` hook with steps")
+        .iter()
+        .map(|(name, step)| {
+            let profiles = step["profiles"]
+                .as_array()
+                .map(|all| {
+                    all.iter()
+                        .filter_map(serde_json::Value::as_str)
+                        .map(ToOwned::to_owned)
+                        .collect()
+                })
+                .unwrap_or_default();
+            let check = step["check"].as_str().unwrap_or_default().to_owned();
+            (name.clone(), (profiles, check))
+        })
+        .collect()
+}
+
+/// EACH `hk check` STEP RUNS ONCE PER LAP (CLOUD-2789). Measured on #1276, tier
+/// 1's nine untagged steps ran again in `ci:checks`, and every step there ran a
+/// third time in tier 3's `ci` before the suite started: a step a tier repeats
+/// costs its whole run whenever it holds no receipt, and most hold none. So the
+/// three hk spellings must partition `hk check`'s steps, and a step none of them
+/// runs must be one the lap runs elsewhere: a `mise run` of it in
+/// `verify:gated`, the engine command an entry there spells, or a narrow `it`
+/// lane of the suite tier 3 runs whole.
+///
+/// Fails by: a step two tiers run; a step tagged `slow` while its name stays in
+/// `ci:checks`' skips (tier 1 stops running it, and nothing else does); a skip
+/// naming no step (it skips nothing, so the step runs twice); or tier 3 losing
+/// `test` or `mutant:changed`.
+#[test]
+fn each_hk_step_runs_in_exactly_one_place_per_lap() {
+    let hk = hk_check_steps();
+    assert!(
+        hk.contains_key("test") && hk.contains_key("mutant:changed"),
+        "the case reads the committed `check` hook: {:?}",
+        hk.keys()
+    );
+    assert_eq!(
+        steps("ci:quick"),
+        ["hk check --all --profile '!slow'"],
+        "tier 1's hk selection is every step without a profile"
+    );
+    let quick: std::collections::BTreeSet<&str> = hk
+        .iter()
+        .filter(|(_, (profiles, _))| profiles.is_empty())
+        .map(|(name, _)| name.as_str())
+        .collect();
+    let checks_run = steps("ci:checks");
+    let mut words = checks_run[0].split_whitespace();
+    let mut checks_skips = Vec::new();
+    while let Some(word) = words.next() {
+        if word == "--skip-step" {
+            checks_skips.push(words.next().expect("a skip names a step").to_owned());
+        }
+    }
+    let suite_skips: Vec<String> = env_of("verify:ci-suite", "HK_SKIP_STEPS")
+        .split(',')
+        .map(|name| name.trim().to_owned())
+        .collect();
+    for skipped in checks_skips.iter().chain(&suite_skips) {
+        assert!(
+            hk.contains_key(skipped),
+            "`{skipped}` is skipped but names no `hk check` step, so it skips nothing"
+        );
+    }
+    let gated = lap();
+    let elsewhere: Vec<String> = gated
+        .iter()
+        .filter(|step| step.starts_with("mise run "))
+        .flat_map(|step| members(step))
+        .chain(gated.iter().flat_map(|step| {
+            common::graph_groups(step)
+                .iter()
+                .flat_map(|group| common::group_rows(group))
+                .filter_map(|row| row.task)
+                .collect::<Vec<_>>()
+        }))
+        .collect();
+    let engine = "cargo run --quiet -p batten -- ";
+    let narrow_lane = |check: &str| {
+        check.strip_prefix("mise run ").is_some_and(|task| {
+            common::task_body(task)
+                .contains("cargo nextest run -p batten --no-tests=fail --test it ")
+        })
+    };
+    let suite_runs_whole = !suite_skips.iter().any(|skipped| skipped == "test");
+    for (name, (_, check)) in &hk {
+        let tiers: Vec<&str> = [
+            ("ci:quick", quick.contains(name.as_str())),
+            ("ci:checks", !checks_skips.contains(name)),
+            ("verify:ci-suite", !suite_skips.contains(name)),
+        ]
+        .into_iter()
+        .filter_map(|(tier, runs)| runs.then_some(tier))
+        .collect();
+        assert!(tiers.len() <= 1, "`{name}` runs in {tiers:?}: once per lap");
+        if tiers.is_empty() {
+            let run_by_an_entry = check
+                .strip_prefix("mise run ")
+                .is_some_and(|task| elsewhere.iter().any(|member| member == task))
+                || check.strip_prefix(engine).is_some_and(|words| {
+                    gated.iter().any(|step| {
+                        step.contains(words)
+                            || common::graph_groups(step).iter().any(|group| {
+                                common::group_rows(group)
+                                    .iter()
+                                    .any(|row| row.run.join(" ").ends_with(words))
+                            })
+                    })
+                })
+                // A tier entry whose task wraps the check in its own keyed step:
+                // `verify:mutant-changed` is `step run mutant-changed -- mise run
+                // mutant:changed`.
+                || elsewhere.iter().any(|member| {
+                    common::task_body(member)
+                        .lines()
+                        .any(|line| line.contains(" step run ") && line.ends_with(&format!(" -- {check}")))
+                });
+            assert!(
+                run_by_an_entry || (narrow_lane(check) && suite_runs_whole),
+                "`{name}` (`{check}`) runs in no tier and nowhere else in the lap"
+            );
+        }
+    }
+    assert!(
+        !suite_skips.iter().any(|skipped| skipped == "test"),
+        "tier 3's suite runs `test`"
+    );
+    assert!(
+        suite_skips
+            .iter()
+            .any(|skipped| skipped == "mutant:changed")
+            && elsewhere
+                .iter()
+                .any(|member| member == "verify:mutant-changed"),
+        "tier 3 runs `mutant:changed` beside the traced suite, as its own entry"
+    );
+}
+
+/// NO TRACED STEP REACHES A MUTANT SWEEP (CLOUD-2789). `ci-suite` traces its
+/// command with `strace -f`, and its command was `mise run ci`, whose `hk check`
+/// ran `mutant:changed`: the whole sweep ran under the trace, which grew past
+/// 5.7 GB a lap while the sweep's mirror copied it, and the land's `mutate cargo`
+/// was killed at 13.6 GB. The sweep keys itself, so it runs as its own step
+/// declared `batten step untraced`, and every other step must stay clear of it.
+///
+/// Fails by: a traced row whose command names a mutant task; a traced row whose
+/// command runs `hk check` (through `ci` or `hooks`) without carving every `hk`
+/// step that runs a mutant task out with its task's `HK_SKIP_STEPS`; or the
+/// mutant row losing its `untraced` declaration.
+#[test]
+fn no_traced_step_reaches_a_mutant_sweep() {
+    let table: toml::Value = toml::from_str(
+        &std::fs::read_to_string(common::committed_config_file("verify_chain"))
+            .expect("the committed authority"),
+    )
+    .expect("the committed authority parses");
+    let untraced = |row: &toml::Value| {
+        row.get("tools")
+            .and_then(toml::Value::as_array)
+            .is_some_and(|tools| {
+                tools.iter().any(|tool| {
+                    tool.as_array().is_some_and(|words| {
+                        words
+                            .iter()
+                            .filter_map(toml::Value::as_str)
+                            .eq(["batten", "step", "untraced"])
+                    })
+                })
+            })
+    };
+    let rows: std::collections::BTreeMap<&str, bool> = table["step"]
+        .as_array()
+        .expect("a step table")
+        .iter()
+        .filter_map(|row| Some((row.get("id")?.as_str()?, untraced(row))))
+        .collect();
+    assert_eq!(
+        rows.get("mutant-changed"),
+        Some(&true),
+        "the mutant tier's own row is declared untraced"
+    );
+    let manifest: toml::Value = toml::from_str(
+        &std::fs::read_to_string(common::at_root("mise.toml")).expect("the task manifest"),
+    )
+    .expect("mise.toml parses as TOML");
+    let mutant_steps: Vec<String> = hk_check_steps()
+        .into_iter()
+        .filter(|(_, (_, check))| check.contains("mutant:"))
+        .map(|(name, _)| name)
+        .collect();
+    assert!(
+        mutant_steps.iter().any(|name| name == "mutant:changed"),
+        "the case reads the committed `check` hook: {mutant_steps:?}"
+    );
+    let mut traced_wrappers = 0;
+    for (name, task) in manifest["tasks"].as_table().expect("a task table") {
+        // A task of `depends` alone has no body to wrap a step in.
+        if task.get("run").is_none() {
+            continue;
+        }
+        for line in common::task_body(name).lines() {
+            // From `step run` on: the rendered engine is itself `cargo run ... --`.
+            let Some((id, command)) = line
+                .split_once(" step run ")
+                .and_then(|(_, rest)| rest.split_once(" -- "))
+                .and_then(|(head, command)| Some((head.split_whitespace().next()?, command)))
+            else {
+                continue;
+            };
+            if rows.get(id) != Some(&false) {
+                continue;
+            }
+            traced_wrappers += 1;
+            assert!(
+                !command.contains("mutant"),
+                "`{name}` traces `{command}` through row `{id}`, which runs a mutant sweep"
+            );
+            let runs_hk = ["mise run ci", "mise run hooks", "hk check"]
+                .iter()
+                .any(|spelling| {
+                    command.trim() == *spelling || command.contains(&format!("{spelling} "))
+                });
+            if runs_hk {
+                let skips = env_of(name, "HK_SKIP_STEPS");
+                for step in &mutant_steps {
+                    assert!(
+                        skips.split(',').any(|skipped| skipped.trim() == step),
+                        "`{name}` traces `{command}` through row `{id}` and its `hk check` runs `{step}`: carve it out with `HK_SKIP_STEPS`"
+                    );
+                }
+            }
+        }
+    }
+    assert!(
+        traced_wrappers > 0,
+        "the case found the traced steps at all"
+    );
 }
 
 /// THE RETIRED BODY'S ORDER, which the old suite pinned by behaviour and by text:
@@ -315,10 +745,26 @@ fn the_claim_step_asks_every_kind_by_branch() {
 /// commit (CLOUD-277).
 #[test]
 fn the_receipt_is_the_last_step() {
-    let gated = steps("verify:gated");
+    let gated = lap();
     let receipt = step_at(&gated, "receipt record verify");
     assert_eq!(receipt, gated.len() - 1, "{gated:?}");
-    assert!(gated[0].contains("tree-clean"), "{gated:?}");
+    // THE FIRST STEP IS A GRAPH WHOSE ONE ROOT IS `tree-clean` (CLOUD-2785):
+    // every other row of the group waits on it, so nothing in the group is
+    // decided over a dirty tree.
+    let first = common::graph_groups(&gated[0])
+        .first()
+        .map(|group| common::group_rows(group))
+        .unwrap_or_default();
+    let roots: Vec<_> = first
+        .iter()
+        .filter(|row| row.depends_on.is_empty())
+        .map(|row| row.task.clone())
+        .collect();
+    assert_eq!(
+        roots,
+        [Some("tree-clean".to_owned())],
+        "{gated:?}: {first:?}"
+    );
     assert!(
         depends_of("verify:gated")
             .iter()
@@ -327,14 +773,24 @@ fn the_receipt_is_the_last_step() {
     );
 }
 
-/// THE PERF GATE MEASURES ALONE (CLOUD-2283): it is the last step before the
+/// THE PERF GATE MEASURES ALONE (CLOUD-2283): it is the last gate before the
 /// receipt, so every other body step has exited when it starts, and it is not a
-/// `depends` entry, which mise would run beside the rest of the fan.
+/// `depends` entry, which mise would run beside the rest of the fan. Only the
+/// coverage read (CLOUD-2788) sits between it and the receipt: it reads the pass
+/// records, `perf-gate`'s among them, so it must follow, and it runs nothing.
+///
+/// It is a run entry of its own after the graph and the suite tier (CLOUD-2789),
+/// so it still starts alone.
 #[test]
 fn the_perf_gate_runs_alone_and_last_before_the_receipt() {
-    let gated = steps("verify:gated");
+    let gated = lap();
+    let graph = step_at(&gated, "step graph run");
     let perf = step_at(&gated, "mise run perf-gate");
-    assert_eq!(perf, gated.len() - 2, "{gated:?}");
+    let cover = step_at(&gated, "step cover");
+    assert!(graph < perf, "{gated:?}");
+    assert_eq!(perf, gated.len() - 3, "{gated:?}");
+    assert_eq!(gated[perf], "mise run perf-gate", "perf-gate runs alone");
+    assert_eq!(cover, gated.len() - 2, "{gated:?}");
     assert!(
         !depends_of("verify:gated")
             .iter()
@@ -350,11 +806,8 @@ fn the_perf_gate_runs_alone_and_last_before_the_receipt() {
 /// run, and a row no task names would be dead, so the case pins both halves.
 #[test]
 fn the_receipted_tasks_name_their_own_step_rows() {
-    let table: toml::Value = toml::from_str(
-        &std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../batten.toml"))
-            .expect("the committed authority reads"),
-    )
-    .expect("the committed authority parses");
+    let table: toml::Value =
+        toml::from_str(&common::committed_config()).expect("the committed authority parses");
     let rows: Vec<&str> = table
         .get("step")
         .and_then(toml::Value::as_array)
@@ -377,11 +830,31 @@ fn the_receipted_tasks_name_their_own_step_rows() {
         );
         assert!(rows.contains(&id), "{id} has a [[step]] row: {rows:?}");
     }
-    // The replay keys the base it was handed, not only the default trunk's.
+    // The replay keys the base it was handed, not only the default trunk's: the
+    // task replays against `TEST_REPLAY_BASE`, and the row keys the merge base
+    // of the same override in-process (`step base --ref-env`, CLOUD-2787).
     assert!(
-        steps("verify:test-replay")[0].contains("--arg {{env.TEST_REPLAY_BASE}} --"),
+        steps("verify:test-replay")[0].contains("--base {{env.TEST_REPLAY_BASE}}"),
         "{:?}",
         steps("verify:test-replay")
+    );
+    assert!(
+        env_of("verify:test-replay", "TEST_REPLAY_BASE").contains("BATTEN_SPEC_BASE"),
+        "the task's base is the override the row keys"
+    );
+    let replay_tools = table["step"]
+        .as_array()
+        .and_then(|rows| {
+            rows.iter()
+                .find(|row| row.get("id").and_then(toml::Value::as_str) == Some("test-replay"))
+        })
+        .and_then(|row| row.get("tools"))
+        .map(toml::Value::to_string)
+        .unwrap_or_default();
+    assert!(
+        replay_tools.contains(r#""step", "base""#)
+            && replay_tools.contains(r#""--ref-env", "BATTEN_SPEC_BASE""#),
+        "the test-replay row keys its base through `step base --ref-env`: {replay_tools}"
     );
 }
 
@@ -423,9 +896,119 @@ fn the_commit_range_and_the_trusted_base_are_the_laps_own() {
         steps("verify:config-lint"),
         vec!["mise run config-lint".to_owned()]
     );
+    // THE GATE SET EXPORTS NO RANGE OR BASE TO EVERY STEP: its `env` is the
+    // engine it built (CLOUD-2924) and nothing else, so no `BASE_SHA`,
+    // `HEAD_SHA` or `CONFIG_LINT_BASE` reaches every step. The dist leg's
+    // profile is `dist:lap`'s own.
+    let verify_gated = task("verify:gated");
+    let keys: Vec<&str> = verify_gated
+        .get("env")
+        .and_then(toml::Value::as_table)
+        .map(|env| env.keys().map(String::as_str).collect())
+        .unwrap_or_default();
+    assert_eq!(
+        keys,
+        ["BATTEN_BIN"],
+        "the gate set itself exports nothing a step did not see before but the engine"
+    );
+}
+
+/// HK'S STEPS RUN THE ENGINE `BATTEN_BIN` NAMES TOO (CLOUD-2924). Tier 2
+/// reaches `hk.pkl`'s `check` strings through `ci:checks`, so a step spelling
+/// `cargo run -p batten` itself queues on cargo's lock beside every sibling
+/// build exactly as a `{{vars.batten}}` entry did. The engine is read ONCE,
+/// in Pkl, as `local batten`: `BATTEN_BIN`, the binary `verify:gated` built,
+/// with `vars.batten`'s own fallback where nothing set it. Each step then opens
+/// with `\(batten)`, so its `check` stays argv: a shell expansion in hk's
+/// declared shell home is refused by `no-new-shell`.
+///
+/// Fails by: any `check` that still spells `cargo run --quiet -p batten --`
+/// bare, or reaches `BATTEN_BIN` through a shell expansion.
+#[test]
+fn every_hk_step_runs_the_named_engine() {
+    let hk = std::fs::read_to_string(common::at_root("hk.pkl")).expect("the hook config");
+    let engine = "cargo run --quiet -p batten --";
+    let named = format!(r#"local batten = read?("env:BATTEN_BIN") ?? "{engine}""#);
+    let mut definitions = 0;
+    let mut steps = 0;
+    for (index, line) in hk.lines().enumerate() {
+        let code = line.trim_start();
+        if code.starts_with("//") {
+            continue;
+        }
+        assert!(
+            !code.contains("${BATTEN_BIN"),
+            "hk.pkl:{} reaches the engine through a shell expansion: {code}",
+            index + 1
+        );
+        if code == named {
+            definitions += 1;
+        } else {
+            assert!(
+                !code.contains(engine),
+                "hk.pkl:{} spells the engine bare, so it waits on cargo's lock: {code}",
+                index + 1
+            );
+        }
+        if code.starts_with(r#"check = "\(batten) "#) {
+            steps += 1;
+        }
+    }
+    assert_eq!(definitions, 1, "hk.pkl reads the engine once, in Pkl");
     assert!(
-        task("verify:gated").get("env").is_none(),
-        "the gate set itself exports nothing a step did not see before"
+        steps > 0,
+        "hk.pkl runs the engine somewhere, so this case has a subject"
+    );
+}
+
+/// THE GATE SET RUNS THE ENGINE IT BUILT FIRST (CLOUD-2924): `tree-clean`,
+/// which opens `verify:gated`'s `depends`, itself depends on `build:debug`, so
+/// the binary exists before any `{{vars.batten}}` runs; the body opens with
+/// `tree-clean`'s own check through that var (CLOUD-2789), so the lap builds
+/// once; `BATTEN_BIN` names that binary; and the build is pinned to that
+/// directory. So every `step run` a tier reaches renders `{{vars.batten}}` to
+/// this tree's engine rather than a `cargo run` per step, whatever
+/// `BATTEN_BIN` the caller of `verify` set or left unset, and `tree-clean`
+/// still runs the engine `land` hands its gate.
+#[test]
+fn the_gate_set_runs_the_engine_it_built_first() {
+    assert_eq!(depends_of("verify:gated"), ["tree-clean"]);
+    let first = common::graph_groups(&lap()[0])
+        .first()
+        .map(|group| common::group_rows(group))
+        .unwrap_or_default();
+    assert!(
+        first
+            .iter()
+            .any(|row| row.depends_on.is_empty() && row.task.as_deref() == Some("tree-clean")),
+        "the body opens with the graph whose root is tree-clean: {first:?}"
+    );
+    assert_eq!(
+        depends_of("tree-clean"),
+        ["build:debug"],
+        "the engine is built before tree-clean, the first entry, runs it"
+    );
+    assert!(
+        common::task_block_template("tree-clean")
+            .expect("tree-clean is a declared task")
+            .lines()
+            .any(|line| line == r#"run = "{{vars.batten}} receipt clean""#),
+        "tree-clean runs the engine through its var, so `land`'s gate engine reaches it"
+    );
+    let target = env_of("build:debug", "CARGO_TARGET_DIR");
+    assert_eq!(
+        env_of("verify:gated", "BATTEN_BIN"),
+        format!("{target}/debug/batten"),
+        "BATTEN_BIN names the binary build:debug writes"
+    );
+    assert_eq!(
+        target, "{{ get_env(name='CARGO_TARGET_DIR', default=config_root ~ '/target') }}",
+        "the build is pinned to the target dir BATTEN_BIN is built from"
+    );
+    assert_eq!(
+        steps("build:debug"),
+        ["cargo build --quiet -p batten --bin batten"],
+        "the dev-profile build of the one batten binary"
     );
 }
 
@@ -451,7 +1034,7 @@ fn record(dir: &Path, check: &str) {
     let output = batten()
         .args(["receipt", "record", check])
         .current_dir(dir)
-        .output()
+        .streamed_output()
         .expect("run batten receipt record");
     assert!(
         output.status.success(),
@@ -465,7 +1048,7 @@ fn status(dir: &Path, args: &[&str]) -> (i32, String) {
         .args(["receipt", "status"])
         .args(args)
         .current_dir(dir)
-        .output()
+        .streamed_output()
         .expect("run batten receipt status");
     (
         output.status.code().expect("exit code"),

@@ -73,7 +73,16 @@ import rego.v1
 rules contains "verb reach missing"
 
 # The file the `CommandDecl` table lives in. One spelling, read three times.
-SURFACE := "crates/batten/src/surface.rs"
+#
+# IT MOVED, AND THE MOVE WAS CAUGHT BY THIS MODULE'S OWN VACUITY ARM (CLOUD-2789).
+# The table left `surface.rs` for `surface_table.rs` when the command surface
+# became data of its own; read at the old path the head held zero verbs, and the
+# arm refused rather than report clean over a surface it could not read.
+SURFACE := "crates/batten/src/surface_table.rs"
+
+# Where the table lived before that move: a base from before the split reads
+# its verbs here, or every pre-existing verb would read as one the branch added.
+FORMER_SURFACE := "crates/batten/src/surface.rs"
 
 # The surfaces a production caller may live in: whatever the row's `line_sources`
 # filled, minus the surface file itself and the crate.
@@ -97,7 +106,7 @@ call_surfaces contains path if {
 # `undefined`: the engine emits `null` where the base would not resolve, and
 # `not input.tree["base-delta"]` is dead for exactly that value.
 delta := d if {
-	d := input.tree["base-delta"]
+	d = input.tree["base-delta"]
 	is_object(d)
 }
 
@@ -125,11 +134,18 @@ touched contains path if {
 # than unreadable: a new surface file declaring a verb nothing reaches is the
 # same defect arriving in one commit instead of two.
 base_lines := lines if {
-	lines := delta["base-lines"][SURFACE]
+	lines = delta["base-lines"][SURFACE]
+}
+
+# A base from before the table moved holds it at its former path.
+base_lines := lines if {
+	not delta["base-lines"][SURFACE]
+	lines = delta["base-lines"][FORMER_SURFACE]
 }
 
 base_lines := [] if {
 	not delta["base-lines"][SURFACE]
+	not delta["base-lines"][FORMER_SURFACE]
 }
 
 # The verb path a `CommandDecl` line declares, or undefined.
@@ -141,13 +157,13 @@ decl_path(line) := verb if {
 	trimmed := trim_space(line)
 	startswith(trimmed, "path: \"")
 	rest := trim_prefix(trimmed, "path: \"")
-	verb := split(rest, "\"")[0]
+	verb = split(rest, "\"")[0]
 	verb != ""
 }
 
 verbs_in(lines) := {verb |
 	some line in lines
-	verb := decl_path(line)
+	verb = decl_path(line)
 }
 
 declared_verbs := verbs_in(input.tree.lines[SURFACE])
@@ -232,9 +248,9 @@ harness_json(path) if {
 #
 # Keeping the LEADING space is what separates the two: a call has a space before
 # the verb because something invoked it, and a `path:` literal has a quote there.
-# So the tail may be a space, a quote, or the end of the text, and the head may
-# not.
-CALL_TAIL := {" ", "\"", "'", "`"}
+# So the tail may be a space, a quote, a `)` closing the `$(…)` or `(…)` the call
+# ran in, or the end of the text, and the head may not.
+CALL_TAIL := {" ", "\"", "'", "`", ")"}
 
 invokes(text, verb) if {
 	some tail in CALL_TAIL
@@ -247,7 +263,7 @@ invokes(text, verb) if {
 
 reached(verb) if {
 	some path in call_surfaces
-	text := code_text(path)
+	text = code_text(path)
 	contains(text, "batten")
 	invokes(text, verb)
 }
@@ -355,13 +371,44 @@ surface_with(verb) := [
 ]
 
 tree_with(lines, base, callers) := {"tree": {
-	"lines": object.union({"crates/batten/src/surface.rs": lines}, callers),
+	"lines": object.union({"crates/batten/src/surface_table.rs": lines}, callers),
 	"base-delta": {
 		"added": [],
+		"edited": ["crates/batten/src/surface_table.rs"],
+		"base-lines": {"crates/batten/src/surface_table.rs": base},
+	},
+}}
+
+# THE FIXTURES SPELL THE PATHS, never `SURFACE`: the evaluator leaves a rule
+# reference used as an object key unresolved, so `{SURFACE: lines}` keyed nothing
+# and every refusing case here read clean.
+
+# A base from before the table moved: the head holds it at `SURFACE`, the base
+# at `FORMER_SURFACE`, and the table's move is an add.
+pre_split_with(lines, base) := {"tree": {
+	"lines": {"crates/batten/src/surface_table.rs": lines},
+	"base-delta": {
+		"added": ["crates/batten/src/surface_table.rs"],
 		"edited": ["crates/batten/src/surface.rs"],
 		"base-lines": {"crates/batten/src/surface.rs": base},
 	},
 }}
+
+# THE MOVE IS NOT AN ADD (CLOUD-2789). Reading only `SURFACE` in a base from
+# before the split made every verb read new, so moving the table refused every
+# unreached one.
+test_a_verb_the_former_surface_declared_survives_the_move if {
+	count(violation) == 0 with input as pre_split_with(
+		surface_with("lease acquire"),
+		surface_with("lease acquire"),
+	)
+}
+
+# AND THE FALLBACK IS NOT A PASS: a verb the former surface lacked is still new.
+test_a_verb_added_across_the_move_is_refused if {
+	some v in violation with input as pre_split_with(surface_with("lease acquire"), [])
+	v.verdict == "verb reach missing"
+}
 
 test_a_branch_that_adds_an_unreached_verb_is_refused if {
 	some v in violation with input as tree_with(surface_with("lease acquire"), [], {})
@@ -412,7 +459,7 @@ test_the_surface_declaration_is_not_its_own_caller if {
 # rejected: an untouched surface must refuse nothing at all.
 test_a_pre_existing_unreached_verb_survives_an_unrelated_edit if {
 	count(violation) == 0 with input as {"tree": {
-		"lines": {"crates/batten/src/surface.rs": surface_with("lease acquire")},
+		"lines": {"crates/batten/src/surface_table.rs": surface_with("lease acquire")},
 		"base-delta": {
 			"added": [],
 			"edited": ["README.md"],
@@ -499,7 +546,7 @@ test_a_hook_command_in_harness_json_reaches_its_verb if {
 
 test_could_not_look_is_reported_rather_than_passed if {
 	some v in violation with input as {"tree": {
-		"lines": {"crates/batten/src/surface.rs": surface_with("lease acquire")},
+		"lines": {"crates/batten/src/surface_table.rs": surface_with("lease acquire")},
 		"base-delta": null,
 	}}
 	v.verdict == "diff read absent"

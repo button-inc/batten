@@ -39,7 +39,9 @@ use crate::common;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use batten::rules::{self, Rule, RuleKind, RuleScope};
+use batten::config_model::{Rule, RuleKind};
+use batten::preset_catalog::RuleScope;
+use batten::rules;
 
 /// A fixture repository carrying a board record and, optionally, the case file
 /// an obligation names.
@@ -81,6 +83,31 @@ fn repo_closing(
     root
 }
 
+/// The fixture with several files written beside the record, as a declaring
+/// file, the suite it names and the authority enrolling it are three files.
+fn repo_with(name: &str, record: &[&str], files: &[(&str, &str)]) -> PathBuf {
+    let root = repo(name, record, None);
+    for (path, body) in files {
+        let full = root.join(path);
+        fs::create_dir_all(full.parent().unwrap()).expect("file parent");
+        fs::write(full, body).expect("write the fixture file");
+    }
+    root
+}
+
+/// The authority enrolling `gates` in `[mutate]`, which is what makes a row in
+/// their files one a sweep applies.
+fn enrolling(gates: &str) -> String {
+    format!("version = 1\n\n[mutate]\ngates = [{gates}]\n")
+}
+
+/// A declaring module naming its suite and carrying one row for `slug-one`.
+const DECLARING: &str =
+    "#MUTANT-SUITE crates/batten/tests/it/x.rs\n#MUTANT slug-one|s@a@b@|the_case\n";
+
+/// The suite that holds the case `DECLARING` names.
+const SUITE: (&str, &str) = ("crates/batten/tests/it/x.rs", "#[test]\nfn the_case() {}\n");
+
 fn write_record(root: &Path, name: &str, lines: &[&str]) {
     let git_dir = common::git_in(root, &["rev-parse", "--absolute-git-dir"]);
     let path = batten::recorder::record_path(Path::new(git_dir.trim()), name, "work", None);
@@ -99,23 +126,24 @@ fn install_module(root: &Path) {
 /// The committed row's shape, including `line_sources` — the field this suite
 /// exists to keep honest, since a glob that misses the named file makes every
 /// obligation unbindable for a reason no message would name.
+///
+/// READ from `batten.toml`, never copied (#1276): the copy pinned four globs
+/// while the committed row had grown to eleven and still missed
+/// `.config/nextest.toml`, `action.yml`, the workflows and
+/// `hk-fix-selection.pkl`, and every case here passed over it.
 fn row() -> Rule {
-    serde_json::from_value(serde_json::json!({
-        "id": "test name undefined",
-        "kind": "policy",
-        "scope": "tree",
-        "base": "origin/main",
-        "delta_sources": ["**"],
-        "line_sources": [
-            "crates/batten/tests/**/*.rs",
-            "policy/*.rego",
-            "mise.toml",
-            "crates/batten/src/**/*.rs"
-        ],
-        "module": "policy/obligations-bound.rego",
-        "severity": "deny",
-    }))
-    .expect("the loader accepts the committed row's shape")
+    common::committed_rule(UNBOUND)
+}
+
+/// THE POPULATION, over this repository: every tracked file declaring a row is
+/// one the committed row reads, so an obligation naming any of them can bind.
+#[test]
+fn every_declaring_file_in_this_repository_is_read() {
+    let unread = common::declaring_files_unread(&row());
+    assert!(
+        unread.is_empty(),
+        "declaring files outside `{UNBOUND}`'s line_sources: {unread:?}"
+    );
 }
 
 /// Two recorders, because the module reads two records: the board writes it
@@ -125,27 +153,27 @@ fn row() -> Rule {
 /// recorder the config declares, so the closing set would resolve to nothing and
 /// every refusal case would pass for the wrong reason. Measured here, in exactly
 /// that shape, before this second row existed.
-fn recorders() -> Vec<batten::recorder::Declared> {
+fn recorders() -> Vec<batten::config_model::RecorderDeclared> {
     vec![
         declared("board-writes", "save_issue", "issue"),
         declared("pr-closes", "pull_request_read", "closes"),
     ]
 }
 
-fn declared(name: &str, tool: &str, kind: &str) -> batten::recorder::Declared {
-    batten::recorder::Declared {
+fn declared(name: &str, tool: &str, kind: &str) -> batten::config_model::RecorderDeclared {
+    batten::config_model::RecorderDeclared {
         name: name.to_owned(),
         record: name.to_owned(),
         tool: tool.to_owned(),
-        key: batten::recorder::RecordKey::Branch,
+        key: batten::config_model::RecordKey::Branch,
         requires: Vec::new(),
         refused_when_input: Vec::new(),
         refused_when_result: Vec::new(),
         requires_input_matching: std::collections::BTreeMap::new(),
         requires_recorded: None,
-        columns: vec![batten::recorder::Column {
+        columns: vec![batten::config_model::Column {
             name: "kind".to_owned(),
-            value: batten::recorder::Value::Literal(kind.to_owned()),
+            value: batten::config_model::Value::Literal(kind.to_owned()),
             minus: None,
             without: None,
             counted_with: None,
@@ -198,19 +226,89 @@ fn line(obligations: &str) -> String {
 /// theirs.
 #[test]
 fn a_bound_obligation_reaches_the_predicate_and_is_clean() {
-    let root = repo(
+    let root = repo_with(
         "obligations-bound-clean",
-        &[&line("1:crates/batten/tests/it/x.rs:slug-one")],
-        Some((
-            "crates/batten/tests/it/x.rs",
-            "#MUTANT slug-one|s@a@b@|the_case\n",
-        )),
+        &[&line("1:policy/subject.rego:slug-one")],
+        &[
+            ("policy/subject.rego", DECLARING),
+            SUITE,
+            ("batten.toml", &enrolling("\"subject\"")),
+        ],
     );
     assert!(
         verdicts(&root).is_empty(),
-        "the obligation names a tracked file whose lines declare the slug: {:?}",
+        "an enrolled gate's row names a case its suite carries: {:?}",
         verdicts(&root)
     );
+}
+
+/// THE `//` OPENER binds as `#` does: `hk.pkl` declares its rows with it.
+#[test]
+fn a_slash_opened_row_in_an_enrolled_file_binds() {
+    let slashed = DECLARING.replace('#', "/".repeat(2).as_str());
+    let root = repo_with(
+        "obligations-bound-slash",
+        &[&line("1:hk.pkl:slug-one")],
+        &[
+            ("hk.pkl", &slashed),
+            SUITE,
+            ("batten.toml", &enrolling("\"hk.pkl\"")),
+        ],
+    );
+    assert!(verdicts(&root).is_empty(), "{:?}", verdicts(&root));
+}
+
+/// THE SLUG IN PROSE IS NOT A ROW (#1276). The gate matched `MUTANT <slug>|`
+/// anywhere in a line, so a comment mentioning the slug bound the obligation
+/// to a mutation no sweep would ever apply.
+#[test]
+fn a_slug_mentioned_in_prose_is_unbound() {
+    let root = repo_with(
+        "obligations-prose",
+        &[&line("1:policy/subject.rego:slug-one")],
+        &[
+            (
+                "policy/subject.rego",
+                "#MUTANT-SUITE crates/batten/tests/it/x.rs\n# see MUTANT slug-one|s@a@b@|the_case\n",
+            ),
+            SUITE,
+            ("batten.toml", &enrolling("\"subject\"")),
+        ],
+    );
+    assert_eq!(verdicts(&root), vec![UNBOUND.to_owned()]);
+}
+
+/// THE CASE IS CHECKED, by the marker gate's rule: the nearest suite above the
+/// row, read for the case's last `::` segment. A row naming a case its suite
+/// lacks is a mutation nothing can kill.
+#[test]
+fn a_row_whose_case_its_suite_lacks_is_unbound() {
+    let root = repo_with(
+        "obligations-case-missing",
+        &[&line("1:policy/subject.rego:slug-one")],
+        &[
+            ("policy/subject.rego", DECLARING),
+            (SUITE.0, "#[test]\nfn another_case() {}\n"),
+            ("batten.toml", &enrolling("\"subject\"")),
+        ],
+    );
+    assert_eq!(verdicts(&root), vec![UNBOUND.to_owned()]);
+}
+
+/// A ROW IN A FILE NO ENFORCED GATE OWNS is one no sweep applies, however well
+/// it is written.
+#[test]
+fn a_row_in_a_file_no_gate_enrolls_is_unbound() {
+    let root = repo_with(
+        "obligations-unenrolled",
+        &[&line("1:policy/subject.rego:slug-one")],
+        &[
+            ("policy/subject.rego", DECLARING),
+            SUITE,
+            ("batten.toml", &enrolling("\"other\"")),
+        ],
+    );
+    assert_eq!(verdicts(&root), vec![UNBOUND.to_owned()]);
 }
 
 #[test]
@@ -472,20 +570,24 @@ fn an_absent_closes_record_judges_nothing() {
 /// than leaving every case above passing over a module nothing runs.
 #[test]
 fn the_committed_row_is_the_one_these_cases_exercise() {
-    let committed: Vec<Rule> = batten::config::load(&common::at_root("batten.toml"))
-        .expect("the committed config loads")
-        .rules;
+    let committed: Vec<Rule> =
+        batten::config::load(&common::committed_config_file("obligations-bound"))
+            .expect("the committed config loads")
+            .rules;
     let declared = committed
         .iter()
         .find(|rule| rule.id == "test name undefined")
         .expect("the committed config declares the row this suite exercises");
     assert_eq!(declared.kind, RuleKind::Policy);
     assert_eq!(declared.scope, RuleScope::Tree);
+    // A glob that MATCHES a case file, not one whose text names the directory:
+    // the row now reads every crate's tests as `crates/*/{tests,examples}/…`
+    // (0c6a0c4c), which covers `crates/batten/tests` without spelling it.
+    let case_file = "crates/batten/tests/it/obligations_bound.rs";
     assert!(
-        declared
-            .line_sources
-            .iter()
-            .any(|glob| glob.contains("crates/batten/tests")),
+        declared.line_sources.iter().any(|glob| {
+            globset::Glob::new(glob).is_ok_and(|glob| glob.compile_matcher().is_match(case_file))
+        }),
         "an obligation naming a case file must be resolvable, or the slug can \
          never be found and the gate refuses for a reason no message names: {:?}",
         declared.line_sources

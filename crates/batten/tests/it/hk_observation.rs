@@ -286,11 +286,28 @@ fn a_record_of_another_predicate_is_could_not_look() {
 /// contract, and a record that reads back.
 #[test]
 fn this_session_can_observe_the_pinned_runner() {
-    let root = common::at_root(".");
-    let output = common::run(
-        &root,
-        &["hk", "observe", "--session", "hk-observation-suite"],
+    use std::hash::BuildHasher as _;
+    let root = common::committed_repo().to_path_buf();
+    // A SESSION OF THIS RUN'S OWN (CLOUD-2936). The record lives in the live
+    // checkout's real git directory, keyed by the session. Under one fixed id,
+    // one recording probed and wrote it and the next read it back without
+    // probing; and two runs in one checkout, `test:cargo` beside a judge,
+    // shared it. `common::session_id` is deterministic run to run by design, so
+    // a per-invocation nonce rides on it: every run probes, which is this
+    // case's subject, and no record is ever another run's.
+    let session = format!(
+        "{}#{:016x}",
+        common::session_id("hk-observation"),
+        std::collections::hash_map::RandomState::new().hash_one(std::process::id())
     );
+    let output = common::run(&root, &["hk", "observe", "--session", &session]);
+    // Its own record and no other is removed, so runs leave nothing behind.
+    let git_dir = batten::git::git_dir(&root).expect("this checkout has a git directory");
+    let digest = fs::read(root.join(hk::ARTIFACT)).map_or_else(
+        |_| "no-contract".to_owned(),
+        |bytes| batten::tools::digest(&bytes),
+    );
+    let _ = fs::remove_file(hk::observation_path(&git_dir, &session, &digest));
     assert_eq!(
         output.status.code(),
         Some(0),
@@ -309,7 +326,7 @@ fn this_session_can_observe_the_pinned_runner() {
         "the verb emits one of the three state tokens, got {state:?}"
     );
     assert!(
-        !emitted.contains("hk-observation-suite"),
+        !emitted.contains(&session),
         "the raw session token reaches no channel"
     );
 }

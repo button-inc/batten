@@ -88,12 +88,33 @@ use common::{at_root, batten, stdout};
 fn scratch(name: &str, git: bool, config: Option<&str>) -> PathBuf {
     let dir = common::scratch_outside_tree("batten-doctor-e2e", name);
     if git {
-        common::git_in(&dir, &["init", "-q"]);
+        batten::gitwrite::init_on_main(&dir).expect("a repository on main");
     }
     if let Some(text) = config {
         common::write(&dir, "batten.toml", text);
     }
+    if git {
+        seed_wiring(&dir);
+    }
     dir
+}
+
+/// Write every harness's committed wiring, so plain `doctor`'s `hook-wiring`
+/// check judges a wired fixture (CLOUD-2676). No session and no disposable
+/// home, so only the committed half can write.
+fn seed_wiring(dir: &Path) {
+    let output = batten()
+        .args(["wiring", "register", "--all"])
+        .current_dir(dir)
+        .env_remove("CLAUDE_PID")
+        .env_remove("BATTEN_ENVIRONMENT")
+        .streamed_output()
+        .expect("run batten wiring register --all");
+    assert!(
+        output.status.success(),
+        "seeding the wiring failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 fn doctor(dir: &Path, extra: &[&str]) -> Output {
@@ -102,14 +123,19 @@ fn doctor(dir: &Path, extra: &[&str]) -> Output {
     command.args(extra);
     command
         .current_dir(dir)
+        .env_remove("CLAUDE_PID")
         .env_remove("BATTEN_STRICTNESS")
         .env_remove("BATTEN_FAIL_ON_WARNING")
         .env_remove("BATTEN_CONFIG_FROM")
-        .output()
+        .streamed_output()
         .expect("run batten doctor")
 }
 
 // --- doctor mediator: WHICH engine the registrations reach (CLOUD-1349) -------
+
+/// A config pinning the engine to source: the one tree whose own build is the
+/// engine, so the only one whose mediator is compared with it (CLOUD-2840).
+const SOURCE_PINNED: &str = "version = 1\nengine = { source = \"ab\" }\n";
 
 /// A checkout that builds a mediator, with `batten` on `PATH` resolving to
 /// `planted`.
@@ -119,7 +145,7 @@ fn doctor(dir: &Path, extra: &[&str]) -> Output {
 /// hold. Nothing is executed, so neither needs to be a real program — which is
 /// also what keeps these cases fast and portable.
 fn mediator_fixture(name: &str, planted: &[u8], built: &[u8]) -> PathBuf {
-    let dir = scratch(name, true, Some("version = 1\n"));
+    let dir = scratch(name, true, Some(SOURCE_PINNED));
     // The manifest is what says "this tree builds a mediator". Its contents are
     // never parsed — only its existence decides the question is askable — so the
     // marker is deliberately minimal.
@@ -154,7 +180,7 @@ fn mediator(dir: &Path, bin: Option<&Path>, extra: &[&str]) -> Output {
         .env_remove("BATTEN_STRICTNESS")
         .env_remove("BATTEN_FAIL_ON_WARNING")
         .env_remove("BATTEN_CONFIG_FROM")
-        .output()
+        .streamed_output()
         .expect("run batten doctor mediator")
 }
 
@@ -196,7 +222,7 @@ fn doctor_hooks_counts_each_merged_surface_under_the_resolved_home() {
         .current_dir(&dir)
         .args(["doctor", "hooks", "-J"])
         .at_home(&home)
-        .output()
+        .streamed_output()
         .expect("run batten doctor hooks");
     let document: serde_json::Value =
         serde_json::from_str(&stdout(&output)).expect("the report is JSON");
@@ -232,7 +258,7 @@ fn the_mediator_is_compared_against_the_build_this_tree_actually_writes() {
     // So the redirect points where the build IS, and the conventional path is
     // left EMPTY. A reader of the literal finds nothing and fails; only a reader
     // of the variable finds the build and matches it.
-    let dir = scratch("mediator-redirected-target", true, Some("version = 1\n"));
+    let dir = scratch("mediator-redirected-target", true, Some(SOURCE_PINNED));
     fs::create_dir_all(dir.join("crates/batten")).unwrap();
     fs::write(dir.join("crates/batten/Cargo.toml"), "# marker\n").unwrap();
     let elsewhere = dir.join("written-elsewhere");
@@ -255,7 +281,7 @@ fn the_mediator_is_compared_against_the_build_this_tree_actually_writes() {
         .env_remove("BATTEN_STRICTNESS")
         .env_remove("BATTEN_FAIL_ON_WARNING")
         .env_remove("BATTEN_CONFIG_FROM")
-        .output()
+        .streamed_output()
         .expect("run batten doctor mediator");
     assert_eq!(output.status.code(), Some(0), "{}", stdout(&output));
     assert_eq!(stdout(&output), "mediator ok\n");
@@ -406,7 +432,7 @@ fn a_tree_that_builds_one_but_has_not_is_could_not_look_never_clean() {
     // have an artifact to compare and does not, which is a different claim from
     // a consumer checkout that never had one. Reading it as clean is the exact
     // shape — an unanswerable question passing — this verb is against.
-    let dir = scratch("mediator-unbuilt", true, Some("version = 1\n"));
+    let dir = scratch("mediator-unbuilt", true, Some(SOURCE_PINNED));
     fs::create_dir_all(dir.join("crates/batten")).unwrap();
     fs::write(dir.join("crates/batten/Cargo.toml"), "# marker\n").unwrap();
     let bin = dir.join("planted-bin");
@@ -538,7 +564,7 @@ fn a_healthy_repository_exits_zero() {
     assert_eq!(output.status.code(), Some(0));
     assert_eq!(
         stdout(&output),
-        "config ok\ngit-repo ok\ncommand-programs ok\npin-record ok\nhook-handlers ok\nplan-surface ok\ndoctor: 6 check(s), 0 failed\n"
+        "config ok\ngit-repo ok\ncommand-programs ok\npin-record ok\nhook-handlers ok\nplan-surface ok\nhook-wiring ok\ndoctor: 7 check(s), 0 failed\n"
     );
 }
 
@@ -641,11 +667,14 @@ fn every_check_is_reported_not_just_the_first_failure() {
     // the same thing in every scratch repository. What it can fail on is a
     // harness declaring neither a fetched spelling nor the row that owes the
     // survey (CLOUD-472), which is a defect in the crate and not in a tree.
-    assert!(text.contains("doctor: 6 check(s), 2 failed"), "got: {text}");
+    //
+    // `hook-wiring` is the third (CLOUD-2676): a directory with no wiring files
+    // is unwired, whatever else it lacks.
+    assert!(text.contains("doctor: 7 check(s), 3 failed"), "got: {text}");
     // AND EACH FAILURE IS LABELLED ON STDERR (CLOUD-2078), where an agent reads
     // it: the class and the check it names, one finding per failing check.
     let said = common::stderr(&output);
-    for check in ["config", "git-repo"] {
+    for check in ["config", "git-repo", "hook-wiring"] {
         assert!(
             said.lines()
                 .any(|line| line.contains("workspace state broken") && line.contains(check)),
@@ -847,7 +876,8 @@ fn json_is_valid_and_carries_every_check() {
             "command-programs",
             "pin-record",
             "hook-handlers",
-            "plan-surface"
+            "plan-surface",
+            "hook-wiring"
         ]
     );
 }
@@ -900,7 +930,10 @@ fn a_passing_check_omits_the_reason_rather_than_nulling_it() {
 
 /// The table as the binary itself renders it, read out of `--help`.
 fn rendered_table() -> String {
-    let output = batten().arg("--help").output().expect("run batten --help");
+    let output = batten()
+        .arg("--help")
+        .streamed_output()
+        .expect("run batten --help");
     String::from_utf8_lossy(&output.stdout).into_owned()
 }
 
@@ -951,7 +984,10 @@ const EXPECTED: [(i32, &str); 4] = [
 
 #[test]
 fn doctor_is_declared_read_in_the_spec() {
-    let output = batten().arg("spec").output().expect("run batten spec");
+    let output = batten()
+        .arg("spec")
+        .streamed_output()
+        .expect("run batten spec");
     let spec: serde_json::Value = serde_json::from_slice(&output.stdout).expect("spec is JSON");
     let doctor = spec["subcommands"]
         .as_array()
@@ -984,11 +1020,11 @@ fn doctor_writes_no_file() {
 /// the three `transcript` cases below, torn, absent and readable alike.
 #[test]
 fn this_repository_is_healthy() {
-    let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let repo = common::committed_repo().to_path_buf();
     let output = batten()
         .args(["doctor", "--json"])
         .current_dir(&repo)
-        .output()
+        .streamed_output()
         .expect("run batten doctor");
     let report: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("the report is JSON");
@@ -1125,6 +1161,29 @@ fn an_unconfigured_transcript_emits_no_check_at_all() {
 /// reasoning `mise-tasks/egress-check.sh` follows by taking both values as
 /// arguments — and the reason `container-preflight` was wrong, since it read a
 /// value `mise` had already corrected.
+/// The `state` `doctor egress -J` names, under `proxy` and `no_proxy`.
+fn egress_state(dir: &Path, proxy: Option<&str>, no_proxy: Option<&str>) -> String {
+    let mut command = batten();
+    command.arg("doctor").arg("egress").arg("-J");
+    for name in ["HTTPS_PROXY", "https_proxy", "NO_PROXY", "no_proxy"] {
+        command.env_remove(name);
+    }
+    if let Some(value) = proxy {
+        command.env("HTTPS_PROXY", value);
+    }
+    if let Some(value) = no_proxy {
+        command.env("NO_PROXY", value);
+    }
+    let json = command
+        .current_dir(dir)
+        .env_remove("BATTEN_CONFIG_FROM")
+        .streamed_output()
+        .expect("run batten doctor egress -J");
+    let parsed: serde_json::Value =
+        serde_json::from_str(&stdout(&json)).expect("the data channel is parseable");
+    parsed["state"].as_str().unwrap_or_default().to_owned()
+}
+
 fn egress(dir: &Path, proxy: Option<&str>, no_proxy: Option<&str>) -> Output {
     let mut command = batten();
     command.arg("doctor").arg("egress");
@@ -1142,7 +1201,7 @@ fn egress(dir: &Path, proxy: Option<&str>, no_proxy: Option<&str>) -> Output {
         .env_remove("BATTEN_STRICTNESS")
         .env_remove("BATTEN_FAIL_ON_WARNING")
         .env_remove("BATTEN_CONFIG_FROM")
-        .output()
+        .streamed_output()
         .expect("run batten doctor egress")
 }
 
@@ -1236,26 +1295,76 @@ fn a_wildcard_entry_is_neither_a_total_bypass_nor_a_fence_for_the_bare_host() {
     // list semantics is the whole reason `fetch::is_direct` exists; making either
     // one match the other would put a second authority in front of one of the two
     // subjects.
+    //
+    // WITH NO LIVE CREDENTIAL THE PROXY IS THE ROUTE (#1276, admitted by the
+    // owner): unfenced is a failure only while a credential would go direct.
     let dir = scratch("egress-wildcard-host", true, Some("version = 1\n"));
     let output = egress(&dir, Some("http://proxy:8080"), Some("*.api.github.com"));
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert_eq!(stdout(&output).trim(), "egress ok");
+    // ROUTED, NOT A TOTAL BYPASS: both read `egress ok`, so the data channel's
+    // state is what still tells the substring-wildcard trap apart, which would
+    // read this list as bypassing everything (`unproxied`).
+    assert_eq!(
+        egress_state(&dir, Some("http://proxy:8080"), Some("*.api.github.com")),
+        "routed"
+    );
+}
+
+/// Fails by: an unfenced proxy passed while a LIVE credential would go
+/// direct, through the binary rather than `egress_of`'s closure. The credential
+/// is proved live by a fresh receipt for its value, which is what
+/// `credential_usable` reads before it would probe (#1276).
+#[test]
+fn a_live_credential_with_an_unfenced_proxy_still_fails() {
+    const TOKEN: &str = "egress-live-credential-token";
+    let config = "version = 1\n\n[credential]\n\
+                  probe_url = \"https://api.github.com/rate_limit\"\n\
+                  names = [\"BATTEN_EGRESS_TEST_TOKEN\"]\n";
+    let dir = scratch("egress-live-credential", true, Some(config));
+    let receipts = dir.join(".git").join("batten-receipts");
+    std::fs::create_dir_all(&receipts).expect("the receipt store");
+    std::fs::write(
+        receipts.join(format!(
+            "credential.{}",
+            batten::digest::sha256_hex(TOKEN.as_bytes())
+        )),
+        "live\n",
+    )
+    .expect("the receipt");
+    let mut command = batten();
+    command.arg("doctor").arg("egress");
+    for name in ["HTTPS_PROXY", "https_proxy", "NO_PROXY", "no_proxy"] {
+        command.env_remove(name);
+    }
+    let output = command
+        .env("HTTPS_PROXY", "http://proxy:8080")
+        .env("NO_PROXY", "localhost,127.0.0.1")
+        .env("BATTEN_EGRESS_TEST_TOKEN", TOKEN)
+        .current_dir(&dir)
+        .env_remove("BATTEN_CONFIG_FROM")
+        .streamed_output()
+        .expect("run batten doctor egress");
     assert_eq!(output.status.code(), Some(1), "{output:?}");
     assert_eq!(stdout(&output).trim(), "egress failed egress-unfenced");
 }
 
 #[test]
 fn a_proxy_with_no_github_fence_is_unfenced() {
+    // No live credential, so the proxy is the route (#1276, admitted).
     let dir = scratch("egress-unfenced", true, Some("version = 1\n"));
     let output = egress(&dir, Some("http://proxy:8080"), Some("localhost,127.0.0.1"));
-    assert_eq!(output.status.code(), Some(1), "{output:?}");
-    assert_eq!(stdout(&output).trim(), "egress failed egress-unfenced");
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert_eq!(stdout(&output).trim(), "egress ok");
 }
 
 #[test]
 fn a_proxy_with_an_empty_no_proxy_is_unfenced() {
+    // No live credential, so the proxy is the route (#1276, admitted).
     let dir = scratch("egress-unfenced-empty", true, Some("version = 1\n"));
     let output = egress(&dir, Some("http://proxy:8080"), Some(""));
-    assert_eq!(output.status.code(), Some(1), "{output:?}");
-    assert_eq!(stdout(&output).trim(), "egress failed egress-unfenced");
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert_eq!(stdout(&output).trim(), "egress ok");
 }
 
 #[test]
@@ -1272,7 +1381,7 @@ fn the_data_channel_emits_a_document_even_when_unproxied() {
     }
     let json = command
         .current_dir(&dir)
-        .output()
+        .streamed_output()
         .expect("run batten doctor egress -J");
     assert_eq!(json.status.code(), Some(0), "{json:?}");
     let parsed: serde_json::Value =
@@ -1294,7 +1403,7 @@ fn the_data_channel_names_the_failing_state() {
         .env("HTTPS_PROXY", "http://proxy:8080")
         .env("NO_PROXY", "api.github.com")
         .current_dir(&dir)
-        .output()
+        .streamed_output()
         .expect("run batten doctor egress -J");
     assert_eq!(json.status.code(), Some(1), "{json:?}");
     let parsed: serde_json::Value =
@@ -1307,20 +1416,33 @@ fn the_lowercase_spellings_are_honoured() {
     // Every client in this class resolves lower case first, then upper. A reader
     // that only knew the upper-case names would report a proxied container as
     // unproxied.
+    //
+    // No live credential, so the proxy is the route (#1276, admitted): `ok`,
+    // and the data channel names it `routed` — a reader blind to the lower-case
+    // names would say `unproxied` instead.
     let dir = scratch("egress-lowercase", true, Some("version = 1\n"));
-    let mut command = batten();
-    command.arg("doctor").arg("egress");
-    for name in ["HTTPS_PROXY", "https_proxy", "NO_PROXY", "no_proxy"] {
-        command.env_remove(name);
-    }
-    let output = command
-        .env("https_proxy", "http://proxy:8080")
-        .env("no_proxy", "localhost")
-        .current_dir(&dir)
-        .output()
-        .expect("run batten doctor egress");
-    assert_eq!(output.status.code(), Some(1), "{output:?}");
-    assert_eq!(stdout(&output).trim(), "egress failed egress-unfenced");
+    let run = |json: bool| {
+        let mut command = batten();
+        command.arg("doctor").arg("egress");
+        if json {
+            command.arg("-J");
+        }
+        for name in ["HTTPS_PROXY", "https_proxy", "NO_PROXY", "no_proxy"] {
+            command.env_remove(name);
+        }
+        command
+            .env("https_proxy", "http://proxy:8080")
+            .env("no_proxy", "localhost")
+            .current_dir(&dir)
+            .streamed_output()
+            .expect("run batten doctor egress")
+    };
+    let output = run(false);
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert_eq!(stdout(&output).trim(), "egress ok");
+    let parsed: serde_json::Value =
+        serde_json::from_str(&stdout(&run(true))).expect("the data channel is parseable");
+    assert_eq!(parsed["state"], "routed", "{parsed:?}");
 }
 
 #[test]
@@ -1431,7 +1553,7 @@ fn gaps(dir: &Path) -> String {
     let outcome = batten()
         .args(["doctor", "gaps"])
         .current_dir(dir)
-        .output()
+        .streamed_output()
         .expect("run");
     assert!(outcome.status.success(), "{}", common::stderr(&outcome));
     stdout(&outcome)
@@ -1479,4 +1601,64 @@ fn the_gap_record_holds_no_argument_text() {
     assert!(!stored.contains(secret), "the argv is not: {stored}");
     assert!(!stored.contains("tools/x.py"), "nor any operand: {stored}");
     assert!(!gaps(&dir).contains(secret));
+}
+
+// --- plain doctor judges the hook wiring (CLOUD-2676) --------------------------
+
+#[test]
+fn plain_doctor_fails_hook_wiring_on_an_unwired_checkout() {
+    // Built by hand rather than through `scratch`, which seeds the wiring.
+    let dir = common::scratch_outside_tree("batten-doctor-e2e", "hook-wiring-unwired");
+    common::git_in(&dir, &["init", "-q"]);
+    common::write(&dir, "batten.toml", "version = 1\n");
+    let output = doctor(&dir, &[]);
+    let out = stdout(&output);
+    assert!(
+        out.contains("hook-wiring failed hook-wiring-unwired"),
+        "plain doctor runs the wiring census: {out}"
+    );
+    assert_eq!(output.status.code(), Some(1), "{out}");
+}
+
+#[test]
+fn plain_doctor_ignores_a_merged_home_registration() {
+    let dir = scratch("hook-wiring-merged-home", true, Some("version = 1\n"));
+    let home = common::scratch_outside_tree("batten-doctor-e2e", "hook-wiring-home");
+    common::write(
+        &home,
+        ".claude/settings.json",
+        r#"{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"batten adjudicate --harness claude-code"}]}]}}"#,
+    );
+    let plain = doctor_with_home(&dir, &home, &[]);
+    let out = stdout(&plain);
+    assert!(out.contains("hook-wiring ok"), "{out}");
+    assert_eq!(plain.status.code(), Some(0), "{out}");
+
+    let hooks = doctor_with_home(&dir, &home, &["hooks", "--json"]);
+    assert_eq!(hooks.status.code(), Some(1));
+    let report: serde_json::Value = serde_json::from_str(&stdout(&hooks)).unwrap();
+    let merged = report["harnesses"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|harness| harness["findings"].as_array().unwrap().iter())
+        .any(|finding| {
+            finding["reason"] == "hook-wiring-merged-registration"
+                && finding["file"] == "~/.claude/settings.json"
+        });
+    assert!(merged, "doctor hooks keeps the merged finding: {report}");
+}
+
+fn doctor_with_home(dir: &Path, home: &Path, extra: &[&str]) -> Output {
+    batten()
+        .arg("doctor")
+        .args(extra)
+        .current_dir(dir)
+        .env("HOME", home)
+        .env_remove("CLAUDE_PID")
+        .env_remove("BATTEN_STRICTNESS")
+        .env_remove("BATTEN_FAIL_ON_WARNING")
+        .env_remove("BATTEN_CONFIG_FROM")
+        .streamed_output()
+        .expect("run batten doctor")
 }

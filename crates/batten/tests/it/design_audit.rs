@@ -21,6 +21,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
+use batten::capture::StreamedChild as _;
 
 use std::path::{Path, PathBuf};
 use std::process::Output;
@@ -312,7 +313,7 @@ fn the_env_spelling_of_the_ladder_promotes_too() {
                 .take()
                 .expect("stdin is piped")
                 .write_all(corpus(&[row]).as_bytes())?;
-            child.wait_with_output()
+            child.streamed_wait()
         })
         .expect("run batten");
 

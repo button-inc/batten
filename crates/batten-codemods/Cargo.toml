@@ -1,0 +1,22 @@
+[package]
+name = "batten-codemods"
+description = "The codemods this repository has run, kept as named recipes over batten's codemod primitives."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+# NEVER RELEASED (#1276). A recipe is a migration this repository ran; it
+# reaches the shipped binary only when a preset vendors it explicitly, and then
+# through that preset, not through this crate.
+publish = false
+
+[dependencies]
+batten = { path = "../batten", version = "=0.0.222" }
+rustfix = "0.9.8"
+serde_json = { workspace = true }
+
+[lints]
+workspace = true

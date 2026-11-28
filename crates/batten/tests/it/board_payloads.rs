@@ -40,6 +40,7 @@
 
 use crate::common;
 use crate::common::StateHome as _;
+use batten::capture::StreamedChild as _;
 
 use std::io::Write as _;
 use std::path::PathBuf;
@@ -93,7 +94,7 @@ impl Store {
     fn call(self, tool: &str, payload: &str) -> Self {
         let event = serde_json::json!({
             "hook_event_name": "PostToolUse",
-            "session_id": "board-payloads",
+            "session_id": common::session_id("board-payloads"),
             "tool_name": tool,
             "tool_input": {},
             "tool_response": [{ "type": "text", "text": payload }],
@@ -115,7 +116,7 @@ impl Store {
             .expect("piped stdin")
             .write_all(event.as_bytes())
             .expect("write the event");
-        let done = child.wait_with_output().expect("run the post-tool event");
+        let done = child.streamed_wait().expect("run the post-tool event");
         assert!(
             done.status.success(),
             "recording a response must not fail: {}",
@@ -131,7 +132,11 @@ impl Store {
             .env_remove("CLAUDE_PROJECT_DIR")
             .state_home(&self.home)
             .stdin(Stdio::null())
-            .output()
+            .streamed_output_keeping(batten::capture::Keep {
+                stdin: true,
+                stdout: false,
+                stderr: false,
+            })
             .expect("run batten")
     }
 

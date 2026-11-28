@@ -15,7 +15,6 @@
 use crate::common;
 
 use std::fs;
-use std::path::PathBuf;
 
 use batten::facts::{Format, Look, Node};
 use common::{Fixture, stderr, stdout};
@@ -742,17 +741,19 @@ const STATED_RESIDUE: &[(&str, &str)] = &[
     // A hook envelope names the host's own settings file, because that is the
     // path the host writes and the engine reads back. It is the harness's
     // vocabulary, not an artifact this fact parses.
-    ("src/hook.rs", ".claude/settings.json"),
+    ("crates/batten/src/hook.rs", ".claude/settings.json"),
     // Prose in module docs, recording where a mechanism used to live.
-    ("src/hook.rs", "mise.toml"),
-    ("src/commit.rs", "mise.toml"),
-    ("src/receipt.rs", "mise.toml"),
-    ("src/provision.rs", "mise.lock"),
+    ("crates/batten/src/hook.rs", "mise.toml"),
+    ("crates/batten/src/commit.rs", "mise.toml"),
+    ("crates/batten/src/receipt.rs", "mise.toml"),
+    // Moved with the config model out of `provision.rs` (3e0ea8b9): a doc
+    // comment comparing a declared lock to `mise.lock`, never a path read.
+    ("crates/batten/src/config_model.rs", "mise.lock"),
 ];
 
 #[test]
 fn no_artifact_name_reaches_the_core() {
-    // Non-negotiable rule 1, computed. Scans `crates/batten/src` — the core —
+    // Non-negotiable rule 1, computed. Scans every crate's `src` — the core —
     // and not `tests/`, where a fixture legitimately writes a workflow file to
     // prove the walker sees it.
     //
@@ -761,19 +762,21 @@ fn no_artifact_name_reaches_the_core() {
     //
     // Fails by: naming any of the artifacts above in a new core module — which
     // is exactly what a per-artifact document fact would have had to do.
-    let src = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src");
+    //
+    // EVERY WORKSPACE CRATE'S `src/`, recursively (CLOUD-2789): the core was
+    // `crates/batten/src` until the split, and a consumer's artifact named in a
+    // module cut into `batten-base` is the same breach of rule 1. Paths are
+    // repo-relative, so the residue names the crate it grants.
+    let root = common::at_root("");
     let mut offenders = Vec::new();
-    for entry in fs::read_dir(&src).expect("read src") {
-        let path = entry.expect("read entry").path();
-        if path.extension().and_then(|ext| ext.to_str()) != Some("rs") {
-            continue;
-        }
-        let relative = format!(
-            "src/{}",
-            path.file_name()
-                .and_then(|name| name.to_str())
-                .unwrap_or("")
-        );
+    for path in common::engine_sources() {
+        let relative = path
+            .strip_prefix(&root)
+            .unwrap_or(&path)
+            .components()
+            .map(|part| part.as_os_str().to_string_lossy().into_owned())
+            .collect::<Vec<_>>()
+            .join("/");
         let source = fs::read_to_string(&path).expect("read source");
         for (index, line) in source.lines().enumerate() {
             for artifact in CONSUMER_ARTIFACTS {
@@ -787,7 +790,7 @@ fn no_artifact_name_reaches_the_core() {
     }
     assert!(
         offenders.is_empty(),
-        "a consumer's artifact name reached `crates/batten` (non-negotiable rule 1). The core \
+        "a consumer's artifact name reached the core (non-negotiable rule 1). The core \
          knows formats; which path carries which format is the consumer's `batten.toml` \
          (CLOUD-772):\n  {}",
         offenders.join("\n  ")
@@ -800,9 +803,8 @@ fn the_stated_residue_is_a_ratchet_and_not_a_suppression() {
     // nobody will notice has gone stale, and the list would only ever grow. So
     // each row must still be live: remove the last mention of an artifact from a
     // module and this fails until the row goes too.
-    let src = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src");
     for (module, artifact) in STATED_RESIDUE {
-        let source = fs::read_to_string(src.join(module.trim_start_matches("src/")))
+        let source = fs::read_to_string(common::at_root(module))
             .unwrap_or_else(|_| panic!("{module} is named by the residue but does not exist"));
         assert!(
             source.contains(artifact),

@@ -1,9 +1,9 @@
 //! Running a row's declared repair at the mediated boundary (CLOUD-1639).
 //!
-//! [`crate::rules::Rule::fix`] has existed since CLOUD-81 as "the mutating half
+//! [`crate::config_model::Rule::fix`] has existed since CLOUD-81 as "the mutating half
 //! of §9's duality" and was executed by nothing. This is the half that executes
 //! it — for the rows whose raised class declares
-//! [`crate::verdict::Applicability::Retry`] or `Silent`, and no other.
+//! [`crate::preset_catalog::Applicability::Retry`] or `Silent`, and no other.
 //!
 //! # NO NEW SPAWN SITE, AND THAT IS A GATE RATHER THAN A PREFERENCE
 //!
@@ -47,7 +47,7 @@
 
 use std::path::Path;
 
-use crate::verdict::Applicability;
+use crate::preset_catalog::Applicability;
 
 /// What running a repair produced.
 ///
@@ -146,8 +146,6 @@ fn argv(resolved: &str) -> Vec<String> {
 ///   own budget on top; a row whose fix cannot finish inside the boundary's
 ///   budget is a row that should not declare one.
 #[must_use]
-//MUTANT-SUITE crates/batten/tests/it/cli.rs
-//MUTANT retry-reports-silent|s@        Applicability::Retry => Outcome::Retry,@        Applicability::Retry => Outcome::Silent,@|a_retry_repair_refuses_and_never_allows
 pub fn run(root: &Path, fix: &str, key: Option<&str>, applicability: Applicability) -> Outcome {
     // ADVICE NEVER REACHES THE SPAWN. Asked here as well as at the call site,
     // because this is the function that runs a command and a caller that got the
@@ -190,7 +188,7 @@ pub fn run(root: &Path, fix: &str, key: Option<&str>, applicability: Applicabili
 #[cfg(test)]
 mod tests {
     use super::*;
-
+    #[cfg(test)]
     #[test]
     fn a_fix_naming_no_key_is_returned_unchanged() {
         assert_eq!(
@@ -279,7 +277,7 @@ mod tests {
         // `run` is what spawns, so `run` is what must refuse.
         assert_eq!(
             run(
-                Path::new("."),
+                &crate::fixture_root::fixture_root("an_advice_class_never_runs_a_repair"),
                 "definitely-not-a-program",
                 None,
                 Applicability::Advice
@@ -294,7 +292,9 @@ mod tests {
         // caller falls back to.
         assert_eq!(
             run(
-                Path::new("."),
+                &crate::fixture_root::fixture_root(
+                    "a_program_that_will_not_resolve_is_a_failed_repair"
+                ),
                 "batten-no-such-program-1639",
                 None,
                 Applicability::Retry
@@ -307,7 +307,9 @@ mod tests {
     /// repair that succeeded refuses and one that failed admits.
     #[test]
     fn a_repair_that_exits_zero_reports_its_posture_and_one_that_fails_does_not() {
-        let root = Path::new(".");
+        let root = &crate::fixture_root::fixture_root(
+            "a_repair_that_exits_zero_reports_its_posture_and_one_that_fails_does_not",
+        );
         assert_eq!(
             run(root, "true", None, Applicability::Silent),
             Outcome::Silent

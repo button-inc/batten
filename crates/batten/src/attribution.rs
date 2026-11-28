@@ -55,103 +55,22 @@
 //! this gate reads is by definition content someone wanted suppressed, so echoing
 //! it back would make the gate republish exactly what it exists to catch.
 
+use crate::hook::HarnessExt as _;
 use std::fmt::Write as _;
 use std::path::Path;
 
 use anyhow::Result;
 use regex::Regex;
-use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
+use crate::config_model::Harness;
+use crate::config_model::{Attribution, Identity};
 use crate::decision::{Caller, Provenance};
+use crate::error::Native;
 use crate::error::UsageError;
 use crate::git;
-use crate::hook::{Capability, Harness};
-use crate::verdict::{Native, Subject as Pointer};
-
-/// The `[attribution]` table: what produced commits may carry about the tooling.
-///
-/// Consumer-specific by nature (non-negotiable rule 1, extended from consumers to
-/// vendors): the engine holds the matcher, this table holds the answer. A vendor
-/// name is configuration here and never a literal in the crate.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct Attribution {
-    /// Patterns refused in the `author` and `committer` identity fields.
-    ///
-    /// Both fields, because the environment sets both and a repair reaching only
-    /// `author` leaves the vendor identity on every commit's `committer` — absent
-    /// from `git log`'s default format and fully public regardless.
-    pub identity_deny: Vec<String>,
-    /// Patterns refused in any trailer, matched against the whole `Key: value`
-    /// line: a co-authorship form lives in the key, a session URL in the value.
-    pub trailer_deny: Vec<String>,
-    /// Patterns refused in the commit message body — attribution-as-advertising.
-    pub body_deny: Vec<String>,
-    /// The carve-out from [`Attribution::trailer_deny`]. Absent or empty exempts
-    /// **nothing**, which is how a silent posture is expressed as data.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub trailer_allow: Vec<String>,
-    /// Identities permitted to have cut a release tag (CLOUD-1794).
-    ///
-    /// AN ALLOW LIST, AND A SEPARATE ONE FROM [`Attribution::identity`], because
-    /// the two answer different questions and measurably hold different values.
-    /// `identity` is what `attribution identity` WRITES into a clone's git config
-    /// — the identity commits must be authored by. A release tag is cut by
-    /// whatever credential the release workflow holds, which renders as that
-    /// account's identity and need not be the committing one. Measured on this
-    /// repository: every tag from v0.0.155 to v0.0.162 was cut by an address that
-    /// is not `identity`'s, and the history carries both as legitimate.
-    ///
-    /// Judging tags against `identity` therefore refuses every release, which is a
-    /// worse outage than the one this gate exists to catch — and is exactly what
-    /// the first draft did before it was run against real tags.
-    ///
-    /// A LIST rather than one value, because the accountable credential changes:
-    /// migrating from a personal token to an org-owned App (CLOUD-94) changes the
-    /// identity tags carry, and a transition where both are briefly valid should
-    /// be expressible without leaving the gate off.
-    ///
-    /// DEFAULTED, AND THAT IS NOT THE SAME CLAIM AS "AN EMPTY LIST IS FINE"
-    /// (CLOUD-1789). The first draft made this mandatory and conflated two
-    /// questions: whether an empty list is a policy — it is not — and whether
-    /// every consumer must answer this one, which it must not. `Attribution`
-    /// carries `deny_unknown_fields`, so a required field here makes any config
-    /// written before this key existed fail to parse, which is a breaking change
-    /// to a table that governs commits rather than tags; it was caught by
-    /// `trust::tests::shrinking_a_deny_list_or_widening_the_carve_out_is_a_weakening`,
-    /// whose fixture is a `[attribution]` table with no reason to mention tags.
-    ///
-    /// ABSENT IS COULD-NOT-LOOK, NEVER CLEAN, which is where the "empty is not a
-    /// policy" half survives: [`Attribution::judge_tagger`] refuses to decide over
-    /// an empty list rather than passing every tag. So a consumer that does not
-    /// govern tag identity is unaffected — it never calls the verb — and one that
-    /// calls the verb without declaring the key gets a loud exit `1` instead of a
-    /// false green. That is the asymmetry rather than a softening of it.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub tag_identity_allow: Vec<String>,
-    /// The accountable identity `--set-identity` writes into the repo-local git
-    /// config.
-    pub identity: Identity,
-}
-
-/// The identity a commit is accountable to.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct Identity {
-    /// `user.name`.
-    pub name: String,
-    /// `user.email`.
-    pub email: String,
-}
-
-impl Identity {
-    /// The identity as git renders it in `%an <%ae>` form.
-    #[must_use]
-    pub fn rendered(&self) -> String {
-        format!("{} <{}>", self.name, self.email)
-    }
-}
+use crate::hook::Capability;
+use crate::verdict::Subject as Pointer;
 
 /// The compiled form of one pattern list.
 struct Matchers(Vec<Regex>);
@@ -215,8 +134,6 @@ pub struct Finding {
     pub verdict: Native,
 }
 
-//MUTANT-SUITE crates/batten/src/attribution.rs
-//MUTANT attribution-refusal-unexplained|s@^        let token = self.verdict.id();$@        let token = "";@|every_attribution_finding_names_its_vendored_class
 impl Finding {
     /// The refusal line, house style §6: `<class> <label> <field>`, through the
     /// same projection every declared refusal renders with.
@@ -235,7 +152,31 @@ impl Finding {
     }
 }
 
-impl Attribution {
+/// Whether a rendered tagger identity is the one this repository is
+/// accountable to.
+///
+/// AN ALLOW-FORM, AND THAT IS THE POINT. A deny list would catch only the
+/// identity somebody thought to name; this refuses every identity that is not
+/// the declared one, so a release cut by an unexpected credential is refused
+/// whether or not anyone predicted that credential. It is also why no vendor
+/// literal appears in this crate for the tag surface at all — non-negotiable
+/// rule 1 is satisfied by not needing the name rather than by relocating it.
+///
+/// `identity_deny` is still consulted, so an identity that is both permitted
+/// and denied is refused. Config that contradicts itself is a finding, not a
+/// pass, and the deny list is the half that wins.
+///
+/// A FREE FUNCTION, deliberately: the two lists are passed in already
+/// compiled, so this is a pure predicate over them, and the policy they came
+/// from is not a second input it could disagree with. It was an associated
+/// function only by placement, and on the `pub` extension trait it would have
+/// exposed the private `Matchers` (CLOUD-2793).
+fn tagger_is_accountable(rendered: &str, permitted: &Matchers, denied: &Matchers) -> bool {
+    permitted.matches(rendered) && !denied.matches(rendered)
+}
+
+/// `Attribution` behaviour that belongs to this module's layer, not the type's (CLOUD-2793).
+pub trait AttributionExt: Sized {
     /// Validate the table at load.
     ///
     /// # Errors
@@ -245,7 +186,32 @@ impl Attribution {
     /// declaring no patterns is the half-change rule 2 exists to catch: it reads
     /// as though a policy is recorded when nothing is. `trailer_allow` may be
     /// empty — there, emptiness is a meaningful posture.
-    pub fn validate(&self) -> Result<()> {
+    fn validate(&self) -> Result<()>;
+
+    /// Judge one commit's metadata, returning every refusal as a pointer.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`UsageError`] (→ exit `1`) if a configured pattern does not
+    /// compile. Validated at load too, so this is the belt to that suspenders and
+    /// keeps the function total.
+    fn judge(&self, commit: &CommitMeta) -> Result<Vec<Finding>>;
+
+    /// Judge who cut a tag, returning every refusal as a pointer.
+    ///
+    /// `label` is the tag name, which is safe to print. The tagger identity never
+    /// reaches a finding — the same rule-4 discipline [`Attribution::judge`] keeps
+    /// over commit metadata.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`UsageError`] (→ exit `1`) if `tag_identity_allow` is empty, or
+    /// if it or `identity_deny` does not compile.
+    fn judge_tagger(&self, label: &str, tagger: &git::Tagger) -> Result<Vec<Finding>>;
+}
+
+impl AttributionExt for Attribution {
+    fn validate(&self) -> Result<()> {
         for (key, patterns) in [
             ("identity_deny", &self.identity_deny),
             ("trailer_deny", &self.trailer_deny),
@@ -273,24 +239,20 @@ impl Attribution {
             Matchers::compile(key, patterns)?;
         }
         Matchers::compile("trailer_allow", &self.trailer_allow)?;
-        if self.identity.name.is_empty() || self.identity.email.is_empty() {
-            return Err(UsageError::raise(
-                "attribution.identity: name and email are both required; an accountable identity \
-                 with a blank half is not one"
-                    .to_owned(),
-            ));
+        if let Some(identity) = &self.identity {
+            let blank = identity.name.is_empty() || identity.email.is_empty();
+            if blank {
+                return Err(UsageError::raise(
+                    "attribution.identity: name and email are both required; an accountable \
+                     identity with a blank half is not one"
+                        .to_owned(),
+                ));
+            }
         }
         Ok(())
     }
 
-    /// Judge one commit's metadata, returning every refusal as a pointer.
-    ///
-    /// # Errors
-    ///
-    /// Returns a [`UsageError`] (→ exit `1`) if a configured pattern does not
-    /// compile. Validated at load too, so this is the belt to that suspenders and
-    /// keeps the function total.
-    pub fn judge(&self, commit: &CommitMeta) -> Result<Vec<Finding>> {
+    fn judge(&self, commit: &CommitMeta) -> Result<Vec<Finding>> {
         let identity = Matchers::compile("identity_deny", &self.identity_deny)?;
         let trailer = Matchers::compile("trailer_deny", &self.trailer_deny)?;
         let body = Matchers::compile("body_deny", &self.body_deny)?;
@@ -329,37 +291,7 @@ impl Attribution {
         Ok(findings)
     }
 
-    /// Whether a rendered tagger identity is the one this repository is
-    /// accountable to.
-    ///
-    /// AN ALLOW-FORM, AND THAT IS THE POINT. A deny list would catch only the
-    /// identity somebody thought to name; this refuses every identity that is not
-    /// the declared one, so a release cut by an unexpected credential is refused
-    /// whether or not anyone predicted that credential. It is also why no vendor
-    /// literal appears in this crate for the tag surface at all — non-negotiable
-    /// rule 1 is satisfied by not needing the name rather than by relocating it.
-    ///
-    /// `identity_deny` is still consulted, so an identity that is both permitted
-    /// and denied is refused. Config that contradicts itself is a finding, not a
-    /// pass, and the deny list is the half that wins.
-    /// Free of `self` deliberately: the two lists are passed in already compiled,
-    /// so this is a pure predicate over them and the policy it came from is not a
-    /// second input it could disagree with.
-    fn tagger_is_accountable(rendered: &str, permitted: &Matchers, denied: &Matchers) -> bool {
-        permitted.matches(rendered) && !denied.matches(rendered)
-    }
-
-    /// Judge who cut a tag, returning every refusal as a pointer.
-    ///
-    /// `label` is the tag name, which is safe to print. The tagger identity never
-    /// reaches a finding — the same rule-4 discipline [`Attribution::judge`] keeps
-    /// over commit metadata.
-    ///
-    /// # Errors
-    ///
-    /// Returns a [`UsageError`] (→ exit `1`) if `tag_identity_allow` is empty, or
-    /// if it or `identity_deny` does not compile.
-    pub fn judge_tagger(&self, label: &str, tagger: &git::Tagger) -> Result<Vec<Finding>> {
+    fn judge_tagger(&self, label: &str, tagger: &git::Tagger) -> Result<Vec<Finding>> {
         // COULD NOT LOOK, NEVER CLEAN, and this is where `validate`'s "an empty
         // allow list is not a policy" lives now that the key is optional
         // (CLOUD-1789). An empty list permits nothing, so deciding over it would
@@ -397,7 +329,7 @@ impl Attribution {
         // over them can split them again and will own the escape that costs.
         Ok(match tagger {
             git::Tagger::Signed(rendered) => {
-                if Self::tagger_is_accountable(rendered, &permitted, &denied) {
+                if tagger_is_accountable(rendered, &permitted, &denied) {
                     Vec::new()
                 } else {
                     vec![point("tagger", Native::TaggerUnaccountable)]
@@ -423,9 +355,18 @@ impl Attribution {
 /// exit `1` — "could not look" — never a clean pass over commits nobody read.
 /// A commit whose record does not carry all four fields is refused there, where
 /// it used to answer with empty strings here.
-pub fn read_range(dir: &Path, base: &str, head: &str) -> Result<Vec<CommitMeta>> {
+pub fn read_range(
+    dir: &Path,
+    base: &str,
+    head: &str,
+    passed: &std::collections::BTreeSet<String>,
+) -> Result<Vec<CommitMeta>> {
     let mut commits = Vec::new();
     for sha in git::commits_in_range(dir, base, head)? {
+        // A commit holding a passing receipt is not read (CLOUD-2962).
+        if passed.contains(&sha) {
+            continue;
+        }
         let record = git::commit_record(dir, &sha)?;
         commits.push(CommitMeta {
             label: short(&sha),
@@ -449,7 +390,7 @@ pub fn read_range(dir: &Path, base: &str, head: &str) -> Result<Vec<CommitMeta>>
 /// Returns an error when the message file cannot be read or git cannot resolve an
 /// identity — exit `1`, not a pass.
 pub fn read_message(dir: &Path, message: &Path) -> Result<CommitMeta> {
-    let body = std::fs::read_to_string(message).map_err(|error| {
+    let body = crate::fsio::read_to_string(message).map_err(|error| {
         UsageError::raise(format!(
             "attribution: cannot read the commit message file `{}`: {error}",
             message.display()
@@ -466,70 +407,287 @@ pub fn read_message(dir: &Path, message: &Path) -> Result<CommitMeta> {
 
 /// Set the repo-local identity when it is unset or denied; report what happened.
 ///
-/// **Repo-local only, never `--global`.** The wider scope covers a developer's own
-/// unrelated repositories, and nothing here has the standing to change those.
+/// **Resolved at run time, never read from the committed table** (CLOUD-2659).
+/// Candidates, each judged against `identity_deny`; the first not denied wins and
+/// a denied one falls through, never echoed or written:
 ///
-/// The current identity is read as git *resolves* it rather than from the local
-/// file, because the defect is an identity inherited from a wider scope: asking
-/// only `--local` would report "unset" for an accountable global identity and write a
-/// redundant copy into every clone.
+/// 1. git's own resolution — the identity [`read_message`] judges, so the verb
+///    and the gate read one identity. Both halves accountable is `LeftAlone`;
+/// 2. the session owner, from the host's declared variable;
+/// 3. the forge user.
+///
+/// Nothing resolved is [`Outcome::Unresolved`]: nothing is written and a vendor
+/// identity is never a fallback. **Repo-local only, never `--global`.** After the
+/// write both stamped identities are re-read, because git ranks the
+/// `GIT_AUTHOR_*` variables and `author.*` keys above `user.*`; one that still
+/// stamps a denied identity is [`Outcome::Outranked`], naming what set it.
+///
+/// `env` is the process environment, passed so a case can fence it.
 ///
 /// # Errors
 ///
-/// Returns an error when git cannot be run or the write fails.
-pub fn set_identity(dir: &Path, attribution: &Attribution) -> Result<Outcome> {
-    let name = git::config_value(dir, "user.name")?.unwrap_or_default();
-    let email = git::config_value(dir, "user.email")?.unwrap_or_default();
-
-    let outcome = if name.trim().is_empty() || email.trim().is_empty() {
-        Outcome::WasUnset
-    } else {
-        let current = format!("{} <{}>", name.trim(), email.trim());
-        let deny = Matchers::compile("identity_deny", &attribution.identity_deny)?;
-        if deny.matches(&current) {
-            Outcome::WasDenied
-        } else {
-            // A contributor who set their own accountable identity keeps it.
-            // Overwriting a real person's name with a configured default would
-            // assert the opposite of what the record says accountability is.
+/// Returns an error when the deny list does not compile or the write fails.
+pub fn set_identity(
+    dir: &Path,
+    attribution: &Attribution,
+    env: &dyn Fn(&str) -> Option<String>,
+) -> Result<Outcome> {
+    let deny = Matchers::compile("identity_deny", &attribution.identity_deny)?;
+    let git = stamped_pair(dir).ok();
+    let was = match &git {
+        // A contributor who set their own accountable identity keeps it.
+        Some((author, committer)) if !deny.matches(author) && !deny.matches(committer) => {
             return Ok(Outcome::LeftAlone);
         }
+        Some(_) => Prior::Denied,
+        None => Prior::Unset,
     };
+    let owner = session_owner(env);
+    let forge = forge_user();
+    let mut candidates = Vec::new();
+    if let Some(email) = owner {
+        // The forge user's name when it answered, else the address's own local
+        // part: the person's own address, never a fabricated one.
+        let name = forge.as_ref().map_or_else(
+            || email.split('@').next().unwrap_or_default().to_owned(),
+            |user| user.name.clone(),
+        );
+        candidates.push(Identity { name, email });
+    }
+    candidates.extend(forge);
+    let Some(identity) = first_accountable(candidates, &deny) else {
+        return Ok(Outcome::Unresolved);
+    };
+    git::set_config_local(dir, "user.name", &identity.name)?;
+    git::set_config_local(dir, "user.email", &identity.email)?;
+    if still_denied(dir, &deny)? {
+        return Ok(Outcome::Outranked {
+            identity,
+            was,
+            by: overriding_names(dir, env),
+        });
+    }
+    Ok(Outcome::Written { identity, was })
+}
 
-    git::set_config_local(dir, "user.name", &attribution.identity.name)?;
-    git::set_config_local(dir, "user.email", &attribution.identity.email)?;
-    Ok(outcome)
+/// The accountable identity an artifact this clone publishes names as its
+/// producer (CLOUD-1544 §5): the committer git would stamp, when
+/// `identity_deny` matches neither half of the stamped pair. `None` where
+/// either half is unresolved or denied — a vendor identity is never a
+/// producer, the same rule [`set_identity`] keeps for a commit.
+///
+/// # Errors
+///
+/// Returns an error when the deny list does not compile.
+pub fn producer(dir: &Path, attribution: &Attribution) -> Result<Option<String>> {
+    let deny = Matchers::compile("identity_deny", &attribution.identity_deny)?;
+    let Ok((author, committer)) = stamped_pair(dir) else {
+        return Ok(None);
+    };
+    Ok((!deny.matches(&author) && !deny.matches(&committer)).then_some(committer))
+}
+
+/// The first candidate `identity_deny` does not match.
+fn first_accountable(candidates: Vec<Identity>, deny: &Matchers) -> Option<Identity> {
+    candidates
+        .into_iter()
+        .find(|candidate| !deny.matches(&candidate.rendered()))
+}
+
+/// Both identities git would stamp, or an error where either half is
+/// unresolved or blank — half an identity is no identity.
+fn stamped_pair(dir: &Path) -> Result<(String, String)> {
+    let author = git::stamped_identity(dir, "GIT_AUTHOR_IDENT")?;
+    let committer = git::stamped_identity(dir, "GIT_COMMITTER_IDENT")?;
+    for stamped in [&author, &committer] {
+        let (name, email) = stamped
+            .rsplit_once(" <")
+            .map(|(name, email)| (name.trim(), email.trim_end_matches('>').trim()))
+            .unwrap_or_default();
+        if name.is_empty() || email.is_empty() {
+            return Err(UsageError::raise(
+                "could not resolve the identity git would stamp".to_owned(),
+            ));
+        }
+    }
+    Ok((author, committer))
+}
+
+/// Whether either stamped identity is still denied after the write.
+fn still_denied(dir: &Path, deny: &Matchers) -> Result<bool> {
+    let (author, committer) = stamped_pair(dir)?;
+    Ok(deny.matches(&author) || deny.matches(&committer))
+}
+
+/// The session owner's address, from every host's declared variable.
+///
+/// Two hosts' variables set to DIFFERENT values is no answer: it never guesses.
+fn session_owner(env: &dyn Fn(&str) -> Option<String>) -> Option<String> {
+    let found: std::collections::BTreeSet<String> = Harness::ALL
+        .iter()
+        .filter_map(|harness| harness.session_owner_email_var())
+        .filter_map(env)
+        .map(|value| value.trim().to_owned())
+        .filter(|value| value.contains('@'))
+        .collect();
+    let mut found = found.into_iter();
+    match (found.next(), found.next()) {
+        (Some(email), None) => Some(email),
+        _ => None,
+    }
+}
+
+/// The forge user, through the in-process REST tier; `None` where it did not
+/// answer with a reading.
+fn forge_user() -> Option<Identity> {
+    let answer = crate::rest::get("user", None)?;
+    if !answer.is_reading() {
+        return None;
+    }
+    let user: serde_json::Value = serde_json::from_str(&answer.body).ok()?;
+    let login = user["login"].as_str().filter(|login| !login.is_empty())?;
+    let name = user["name"]
+        .as_str()
+        .filter(|name| !name.trim().is_empty())
+        .unwrap_or(login);
+    let email = match user["email"].as_str().filter(|email| !email.is_empty()) {
+        Some(email) => email.to_owned(),
+        None => format!("{}+{login}@users.noreply.github.com", user["id"].as_u64()?),
+    };
+    Some(Identity {
+        name: name.to_owned(),
+        email,
+    })
+}
+
+/// The names of whatever outranks the repo-local `user.*`, never their values.
+fn overriding_names(dir: &Path, env: &dyn Fn(&str) -> Option<String>) -> Vec<String> {
+    let mut names: Vec<String> = [
+        "GIT_AUTHOR_NAME",
+        "GIT_AUTHOR_EMAIL",
+        "GIT_COMMITTER_NAME",
+        "GIT_COMMITTER_EMAIL",
+    ]
+    .into_iter()
+    .filter(|var| env(var).is_some())
+    .map(ToOwned::to_owned)
+    .collect();
+    let count = env("GIT_CONFIG_COUNT")
+        .and_then(|count| count.trim().parse::<usize>().ok())
+        .unwrap_or(0);
+    for n in 0..count {
+        let var = format!("GIT_CONFIG_KEY_{n}");
+        if env(&var).is_some_and(|key| identity_key(&key)) {
+            names.push(var);
+        }
+    }
+    for key in [
+        "author.name",
+        "author.email",
+        "committer.name",
+        "committer.email",
+    ] {
+        if git::config_value(dir, key).ok().flatten().is_some() {
+            names.push(key.to_owned());
+        }
+    }
+    names
+}
+
+/// Whether a config key names an identity git stamps.
+fn identity_key(key: &str) -> bool {
+    let key = key.to_ascii_lowercase();
+    ["user.", "author.", "committer."]
+        .iter()
+        .any(|prefix| key.starts_with(prefix))
+}
+
+/// The identity state before the write.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Prior {
+    /// No identity resolved.
+    Unset,
+    /// The resolved identity matched the deny-set.
+    Denied,
+}
+
+impl Prior {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Unset => "unset",
+            Self::Denied => "denied",
+        }
+    }
 }
 
 /// What [`set_identity`] did.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum Outcome {
-    /// No identity resolved; one was written.
-    WasUnset,
-    /// The resolved identity matched the deny-set; it was replaced.
-    WasDenied,
+    /// A resolved, accountable identity was written.
+    Written {
+        /// What was written.
+        identity: Identity,
+        /// The state it replaced.
+        was: Prior,
+    },
     /// An accountable identity was already configured and was not touched.
     LeftAlone,
+    /// No candidate resolved, or every one was denied; nothing was written.
+    Unresolved,
+    /// Written, but something git ranks above `user.*` still stamps a denied
+    /// identity.
+    Outranked {
+        /// What was written.
+        identity: Identity,
+        /// The state it replaced.
+        was: Prior,
+        /// The variable or key names that outrank it, never their values.
+        by: Vec<String>,
+    },
 }
 
 impl Outcome {
-    /// The one-line report, pointer-only: it names the prior *state*, never the
-    /// denied value.
+    /// The report, pointer-only: it names the prior *state* and the overriding
+    /// names, never the denied value.
     #[must_use]
-    pub fn line(self, identity: &Identity) -> String {
+    pub fn line(&self) -> String {
         match self {
-            Self::WasUnset => format!(
-                "attribution: repo-local identity set to {} (was: unset)",
-                identity.rendered()
-            ),
-            Self::WasDenied => format!(
-                "attribution: repo-local identity set to {} (was: denied)",
-                identity.rendered()
+            Self::Written { identity, was } => format!(
+                "attribution: repo-local identity set to {} (was: {})",
+                identity.rendered(),
+                was.as_str()
             ),
             Self::LeftAlone => {
                 "attribution: identity already accountable; left as configured".to_owned()
             }
+            Self::Unresolved => {
+                "attribution: no accountable identity resolved (git, session owner, forge)"
+                    .to_owned()
+            }
+            Self::Outranked { identity, was, by } => format!(
+                "attribution: repo-local identity set to {} (was: {})\n\
+                 attribution: a denied identity outranks the repo-local one; set by {}; unset them",
+                identity.rendered(),
+                was.as_str(),
+                if by.is_empty() {
+                    "an unnamed source".to_owned()
+                } else {
+                    by.join(", ")
+                }
+            ),
+        }
+    }
+
+    /// The exit this outcome owes: `0` written or left alone, `1` nothing
+    /// resolvable, `2` written but outranked.
+    #[must_use]
+    pub const fn exit(&self) -> crate::exit::ExitCode {
+        match self {
+            Self::Written { .. } | Self::LeftAlone => crate::exit::ExitCode::Success,
+            Self::Unresolved => crate::exit::ExitCode::Usage,
+            Self::Outranked { .. } => crate::exit::ExitCode::Violation,
         }
     }
 }
@@ -640,10 +798,10 @@ mod tests {
             // has, and a fixture where the two coincide would pass a judge that
             // conflated them.
             tag_identity_allow: vec![r"^Release Cutter <releases@example\.test>$".to_owned()],
-            identity: Identity {
+            identity: Some(Identity {
                 name: "Accountable Human".to_owned(),
                 email: "human@example.test".to_owned(),
-            },
+            }),
         }
     }
 
@@ -875,7 +1033,7 @@ mod tests {
         assert_eq!(policy().judge(&subject).unwrap().len(), 4);
     }
 
-    /// `#MUTANT attribution-refusal-unexplained` reddens here (CLOUD-1960): every
+    /// A mutant dropping a field's class reddens here (CLOUD-1960): every
     /// field this module raises leads its line with its own declared class.
     #[test]
     fn every_attribution_finding_names_its_vendored_class() {
@@ -914,7 +1072,7 @@ mod tests {
             fields,
             expected.iter().map(|(field, _)| *field).collect::<Vec<_>>()
         );
-        let registry = crate::verdict::vendored();
+        let registry = crate::config_check::verdict::vendored();
         for (finding, (field, class)) in found.iter().zip(expected) {
             assert_eq!(finding.verdict, class, "{field}");
             let line = finding.line();
@@ -955,7 +1113,7 @@ mod tests {
     #[test]
     fn a_blank_half_of_the_identity_is_refused() {
         let mut blank = policy();
-        blank.identity.email = String::new();
+        blank.identity.as_mut().unwrap().email = String::new();
         assert!(blank.validate().is_err());
     }
 
@@ -981,7 +1139,7 @@ mod tests {
     #[test]
     fn an_identity_renders_as_git_renders_an_author() {
         assert_eq!(
-            policy().identity.rendered(),
+            policy().identity.unwrap().rendered(),
             "Accountable Human <human@example.test>"
         );
     }
@@ -1008,7 +1166,7 @@ mod tests {
         crate::gitwrite::commit_paths(&dir, &["a".to_owned()], "first").unwrap();
         std::fs::write(dir.join("a"), "b").unwrap();
         crate::gitwrite::commit_paths(&dir, &["a".to_owned()], "second\n").unwrap();
-        let read = read_range(&dir, "HEAD~1", "HEAD").unwrap();
+        let read = read_range(&dir, "HEAD~1", "HEAD", &std::collections::BTreeSet::new()).unwrap();
         assert_eq!(read.len(), 1, "{read:?}");
         assert_eq!(read[0].label.len(), 8);
         assert!(read[0].body.starts_with("second"), "{:?}", read[0].body);
@@ -1022,23 +1180,42 @@ mod tests {
         crate::gitwrite::init_on_main(&dir).unwrap();
         git::set_config_local(&dir, "user.name", "Somebody").unwrap();
         git::set_config_local(&dir, "user.email", " ").unwrap();
-        assert_eq!(set_identity(&dir, &policy()).unwrap(), Outcome::WasUnset);
+        let owner =
+            |var: &str| (var == "CLAUDE_CODE_USER_EMAIL").then(|| "o@example.test".to_owned());
+        let forge = crate::rest::routed("attribution-half-forge", &[("/user", 401, "{}")]);
+        assert_eq!(
+            crate::rest::with_fixture(&forge, || set_identity(&dir, &policy(), &owner)).unwrap(),
+            Outcome::Written {
+                identity: Identity {
+                    name: "o".to_owned(),
+                    email: "o@example.test".to_owned(),
+                },
+                was: Prior::Unset,
+            }
+        );
         assert_eq!(
             git::config_value(&dir, "user.email").unwrap().as_deref(),
-            Some("human@example.test")
+            Some("o@example.test")
         );
     }
 
     #[test]
     fn the_outcome_line_names_the_state_not_the_denied_value() {
-        let identity = policy().identity;
-        assert!(Outcome::WasDenied.line(&identity).contains("was: denied"));
-        assert!(Outcome::WasUnset.line(&identity).contains("was: unset"));
-        assert!(
-            Outcome::LeftAlone
-                .line(&identity)
-                .contains("left as configured")
-        );
+        let identity = policy().identity.unwrap();
+        let written = |was| Outcome::Written {
+            identity: identity.clone(),
+            was,
+        };
+        assert!(written(Prior::Denied).line().contains("was: denied"));
+        assert!(written(Prior::Unset).line().contains("was: unset"));
+        assert!(Outcome::LeftAlone.line().contains("left as configured"));
+        let outranked = Outcome::Outranked {
+            identity: identity.clone(),
+            was: Prior::Denied,
+            by: vec!["GIT_AUTHOR_NAME".to_owned()],
+        }
+        .line();
+        assert!(outranked.contains("set by GIT_AUTHOR_NAME"), "{outranked}");
     }
 
     #[test]

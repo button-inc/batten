@@ -411,6 +411,20 @@ fn re_enabled_lockfile_writes_are_reported() {
 }
 
 #[test]
+fn a_locked_lockfile_permits_no_write() {
+    // CLOUD-2881: mise gates every install-time lock write on `locked`, so the
+    // lockfile read under locked mode — the setting this repository holds —
+    // writes no residue and is not refused.
+    let (code, said) = judge_repo(
+        "lock-complete-locked-mode-unread",
+        &complete_lock(),
+        "[settings]\nlockfile = true\nlocked = true\n\n[tools]\n\"t\" = \"1.0.0\"\n",
+        &[],
+    );
+    assert_eq!(code, Some(0), "a locked read writes nothing\n{said}");
+}
+
+#[test]
 fn a_workflow_installing_without_the_lockfile_env_is_reported() {
     // The workflow clause is the one predicate here reading the LINE surface
     // rather than the index, and this is where that reaches the engine: a glob,

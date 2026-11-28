@@ -62,7 +62,7 @@
 //!
 // carried: "doctor runs inside the synchronous window — after install, before the preflight" crates/batten/tests/it/session_provisioning.rs
 // carried: "mise install runs — the step whose absence was the defect" crates/batten/tests/it/session_provisioning.rs
-// carried: "the install is lockfile-free — provisioning must not dirty the tracked lock" crates/batten/tests/it/session_provisioning.rs
+// carried: "the install is lockfile-free — provisioning must not dirty the tracked lock" crates/batten/tests/it/session_provisioning.rs carried by `the_install_step_is_declared_locked`: the invariant is unchanged and the mechanism is a LOCKED install (CLOUD-2688), which reads `mise.lock` and never writes it
 // carried: "a failed step exits non-zero — absence must never be silent" crates/batten/tests/it/session_provisioning.rs
 // carried: "the hook is registered as a SessionStart hook" crates/batten/tests/it/session_provisioning.rs
 //!
@@ -83,11 +83,14 @@
 //!   suite. What covers it instead is the session itself: a failed step now
 //!   reports on the advisory channel at the moment it fails.
 //! * `"running the hook leaves the tracked lockfile untouched"` was the
-//!   end-to-end half of the CLOUD-223 residue check. `[settings] lockfile = false`
-//!   in `mise.toml` is the authority and `mise run lock-complete` is the standing
+//!   end-to-end half of the CLOUD-223 residue check. `[settings] lockfile = true`
+//!   with `locked = true` in `mise.toml` (CLOUD-2881: locked installs never
+//!   write) is the authority and `mise run lock-complete` is the standing
 //!   gate; what is lost is the observation that THIS provisioning path honours it,
-//!   and `session:install` carrying `MISE_LOCKFILE=false` is asserted below as the
-//!   declaration rather than as the effect.
+//!   and `session:install` carrying `MISE_LOCKED=true` and `MISE_LOCKFILE=true` (a
+//!   locked install reads the lock and never writes it, CLOUD-2688) is asserted
+//!   below by `the_install_step_is_declared_locked`, as the declaration rather
+//!   than as the effect.
 //! * `"the git hooks are installed — the per-clone step that was absent"` ran the
 //!   hook and then stat-ed two symlinks. `doctor` decides that same state on every
 //!   later run — which the retired case's own comment already named as its
@@ -95,7 +98,7 @@
 //!   is lost is the end-to-end pairing of the step with its effect in one case.
 //!
 // changed: "the hook runs green on this checkout" crates/batten/tests/it/session_provisioning.rs the exit-0-and-silent half survives as `a_step_that_passes_says_nothing`, against stubs; the END-TO-END half is withdrawn, because dispatching the real rows provisions a container inside `test:cargo` — 141s measured cold — which is the cost CLOUD-1268 exists to stop moving between lanes. What covers it instead is the session itself: a failed step reports on the advisory channel at the moment it fails
-// changed: "running the hook leaves the tracked lockfile untouched" crates/batten/tests/it/session_provisioning.rs narrowed from the EFFECT to the DECLARATION: `the_install_step_is_declared_lockfile_free` asserts `session:install` carries MISE_LOCKFILE=false, where the retired case ran the hook and diffed `git status -- mise.lock`. `[settings] lockfile = false` in mise.toml is the standing authority and `lock cover partial` the standing gate; what is lost is the observation that this particular path honours it
+// changed: "running the hook leaves the tracked lockfile untouched" crates/batten/tests/it/session_provisioning.rs narrowed from the EFFECT to the DECLARATION: `the_install_step_is_declared_locked` asserts `session:install` carries MISE_LOCKED=true and MISE_LOCKFILE=true (CLOUD-2688: a locked install reads `mise.lock` and never writes it), where the retired case ran the hook and diffed `git status -- mise.lock`. `lock cover partial` is the standing gate; what is lost is the observation that this particular path honours it
 // changed: "the session-start hook calls it — the whole point is WHEN it runs" crates/batten/tests/it/session_provisioning.rs from `tests/container-preflight.bats`. The case grepped the retired script for `container-preflight`; the property — that a preflight nothing runs at startup is worthless — is now a declared row, and its POSITION is asserted too, which the grep could not say. CLOUD-1753 retired the subject as well and split that row into `session-container-preflight` and `session-credential`, so the property is now carried by both and the position clause covers their order
 // changed: "the hook passes --degraded when provisioning failed" batten.toml the capability is gone rather than moved, and this is the one real loss in this retirement. `--degraded` told the preflight not to trust toolchain-dependent probes when an earlier step had failed, and it worked because the script carried a `fail` variable across its steps. Handlers share no state — each is its own process with its own outcome — so nothing can compute the flag. The consequence is bounded: a container whose install failed now gets the full probe set, so it may report a second symptom of one cause, and both refusals arrive in the same reply. Recovering it needs a fact the door does not carry; filed rather than papered over
 // changed: "the fixer is wired: session-start runs it, so a clone is compliant before it commits" crates/batten/tests/it/session_provisioning.rs from `tests/commit-attribution.bats`, whose own subject (hk.pkl, mise.toml) survives. The case grepped the retired script for its `step attribution-identity` line; the property — that the identity fixer runs before a clone commits — is now the `session-attribution-identity` row, asserted by `the_committed_provisioning_declares_every_step_in_order`. It is CHANGED rather than CARRIED because the retired case pinned the invocation's exact spelling inside a program and this pins a row's presence and position in a list
@@ -116,6 +119,10 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
+use batten::capture::Streamed as _;
+use batten::capture::StreamedChild as _;
+use batten::hook::EventExt as _;
+use batten::hook::HarnessExt as _;
 
 use std::path::{Path, PathBuf};
 
@@ -199,9 +206,23 @@ impl Bench {
     fn session_start(&self) -> Door {
         use std::io::Write as _;
 
+        // THE BENCH'S OWN SESSION (CLOUD-2840): every case in one process
+        // shares the suite's state root, where a session's home is recorded by
+        // its id. One fixed id was one session across every bench, so a later
+        // bench's start was judged in the first bench's repository, already
+        // prepared, and said nothing. The bench's scratch directory names it
+        // (its repository is always `repo`).
+        let session = format!(
+            "session-provisioning-{}",
+            self.repo
+                .parent()
+                .and_then(Path::file_name)
+                .unwrap_or_default()
+                .to_string_lossy()
+        );
         let payload = serde_json::json!({
             "hook_event_name": "SessionStart",
-            "session_id": "session-provisioning-fixture",
+            "session_id": session,
             "source": "startup",
         })
         .to_string();
@@ -220,12 +241,21 @@ impl Bench {
             .expect("stdin is piped")
             .write_all(payload.as_bytes())
             .expect("write stdin");
-        let outcome = child.wait_with_output().expect("wait for batten");
+        let outcome = child.streamed_wait().expect("wait for batten");
         Door {
             out: stdout(&outcome),
             err: stderr(&outcome),
             code: outcome.status.code(),
         }
+    }
+
+    /// What the session hears once the setup task the agent dispatches has
+    /// finished: the first call after it, which carries the recorded outcome
+    /// (CLOUD-2840). The door's own reply never can: it runs no row, and starts
+    /// nothing that would.
+    fn settled(&self) -> String {
+        let _ = crate::session_start::settle(&self.repo);
+        crate::session_start::pre_tool(&self.repo)
     }
 
     /// Write one stub step and declare it as a `session-start` handler body.
@@ -259,6 +289,14 @@ fn bench(name: &str, rows: &[(&str, u64)]) -> Bench {
     }
     write(&repo, "batten.toml", &config);
     git_in(&repo, &["init", "-q", "-b", "main", "."]);
+    // Wired on every host's whole surface, as `init` leaves a consumer: a
+    // passing session start owes the doctor's wiring check nothing.
+    let wired = common::batten()
+        .current_dir(&repo)
+        .args(["wiring", "register", "--all"])
+        .streamed_output()
+        .expect("the binary runs");
+    assert_eq!(wired.status.code(), Some(0), "{}", common::stderr(&wired));
 
     Bench { repo }
 }
@@ -301,7 +339,7 @@ struct Row {
 /// scan actually found rows, so a header this repository re-spells cannot turn
 /// every case below vacuous.
 fn handler_rows() -> Vec<Row> {
-    let text = std::fs::read_to_string(at_root("batten.toml"))
+    let text = std::fs::read_to_string(common::committed_config_file("session_provisioning"))
         .expect("the committed authority is readable");
 
     let mut rows = Vec::new();
@@ -361,6 +399,7 @@ fn the_steps_run_in_declaration_order() {
 
     let door = bench.session_start();
     assert_eq!(door.code, Some(0), "session start allows: {}", door.err);
+    let _ = bench.settled();
 
     let ran = std::fs::read_to_string(&log).expect("every step ran");
     assert_eq!(
@@ -395,11 +434,29 @@ fn a_session_start_writes_the_stamp_before_any_row_runs() {
             .is_file(),
         "a session start through the door dates the session"
     );
+    let _ = bench.settled();
     assert_eq!(
         std::fs::read_to_string(bench.repo.join("observed")).expect("the step ran"),
         "present\n",
         "the stamp exists before the first declared row runs"
     );
+}
+
+/// Fails by: a handler that reports a failure leaving the setup task's outcome
+/// `ok` — the surviving mutant `failed_any -> false` — so the task records a
+/// clean setup over a step that failed, and the gate and the next session read
+/// it as done. A passing handler still ends `ok`, so the failure is the step's.
+#[test]
+fn a_failing_handler_ends_the_setup_task_failed() {
+    let failing = bench("session-phase-failed", &[("failing", 5000)]);
+    failing.step("failing", "echo '::error:: failing failed' >&2\nexit 1");
+    let _ = failing.session_start();
+    assert_eq!(crate::session_start::settle(&failing.repo), "failed");
+
+    let passing = bench("session-phase-ok", &[("quiet", 5000)]);
+    passing.step("quiet", "exit 0");
+    let _ = passing.session_start();
+    assert_eq!(crate::session_start::settle(&passing.repo), "ok");
 }
 
 #[test]
@@ -427,7 +484,9 @@ fn a_failed_step_is_reported_rather_than_silent() {
         Some(0),
         "a failed provisioning step never blocks the session"
     );
-    let said = format!("{}{}", door.out, door.err);
+    // RECORDED, AND SAID ON THE NEXT CALL (CLOUD-2840): the door returns before
+    // the step runs, so its reason arrives with the first call after the task.
+    let said = bench.settled();
     assert!(
         said.contains("session-start: failing failed"),
         "the step's own reason reaches the session, not just its exit code: {said}"
@@ -448,15 +507,29 @@ fn a_step_that_passes_says_nothing() {
 
     let door = bench.session_start();
     assert_eq!(door.code, Some(0));
-    assert!(
-        door.out.is_empty(),
-        "a passing step announces nothing on stdout: {}",
+    // THE DISPATCH NOTICE IS THE DOOR'S ONE LINE (CLOUD-2840, admitted by the
+    // owner): setup is owed, so the hook tells the agent what to dispatch, and
+    // a passing step adds nothing to it.
+    let document: serde_json::Value =
+        serde_json::from_str(&door.out).expect("the door says one document");
+    assert_eq!(
+        document,
+        serde_json::json!({"hookSpecificOutput": {
+            "hookEventName": "SessionStart",
+            "additionalContext": batten::session_setup::instruction(true),
+        }}),
+        "a passing step announces nothing beside the dispatch notice: {}",
         door.out
     );
     assert!(
         !door.err.contains("quiet"),
         "a passing step is not named on stderr either: {}",
         door.err
+    );
+    let said = bench.settled();
+    assert!(
+        !said.contains("quiet"),
+        "nor on the call that carries the task's outcome: {said}"
     );
 }
 
@@ -500,7 +573,7 @@ fn a_step_that_hangs_is_killed_at_its_declared_bound() {
     let door = bench.session_start();
 
     assert_eq!(door.code, Some(0), "a timed-out step allows: {}", door.err);
-    let said = format!("{}{}", door.out, door.err);
+    let said = bench.settled();
     assert!(
         said.contains("hook.handler.hanging timed-out-300ms"),
         "the declared bound is imposed by the parent, not hoped for: {said}"
@@ -518,7 +591,7 @@ fn a_step_that_hangs_is_killed_at_its_declared_bound() {
     )]
     let state = std::process::Command::new("ps")
         .args(["-o", "stat=", "-p", &grandchild.to_string()])
-        .output()
+        .streamed_output()
         .expect("run ps");
     let state = String::from_utf8_lossy(&state.stdout).trim().to_owned();
     assert!(
@@ -552,6 +625,11 @@ fn a_steps_stdout_is_interpreted_never_forwarded() {
         "a handler's stdout is never forwarded to the host verbatim: {}",
         door.out
     );
+    let said = bench.settled();
+    assert!(
+        !said.contains("{\"async\": true}"),
+        "nor on the call that carries the task's outcome: {said}"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -575,8 +653,8 @@ fn the_committed_provisioning_declares_every_step_in_order() {
 
 /// The two entry points that compile the engine, named once.
 ///
-/// `install:local` declares `depends = ["build:release"]`, so either spelling
-/// reaching a session-start task is the same four-minute compile.
+/// `install:local` runs `build:release` as a step, so either spelling reaching
+/// a session-start task is the same four-minute compile.
 const COMPILE_ENTRY_POINTS: [&str; 2] = ["install:local", "build:release"];
 
 /// The task each `session-start` row dispatches, plus every task those bodies
@@ -597,9 +675,8 @@ const COMPILE_ENTRY_POINTS: [&str; 2] = ["install:local", "build:release"];
 /// retired mechanism is supposed to still be written down.
 ///
 /// So this reads `run` and `depends` — what mise will actually execute —
-/// discarding the commentary around them. `depends` is here because
-/// `install:local` carries `depends = ["build:release"]`: a task can compile
-/// without its own body naming a compiler.
+/// discarding the commentary around them. `depends` is here because a task
+/// can compile through one without its own body naming a compiler.
 ///
 /// `[tasks."name"]` and `[tasks.name]` are both spelled in this file, and both
 /// are anchored to their own line: `[tasks.verify]` appears inside two comments
@@ -771,8 +848,6 @@ fn the_reachable_set_is_not_empty() {
 // zero bodies. So the mutation makes the extraction yield nothing, and the case
 // it must redden is the anti-vacuity one — which is the only case that can tell
 // "nothing compiles" from "nothing was read".
-//MUTANT-SUITE crates/batten/tests/it/session_provisioning.rs
-//MUTANT session-start-compiles|s@^                \["mise", "run", task, \.\.\] => Some((\*task).to_owned()),$@                ["mise", "run", _task, ..] => None,@|the_reachable_set_is_not_empty
 #[test]
 fn no_session_start_step_compiles_the_engine() {
     for (name, body) in reachable_session_task_bodies() {
@@ -821,11 +896,11 @@ fn every_handler_row_is_read() {
     assert!(
         rows.len() > DECLARED.len(),
         "the scan reads the handler table: the provisioning rows plus the \
-         user-prompt-submit and pre-tool rows that predate them, found {}",
+         stop and pre-tool rows beside them, found {}",
         rows.len()
     );
     assert!(
-        rows.iter().any(|row| row.on == "user-prompt-submit"),
+        rows.iter().any(|row| row.on == "stop"),
         "a row on another event is read too, so `session_rows` is filtering \
          rather than being all there is"
     );
@@ -835,7 +910,7 @@ fn every_handler_row_is_read() {
 /// has probed, stated so the census below can be exact rather than lenient.
 /// CLOUD-1961 owns emptying it; a row leaving this list is what closing the gap
 /// looks like, in `ADVISORY_GAPS`' shape one table over.
-const UNHEARD: [&str; 2] = ["turn-cross-check", "head-move-mediator-check"];
+const UNHEARD: [&str; 1] = ["head-move-mediator-check"];
 
 /// Whether Claude Code carries an advisory emitted on the event a row names.
 ///
@@ -843,7 +918,7 @@ const UNHEARD: [&str; 2] = ["turn-cross-check", "head-move-mediator-check"];
 /// whether that spelling is in `delivered_on` — so the census cannot drift from
 /// what the door actually renders.
 fn claude_hears(on: &str) -> bool {
-    let wiring = batten::hook::Harness::ClaudeCode
+    let wiring = batten::config_model::Harness::ClaudeCode
         .wiring()
         .expect("Claude Code is an installable harness");
     let Some((_, spelling)) = wiring
@@ -853,7 +928,7 @@ fn claude_hears(on: &str) -> bool {
     else {
         return false;
     };
-    let capabilities = batten::hook::Harness::ClaudeCode.capabilities();
+    let capabilities = batten::config_model::Harness::ClaudeCode.capabilities();
     capabilities.advisory_reachable(spelling)
 }
 
@@ -861,7 +936,6 @@ fn claude_hears(on: &str) -> bool {
 // everything passes the first loop over any tree, which is the exact false green
 // this census exists to refuse: the finding the door drops looks, from the
 // config, identical to one it delivers.
-//MUTANT hears-everything|s@^    capabilities.advisory_reachable(spelling)$@    !capabilities.events.is_empty() \&\& !spelling.is_empty()@|every_reporting_handler_speaks_on_a_delivered_channel
 #[test]
 fn every_reporting_handler_speaks_on_a_delivered_channel() {
     // CLOUD-1946. A handler's exit-1 report joins the advisory buffer, and the
@@ -914,7 +988,7 @@ fn every_provisioning_step_declares_its_own_bound() {
 }
 
 #[test]
-fn the_install_step_is_declared_lockfile_free() {
+fn the_install_step_is_declared_locked() {
     // CARRIES `"the install is lockfile-free — provisioning must not dirty the
     // tracked lock"` (CLOUD-223), and `"mise install runs — the step whose
     // absence was the defect"` with it: both were greps over the retired
@@ -937,13 +1011,28 @@ fn the_install_step_is_declared_lockfile_free() {
         .and_then(|tasks| tasks.values().next())
         .expect("the block carries its task");
 
-    assert_eq!(
+    // LOCKED, NOT LOCKFILE-FREE, since CLOUD-2688. The invariant is unchanged —
+    // provisioning must not dirty the tracked lock — and the mechanism moved: a
+    // LOCKED install reads `mise.lock` (its URLs and checksums, so no
+    // `api.github.com` resolve the proxy refuses) and refuses, rather than
+    // appends, anything the lock lacks. Measured: all 38 tools into an empty data
+    // directory, lock byte-identical after.
+    let env = |key: &str| {
         task.get("env")
-            .and_then(|env| env.get("MISE_LOCKFILE"))
-            .and_then(toml::Value::as_str),
-        Some("false"),
-        "provisioning installs purely, so it cannot append a platform key `mise lock` \
-         cannot produce and `lock cover partial` rejects"
+            .and_then(|env| env.get(key))
+            .and_then(toml::Value::as_str)
+            .map(ToOwned::to_owned)
+    };
+    assert_eq!(
+        env("MISE_LOCKED").as_deref(),
+        Some("true"),
+        "provisioning installs from the lock and never writes it, so it cannot append a \
+         platform key `mise lock` cannot produce and `lock cover partial` rejects"
+    );
+    assert_eq!(
+        env("MISE_LOCKFILE").as_deref(),
+        Some("true"),
+        "locked mode reads the lockfile, so the lockfile must be on"
     );
     assert!(
         task_value(&block, "run").contains("mise install"),
@@ -959,10 +1048,13 @@ fn the_install_step_is_declared_lockfile_free() {
 /// a reclaim step: neither the build nor the install it serves declares one.
 #[test]
 fn no_build_entry_point_waits_on_a_reclaim_step() {
-    let install = task_depends("install:local");
+    // A STEP, NO LONGER A `depends` (CLOUD-2840): the install asks the pin
+    // before it compiles, and a `depends` would run the build ahead of that
+    // question. It still runs the build, so it inherits what the build declares.
+    let install = task_surface("install:local").expect("the local install is a declared task");
     assert!(
-        install.iter().any(|entry| entry == "build:release"),
-        "the install DECLARES the build, so it inherits what the build declares: {install:?}"
+        install.contains("mise run build:release"),
+        "the install RUNS the build, so it inherits what the build declares: {install}"
     );
     for name in ["build:release", "install:local"] {
         let depends = task_depends(name);
@@ -996,13 +1088,45 @@ fn the_reclaim_itself_stays_dependency_free_and_the_surfaces_are_not_empty() {
     );
 }
 
-/// A LOCAL RELEASE BUILD IS THE ENGINE IN USE (CLOUD-2232): built, stamped with
-/// this tree's digest, and pinned by it, in that order, by the binary just
-/// built. A build that skipped either left an unstamped binary first on
-/// `_.path` while `batten.toml` named the release, so the branch was judged by
-/// an engine it had not built.
+/// EVERY TASK SPELLS BATTEN AS `{{vars.batten}}` (step 22), so the one place that
+/// says how batten runs is `[vars]`: `cargo run` by default, and the lap's own
+/// engine when `land` hands its gate `BATTEN_BIN`. A literal `cargo run -p
+/// batten` in a body is a step that rebuild-checks the engine on every lap
+/// whatever the lap hands it.
 #[test]
-fn a_local_release_build_is_stamped_and_pinned_by_itself() {
+fn every_task_reaches_batten_through_its_var() {
+    let manifest = std::fs::read_to_string(common::at_root("mise.toml")).expect("mise.toml");
+    let literal: Vec<String> = manifest
+        .lines()
+        .enumerate()
+        .filter(|(_, line)| !line.trim_start().starts_with('#') && !line.starts_with("batten = "))
+        .filter(|(_, line)| {
+            [
+                "cargo run --quiet -p batten",
+                "cargo run -q -p batten",
+                "cargo run -p batten",
+            ]
+            .iter()
+            .any(|spelling| line.contains(spelling))
+                || line.contains("mise run -q batten --")
+                || line.contains("mise run batten --")
+        })
+        .map(|(at, line)| format!("mise.toml:{}: {line}", at + 1))
+        .collect();
+    assert!(
+        literal.is_empty(),
+        "spell batten `{{{{vars.batten}}}}`:\n{}",
+        literal.join("\n")
+    );
+}
+
+/// A LOCAL RELEASE BUILD IS THE ENGINE IN USE (CLOUD-2232): built, then stamped
+/// with this tree's digest by the binary just built. A build that skipped the
+/// stamp left an unstamped binary first on `_.path`. It never rewrites the
+/// committed pin: the build runs under session-start repairs, and a pin written
+/// mid-lap moved the admission epoch and every step key (#1276).
+#[test]
+fn a_local_release_build_is_stamped_and_leaves_the_pin_alone() {
     let build = task_surface("build:release").expect("the release build is a declared task");
     let at = |needle: &str| {
         build
@@ -1011,10 +1135,12 @@ fn a_local_release_build_is_stamped_and_pinned_by_itself() {
     };
     let compiled = at("cargo build --quiet --release -p batten");
     let stamped = at("target/release/batten engine stamp");
-    let pinned = at("target/release/batten engine pin source");
+    assert!(compiled < stamped, "built, then stamped: {build}");
+    // A build writes no tracked file: `engine pin` rewrites `batten.toml`, and a
+    // build runs under session-start repairs, mid-lap included (#1276).
     assert!(
-        compiled < stamped && stamped < pinned,
-        "built, then stamped, then pinned: {build}"
+        !build.contains("engine pin") && !build.contains("engine update"),
+        "build:release rewrites the committed pin: {build}"
     );
 }
 

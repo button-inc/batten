@@ -74,13 +74,13 @@ declared_gap := {
 published contains target if {
 	some _, job in input.tree.documents[".github/workflows/dist.yml"].jobs
 	some entry in job.strategy.matrix.include
-	target := entry.target
+	target = entry.target
 }
 
 # Every platform key a `[[provision]]` row pins, per row name.
 pinned[name] := keys if {
 	some row in input.tree.documents["batten.toml"].provision
-	name := row.name
+	name = row.name
 	keys := {key | some key, _ in row.platforms}
 }
 
@@ -92,7 +92,7 @@ violation contains {
 	"subjects": [{"artifact": target}, {"artifact": name}],
 } if {
 	some target in published
-	key := platform_of[target]
+	key = platform_of[target]
 	not declared_gap[key]
 	some name, keys in pinned
 	not keys[key]

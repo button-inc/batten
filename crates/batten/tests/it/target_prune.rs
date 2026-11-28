@@ -163,6 +163,18 @@ fn kinded(deps: &Path, stem: &str, hash: &str, kind: &str, age_seconds: u64) {
     sized(deps, stem, hash, kind, age_seconds, 16 * 1024);
 }
 
+/// A unit last used `age_seconds` before a fixed 2001 instant.
+///
+/// NEVER `now - age`: the collector holds every unit used since the earliest
+/// running build ON THE HOST started (`collect::live_since`). Measured on
+/// #1276, both collection cases failed in every mutant once the host's
+/// cargo-mutants had run longer than the 7200 s backdate, since the "stale"
+/// unit was then newer than a live build. No process starts before 2001, so an
+/// anchored age keeps the fixtures' order and is never live.
+fn aged(age_seconds: u64) -> std::time::SystemTime {
+    std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_000_000_000 - age_seconds)
+}
+
 /// The same, of a chosen size.
 fn sized(deps: &Path, stem: &str, hash: &str, kind: &str, age_seconds: u64, bytes: usize) {
     std::fs::create_dir_all(deps).unwrap();
@@ -180,7 +192,7 @@ fn sized(deps: &Path, stem: &str, hash: &str, kind: &str, age_seconds: u64, byte
         mode.set_mode(0o755);
         std::fs::set_permissions(&path, mode).unwrap();
     }
-    let when = std::time::SystemTime::now() - std::time::Duration::from_secs(age_seconds);
+    let when = aged(age_seconds);
     std::fs::File::options()
         .write(true)
         .open(&path)
@@ -197,7 +209,7 @@ fn prune(dir: &Path, free: &str, args: &[&str]) -> std::process::Output {
         .args(args)
         .env("TARGET_PRUNE_FREE_MB", free)
         .current_dir(dir)
-        .output()
+        .streamed_output()
         .expect("run batten")
 }
 
@@ -246,7 +258,7 @@ fn live(profile: &Path, name: &str, hash: &str, age_seconds: u64, bytes: usize) 
     std::fs::create_dir_all(&fingerprint).unwrap();
     let file = fingerprint.join(format!("bin-{name}"));
     std::fs::write(&file, b"fingerprint").unwrap();
-    let when = std::time::SystemTime::now() - std::time::Duration::from_secs(age_seconds);
+    let when = aged(age_seconds);
     common::set_times(
         &file,
         std::fs::FileTimes::new()
@@ -261,7 +273,7 @@ fn live(profile: &Path, name: &str, hash: &str, age_seconds: u64, bytes: usize) 
 /// it warm and this case reads the committed file.
 #[test]
 fn the_committed_build_root_is_basis_moving() {
-    let text = std::fs::read_to_string(common::at_root("batten.toml")).unwrap();
+    let text = std::fs::read_to_string(common::committed_config_file("target_prune")).unwrap();
     let config: toml::Value = toml::from_str(&text).unwrap();
     let build = config
         .get("prune")
@@ -320,7 +332,7 @@ fn the_followed_build_is_never_collected() {
         .env("TARGET_PRUNE_FREE_MB", FREE)
         .env("CARGO_TARGET_DIR", "redirected")
         .current_dir(&dir)
-        .output()
+        .streamed_output()
         .expect("run batten");
 
     assert!(
@@ -333,8 +345,8 @@ fn the_followed_build_is_never_collected() {
 /// THE VERB IS ONE COLLECTION, and the spec's own case. Two live units of known
 /// size, free space one MiB short of `max_free_mb`: the older unit goes, the
 /// line is `disk-collected …`, and the exit is 0 — no floor, no basis, no
-/// escalation field. `#MUTANT prune-verb-skips-collect` returns before
-/// collecting, and the older unit survives.
+/// escalation field. A mutant that returns before collecting leaves the older
+/// unit standing.
 #[test]
 fn target_prune_collects_to_max_free_without_a_floor() {
     let repo = repo("target-prune-collects");
@@ -541,7 +553,10 @@ fn superseded_example_generations_are_reclaimed_like_deps() {
     unit(&examples, "bench", "cccccccccccc", 60, 101, 5);
     let orphan = examples.join("bench-dddddddddddd.bench.1a2b3c4d-cgu.0.rcgu.dwo");
     std::fs::write(&orphan, b"debuginfo").unwrap();
-    let foreign = repo.join("target/tmp/fixture/examples");
+    // OUTSIDE `tmp/`: a decoy under the test scratch is a fixture the disk
+    // collector judges by its own window (#1276), and no suite runs from this
+    // tree, so it went for that reason rather than this case's.
+    let foreign = repo.join("target/fixture/examples");
     artifact(&foreign, "bench", "aaaaaaaaaaaa", 3600);
     artifact(&foreign, "bench", "bbbbbbbbbbbb", 1800);
     artifact(&foreign, "bench", "cccccccccccc", 60);
@@ -575,7 +590,6 @@ fn superseded_example_generations_are_reclaimed_like_deps() {
 //
 // The declared mutation, in a plain comment for CLOUD-1913's reason below;
 // killed by hand:
-// MUTANT orphaned-dwo-kept|s@        if !live.contains(hash) {@        if false {@|a_dwo_whose_unit_has_no_fingerprint_is_reclaimed_and_a_live_ones_is_not
 #[test]
 fn a_dwo_whose_unit_has_no_fingerprint_is_reclaimed_and_a_live_ones_is_not() {
     let repo = repo("target-prune-dwo");
@@ -606,10 +620,6 @@ fn a_dwo_whose_unit_has_no_fingerprint_is_reclaimed_and_a_live_ones_is_not() {
 // cannot see `crates/batten/src/**`. The expression belongs to `prune.rs`'s
 // `reclaim_superseded`; inert under the sweep, its kill was demonstrated by hand
 // against the case below.
-/*
-#MUTANT-SUITE crates/batten/tests/it/target_prune.rs
-#MUTANT fingerprint-left-behind|s@^                        forget_fingerprint(fingerprints, victim);$@                        let _ = (fingerprints, victim);@|a_reclaimed_copy_takes_its_cargo_fingerprint_with_it
-*/
 
 #[test]
 fn a_reclaimed_copy_takes_its_cargo_fingerprint_with_it() {
@@ -647,10 +657,6 @@ fn a_reclaimed_copy_takes_its_cargo_fingerprint_with_it() {
 
 // CLOUD-1913's second declared mutation, here for the same reason: a contended
 // build lock read as free is the race that removed `target/clippy` under clippy.
-/*
-#MUTANT-SUITE crates/batten/tests/it/target_prune.rs
-#MUTANT running-build-reclaimed|s@^            Err(std::fs::TryLockError::WouldBlock) => return None,$@            Err(std::fs::TryLockError::WouldBlock) => {}@|a_tree_a_running_build_holds_is_not_reclaimed
-*/
 
 #[test]
 fn a_tree_a_running_build_holds_is_not_reclaimed() {
@@ -665,7 +671,8 @@ fn a_tree_a_running_build_holds_is_not_reclaimed() {
     artifact(&deps, "cli", "bbbbbbbbbbbb", 1800);
     artifact(&deps, "cli", "cccccccccccc", 60);
     let lock = std::fs::File::create(repo.join("target/debug/.cargo-lock")).unwrap();
-    lock.lock().unwrap();
+    lock.try_lock()
+        .expect("hold the build lock, free in a fresh fixture");
 
     let output = prune(&repo, FREE, &["-y"]);
     assert!(output.status.success(), "{}", said(&output));
@@ -1014,7 +1021,7 @@ fn target_is_a_noun_that_performs_no_default_action() {
     let output = batten()
         .arg("target")
         .current_dir(&repo)
-        .output()
+        .streamed_output()
         .expect("run batten");
     assert!(
         !output.status.success(),
@@ -1048,7 +1055,8 @@ fn a_held_profile_is_reported_by_its_lock() {
     let profile = repo.join("target/debug");
     live(&profile, "stale", "cccccccccccccccc", 7200, 1 << 20);
     let lock = std::fs::File::create(profile.join(".cargo-lock")).unwrap();
-    lock.lock().unwrap();
+    lock.try_lock()
+        .expect("hold the build lock, free in a fresh fixture");
 
     let output = prune(&repo, FREE, &["-y"]);
     let said = said(&output);

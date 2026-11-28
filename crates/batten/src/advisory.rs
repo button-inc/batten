@@ -17,11 +17,9 @@
 //! cheaper than rationalising it after — and the third producer has since
 //! arrived, which is the row being right rather than lucky.
 
-use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
-
 use crate::refusal::{Arm, Refusal};
 use crate::severity::AdvisoryTier;
+use crate::severity::SeverityExt as _;
 
 /// One producer's contribution, with the latency its content demands.
 ///
@@ -78,7 +76,7 @@ impl Advice {
     /// One classed entry, rendered through the finding projection at emission.
     #[must_use]
     pub fn finding(tier: AdvisoryTier, refusal: Refusal) -> Advice {
-        let severity = crate::refusal::Severity::of_tier(tier);
+        let severity = crate::grammar::Severity::of_tier(tier);
         Advice {
             tier,
             text: String::new(),
@@ -99,38 +97,9 @@ impl Advice {
     }
 }
 
-/// The `[advisory]` table: what ONE emission of the whole channel may cost.
-///
-/// **The channel, not the producer**, which is the whole of this row. Absent
-/// means unenforced, on `[budget]`'s reading — a threshold nobody declared is
-/// not a threshold of zero — so a consumer that has not adopted it emits exactly
-/// what it emitted before.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct Channel {
-    /// The ceiling on estimated tokens for one emission, across every producer.
-    /// The boundary is `<=`, matching `[budget]` and `[refusal]` so the three
-    /// thresholds in this tree do not disagree about their own edge.
-    pub max_tokens: usize,
-}
-
-/// Refuse a ceiling nothing could satisfy.
-///
-/// # Errors
-///
-/// When the declared ceiling is zero: it would suppress every advisory including
-/// the shortest, which is a channel switched off wearing a budget's clothes.
-pub fn validate(channel: Option<&Channel>) -> Result<(), String> {
-    match channel {
-        Some(declared) if declared.max_tokens == 0 => Err(
-            "`[advisory] max_tokens = 0` suppresses every advisory the channel could carry — \
-             remove the table to leave the channel unbounded, or name a ceiling something can \
-             fit inside"
-                .to_owned(),
-        ),
-        _ => Ok(()),
-    }
-}
+#[cfg(test)]
+use crate::config_check::advisory::validate;
+use crate::config_model::Channel;
 
 /// What one emission carries, and what it left behind.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -168,24 +137,31 @@ impl Sighter for Unsighted {
     }
 }
 
-/// The widest handle a closing line can name, reserved while admitting so the
-/// line itself never pushes an emission past its ceiling.
-const WIDEST_HANDLE: &str =
-    "advisory:0000000000000000000000000000000000000000000000000000000000000000";
+/// The widest pointer a closing line can carry, reserved while admitting so the
+/// line itself never pushes an emission past its ceiling: the `output point now`
+/// line every stored output takes (CLOUD-2284), over a long view path.
+fn widest_pointer() -> String {
+    format!(
+        "batten note output point now at /advisory:999999-999999(999999999B 999999999T) \
+         advisory:{}; read /{}.md",
+        "0".repeat(64),
+        "x".repeat(255)
+    )
+}
 
 /// The line closing an emission the ceiling cut, so a partial report cannot
 /// read as a complete one: how many entries were withheld, the ceiling, and the
-/// handle returning exactly them — or that they could not be stored.
+/// pointer to a view of exactly them — or that they could not be stored.
 ///
 /// **A truncated report that reads as complete is the false green in advisory
 /// form**, and a count with no way to the rest is a truncation that calls
 /// itself a summary (CLOUD-2175).
 #[must_use]
-pub fn suppressed_line(suppressed: usize, ceiling: usize, handle: Option<&str>) -> String {
-    match handle {
-        Some(handle) => format!(
+pub fn suppressed_line(suppressed: usize, ceiling: usize, pointer: Option<&str>) -> String {
+    match pointer {
+        Some(pointer) => format!(
             "advisory: {suppressed} further finding(s) past the declared channel ceiling of \
-             {ceiling} token(s); run batten capture show {handle}"
+             {ceiling} token(s); {pointer}"
         ),
         None => format!(
             "advisory: {suppressed} further finding(s) past the declared channel ceiling of \
@@ -208,7 +184,7 @@ fn merged(entries: Vec<Advice>) -> Vec<Advice> {
                     .is_some_and(|other| other.absorb(refusal))
                 {
                     held.tier = held.tier.max(entry.tier);
-                    let severity = crate::refusal::Severity::of_tier(held.tier);
+                    let severity = crate::grammar::Severity::of_tier(held.tier);
                     if let Some(finding) = held.finding.take() {
                         held.finding = Some(Box::new((*finding).with_severity(severity)));
                     }
@@ -246,11 +222,6 @@ fn merged(entries: Vec<Advice>) -> Vec<Advice> {
 ///
 /// Even where it alone exceeds the ceiling: a channel that could emit nothing
 /// would turn a budget into a mute switch.
-//MUTANT-SUITE crates/batten/src/advisory.rs
-//MUTANT first-sighting-repeated|s@^            !held$@            true@|a_drained_rules_remedy_is_said_once_per_window
-//MUTANT unceilinged-reordered|s@^    let ranked = ceiling.is_some();$@    let ranked = true;@|an_undeclared_ceiling_leaves_the_channel_exactly_as_it_was
-//MUTANT advisory-ceiling-unread|s@^    let whole = within(\&probes);$@    let whole = true;@|what_does_not_fit_is_counted_and_returned_rather_than_dropped
-//MUTANT cut-entry-marked|s@^            overflow.push(match entry.finding {$@            overflow.push(match entry.finding.map(\x7crefusal\x7c { let _ = sighter.mark(\&refusal); refusal }) {@|a_cut_finding_is_never_marked_seen
 #[must_use]
 pub fn admit(
     entries: Vec<Advice>,
@@ -291,8 +262,8 @@ pub fn admit(
         })
     };
     let whole = within(&probes);
-    let reserve =
-        ceiling.map(|held| suppressed_line(ordered.len(), held.max_tokens, Some(WIDEST_HANDLE)));
+    let reserve = ceiling
+        .map(|held| suppressed_line(ordered.len(), held.max_tokens, Some(&widest_pointer())));
 
     let mut admitted: Vec<String> = Vec::new();
     let mut overflow: Vec<String> = Vec::new();
@@ -334,7 +305,7 @@ fn joined_text(texts: &[String]) -> String {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
-
+    #[cfg(test)]
     fn entry(tier: AdvisoryTier, text: &str) -> Advice {
         Advice::new(tier, text)
     }
@@ -361,7 +332,7 @@ mod tests {
     }
 
     fn finding(tier: AdvisoryTier, subject: &str) -> Advice {
-        classed(tier, crate::verdict::Native::RunBroken, subject)
+        classed(tier, crate::error::Native::RunBroken, subject)
     }
 
     /// A drained rule's remedy is said in full once per window, and never as a
@@ -372,7 +343,7 @@ mod tests {
             Advice::first_sighting(
                 AdvisoryTier::Advisory,
                 Refusal::engine(
-                    crate::verdict::Native::CheckRunRed,
+                    crate::error::Native::CheckRunRed,
                     &[crate::verdict::artifact("remedy-subject")],
                     crate::refusal::Fix::None,
                 ),
@@ -389,7 +360,7 @@ mod tests {
         assert!(fresh.text.contains("remedy-subject"), "{}", fresh.text);
     }
 
-    fn classed(tier: AdvisoryTier, class: crate::verdict::Native, subject: &str) -> Advice {
+    fn classed(tier: AdvisoryTier, class: crate::error::Native, subject: &str) -> Advice {
         Advice::finding(
             tier,
             Refusal::engine(
@@ -511,7 +482,7 @@ mod tests {
                 entry(AdvisoryTier::Caution, &"c".repeat(80)),
                 classed(
                     AdvisoryTier::Advisory,
-                    crate::verdict::Native::CheckRunRed,
+                    crate::error::Native::CheckRunRed,
                     "a-subject",
                 ),
             ],
@@ -555,14 +526,35 @@ mod tests {
     #[test]
     fn the_closing_line_counts_the_cut_and_names_where_it_went() {
         assert_eq!(
-            suppressed_line(2, 30, Some("advisory:abc")),
+            suppressed_line(
+                2,
+                30,
+                Some("batten note output point now at /advisory:1-2(9B 3T); read /v.md")
+            ),
             "advisory: 2 further finding(s) past the declared channel ceiling of 30 \
-             token(s); run batten capture show advisory:abc"
+             token(s); batten note output point now at /advisory:1-2(9B 3T); read /v.md"
         );
         assert_eq!(
             suppressed_line(1, 5, None),
             "advisory: 1 further finding(s) past the declared channel ceiling of 5 \
              token(s), and they could not be stored"
         );
+    }
+
+    /// Fails by: the reserved closing pointer emptied, so an entry that only fits
+    /// beside a pointer-less closing line is admitted and the real closing line
+    /// pushes the emission past its ceiling.
+    #[test]
+    fn admission_reserves_room_for_the_widest_closing_pointer() {
+        let emission = emit(
+            vec![
+                entry(AdvisoryTier::Caution, &"a".repeat(40)),
+                entry(AdvisoryTier::Caution, &"b".repeat(40)),
+                entry(AdvisoryTier::Caution, &"c".repeat(400)),
+            ],
+            Some(&Channel { max_tokens: 60 }),
+        );
+        assert_eq!(emission.text, "a".repeat(40), "{}", emission.text);
+        assert_eq!(emission.suppressed, 2);
     }
 }

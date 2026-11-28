@@ -74,6 +74,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
+use batten::capture::StreamedChild as _;
 
 use std::path::PathBuf;
 
@@ -94,7 +95,10 @@ const LIFECYCLE: [&str; 4] = [
 
 /// The repository root, whose committed `batten.toml` is the policy under test.
 fn root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
+    // THE COMMITTED TREE IN A REPOSITORY OF ITS OWN (CLOUD-2904), never the
+    // checkout: the hook's verdict is about the committed config, not about the
+    // real checkout's HEAD, refs and receipts.
+    common::committed_repo().to_path_buf()
 }
 
 /// [`bash_payload`] with `run_in_background` stated true.
@@ -358,8 +362,9 @@ fn a_blocked_command_emits_a_deny_decision() {
 #[test]
 fn an_allowed_command_emits_no_decision() {
     // Silence is the contract: a document per allowed call would put a line in
-    // front of the agent on every tool use.
-    let out = decision("gh pr view 63 --json state");
+    // front of the agent on every tool use. Not a read, which the plan-mode
+    // preset now grants out loud (CLOUD-2206).
+    let out = decision("gh pr checkout 63");
     assert!(
         !out.contains("permissionDecision"),
         "an allowed command must emit no decision document\n{out}"
@@ -397,7 +402,7 @@ fn decision_with_env(command: &str, key: &str, value: &str) -> String {
                     .as_mut()
                     .expect("stdin is piped")
                     .write_all(bash_payload(command).as_bytes())?;
-                child.wait_with_output()
+                child.streamed_wait()
             })
             .expect("the binary runs"),
     )

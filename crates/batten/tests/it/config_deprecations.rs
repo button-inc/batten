@@ -79,20 +79,28 @@ use common::{batten, git_in, scratch};
 /// `None` is could-not-look and never a pass. A fresh clone with no tags fetched
 /// has no baseline, and reporting "nothing was removed" having compared nothing is
 /// the vacuous pass CLOUD-251 names.
+///
+/// The oracle parses every `v*` tag through the one semver reading and takes the
+/// greatest RELEASE by precedence (CLOUD-2906): git's own version sort ranks
+/// `v1.0.0-rc1` above `v1.0.0` unless `versionsort.suffix` is configured.
 fn latest_release_tag(root: &Path) -> Option<String> {
-    let listed = git_in(root, &["tag", "--list", "v*", "--sort=-v:refname"]);
+    let listed = git_in(root, &["tag", "--list", "v*"]);
     listed
         .lines()
-        .next()
-        .map(str::to_owned)
-        .filter(|tag| !tag.is_empty())
+        .filter_map(|name| {
+            batten::version::Tag::parse(name)
+                .filter(batten::version::Tag::is_release)
+                .map(|tag| (tag.version, name.to_owned()))
+        })
+        .max_by(|(left, _), (right, _)| batten::version::precedence(left, right))
+        .map(|(_, name)| name)
 }
 
 /// The schema this build derives from the config types.
 fn derived_schema() -> Vec<u8> {
     let output = batten()
         .args(["generate", "schema"])
-        .output()
+        .streamed_output()
         .expect("run batten generate schema");
     assert_eq!(output.status.code(), Some(0));
     output.stdout
@@ -103,7 +111,7 @@ fn deprecations(root: &Path, against: &str) -> (i32, String) {
     let output = batten()
         .args(["config", "deprecations", against])
         .current_dir(root)
-        .output()
+        .streamed_output()
         .expect("run batten config deprecations");
     let mut said = String::from_utf8_lossy(&output.stdout).into_owned();
     said.push_str(&String::from_utf8_lossy(&output.stderr));
@@ -190,6 +198,16 @@ impl Published {
         );
         self.publish("publish without a key this build has", tag);
         self.write_schema(&derived_schema());
+    }
+
+    /// Bake `tag` as a release does: one commit records it in `install.lock`
+    /// beside a schema still declaring `key`, and a later commit drops the key
+    /// and lands a newer, key-free tag. So the recorded release and the newest
+    /// tag disagree, and only the recorded one sees the removal.
+    fn bake_then_remove(&self, key: &str, tag: &str, newer: &str) {
+        fs::write(self.root.join("install.lock"), format!("tag {tag}\n")).expect("the lock");
+        self.publish_then_remove(key, "x", tag);
+        self.publish("after the release", newer);
     }
 
     fn baseline(&self) -> Option<String> {
@@ -374,7 +392,7 @@ fn this_repositorys_schema_has_lost_no_key_since_its_last_release() {
     // none, and the honest answer there is could-not-look rather than a pass over a
     // comparison nobody made. Both arms are asserted, so this cannot report green
     // by having compared nothing.
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let root = common::committed_repo().to_path_buf();
     match latest_release_tag(&root) {
         Some(against) => {
             let (code, said) = deprecations(&root, &against);
@@ -393,4 +411,99 @@ fn this_repositorys_schema_has_lost_no_key_since_its_last_release() {
             );
         }
     }
+}
+
+/// `latest` IS THE RELEASE THE TREE RECORDS, NOT THE NEWEST TAG A CLONE HOLDS
+/// (CLOUD-2789).
+///
+/// The gate `config retire unnamed` asks `latest`. Resolved as the newest tag
+/// in the clone, it refused in a container that fetched no tags and judged an
+/// older release in one that fetched only some, so the land and a session
+/// disagreed on one commit. `install.lock`, committed by every release's bake,
+/// names one tag for every clone of a commit; a newer tag beside it is not the
+/// tree's baseline.
+///
+/// Fails by: `latest` taking the newest tag over the recorded one, or answering
+/// differently from the same comparison named outright.
+#[test]
+fn latest_is_the_release_the_tree_records() {
+    let fixture = Published::new("config-deprecations-recorded");
+    fixture.bake_then_remove("a_key_the_recorded_release_had", "v0.0.2", "v0.0.3");
+    let (code, said) = deprecations(&fixture.root, "latest");
+    let (explicit_code, explicit) = deprecations(&fixture.root, "v0.0.2");
+    assert_eq!((code, &said), (explicit_code, &explicit));
+    assert_eq!(code, 2, "the recorded release saw the removal: {said}");
+    assert!(
+        said.contains("v0.0.2") && !said.contains("v0.0.3"),
+        "the line names the recorded release: {said}"
+    );
+}
+
+/// THE SAME VERDICT IN A CLONE THAT HOLDS NO TAGS (CLOUD-2789). A container
+/// restarted without its startup fetch held a full history and no `v*` tag,
+/// and refused the gate the land passed. The recorded release is read at the
+/// commit that baked it, which every full clone holds.
+///
+/// Fails by: `latest` reading the release through its tag, so deleting the
+/// tags changes the answer.
+#[test]
+fn a_clone_without_its_tags_answers_as_one_with_them() {
+    let fixture = Published::new("config-deprecations-tagless");
+    fixture.bake_then_remove("a_key_the_recorded_release_had", "v0.0.2", "v0.0.3");
+    let tagged = deprecations(&fixture.root, "latest");
+    for tag in ["v0.0.1", "v0.0.2", "v0.0.3"] {
+        git_in(&fixture.root, &["tag", "-d", tag]);
+    }
+    assert_eq!(deprecations(&fixture.root, "latest"), tagged);
+}
+
+/// A recorded release no commit in the history records, or a history too
+/// shallow to walk, is could-not-look: never a usage refusal, and never a
+/// pass against some other release.
+///
+/// Fails by: a missing baseline read as clean, refused as a usage error, or
+/// resolved to some other tag the clone holds.
+#[test]
+fn a_recorded_release_missing_from_the_clone_is_could_not_look() {
+    let fixture = Published::new("config-deprecations-unfetched");
+    fixture.bake_then_remove("a_key_the_recorded_release_had", "v0.0.2", "v0.0.3");
+    let shallow = scratch("config-deprecations-shallow");
+    git_in(
+        &shallow,
+        &[
+            "clone",
+            "-q",
+            "--depth",
+            "1",
+            &format!("file://{}", fixture.root.display()),
+            ".",
+        ],
+    );
+    let (code, said) = deprecations(&shallow, "latest");
+    assert_eq!(code, 3, "a shallow history is could-not-look: {said}");
+    assert!(
+        said.contains("git fetch --unshallow"),
+        "names the deepening: {said}"
+    );
+    fs::write(fixture.root.join("install.lock"), "tag v9.9.9\n").expect("the lock");
+    let (code, said) = deprecations(&fixture.root, "latest");
+    assert_eq!(code, 3, "an unrecorded baseline is could-not-look: {said}");
+}
+
+/// Where no lock records a release, `latest` is the newest tag by version
+/// order; with no tag at all it is could-not-look.
+///
+/// Fails by: the fallback taking another tag, or a tagless clone passing.
+#[test]
+fn without_a_lock_latest_is_the_newest_tag_and_none_is_could_not_look() {
+    let fixture = Published::new("config-deprecations-unlocked");
+    git_in(&fixture.root, &["tag", "v0.0.10"]);
+    git_in(&fixture.root, &["tag", "v0.0.9"]);
+    let (_, said) = deprecations(&fixture.root, "latest");
+    assert!(said.contains("v0.0.10"), "the newest by version: {said}");
+    for tag in ["v0.0.1", "v0.0.9", "v0.0.10"] {
+        git_in(&fixture.root, &["tag", "-d", tag]);
+    }
+    let (code, said) = deprecations(&fixture.root, "latest");
+    assert_eq!(code, 3, "no tag is could-not-look: {said}");
 }

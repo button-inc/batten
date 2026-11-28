@@ -41,8 +41,10 @@ use std::fs;
 use std::io::ErrorKind;
 use std::path::Path;
 
+use batten::config_model::RuleKind;
+use batten::preset_catalog::RuleScope;
 use batten::release_state::{self, Files};
-use batten::rules::{self, RuleKind, RuleScope};
+use batten::rules;
 
 use crate::common;
 
@@ -77,14 +79,16 @@ fn move_to_next_release(scratch: &Path) -> String {
     let current = batten::release_path::version_of(&manifest).expect("a workspace version");
     // `main` pins the release it carries; a working tree pinned to a source
     // build (`install:local`) is put back to that before the move.
-    let pinned = batten::engine::Pin {
+    let pinned = batten::config_model::Pin {
         release: Some(format!("v{current}")),
         source: None,
     };
     let files = Files {
         manifest,
         lock: read("Cargo.lock"),
-        config: batten::engine::rewrite(&read("batten.toml"), &pinned),
+        // ITS OWN FIXTURE CONFIG (CLOUD-2960): the committed parts with no pin,
+        // and the pin this case is about written in by `rewrite`.
+        config: batten::engine::rewrite(&common::committed_config(), &pinned),
         // Read because `bump` requires its heading; never written (above).
         changelog: read("crates/batten/CHANGELOG.md"),
     };
@@ -102,9 +106,9 @@ fn the_release_rules_are_clean_one_release_ahead() {
     let root = common::at_root(".")
         .canonicalize()
         .expect("this checkout is where the manifest says it is");
-    let config =
-        batten::config::load(&root.join("batten.toml")).expect("the committed config loads");
-    let selected: Vec<rules::Rule> = config
+    let config = batten::config::load(&common::committed_config_file("release-rehearsal"))
+        .expect("the committed config loads");
+    let selected: Vec<batten::config_model::Rule> = config
         .rules
         .iter()
         .filter(|rule| {
@@ -126,8 +130,13 @@ fn the_release_rules_are_clean_one_release_ahead() {
         "the selection carries the row that held v0.0.217: {:?}",
         selected.iter().map(|rule| &rule.id).collect::<Vec<_>>()
     );
-    let scratch = common::scratch("release-rehearsal");
+    let scratch = common::scratch_repo("release-rehearsal");
     copy_tracked(&root, &scratch);
+    // COMMITTED, AS THE CHECKOUT'S TREE IS (CLOUD-2904): the scratch is a
+    // repository of its own, so the copy is its HEAD and the release move below
+    // is the working change a release head makes over it.
+    common::git_in(&scratch, &["add", "-A"]);
+    common::git_in(&scratch, &["commit", "-q", "-m", "the committed tree"]);
     let next = move_to_next_release(&scratch);
     let scan = rules::run_static_over(
         &selected,
@@ -135,6 +144,8 @@ fn the_release_rules_are_clean_one_release_ahead() {
         batten::policy::Vocabulary::from(&config),
         &scratch,
         rules::RunOptions {
+            half: None,
+            keyed_bases: &[],
             checks: batten::policy::ModuleChecks::RunOverSelection,
             scope: &rules::Scope::Tree,
             surface: batten::facts::Surface::Check,

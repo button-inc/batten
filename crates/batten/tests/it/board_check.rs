@@ -1608,7 +1608,7 @@ mod ready_cites {
     fn synthetic(name: &str) -> (PathBuf, PathBuf) {
         let dir = common::Fixture::new(&format!("board-check-cites-{name}"))
             .file(
-                "crates/batten/src/git.rs",
+                "crates/batten-core/src/git.rs",
                 "fn a_real_test_that_exists_here() {}\n",
             )
             .file(
@@ -1654,7 +1654,7 @@ mod ready_cites {
         ))
         .expect("the fetched fixture");
         let output = common::run_with_stdin(
-            &common::at_root(""),
+            common::committed_repo_whole(),
             &["board", "check", "--cites"],
             &payload,
         );
@@ -1683,7 +1683,7 @@ mod ready_cites {
         ))
         .expect("the fetched fixture");
         let output = common::run_with_stdin(
-            &common::at_root(""),
+            common::committed_repo_whole(),
             &["board", "check", "--cites"],
             &payload,
         );
@@ -1698,7 +1698,7 @@ mod ready_cites {
         ))
         .expect("the fetched fixture");
         let output = common::run_with_stdin(
-            &common::at_root(""),
+            common::committed_repo_whole(),
             &["board", "check", "--cites"],
             &payload,
         );
@@ -1817,7 +1817,7 @@ mod ready_cites {
             &dir,
             &config,
             &block7(
-                "Present: `crates/batten/src/git.rs`. Planned: `tests/layer-check.bats` (new). Stale: `tests/gone.bats`.",
+                "Present: `crates/batten-core/src/git.rs`. Planned: `tests/layer-check.bats` (new). Stale: `tests/gone.bats`.",
             ),
         );
         assert_eq!(code(&output), 2, "{}", text(&output));
@@ -1872,7 +1872,7 @@ mod ready_cites {
         let output = cites(
             &dir,
             &config,
-            &block7("The subject is `crates/batten/src/git.rs`."),
+            &block7("The subject is `crates/batten-core/src/git.rs`."),
         );
         assert_eq!(code(&output), 0, "{}", text(&output));
         assert!(text(&output).contains("1 of 1 citation(s) resolve"));

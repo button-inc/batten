@@ -51,7 +51,7 @@ use common::{Fixture, run, run_with_stdin, stderr, stdout};
 /// compile time, so a row edited in `batten.toml` is exercised by the next run
 /// rather than by whoever remembers to update a duplicate.
 fn repo(name: &str) -> PathBuf {
-    repo_with(name, include_str!("../../../../batten.toml"))
+    repo_with(name, &common::committed_config())
 }
 
 /// [`repo`] over `config` rather than the committed authority alone.
@@ -386,10 +386,7 @@ reason = "Run the `groom` skill with the row's key as its argument, then retry t
 "#;
 
 fn groomed_repo(name: &str) -> PathBuf {
-    repo_with(
-        name,
-        &format!("{}{GROOM_ROWS}", include_str!("../../../../batten.toml")),
-    )
+    repo_with(name, &format!("{}{GROOM_ROWS}", common::committed_config()))
 }
 
 /// The `groom` skill dispatched over `args`, answered as the live host answers.

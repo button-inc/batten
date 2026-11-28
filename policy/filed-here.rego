@@ -63,7 +63,7 @@
 #MUTANT blocked-recorder-still-priced|s@^\tnot closes_unreadable$@\ttrue@|a_blocked_closes_recorder_withholds_the_proximity_refusal
 #MUTANT left-open-arm-unpartitioned|s@^\tcites_only(id)$@\ttrue@|a_row_recorded_after_the_base_whose_sec1_names_the_diff_still_refuses
 #MUTANT left-open-judges-an-unread-body|s@^\tbody_read$@\ttrue@|an_unread_pr_body_leaves_the_set_unjudged
-#MUTANT older-body-still-exempts|s@^\traw := measured_closes\[count(measured_closes) - 1\]$@\tsome raw in measured_closes@|a_key_dropped_from_the_latest_body_exempts_nothing
+#MUTANT older-body-still-exempts|s@^\traw = measured_closes\[count(measured_closes) - 1\]$@\tsome raw in measured_closes@|a_key_dropped_from_the_latest_body_exempts_nothing
 #MUTANT unread-fetch-measured|s@^\tcolumns\[1\] != "-"$@\ttrue@|a_newest_unread_fetch_keeps_the_earlier_exemption
 #MUTANT nothing-read-as-zero|s@^\tcontains(columns\[1\], ":")$@\ttrue@|a_measured_nothing_exempts_no_row_named_zero
 #MUTANT blocked-outranks-measured|s@^\tcount(measured_closes) == 0$@\ttrue@|a_measured_body_outranks_a_blocked_fetch
@@ -96,9 +96,13 @@ lines := input.tree.records["board-writes"]
 # THE TAIL COLUMNS ARE OPTIONAL BY CONSTRUCTION. A record written by an older
 # recorder is shorter, so a column past its end reads `-` and passes — a branch is
 # never refused for a question its recorder could not ask.
-column(columns, at) := value if {
-	value := columns[at]
-} else := "-"
+#
+# TWO DEFINITIONS, NO `else` (#1276): regorus 0.15's bytecode drops an `else`
+# after a body indexing by a variable. A column is a string, never `false`, so
+# `not` reads only that the index is out of range.
+column(columns, at) := columns[at]
+
+column(columns, at) := "-" if not columns[at]
 
 # Every `issue` line, keyed by its position so a later reading can supersede an
 # earlier one.
@@ -129,7 +133,7 @@ entry[at] := row if {
 # mechanism, so it is simply the current one.
 latest[id] := row if {
 	some at, row in entry
-	id := row.id
+	id = row.id
 	at == max({other | some other, candidate in entry; candidate.id == id})
 }
 
@@ -168,7 +172,7 @@ changed contains path if {
 # kept exempting a row an older body closed and the latest dropped: the PR no
 # longer lands it, and the exemption is the fail-open direction.
 closes contains key if {
-	raw := measured_closes[count(measured_closes) - 1]
+	raw = measured_closes[count(measured_closes) - 1]
 
 	# THE SAME TRIMMED SPLIT `measured_closes` decided on, so a line it counts
 	# as measured is never parsed into different columns here.
@@ -254,9 +258,9 @@ overlapping[id] := hits if {
 # side missing skips the arm rather than deciding on it: could-not-look
 # manufactures neither a pass nor a refusal.
 predates_the_branch(id) if {
-	base := delta["base-date"]
+	base = delta["base-date"]
 	is_string(base)
-	updated := latest[id].updated
+	updated = latest[id].updated
 	updated != "-"
 	updated < base
 }
@@ -270,7 +274,7 @@ predates_the_branch(id) if {
 # `-` is could-not-look and leaves the row judged as before, so a record from an
 # older recorder is never silently exempted.
 cites_only(id) if {
-	packed := latest[id].sec1
+	packed = latest[id].sec1
 	packed != "-"
 	count({path |
 		some path in named_paths(packed)
@@ -485,7 +489,7 @@ test_a_newest_unread_fetch_keeps_the_earlier_exemption if {
 # A NEWEST `closes 0` IS A MEASURED NOTHING: no key, and the older body's
 # exemption is gone.
 test_a_latest_body_closing_nothing_exempts_nothing if {
-	doc := with_diff(
+	doc = with_diff(
 		["issue CLOUD-1 2026-02-01T00:00:00Z ready 1,src/a.rs - 1,src/a.rs"],
 		["closes 1:CLOUD-1", "closes 0"],
 		["src/a.rs"],

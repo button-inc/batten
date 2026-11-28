@@ -54,6 +54,14 @@ use crate::error::UsageError;
 // host-free version in `landed` is the survivor; its doc carries the reasoning.
 use crate::landed::is_pull_request_url;
 
+/// The out-of-tree receipt directory both halves of the claim protocol share.
+///
+/// HERE, NOT AT THE CRATE ROOT (CLOUD-2789): the mutant mirror names it to
+/// leave the engine's runtime state out, and a reference to the root from
+/// `mutate::schema` made every module reaching the schema reach the whole
+/// crate, which `modules-ratchet` measured as propagation 5268 to 5374.
+pub(crate) const RECEIPT_DIR: &str = "batten-receipts";
+
 /// A refusal: which issue, and which rule.
 ///
 /// **Pointer-only** (rule 4): the issue key, the rule id, and a PR number where
@@ -104,8 +112,14 @@ pub struct Issue {
     /// other are indistinguishable in the payload. Reporting a name comparison
     /// would be a check that looks like it discriminates and does not.
     pub assigned: bool,
-    /// A **live** pull request attached to it, if any — the URL's number.
-    pub live_pr: Option<String>,
+    /// Every **live** pull request attached to it, by the URL's number, in
+    /// attachment order.
+    ///
+    /// ALL OF THEM, NOT THE FIRST (CLOUD-2697). The own-claim test asks whether
+    /// this branch's PR is the row's ONLY live one; reading the first alone let a
+    /// row carrying this branch's PR first and a rival's live PR second past every
+    /// competitor rule.
+    pub live_prs: Vec<String>,
     /// The body, when the caller supplied one.
     pub description: Option<String>,
     /// When the tracker says the row was created, for the prose-dialect cutover.
@@ -169,7 +183,7 @@ impl Issue {
             id,
             status,
             assigned: value.get("assignee").is_some_and(|value| !value.is_null()),
-            live_pr: live_pull_request(value),
+            live_prs: live_pull_requests(value),
             description: value
                 .get("description")
                 .and_then(serde_json::Value::as_str)
@@ -182,7 +196,7 @@ impl Issue {
     }
 }
 
-/// The first attachment that is a **live** GitHub pull request.
+/// Every attachment that is a **live** GitHub pull request, in order.
 ///
 /// LIVE, NOT MERELY PRESENT (CLOUD-520). This rule catches somebody who
 /// published before the column moved, which is a claim about an OPEN pull
@@ -198,18 +212,26 @@ impl Issue {
 /// the old behaviour — this narrowing can only ever turn a false refusal into a
 /// pull, never a real competitor into a silent pass. Malformed refuses too: a
 /// parse failure must not become a pass.
-fn live_pull_request(value: &serde_json::Value) -> Option<String> {
-    let attachments = value.get("attachments")?.as_array()?;
-    attachments.iter().find_map(|attachment| {
-        let url = attachment.get("url").and_then(serde_json::Value::as_str)?;
-        if !is_pull_request_url(url) {
-            return None;
-        }
-        if crate::forge::PullState::of(attachment).is_finished() {
-            return None;
-        }
-        Some(url.rsplit('/').next().unwrap_or(url).to_owned())
-    })
+fn live_pull_requests(value: &serde_json::Value) -> Vec<String> {
+    let Some(attachments) = value
+        .get("attachments")
+        .and_then(serde_json::Value::as_array)
+    else {
+        return Vec::new();
+    };
+    attachments
+        .iter()
+        .filter_map(|attachment| {
+            let url = attachment.get("url").and_then(serde_json::Value::as_str)?;
+            if !is_pull_request_url(url) {
+                return None;
+            }
+            if crate::forge::PullState::of(attachment).is_finished() {
+                return None;
+            }
+            Some(url.rsplit('/').next().unwrap_or(url).to_owned())
+        })
+        .collect()
 }
 
 /// What the caller asked for, beyond the payloads.
@@ -221,6 +243,15 @@ pub struct Request {
     /// "I refined this story in my own session, on purpose" — the one way a
     /// human clears the sequence rules, and it says so in the receipt.
     pub bypass_sequence: bool,
+    /// The number of THIS branch's open pull request, as the forge answered it.
+    ///
+    /// A bundle's draft PR names every row it closes, and the forge's own
+    /// automation then moves each to In Progress, assigned, with that PR attached
+    /// — before the bundle has pulled any but the first (CLOUD-2697, measured on
+    /// #1276). Those rows are this branch's claim, not a competitor's, so a row
+    /// whose live PR is this one is judged past the competitor rules. `None` when
+    /// the forge was not asked or did not answer, which changes nothing.
+    pub own_pr: Option<String>,
 }
 
 /// What the gate decided.
@@ -285,33 +316,44 @@ pub fn judge(
     let mut verdict = Verdict::default();
     for issue in issues {
         let before = verdict.refusals.len();
+        // THIS BRANCH'S OWN CLAIM: its only live PR is this branch's open one.
+        // The column, the assignee and the PR are the forge recording that claim,
+        // so none of them is a competitor; the readiness and sequence rules below
+        // still decide.
+        let own = !issue.live_prs.is_empty()
+            && issue
+                .live_prs
+                .iter()
+                .all(|number| request.own_pr.as_deref() == Some(number.as_str()));
 
-        if issue.status != ready_column {
-            verdict.refusals.push(Refusal {
-                id: issue.id.clone(),
-                // The token carries the consumer's word for the queue, so a
-                // reader is told which column their row failed to be in.
-                rule: format!("not-{} (in {})", ready_column.to_lowercase(), issue.status),
-                kind: Kind::Competitor,
-            });
-            continue;
-        }
-        if issue.assigned {
-            verdict.refusals.push(Refusal {
-                id: issue.id.clone(),
-                rule: "assigned".to_owned(),
-                kind: Kind::Competitor,
-            });
-        }
-        if let Some(number) = &issue.live_pr {
-            verdict.refusals.push(Refusal {
-                id: issue.id.clone(),
-                rule: format!(
-                    "has-pr ({number}) — if it is merged or closed, say so on the attachment \
-                     (\"state\": \"merged\") and re-run"
-                ),
-                kind: Kind::Competitor,
-            });
+        if !own {
+            if issue.status != ready_column {
+                verdict.refusals.push(Refusal {
+                    id: issue.id.clone(),
+                    // The token carries the consumer's word for the queue, so a
+                    // reader is told which column their row failed to be in.
+                    rule: format!("not-{} (in {})", ready_column.to_lowercase(), issue.status),
+                    kind: Kind::Competitor,
+                });
+                continue;
+            }
+            if issue.assigned {
+                verdict.refusals.push(Refusal {
+                    id: issue.id.clone(),
+                    rule: "assigned".to_owned(),
+                    kind: Kind::Competitor,
+                });
+            }
+            for number in &issue.live_prs {
+                verdict.refusals.push(Refusal {
+                    id: issue.id.clone(),
+                    rule: format!(
+                        "has-pr ({number}) — if it is merged or closed, say so on the attachment \
+                         (\"state\": \"merged\") and re-run"
+                    ),
+                    kind: Kind::Competitor,
+                });
+            }
         }
 
         // Skipped wholesale under the bypass: both rules below are about the
@@ -468,7 +510,7 @@ fn sequence_refusal(issue: &Issue, description: &str, receipts: &Path) -> Result
 ///
 /// [`UsageError`] when the receipt or the store exists and will not read.
 fn read_baseline(receipt: &Path, store: &Path) -> Result<Option<String>> {
-    match std::fs::read_to_string(receipt) {
+    match crate::fsio::read_to_string(receipt) {
         Ok(text) => Ok(text
             .lines()
             .next()
@@ -620,7 +662,7 @@ fn carried_ids(receipt: &Path, base: Option<&str>) -> Vec<String> {
 /// and two unresolvable bases are not evidence of the same branch.
 fn receipt_on_the_same_base(receipt: &Path, base: Option<&str>) -> Option<String> {
     let base = base?;
-    let existing = std::fs::read_to_string(receipt).ok()?;
+    let existing = crate::fsio::read_to_string(receipt).ok()?;
     existing
         .lines()
         .filter_map(|line| line.strip_prefix("base "))
@@ -651,7 +693,7 @@ fn receipt_on_the_same_base(receipt: &Path, base: Option<&str>) -> Option<String
 /// partition, so a branch with no claim behaves exactly as it did before.
 #[must_use]
 pub fn claimed_token(receipts: &Path, branch: &str) -> Option<String> {
-    let body = std::fs::read_to_string(receipts.join(receipt_name(branch))).ok()?;
+    let body = crate::fsio::read_to_string(receipts.join(receipt_name(branch))).ok()?;
     // LINE 1 IS THE ID LIST and `mint` says so in as many words, so this reads the
     // documented position rather than scanning for a shape.
     let ids = body.lines().next()?.trim();
@@ -836,7 +878,7 @@ pub fn adopt(
         if !name.starts_with("claim.") {
             continue;
         }
-        let Ok(text) = std::fs::read_to_string(&path) else {
+        let Ok(text) = crate::fsio::read_to_string(&path) else {
             continue;
         };
         // Read by KEY, never by line number: line 1 is the id list every existing
@@ -885,7 +927,7 @@ pub fn adopt(
     // bypass wearing a better name — the same reason the takeover names the
     // refusals it overrode. `branch` is rewritten so the receipt keeps describing
     // where it lives, and `adopted-from` keeps where it came from.
-    let Ok(text) = std::fs::read_to_string(&orphan.path) else {
+    let Ok(text) = crate::fsio::read_to_string(&orphan.path) else {
         return Err(UsageError::raise(
             "claim: the orphaned receipt could not be re-read to adopt it".to_owned(),
         ));
@@ -910,7 +952,7 @@ pub fn adopt(
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
-
+    #[cfg(test)]
     /// Fails by: readiness answered as a constant rather than by the one
     /// definition of Ready.
     #[test]
@@ -948,7 +990,7 @@ mod tests {
             id: id.to_owned(),
             status: status.to_owned(),
             assigned: false,
-            live_pr: None,
+            live_prs: Vec::new(),
             description: None,
             created_at: None,
         }
@@ -1007,7 +1049,7 @@ mod tests {
             "2026-09-01T00:00:00Z",
         )
         .unwrap();
-        std::fs::read_to_string(dest).unwrap()
+        crate::fsio::read_to_string(dest).unwrap()
     }
 
     /// ONE BRANCH, MANY ISSUES (CLOUD-472). The receipt's first line has always
@@ -1076,7 +1118,7 @@ mod tests {
         let Ok(parsed) = Issue::parse(&merged) else {
             panic!("a well-formed payload must parse")
         };
-        assert_eq!(parsed.live_pr, None);
+        assert!(parsed.live_prs.is_empty());
     }
 
     #[test]
@@ -1095,8 +1137,8 @@ mod tests {
                 panic!("a well-formed payload must parse")
             };
             assert_eq!(
-                parsed.live_pr.as_deref(),
-                Some("9"),
+                parsed.live_prs,
+                [String::from("9")],
                 "only an explicit merged/closed reading may stand down"
             );
         }
@@ -1125,6 +1167,7 @@ mod tests {
         let takeover = Request {
             takeover: true,
             bypass_sequence: false,
+            own_pr: None,
         };
         assert!(
             !verdict.pullable(&takeover),
@@ -1154,13 +1197,101 @@ mod tests {
             &test_columns(),
             &issues,
             &Request::default(),
-            Path::new("."),
+            &crate::fixture_root::fixture_root("a_status_that_is_not_todo_short_circuits_the_rest"),
             None,
         ) else {
             panic!("a non-Todo issue needs no body")
         };
         assert_eq!(verdict.refusals.len(), 1);
         assert!(verdict.refusals[0].rule.starts_with("not-todo"));
+    }
+
+    /// CLOUD-2697: a bundle's draft PR moves every row it closes to In Progress,
+    /// assigned, with that PR attached. Fails by: that row refused as held by
+    /// another when the PR is this branch's own, or a DIFFERENT PR let through.
+    #[test]
+    fn a_row_held_only_by_this_branchs_own_pr_is_its_claim() {
+        let held = Issue {
+            assigned: true,
+            live_prs: vec![String::from("1276")],
+            ..issue("CLOUD-1", "In Progress")
+        };
+        let grammar = crate::ready::Grammar::committed();
+        let judged = |own: Option<&str>| {
+            let request = Request {
+                own_pr: own.map(str::to_owned),
+                ..Request::default()
+            };
+            judge(
+                &grammar,
+                &test_columns(),
+                std::slice::from_ref(&held),
+                &request,
+                &crate::fixture_root::fixture_root(
+                    "a_row_held_only_by_this_branchs_own_pr_is_its_claim",
+                ),
+                None,
+            )
+        };
+        // Its own: past every competitor rule, so the body is what decides — and
+        // this one carries none, which is the readiness rule asking for it.
+        assert!(
+            judged(Some("1276")).is_err(),
+            "this branch's own row reaches the readiness rule"
+        );
+        // Another PR is still a competitor, column first.
+        let Ok(other) = judged(Some("1300")) else {
+            panic!("a competitor needs no body")
+        };
+        assert!(other.refusals[0].rule.starts_with("not-todo"));
+        // And no answer from the forge changes nothing.
+        let Ok(unknown) = judged(None) else {
+            panic!("a competitor needs no body")
+        };
+        assert!(unknown.refusals[0].rule.starts_with("not-todo"));
+    }
+
+    /// CLOUD-2697's "ONLY": a row carrying this branch's PR FIRST and a rival's
+    /// live PR SECOND is not this branch's claim. Fails by: the own-claim test
+    /// reading the first live PR alone, which let that row past every competitor
+    /// rule; or a rival's PR left out of the refusals.
+    #[test]
+    fn a_rivals_live_pr_beside_this_branchs_own_keeps_the_row_a_competitor() {
+        let parsed = Issue::parse(&serde_json::json!({
+            "id": "CLOUD-1", "status": "In Progress",
+            "attachments": [
+                { "url": "https://github.com/o/r/pull/1276", "state": "open" },
+                { "url": "https://github.com/o/r/pull/1300", "state": "open" }
+            ]
+        }));
+        let Ok(parsed) = parsed else {
+            panic!("a well-formed payload must parse")
+        };
+        assert_eq!(
+            parsed.live_prs,
+            [String::from("1276"), String::from("1300")]
+        );
+        let request = Request {
+            own_pr: Some(String::from("1276")),
+            ..Request::default()
+        };
+        let grammar = crate::ready::Grammar::committed();
+        let Ok(verdict) = judge(
+            &grammar,
+            &test_columns(),
+            std::slice::from_ref(&parsed),
+            &request,
+            &crate::fixture_root::fixture_root(
+                "a_rivals_live_pr_beside_this_branchs_own_keeps_the_row_a_competitor",
+            ),
+            None,
+        ) else {
+            panic!("a competitor needs no body")
+        };
+        assert!(
+            verdict.refusals[0].rule.starts_with("not-todo"),
+            "{verdict:?}"
+        );
     }
 
     #[test]
@@ -1174,7 +1305,9 @@ mod tests {
             &test_columns(),
             &issues,
             &Request::default(),
-            Path::new("."),
+            &crate::fixture_root::fixture_root(
+                "an_unrefusable_issue_with_no_body_is_a_usage_error_rather_than_a_pass",
+            ),
             None,
         );
         assert!(
@@ -1206,7 +1339,9 @@ mod tests {
             &test_columns(),
             &[todo],
             &Request::default(),
-            Path::new("."),
+            &crate::fixture_root::fixture_root(
+                "a_body_with_no_ready_block_is_refused_as_not_ready",
+            ),
             None,
         )
         .unwrap();
@@ -1298,7 +1433,7 @@ mod tests {
             "2026-09-01T00:00:00Z",
         )
         .unwrap();
-        let body = std::fs::read_to_string(dest).unwrap();
+        let body = crate::fsio::read_to_string(dest).unwrap();
         assert!(
             body.contains("takeover 1 refusal(s) overridden: CLOUD-1 assigned\n"),
             "{body}"
@@ -1324,7 +1459,7 @@ mod tests {
         let orphan = adopt(&receipts, "new", Some("old"), &|_| false).unwrap();
         assert_eq!(orphan.recorded, "old");
         assert_eq!(
-            std::fs::read_to_string(receipts.join(receipt_name("new"))).unwrap(),
+            crate::fsio::read_to_string(receipts.join(receipt_name("new"))).unwrap(),
             "CLOUD-1\nbranch new\nadopted-from old\n"
         );
         assert!(!receipts.join(receipt_name("old")).exists());

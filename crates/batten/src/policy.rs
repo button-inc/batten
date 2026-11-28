@@ -63,7 +63,7 @@
 //! future evaluator gained IO with no new dependency.
 //!
 //! That is the whole argument for admitting consumer-authored code to the
-//! mediated call. A [`crate::rules::RuleKind::Command`] row spawns a process with
+//! mediated call. A [`crate::config_model::RuleKind::Command`] row spawns a process with
 //! the calling user's authority and can acquire anything; a module sees the
 //! fields the boundary resolved and acquires nothing. "Consumer-authored" was
 //! only ever a proxy for "ambient authority", and this kind separates them.
@@ -93,14 +93,19 @@
 //! agreement — CLOUD-251's vacuous pass, which is exactly the failure this
 //! surface could rebuild.
 
+use crate::preset::ManifestExt as _;
+use crate::preset::PresetModuleExt as _;
+use crate::rules::RuleExt as _;
+use crate::verdict::DeclaredVerdictExt as _;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::Result;
+use crate::config_model::preset_names;
+use crate::config_model::{Rule, RuleKind};
 use crate::error::UsageError;
 use crate::facts::Look;
-use crate::rules::{Rule, RuleKind};
 
 /// The unattributed deny set: a set of bare strings, and the shape CLOUD-689
 /// shipped.
@@ -249,7 +254,7 @@ pub struct Violation {
     pub counted: bool,
 }
 
-// `PRESETS` moved to `crate::preset::MANIFESTS` (CLOUD-1181). It was one of
+// `PRESETS` moved to `crate::preset_catalog::MANIFESTS` (CLOUD-1181). It was one of
 // three parallel tables describing a preset, none of which knew about the
 // others; the doc comment that stood here — why Batten ships defaults, why this
 // is not the OCI distribution CLOUD-129 rejected, and why rule 1 is most
@@ -289,18 +294,6 @@ pub struct Violation {
 // The reason this comment says so at all is the failure CLOUD-970 names: a
 // resolver landing while this text still claims no network exists, so the next
 // reader inherits a guarantee nobody is holding.
-
-/// Every vendored preset's name, in a stable order.
-///
-/// Derived from [`crate::preset::MANIFESTS`] so the binary and the published
-/// schema cannot
-/// disagree about what may be enabled — the same discipline `surface::SURFACE`
-/// carries, and the reason an unknown name is a config error rather than a
-/// silent no-op.
-#[must_use]
-pub fn preset_names() -> Vec<&'static str> {
-    crate::preset::names()
-}
 
 // `preset_modules` is gone (CLOUD-1181): the load site reads the whole manifest
 // now, so a second lookup returning only the modules was one more place that
@@ -440,21 +433,116 @@ pub struct Bundle {
     /// `Option` keeps could-not-look distinct from not-yet-read, and `Arc` keeps
     /// the live-path clone a refcount rather than a copy.
     described: std::sync::OnceLock<Option<std::sync::Arc<Vec<Described>>>>,
+    /// The interpreter's [`Ast`], rendered once on first use (CLOUD-2830):
+    /// `described`'s rationale for every other reader of the same engine's AST
+    /// — the load's `:=` check, the verdict compile's refusals and guard, and
+    /// the suite plan, each of which rendered it again.
+    ast: std::sync::OnceLock<Option<std::sync::Arc<Ast>>>,
+    /// An interpreted bundle's [`Bundle::tree_reads`], taken once: seeded from
+    /// the cache entry under the bundle's key where one holds it
+    /// ([`remember_reads`]), so the two halves of a split `enforce` do not both
+    /// describe it from scratch. Bytecode reads its own header instead.
+    reads: std::sync::OnceLock<Reads>,
+}
+
+/// What a bundle reads off the tree input document: see [`Bundle::tree_reads`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Reads {
+    /// Exactly these `input.tree` keys, and nothing else on the input.
+    Known(BTreeSet<String>),
+    /// A read this reader cannot name, so any key may be read.
+    Opaque,
 }
 
 impl Bundle {
     /// This bundle's [`describe`] reading, computed on first use.
     fn described(&self) -> Option<&[Described]> {
         self.described
-            .get_or_init(|| describe(self.evaluator.engine()?).map(std::sync::Arc::new))
+            .get_or_init(|| describe_of(self.ast()?).map(std::sync::Arc::new))
             .as_deref()
             .map(Vec::as_slice)
     }
 
-    /// Whether this bundle evaluates as cached bytecode (CLOUD-2236).
+    /// This bundle's interpreter's [`Ast`], rendered on first use; `None`
+    /// without an interpreter or where the AST will not serialise.
+    fn ast(&self) -> Option<&Ast> {
+        self.ast
+            .get_or_init(|| Ast::of(self.evaluator.engine()?).map(std::sync::Arc::new))
+            .as_deref()
+    }
+    /// Seed this bundle, compiled from `full`'s sources through
+    /// [`without_test_rules`], with `full`'s reading less its `test_` rules.
+    ///
+    /// ONE LOAD DESCRIBES EACH BUNDLE ONCE (CLOUD-1875), and a checked load's
+    /// bytecode miss holds two: the full-text interpreter its checks read, and
+    /// the stripped one its program and cache header are taken from. Describing
+    /// both serialised every module's AST twice. The stripped text is the full
+    /// text with exactly the column-zero `test_` rules removed, and [`describe`]
+    /// reads each rule on its own, so the full reading filtered by that name is
+    /// the stripped reading: the program's reads and facts come out the same,
+    /// and the AST is serialised once. A `full` with no reading leaves this one
+    /// to describe itself, as before.
+    fn seed_stripped_from(&self, full: &Self) {
+        let Some(described) = full.described() else {
+            return;
+        };
+        let stripped = described
+            .iter()
+            .map(|module| Described {
+                path: module.path.clone(),
+                package: module.package.clone(),
+                rules: module
+                    .rules
+                    .iter()
+                    .filter(|rule| !rule.name.starts_with("test_"))
+                    .cloned()
+                    .collect(),
+            })
+            .collect();
+        let _ = self.described.set(Some(std::sync::Arc::new(stripped)));
+    }
+
+    /// Whether this bundle evaluates as bytecode (CLOUD-2236).
     #[must_use]
     pub fn is_bytecode(&self) -> bool {
-        matches!(self.evaluator, Evaluator::Compiled(_))
+        matches!(self.evaluator, Evaluator::Compiled(..))
+    }
+
+    /// Which evaluator decides this bundle's verdicts, and why where it is the
+    /// interpreter (#1276).
+    #[must_use]
+    pub fn execution(&self) -> Execution {
+        match &self.evaluator {
+            Evaluator::Compiled(compiled, _) => Execution::Bytecode {
+                cached: compiled.cached,
+            },
+            Evaluator::Interpreted { why, .. } => Execution::Interpreted(*why),
+        }
+    }
+
+    /// What the bytecode compiler said when it refused this bundle, if it did.
+    #[must_use]
+    pub fn fallback_detail(&self) -> Option<&str> {
+        match &self.evaluator {
+            Evaluator::Interpreted { detail, .. } => detail.as_deref(),
+            Evaluator::Compiled(..) => None,
+        }
+    }
+
+    /// This bundle evaluating on its interpreter, where it holds one: what a
+    /// parity check compares bytecode against. `None` for a hot-path bundle
+    /// read from the cache, which carries no interpreter.
+    #[must_use]
+    pub fn as_interpreted(&self) -> Option<Self> {
+        let engine = self.evaluator.engine()?.clone();
+        Some(Self {
+            evaluator: Evaluator::Interpreted {
+                engine: Box::new(engine),
+                why: Fallback::NotOffered,
+                detail: None,
+            },
+            ..self.clone()
+        })
     }
 
     /// The enabling rule's id.
@@ -500,8 +588,9 @@ impl Bundle {
     #[must_use]
     pub fn session_start_facts(&self) -> BTreeSet<&'static str> {
         // Bytecode carries no AST, so its reading was taken when the cache
-        // entry was written, from the same source this would describe.
-        if let Evaluator::Compiled(compiled) = &self.evaluator {
+        // entry was written, from the same source this would describe. A
+        // checked load keeps its interpreter, and reads its own full text.
+        if let Evaluator::Compiled(compiled, None) = &self.evaluator {
             return compiled
                 .facts
                 .iter()
@@ -531,6 +620,57 @@ impl Bundle {
             }
         }
         found
+    }
+
+    /// Every `input.tree` key this bundle's modules read, or [`Reads::Opaque`]
+    /// when that cannot be established statically (step 13a).
+    ///
+    /// Derived from the same [`describe`] reading [`Self::session_start_facts`]
+    /// trusts, and conservative everywhere it cannot see: a bundle with no
+    /// reading, a bare `input` or `input.tree` (an alias such as
+    /// `t := input.tree`, or a variable index `input.tree[k]`, arrives as one of
+    /// these), any read of `input.facts`/`input.call` or of a top-level key the
+    /// tree document does not emit, and a bytecode entry written without the
+    /// read set are all `Opaque`. Opaque is what makes a policy row LIVE, which
+    /// is the side an undeterminable answer must fall on.
+    #[must_use]
+    pub fn tree_reads(&self) -> Reads {
+        if let Evaluator::Compiled(compiled, None) = &self.evaluator {
+            return compiled.reads.as_ref().map_or(Reads::Opaque, |keys| {
+                Reads::Known(keys.iter().cloned().collect())
+            });
+        }
+        self.reads.get_or_init(|| self.described_reads()).clone()
+    }
+
+    /// [`Self::tree_reads`] read off the [`describe`] reading.
+    fn described_reads(&self) -> Reads {
+        let Some(described) = self.described() else {
+            return Reads::Opaque;
+        };
+        let mut keys = BTreeSet::new();
+        for module in described {
+            // A `test_` rule is never queried by an enforce, and its `with input
+            // as {...}` rebinding read as a bare `input` and made 79 of 106 tree
+            // rows `Opaque` (CLOUD-2329).
+            for rule in module
+                .rules
+                .iter()
+                .filter(|rule| !rule.name.starts_with("test_"))
+            {
+                for path in &rule.input_paths {
+                    let Some(rest) = path.strip_prefix("tree.") else {
+                        return Reads::Opaque;
+                    };
+                    let key = rest.split('.').next().unwrap_or(rest);
+                    if key.is_empty() {
+                        return Reads::Opaque;
+                    }
+                    keys.insert(key.to_owned());
+                }
+            }
+        }
+        Reads::Known(keys)
     }
 
     /// The pointer a bundle-level diagnostic is reported against: its first
@@ -566,7 +706,7 @@ impl Bundle {
     /// pure "N sources, one engine" function CLOUD-837 made it and its callers
     /// keep their signature.
     #[must_use]
-    pub fn with_severity(mut self, rule: &crate::rules::Rule) -> Self {
+    pub fn with_severity(mut self, rule: &crate::config_model::Rule) -> Self {
         self.severity = rule.severity();
         self.predicate_severity = rule.predicate_severity.clone().unwrap_or_default();
         self
@@ -574,7 +714,7 @@ impl Bundle {
 
     /// The severity a denial from this bundle is reported at.
     ///
-    /// Resolved exactly as [`crate::rules::Rule::severity_for`] resolves it —
+    /// Resolved exactly as [`crate::config_model::Rule::severity_for`] resolves it —
     /// the predicate's own where the row named one, the row's otherwise
     /// (CLOUD-832) — because the id a finding is reported under and the severity
     /// it is reported at have to come from one answer.
@@ -664,6 +804,8 @@ impl Clone for Bundle {
             predicate_severity: self.predicate_severity.clone(),
             evaluator: self.evaluator.clone(),
             described: self.described.clone(),
+            ast: self.ast.clone(),
+            reads: self.reads.clone(),
         }
     }
 }
@@ -730,13 +872,13 @@ pub struct Vocabulary<'a> {
     /// The `[[pattern]]` table (CLOUD-885).
     pub patterns: &'a [crate::pattern::NamedPattern],
     /// The `[[verdict]]` table (CLOUD-1050).
-    pub verdicts: &'a [crate::verdict::DeclaredVerdict],
+    pub verdicts: &'a [crate::config_model::DeclaredVerdict],
     /// The `[vocabulary]` word lists (CLOUD-1638).
     ///
     /// `None` where the consumer declared none, which is the same exemption the
     /// class grammar takes: a tree with no lists cannot satisfy membership, so
     /// holding its finding ids to them would be a demand with no fix available.
-    pub words: Option<&'a crate::verdict::Vocabulary>,
+    pub words: Option<&'a crate::config_model::Vocabulary>,
     /// The `[[recorder]]` table (CLOUD-1051).
     ///
     /// Here for the reason stated above rather than as a third thing bolted on:
@@ -745,7 +887,7 @@ pub struct Vocabulary<'a> {
     /// module reads is projected from it, so a caller with the patterns always
     /// has the recorders too. The alternative was a fifth positional on four
     /// public entry points, which is the shape this parameter exists to prevent.
-    pub recorders: &'a [crate::recorder::Declared],
+    pub recorders: &'a [crate::config_model::RecorderDeclared],
     /// The `[[register]]` table (CLOUD-2005), read by a `reference` rule.
     ///
     /// Here for `recorders`' reason: config the consumer declares, fixed for the
@@ -761,7 +903,7 @@ pub struct Vocabulary<'a> {
     /// the recorders needs the verb-written families too or half the store is
     /// invisible to it. Carrying it on this struct is what keeps the arity of the
     /// four public entry points from growing again.
-    pub records: &'a [crate::record::Declared],
+    pub records: &'a [crate::config_model::RecordDeclared],
 }
 
 impl Vocabulary<'_> {
@@ -781,8 +923,8 @@ impl Vocabulary<'_> {
     };
 }
 
-impl<'a> From<&'a crate::config::Config> for Vocabulary<'a> {
-    fn from(config: &'a crate::config::Config) -> Self {
+impl<'a> From<&'a crate::config_model::Config> for Vocabulary<'a> {
+    fn from(config: &'a crate::config_model::Config) -> Self {
         Vocabulary {
             patterns: &config.patterns,
             verdicts: &config.verdicts,
@@ -898,6 +1040,47 @@ pub fn load(
     checks: ModuleChecks,
     reference: Option<&str>,
 ) -> Result<Vec<Bundle>> {
+    load_from(
+        root,
+        rules,
+        vocabulary,
+        checks,
+        reference,
+        Sourcing::AtReference,
+    )
+}
+
+/// Where a rule's module sources are read from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Sourcing {
+    /// At `reference` (the working tree for `None`), every rule alike: what
+    /// every verb that RUNS the rules reads, so a base's rules are never paired
+    /// with the tree's predicates.
+    AtReference,
+    /// Every rule from the WORKING TREE, `reference` unread (CLOUD-2840, `config
+    /// lint`): one source, so the registry, the claims and the module texts all
+    /// agree, and a module a branch adds or modifies is judged by the text it
+    /// runs. A rule whose sources are ABSENT from the tree ([`sources_in_tree`])
+    /// is left unloaded, as an absent file is said by the verbs that run it, and
+    /// the checks that need EVERY rule (`check_registry_is_exhausted`,
+    /// `check_collapse`) stand down, since a set with a gap cannot answer them.
+    TreeWherePresent,
+}
+
+/// [`load`] under a chosen [`Sourcing`].
+///
+/// # Errors
+///
+/// As [`load`]: a [`UsageError`] (exit `1`) for any module that will not read,
+/// compile or validate where it was read from.
+pub fn load_from(
+    root: &Path,
+    rules: &[Rule],
+    vocabulary: Vocabulary<'_>,
+    checks: ModuleChecks,
+    reference: Option<&str>,
+    sourcing: Sourcing,
+) -> Result<Vec<Bundle>> {
     let Vocabulary {
         patterns,
         verdicts,
@@ -937,7 +1120,17 @@ pub fn load(
     // the value is what lets the collision refusal name BOTH sides, which is the
     // difference between a pointer and a complaint.
     let mut ids: BTreeMap<String, String> = BTreeMap::new();
+    // A rule left unloaded because its sources are absent (`TreeWherePresent`).
+    let mut unloaded = false;
     for rule in rules.iter().filter(|r| r.kind == RuleKind::Policy) {
+        let reference = match sourcing {
+            Sourcing::AtReference => reference,
+            Sourcing::TreeWherePresent if sources_in_tree(root, rule) => None,
+            Sourcing::TreeWherePresent => {
+                unloaded = true;
+                continue;
+            }
+        };
         let source_key = source_key(rule)?;
         // Two rows naming one source AT ONE SCOPE is dead config: the second
         // enablement decides nothing the first did not, and "which one denied
@@ -951,18 +1144,11 @@ pub fn load(
         // share a name and decide disjoint surfaces. Narrower rather than looser
         // for a module or a bundle, where the pair still collapses to the name
         // in practice because those decide exactly one surface.
-        if !seen.insert((source_key, rule.scope.as_str())) {
-            return Err(UsageError::raise(format!(
-                "rule `{}` registers `{source_key}` at scope `{}`, which another rule already \
-                 registers at that scope",
-                rule.id,
-                rule.scope.as_str()
-            )));
-        }
+        claim_scope(&mut seen, source_key, rule)?;
 
         // The module comes from wherever the RULES came from, and that is the
         // whole of this branch. Under `--config-from <ref>` the authority is
-        // read from the ref (`trust::load_base`), so reading the module off disk
+        // read from the ref (`trust_pin::load_base`), so reading the module off disk
         // would pair a base's rules with the working tree's predicates — and an
         // agent editing an enabled `.rego` would change what the BASE policy
         // decides. That is exactly the influence `--config-from` exists to
@@ -991,7 +1177,7 @@ pub fn load(
         // consumer who enabled `trunk-basd` should be told, not quietly gated by
         // nothing.
         if let Some(name) = rule.preset.as_deref() {
-            let manifest = crate::preset::find(name).ok_or_else(|| {
+            let manifest = crate::preset_catalog::find(name).ok_or_else(|| {
                 UsageError::raise(format!(
                     "rule `{}` enables the preset `{name}`, which this binary does not ship; \
                      the ones it does are {}",
@@ -1035,7 +1221,17 @@ pub fn load(
             // The provider comparison (CLOUD-1625), in its own function for
             // `clippy::too_many_lines`: a nameable step lifted out whole, which is
             // the remedy `lib.rs` takes for the same lint rather than raising a cap.
-            let sources: Vec<(String, String)> = preset_sources(rule, manifest, name)?;
+            let mut sources: Vec<(String, String)> = preset_sources(rule, manifest, name)?;
+            // THE HOT PATH STRIPS A PRESET'S CASES TOO, as `read_sources` does a
+            // module's (#1276). It did not, so its key was the full text's while
+            // every checked load keyed the stripped one: each mediated call
+            // recompiled every preset row and overwrote the entry, and the next
+            // `check` recompiled it back.
+            if checks == ModuleChecks::SkipOnHotPath {
+                for (_, text) in &mut sources {
+                    *text = without_test_rules(text);
+                }
+            }
             let bundle = compile_for(root, &rule.id, &sources, data, checks)?;
             let declared = bundle.declared.clone();
             check_predicate_severity(rule, &declared, source_key)?;
@@ -1060,11 +1256,7 @@ pub fn load(
             continue;
         }
 
-        let paths = match (rule.module.as_deref(), rule.bundle.as_deref()) {
-            (Some(module), _) => vec![module.to_owned()],
-            (None, Some(bundle)) => bundle_members(root, bundle, reference, &rule.id)?,
-            (None, None) => Vec::new(),
-        };
+        let paths = rule_paths(root, rule, reference)?;
         let sources = read_sources(root, &paths, reference, &rule.id, checks)?;
         if checks != ModuleChecks::SkipOnHotPath {
             check_finding_ids(&sources, words, &tokens)?;
@@ -1102,10 +1294,43 @@ pub fn load(
 
     if checks == ModuleChecks::Run {
         check_no_vendored_collision(verdicts)?;
-        check_registry_is_exhausted(verdicts, &emitted)?;
-        check_collapse(rules, &per_rule, &tokens)?;
+        if !unloaded {
+            check_registry_is_exhausted(verdicts, &emitted)?;
+            check_collapse(rules, &per_rule, &tokens)?;
+        }
     }
     Ok(bundles)
+}
+
+/// Record `rule`'s `(source, scope)` pair in `seen`, refusing a second row
+/// registering one source at one scope: the second enablement decides nothing
+/// the first did not. Lifted out of [`load_from`] for `clippy::too_many_lines`;
+/// the call site carries why the key is the pair (CLOUD-1672).
+fn claim_scope<'a>(
+    seen: &mut BTreeSet<(&'a str, &'static str)>,
+    source_key: &'a str,
+    rule: &Rule,
+) -> Result<()> {
+    if seen.insert((source_key, rule.scope.as_str())) {
+        return Ok(());
+    }
+    Err(UsageError::raise(format!(
+        "rule `{}` registers `{source_key}` at scope `{}`, which another rule already \
+         registers at that scope",
+        rule.id,
+        rule.scope.as_str()
+    )))
+}
+
+/// The module paths a non-preset `rule` names: its one `module`, or every
+/// member of its `bundle` root at `reference`. Lifted out of [`load_from`] for
+/// `clippy::too_many_lines`.
+fn rule_paths(root: &Path, rule: &Rule, reference: Option<&str>) -> Result<Vec<String>> {
+    Ok(match (rule.module.as_deref(), rule.bundle.as_deref()) {
+        (Some(module), _) => vec![module.to_owned()],
+        (None, Some(bundle)) => bundle_members(root, bundle, reference, &rule.id)?,
+        (None, None) => Vec::new(),
+    })
 }
 
 /// The verdict registry and the collidable tokens, built exactly off the hot path
@@ -1114,10 +1339,10 @@ pub fn load(
 /// every hook call was 0.65 ms spent on nothing. `Some` registry is therefore
 /// also what gates [`check_loaded`].
 fn check_tables(
-    verdicts: &[crate::verdict::DeclaredVerdict],
+    verdicts: &[crate::config_model::DeclaredVerdict],
     checks: ModuleChecks,
 ) -> Result<(
-    Option<Vec<crate::verdict::DeclaredVerdict>>,
+    Option<Vec<crate::config_model::DeclaredVerdict>>,
     BTreeSet<String>,
 )> {
     if checks == ModuleChecks::SkipOnHotPath {
@@ -1129,14 +1354,18 @@ fn check_tables(
 /// Refuse a preset enabled at a scope none of its modules decide (CLOUD-1181,
 /// CLOUD-1672) — see the call site in [`load`] for why this precedes
 /// compilation. Lifted out whole for `clippy::too_many_lines`.
-fn check_preset_scope(rule: &Rule, manifest: &crate::preset::Manifest, name: &str) -> Result<()> {
+fn check_preset_scope(
+    rule: &Rule,
+    manifest: &crate::preset_catalog::Manifest,
+    name: &str,
+) -> Result<()> {
     if manifest.decides(rule.scope) {
         return Ok(());
     }
     let decided: Vec<&str> = manifest
         .scopes()
         .into_iter()
-        .map(crate::rules::RuleScope::as_str)
+        .map(crate::preset_catalog::RuleScope::as_str)
         .collect();
     Err(UsageError::raise(format!(
         "rule `{}` enables the preset `{name}` at scope `{}`, but its modules \
@@ -1169,11 +1398,21 @@ fn check_loaded(
     rule: &Rule,
     bundle: &Bundle,
     (declared_patterns, sources): Cited<'_>,
-    registry: &[crate::verdict::DeclaredVerdict],
+    registry: &[crate::config_model::DeclaredVerdict],
     source: &str,
     (emitted, per_rule): Raised<'_>,
 ) -> Result<()> {
     check_tree_paths_are_emittable(rule, bundle, source)?;
+    // A `:=` the bytecode guard cannot cover would decide differently on the
+    // hook path than under `policy test` (#1276), so it is a config fault here.
+    if let Some(at) = bundle.ast().and_then(unguardable_assignment) {
+        return Err(UsageError::raise(format!(
+            "rule `{}`: `{at}` binds `:=` to a pattern naming no variable, which the bytecode \
+             cannot guard against an undefined right side; bind a named variable, or test \
+             definedness with `_ := e`",
+            rule.id
+        )));
+    }
     // A module row's sources may be copies `batten preset eject` wrote
     // (CLOUD-2290); a preset arm passes none and takes the plain check.
     match sources {
@@ -1200,15 +1439,29 @@ fn compile_for(
     (pattern_data, pattern_text): (&serde_json::Value, &PatternText),
     checks: ModuleChecks,
 ) -> Result<Bundle> {
+    let (text, digest) = pattern_text.get_or_init(|| {
+        let text = pattern_data.to_string();
+        let digest = *blake3::hash(text.as_bytes()).as_bytes();
+        (text, digest)
+    });
     if checks == ModuleChecks::SkipOnHotPath {
-        let (text, digest) = pattern_text.get_or_init(|| {
-            let text = pattern_data.to_string();
-            let digest = *blake3::hash(text.as_bytes()).as_bytes();
-            (text, digest)
-        });
         compile_cached(root, id, sources, pattern_data, (text, digest))
     } else {
-        compile(id, sources, pattern_data)
+        // EVERY LOAD DECIDES ON BYTECODE (#1276). A surface that reports
+        // config faults still compiles from source, because its checks read
+        // the interpreter's AST; the interpreter rides along for them and the
+        // verdicts run on the program the hot path runs, from the same entry.
+        // It used to stop here, so `check` and `enforce` interpreted every
+        // bundle and the lap's live half spent most of its time in regorus's
+        // tree walker with nothing recording it.
+        let bundle = compile(id, sources, pattern_data)?;
+        Ok(with_bytecode(
+            root,
+            (id, sources),
+            (pattern_data, text, digest),
+            bundle,
+            true,
+        ))
     }
 }
 
@@ -1220,7 +1473,7 @@ fn compile_for(
 /// crate already takes for that lint instead of raising a cap.
 fn preset_sources(
     rule: &Rule,
-    manifest: &crate::preset::Manifest,
+    manifest: &crate::preset_catalog::Manifest,
     name: &str,
 ) -> Result<Vec<(String, String)>> {
     // THE PROVIDER COMPARISON, AND UNLIKE THE SCOPE ONE ITS CALLER RUNS FIRST,
@@ -1253,7 +1506,7 @@ fn preset_sources(
             .modules
             .iter()
             .filter(|module| module.scope == rule.scope)
-            .map(crate::preset::PresetModule::name)
+            .map(crate::preset_catalog::PresetModule::name)
             .collect();
         return Err(UsageError::raise(format!(
             "rule `{}` excepts `{unknown}`, which the preset `{name}` does not ship at scope \
@@ -1280,10 +1533,11 @@ fn preset_sources(
     // declared — so the reader can see which half to change.
     if sources.is_empty() {
         let reads: Vec<&str> = manifest.providers_at(rule.scope);
+        let repair = provider_repair(&reads);
         return Err(UsageError::raise(format!(
             "rule `{}` enables the preset `{name}` at scope `{}`, but every module \
              there reads {}, and this row declares {} — on another provider those \
-             modules match nothing and would report a clean tree they never read",
+             modules match nothing and would report a clean tree they never read{repair}",
             rule.id,
             rule.scope.as_str(),
             reads.join(" and "),
@@ -1291,6 +1545,21 @@ fn preset_sources(
         )));
     }
     Ok(sources)
+}
+
+/// The repair a provider refusal ends with (CLOUD-2658): the column and the
+/// values the preset's modules read, so the reader does not have to know the
+/// key. Empty when no module names a provider.
+fn provider_repair(reads: &[&str]) -> String {
+    let values: Vec<String> = reads
+        .iter()
+        .filter(|read| **read != "no provider")
+        .map(|read| format!("provider = \"{read}\""))
+        .collect();
+    if values.is_empty() {
+        return String::new();
+    }
+    format!("; declare it on the row as {}", values.join(" or "))
 }
 
 /// Read one row's declared module text, from the working tree or from a ref.
@@ -1302,12 +1571,16 @@ fn preset_sources(
 /// Each source `batten preset eject` wrote, keyed by path, to the vendored
 /// module source its header names (CLOUD-2290). A header naming nothing this
 /// binary ships maps to nothing, so it exempts nothing.
-fn ejected_originals(sources: &[(String, String)]) -> BTreeMap<String, &'static str> {
+fn ejected_originals(
+    sources: &[(String, String)],
+) -> BTreeMap<String, std::borrow::Cow<'static, str>> {
     sources
         .iter()
         .filter_map(|(path, text)| {
             let (preset, module, _) = crate::preset::ejected_from(text)?;
-            let original = crate::preset::find(&preset)?.module(&module)?.source;
+            let original = crate::preset_catalog::find(&preset)?
+                .module(&module)?
+                .text();
             Some((path.clone(), original))
         })
         .collect()
@@ -1328,7 +1601,7 @@ fn read_sources(
                     "rule `{rule_id}` registers `{path}`, which is absent at {reference}"
                 ))
             })?,
-            None => std::fs::read_to_string(root.join(path)).map_err(|_| {
+            None => crate::fsio::read_to_string(root.join(path)).map_err(|_| {
                 UsageError::raise(format!(
                     "rule `{rule_id}` registers `{path}`, which cannot be read"
                 ))
@@ -1371,10 +1644,11 @@ fn read_sources(
 /// line starting `test_` at column zero opens a test rule, and everything up to
 /// the next column-zero line that opens something else belongs to it.
 ///
-/// **`ModuleChecks::SkipOnHotPath` is the only caller**, which is what keeps this
-/// from being a way to lose a test: `policy test` compiles the full text, and so
-/// does every load that runs the module checks. A stripped module is never the
-/// one anything is graded against.
+/// **Only verdict programs are compiled from its output**, which is what keeps
+/// this from being a way to lose a test: the hot path's sources, and the
+/// bytecode a checked load decides on (#1276). `policy test` compiles the full
+/// text, and so does every load's interpreter that runs the module checks. A
+/// stripped module is never the one anything is graded against.
 fn without_test_rules(source: &str) -> String {
     let mut kept = String::with_capacity(source.len());
     let mut dropping = false;
@@ -1397,6 +1671,46 @@ fn without_test_rules(source: &str) -> String {
     kept
 }
 
+/// The engine-default library every bundle carries (CLOUD-2840): one place
+/// for a predicate more than one module asks, so none restates it. Today it
+/// is the read-only allowlist, `data.batten.library.read_only(call)`, which
+/// the `claude-code-cloud` preset grants on and the install gate admits on.
+/// Added to every bundle whose sources REFERENCE it (`data.batten.library.`),
+/// whatever presets the consumer enables, so a module calling it never meets
+/// an undefined function and a bundle that never asks pays nothing.
+pub const LIBRARY: &[(&str, &str)] = &[(
+    "crates/batten/src/policy/library/read-only.rego",
+    include_str!("policy/library/read-only.rego"),
+)];
+
+/// [`LIBRARY`] as this build compiles it: the embedded text, or in a mutation
+/// sweep's suite build a mutated copy ([`crate::preset::library_text`]). Read
+/// once per process.
+fn library() -> &'static [(&'static str, std::borrow::Cow<'static, str>)] {
+    static LOADED: std::sync::OnceLock<Vec<(&'static str, std::borrow::Cow<'static, str>)>> =
+        std::sync::OnceLock::new();
+    LOADED.get_or_init(|| {
+        let overlay = crate::preset::library_overlay();
+        LIBRARY
+            .iter()
+            .map(|(path, embedded)| {
+                (
+                    *path,
+                    crate::preset::library_text(overlay.as_deref(), path, embedded),
+                )
+            })
+            .collect()
+    })
+}
+
+/// Whether a bundle of `sources` composes the library: any module naming it,
+/// as `import data.batten.library` or a direct `data.batten.library.` call.
+fn asks_library(sources: &[(String, String)]) -> bool {
+    sources
+        .iter()
+        .any(|(_, source)| source.contains("data.batten.library"))
+}
+
 /// Compose `sources` into **one** bundle: one engine, one compile, one smoke
 /// query (CLOUD-837).
 ///
@@ -1416,8 +1730,6 @@ fn without_test_rules(source: &str) -> String {
 /// the smoke query, when `rules` answers a shape that is not a set of ids, or
 /// when a `violation` reachable on an empty document raises an id the bundle
 /// does not declare.
-//MUTANT-SUITE crates/batten/tests/it/policy_walk.rs
-//MUTANT package-address-dropped|s@            packages.insert(relative);@            packages.insert(Vec::new());@|the_module_s_own_violation_still_raises
 pub fn compile(
     id: &str,
     sources: &[(String, String)],
@@ -1449,17 +1761,37 @@ pub fn compile(
                 "the declared pattern table could not be loaded: {err}"
             ))
         })?;
+    // THE LIBRARY FIRST, and outside `modules`/`packages`: it declares no
+    // `rules` and raises no `violation`, so it is reachable from every module
+    // that calls it and decides nothing itself.
+    let asks = asks_library(sources);
+    for (path, source) in library() {
+        if !asks || sources.iter().any(|(given, _)| given == path) {
+            continue;
+        }
+        engine
+            .add_policy((*path).to_owned(), source.clone().into_owned())
+            .map_err(|err| UsageError::raise(format!("`{path}` does not compile: {err}")))?;
+    }
     let mut modules = Vec::new();
     let mut packages = BTreeSet::new();
     for (path, source) in sources {
         let package = engine
             .add_policy(path.clone(), source.clone())
             .map_err(|err| UsageError::raise(format!("`{path}` does not compile: {err}")))?;
-        // A package outside `data.batten` is unreachable by the one query this
-        // gate runs, so it has no address to record.
-        if let Some(relative) = relative_package(&package) {
-            packages.insert(relative);
-        }
+        // A PACKAGE OUTSIDE `data.batten` IS REFUSED, NOT SKIPPED (CLOUD-2696).
+        // The one query this gate runs never reaches it, so live it decided
+        // nothing and the call was allowed, while `policy test` evaluated its
+        // cases directly and passed them: a module green under its own tests and
+        // inert at the gate, with nothing to tell the two apart.
+        let Some(relative) = relative_package(&package) else {
+            return Err(UsageError::raise(format!(
+                "`{path}` declares `{package}`, outside `data.batten`, so the gate's query \
+                 never reaches it and it would decide nothing live; name it \
+                 `package batten.<name>`"
+            )));
+        };
+        packages.insert(relative);
         modules.push(Module { path: path.clone() });
     }
 
@@ -1521,8 +1853,14 @@ pub fn compile(
         // for the value that decides whether a refusal refuses.
         severity: crate::severity::RuleSeverity::Deny,
         predicate_severity: BTreeMap::new(),
-        evaluator: Evaluator::Interpreted(Box::new(engine)),
+        evaluator: Evaluator::Interpreted {
+            engine: Box::new(engine),
+            why: Fallback::NotOffered,
+            detail: None,
+        },
         described: std::sync::OnceLock::new(),
+        ast: std::sync::OnceLock::new(),
+        reads: std::sync::OnceLock::new(),
     })
 }
 
@@ -1768,22 +2106,143 @@ impl Answer {
 /// How a bundle evaluates (CLOUD-2236).
 #[derive(Clone)]
 enum Evaluator {
-    /// The interpreter, compiled from source in this process. Boxed: an
-    /// engine is several times the size of the shared bytecode handle.
-    Interpreted(Box<regorus::Engine>),
-    /// Bytecode a previous call compiled and cached.
-    Compiled(std::sync::Arc<Compiled>),
+    /// The interpreter, compiled from source in this process, and WHY it is not
+    /// bytecode (#1276). Boxed: an engine is several times the size of the
+    /// shared bytecode handle.
+    Interpreted {
+        engine: Box<regorus::Engine>,
+        why: Fallback,
+        /// What the bytecode compiler said, where it refused.
+        detail: Option<std::sync::Arc<str>>,
+    },
+    /// Bytecode, read from the cache or compiled by this process. The
+    /// interpreter rides along where a surface that reports config faults
+    /// loaded it: its checks, `policy test` and the sweeps read the AST, which
+    /// bytecode does not carry. It never decides a verdict here. Shared, so a
+    /// bundle clone stays a refcount.
+    Compiled(
+        std::sync::Arc<Compiled>,
+        Option<std::sync::Arc<regorus::Engine>>,
+    ),
 }
 
 impl Evaluator {
-    /// The interpreter, where this bundle has one. Bytecode is loaded only on
-    /// the hot path, whose bundles nothing describes, tests or sweeps.
+    /// The interpreter, where this bundle has one: always for an interpreted
+    /// bundle, and for bytecode loaded off the hot path.
     fn engine(&self) -> Option<&regorus::Engine> {
         match self {
-            Self::Interpreted(engine) => Some(engine.as_ref()),
-            Self::Compiled(_) => None,
+            Self::Interpreted { engine, .. } => Some(engine.as_ref()),
+            Self::Compiled(_, engine) => engine.as_deref(),
         }
     }
+}
+
+/// Why a bundle evaluates on the tree-walking interpreter rather than on
+/// bytecode (#1276).
+///
+/// **A CLOSED SET, AND EVERY INTERPRETED BUNDLE CARRIES ONE.** `enforce` and
+/// `check` once loaded every bundle interpreted with nothing recording it — the
+/// bytecode cache served only the hook path — and the lap's live half spent
+/// most of its 824 s in the interpreter unnoticed. A fallback is now a value the
+/// type requires, read by `-vv`'s census and by the gate that holds every
+/// shipped module on bytecode (`policy_execution`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Fallback {
+    /// Built by [`compile`] alone and never offered to the bytecode compiler:
+    /// a test, analysis or lint surface that asked for the interpreter.
+    NotOffered,
+    /// The `:=` guard could not be spliced into the source
+    /// ([`guarded_sources`]): the AST would not serialise, or an offset is not
+    /// a character boundary.
+    GuardUnavailable,
+    /// A guarded module would not parse again.
+    GuardedSourceRefused,
+    /// The bundle defines none of the [`ANSWERED_RULES`], so no entry point
+    /// exists to compile.
+    NoAnsweredRule,
+    /// The bytecode compiler refused a construct the bundle uses.
+    CompileRefused,
+    /// A partial set under an indexed reference (`f[k] contains v`), which the
+    /// bytecode compiler accepts and answers wrongly ([`keyed_partial_set`]).
+    KeyedPartialSet,
+    /// A rule with an `else` body, which the bytecode drops after a body that
+    /// iterates nothing ([`rule_else`]).
+    RuleElse,
+    /// A `policy test` case whose `with` modifiers the suite program cannot
+    /// desugar ([`plan_suite`]): the bytecode compiler has no `with`.
+    TestWith,
+}
+
+impl Fallback {
+    /// The reason's stable token.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::NotOffered => "not-offered",
+            Self::GuardUnavailable => "guard-unavailable",
+            Self::GuardedSourceRefused => "guarded-source-refused",
+            Self::NoAnsweredRule => "no-answered-rule",
+            Self::CompileRefused => "compile-refused",
+            Self::KeyedPartialSet => "keyed-partial-set",
+            Self::RuleElse => "rule-else",
+            Self::TestWith => "test-with",
+        }
+    }
+}
+
+/// Which evaluator a bundle's verdicts run on (#1276).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Execution {
+    /// Bytecode: `cached` when the program was read from the `.rvm` entry
+    /// rather than compiled by this process.
+    Bytecode {
+        /// Read from the cache, not compiled here.
+        cached: bool,
+    },
+    /// The interpreter, for this reason.
+    Interpreted(Fallback),
+}
+
+impl std::fmt::Display for Execution {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Bytecode { cached: true } => f.write_str("bytecode cached"),
+            Self::Bytecode { cached: false } => f.write_str("bytecode compiled"),
+            Self::Interpreted(why) => write!(f, "interpreter {}", why.as_str()),
+        }
+    }
+}
+
+/// Every verdict evaluation this process ran, per bundle and evaluator: the
+/// census `-vv` prints and `policy_execution` gates. A counter, never a clock.
+static EXECUTIONS: std::sync::Mutex<BTreeMap<(String, Execution), usize>> =
+    std::sync::Mutex::new(BTreeMap::new());
+
+/// Count one verdict evaluation of `bundle`.
+fn record_execution(bundle: &Bundle) {
+    record_as(&bundle.id, bundle.execution());
+}
+
+/// Count one evaluation of bundle `id` against the evaluator `how` that ran it:
+/// a verdict, or a `policy test` case, which decides that verb's verdict.
+fn record_as(id: &str, how: Execution) {
+    if let Ok(mut held) = EXECUTIONS.lock() {
+        *held.entry((id.to_owned(), how)).or_insert(0) += 1;
+    }
+}
+
+/// Every verdict evaluation this process has run: `(bundle id, evaluator,
+/// count)`, by id (#1276).
+#[must_use]
+pub fn execution_census() -> Vec<(String, Execution, usize)> {
+    EXECUTIONS.lock().map_or_else(
+        |_| Vec::new(),
+        |held| {
+            held.iter()
+                .map(|((id, how), count)| (id.clone(), *how, *count))
+                .collect()
+        },
+    )
 }
 
 /// Evaluate `bundle` over `input`, reading only the rules named (CLOUD-2236).
@@ -1793,16 +2252,16 @@ impl Evaluator {
 /// call that asks one question.
 ///
 /// `None` is could-not-look: the input will not parse or the bundle faults.
-//MUTANT answer-memo-never-recalled|s@^            if let Some(answer) = Answers::recall(compiled, input, \x7cheld\x7c select(held, rules)) {$@            if let Some(answer) = None::<Option<Answer>> {@|one_call_evaluates_each_rule_once
 fn answer(bundle: &Bundle, input: &str, rules: &[&str]) -> Option<Answer> {
+    record_execution(bundle);
     match &bundle.evaluator {
-        Evaluator::Interpreted(engine) => {
+        Evaluator::Interpreted { engine, .. } => {
             let mut engine = engine.clone();
             engine.set_input_json(input).ok()?;
             let results = engine.eval_query(PACKAGE_QUERY.to_owned(), false).ok()?;
             Some(Answer::of(&results))
         }
-        Evaluator::Compiled(compiled) => {
+        Evaluator::Compiled(compiled, _) => {
             if !Answers::open() {
                 return compiled.answer(&regorus::Value::from_json_str(input).ok()?, rules);
             }
@@ -2011,6 +2470,316 @@ pub(crate) struct Compiled {
     entries: BTreeSet<(Vec<String>, String)>,
     /// The session-start facts the bundle reads, from [`Bundle::session_start_facts`].
     facts: Vec<String>,
+    /// The tree keys the bundle reads, from [`Bundle::tree_reads`]; `None` is
+    /// [`Reads::Opaque`] (step 13a). Bytecode carries no AST, so the reading is
+    /// taken when the entry is written, as `facts` is.
+    reads: Option<Vec<String>>,
+    /// Read from the `.rvm` entry rather than compiled by this process.
+    cached: bool,
+}
+
+/// The text bytecode is compiled from: each module as written, with every `:=`
+/// statement followed by a check that what it bound is defined (#1276,
+/// CLOUD-2696).
+///
+/// **THE BYTECODE COMPILER DROPS A GUARD THE LANGUAGE REQUIRES.** regorus 0.15
+/// (and its `main`) emits `Guard NotUndefined` after every binding context but
+/// `:=` — `PlanContext::require_defined_values` in its `destructuring.rs` omits
+/// `ColonAssignment` — so `x := f(a)` with `f` undefined for `a` binds
+/// `Undefined` and the body runs on, where OPA and regorus's own interpreter
+/// fail it. Under a `not` over `x` that is a violation no case raises
+/// (`an_undefined_helper_decides_alike_in_both_evaluators`).
+///
+/// The guard is restored at the source: after each such statement, `; v == v`
+/// for every variable its left side binds. An equality over `Undefined` fails
+/// the body exactly as the missing guard would have, and over a defined value
+/// it holds. Only the program is compiled from this text; the interpreter,
+/// `policy test` and every pointer keep the module as written, so ONE evaluator
+/// decides, once, from the cached program. CLOUD-2696's first answer re-decided
+/// every bytecode refusal by compiling an interpreter from source, which cost
+/// every refusing or advising hook call a parse (measured 1.68× on `wired`).
+///
+/// `None` is could-not-look: the AST would not serialize, or an offset is not a
+/// boundary of its module's text. The bundle then stays interpreted.
+fn guarded_sources(engine: &regorus::Engine) -> Option<Vec<(String, String)>> {
+    guarded_sources_of(&Ast::of(engine)?)
+}
+
+/// One engine's modules as `Engine::get_ast_as_json` renders them, parsed once
+/// (CLOUD-2830).
+///
+/// SHARED BY EVERY READING OF ONE ENGINE. The refusals of regorus's known
+/// miscompiles and the `:=` guard each read the same AST, and each once
+/// rendered it to pretty JSON and parsed it back: four renders per verdict
+/// program and five per suite program, measured at 26% of `policy test`'s
+/// samples against main's one. Built once per engine and handed to each, the
+/// answers are the same and the render is paid once.
+struct Ast(Vec<serde_json::Value>);
+
+impl Ast {
+    /// `engine`'s modules, or `None` where the AST will not serialise.
+    fn of(engine: &regorus::Engine) -> Option<Self> {
+        let json = engine.get_ast_as_json().ok()?;
+        serde_json::from_str(&json).ok().map(Self)
+    }
+}
+
+/// [`guarded_sources`] over an [`Ast`] already in hand.
+fn guarded_sources_of(ast: &Ast) -> Option<Vec<(String, String)>> {
+    let policies = &ast.0;
+    let mut out = Vec::with_capacity(policies.len());
+    for policy in policies {
+        let source = policy.get("source")?;
+        let path = source.get("file")?.as_str()?.to_owned();
+        let mut text = source.get("contents")?.as_str()?.to_owned();
+        let mut guards = Vec::new();
+        colon_assignments(policy.get("ast")?, &mut guards);
+        // Every guard as text edits `(offset, bytes replaced, text)`.
+        let mut edits: Vec<(usize, usize, String)> = Vec::new();
+        for guard in guards {
+            // A STRING LITERAL'S SPAN STOPS BEFORE ITS CLOSING DELIMITER (#1276):
+            // regorus's span of `"x"` ends before the closing quote, so a
+            // statement ending `p := "x"` ended one byte early and the guard
+            // landed INSIDE the string — `p` bound `"x; p == p"`. The
+            // interpreter never saw it; the bytecode did, and
+            // `rules-drift.rego` answered differently.
+            let end = match text.as_bytes().get(guard.end) {
+                Some(b'"' | b'`') => guard.end + 1,
+                _ => guard.end,
+            };
+            // A BRACELESS BODY (`p if x := e`) TAKES ONE EXPRESSION, so the
+            // statement and its guard are braced to stay one body.
+            let braceless = text
+                .get(..guard.start)?
+                .trim_end()
+                .strip_suffix("if")
+                .is_some_and(|head| head.ends_with(|c: char| c.is_whitespace() || c == ')'));
+            if braceless {
+                edits.push((guard.start, 0, String::from("{ ")));
+                edits.push((end, 0, format!("{} }}", guard.checks)));
+            } else {
+                edits.push((end, 0, guard.checks));
+            }
+            if let Some((at, name)) = guard.wildcard {
+                edits.push((at, 1, name));
+            }
+        }
+        // Spliced from the end, so each offset still holds when it is used; at
+        // one offset the replacement first, so an insertion there (a brace
+        // before a renamed wildcard) lands in front of it, not inside it.
+        edits.sort_by_key(|(at, replaced, _)| std::cmp::Reverse((*at, *replaced)));
+        for (at, replaced, insert) in edits {
+            if !text.is_char_boundary(at) || !text.is_char_boundary(at + replaced) {
+                return None;
+            }
+            text.replace_range(at..at + replaced, &insert);
+        }
+        out.push((path, text));
+    }
+    Some(out)
+}
+
+/// Every input a bundle's own cases hand it: the term of each
+/// `with input as <term>` modifier in its modules, evaluated by the interpreter
+/// in the module's package so its helpers resolve (#1276).
+///
+/// **THE PARITY CORPUS.** Bytecode and interpreter must decide alike, and a
+/// handful of fixed calls never reached the input that split them over an
+/// undefined helper (CLOUD-2696). A module's cases are exactly the inputs its
+/// author proved decisions over, so they are the inputs the two evaluators must
+/// agree on. A term that reads a variable local to a function body (a case
+/// helper's own parameters) does not stand alone and is not an input here.
+///
+/// `None` is could-not-look: a bundle with no interpreter, or an AST that will
+/// not serialize. Each input is a JSON document.
+#[must_use]
+pub fn case_inputs(bundle: &Bundle) -> Option<Vec<String>> {
+    let engine = bundle.evaluator.engine()?;
+    let json = engine.get_ast_as_json().ok()?;
+    let policies: Vec<serde_json::Value> = serde_json::from_str(&json).ok()?;
+    let mut inputs = BTreeSet::new();
+    for policy in &policies {
+        let text = policy.get("source")?.get("contents")?.as_str()?;
+        let ast = policy.get("ast")?;
+        let package = reference_path(ast.get("package")?.get("refr")?)?;
+        let mut terms = Vec::new();
+        input_terms(ast, text, &mut terms);
+        for term in terms {
+            let mut probe = engine.clone();
+            let module =
+                format!("package {package}\n\nimport rego.v1\n\nbatten_case_input := {term}\n");
+            if probe
+                .add_policy(String::from("batten-case-input.rego"), module)
+                .is_err()
+            {
+                continue;
+            }
+            let Ok(results) = probe.eval_query(format!("data.{package}.batten_case_input"), false)
+            else {
+                continue;
+            };
+            let value = results
+                .result
+                .first()
+                .and_then(|result| result.expressions.first())
+                .map(|expression| expression.value.clone());
+            if let Some(value) = value.filter(|value| *value != regorus::Value::Undefined)
+                && let Ok(document) = value.to_json_str()
+            {
+                inputs.insert(document);
+            }
+        }
+    }
+    Some(inputs.into_iter().collect())
+}
+
+/// The source text of every `with input as <term>` term under `node`.
+fn input_terms(node: &serde_json::Value, text: &str, found: &mut Vec<String>) {
+    match node {
+        serde_json::Value::Object(map) => {
+            if let Some(mods) = map.get("with_mods").and_then(serde_json::Value::as_array) {
+                for modifier in mods {
+                    let names_input = modifier
+                        .get("refr")
+                        .and_then(reference_path)
+                        .is_some_and(|path| path == "input");
+                    if let Some(term) = modifier
+                        .get("as")
+                        .filter(|_| names_input)
+                        .and_then(|term| expr_text(term, text))
+                    {
+                        found.push(term.to_owned());
+                    }
+                }
+            }
+            for value in map.values() {
+                input_terms(value, text, found);
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for item in items {
+                input_terms(item, text, found);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// An expression's own source text, by the span of its single variant.
+fn expr_text<'t>(expr: &serde_json::Value, text: &'t str) -> Option<&'t str> {
+    let span = expr.as_object()?.values().next()?.get("span")?;
+    let start = usize::try_from(span.get("start")?.as_u64()?).ok()?;
+    let end = usize::try_from(span.get("end")?.as_u64()?).ok()?;
+    text.get(start..end)
+}
+
+/// Every `:=` statement under `node`: the byte offset its statement ends at,
+/// with the guard that goes there.
+fn colon_assignments(node: &serde_json::Value, found: &mut Vec<Guard>) {
+    match node {
+        serde_json::Value::Object(map) => {
+            if let Some(stmts) = map.get("stmts").and_then(serde_json::Value::as_array) {
+                found.extend(stmts.iter().filter_map(statement_guard));
+            }
+            for value in map.values() {
+                colon_assignments(value, found);
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for item in items {
+                colon_assignments(item, found);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// A statement's guard, when it is a `:=` binding at least one named variable
+/// or a bare `_` (renamed so the guard can name it):
+/// `; v == v` per variable, at the statement's end — after any `with` modifier,
+/// which the statement's span covers.
+fn statement_guard(stmt: &serde_json::Value) -> Option<Guard> {
+    let assign = stmt
+        .get("literal")?
+        .get("Expr")?
+        .get("expr")?
+        .get("AssignExpr")?;
+    if assign.get("op")?.as_str()? != "ColEq" {
+        return None;
+    }
+    let lhs = assign.get("lhs")?;
+    let span = |node: &serde_json::Value, edge: &str| -> Option<usize> {
+        usize::try_from(node.get("span")?.get(edge)?.as_u64()?).ok()
+    };
+    let mut vars = BTreeSet::new();
+    bound_vars(lhs, &mut vars);
+    vars.remove("_");
+    // A BARE `_ := e` BINDS NOTHING A GUARD CAN NAME (#1276), and it is the
+    // spelling of "e is defined" — `on_pull_request(path) if _ :=
+    // triggers(path).pull_request`. Unguarded, the bytecode binds `Undefined`
+    // and the rule holds for every path. The wildcard is renamed to a variable
+    // the guard can test, which binds exactly what `_` did.
+    let mut wildcard = None;
+    if vars.is_empty() {
+        let bare = lhs.get("Var")?;
+        if bare.get("value")?.as_str()? != "_" {
+            return None;
+        }
+        let at = span(bare, "start")?;
+        let name = format!("__batten_defined_{at}");
+        vars.insert(name.clone());
+        wildcard = Some((at, name));
+    }
+    let mut checks = String::new();
+    for var in &vars {
+        checks.push_str("; ");
+        checks.push_str(var);
+        checks.push_str(" == ");
+        checks.push_str(var);
+    }
+    Some(Guard {
+        start: span(stmt, "start")?,
+        end: span(stmt, "end")?,
+        checks,
+        wildcard,
+    })
+}
+
+/// One `:=` statement's guard ([`statement_guard`]).
+struct Guard {
+    /// Where the statement starts and ends, in its module's bytes.
+    start: usize,
+    end: usize,
+    /// `; v == v` for each variable it binds.
+    checks: String,
+    /// A bare `_` on the left, renamed: its offset and the name it takes.
+    wildcard: Option<(usize, String)>,
+}
+
+/// The variables a binding pattern names: a bare variable, or each one inside
+/// an array or object pattern.
+fn bound_vars(node: &serde_json::Value, vars: &mut BTreeSet<String>) {
+    if let Some(name) = node
+        .get("Var")
+        .and_then(|var| var.get("value"))
+        .and_then(serde_json::Value::as_str)
+    {
+        vars.insert(name.to_owned());
+        return;
+    }
+    match node {
+        serde_json::Value::Object(map) => {
+            for value in map.values() {
+                bound_vars(value, vars);
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for item in items {
+                bound_vars(item, vars);
+            }
+        }
+        _ => {}
+    }
 }
 
 /// [`compile`] on the hot path, through the bytecode cache (CLOUD-2236).
@@ -2024,7 +2793,6 @@ pub(crate) struct Compiled {
 ///
 /// The cache is best-effort by construction: an unwritable state directory or
 /// an unreadable entry is a miss, never an error.
-//MUTANT cache-never-read|s@read_cached(path, \&key@read_cached(Path::new("/"), \&key@|a_warm_load_compiles_no_engine
 fn compile_cached(
     root: &Path,
     id: &str,
@@ -2033,19 +2801,86 @@ fn compile_cached(
     (text, digest): (&str, &[u8; 32]),
 ) -> Result<Bundle> {
     let key = cache_key(id, sources, digest);
-    let path = cache_path(root, id);
-    if let Some(bundle) = path
+    if let Some(bundle) = cache_path(root, id)
         .as_deref()
         .and_then(|path| read_cached(path, &key, id, sources, text))
     {
         return Ok(bundle);
     }
     let bundle = compile(id, sources, data)?;
-    let Some(compiled) = Compiled::from_bundle(&bundle, data) else {
-        return Ok(bundle);
+    Ok(with_bytecode(
+        root,
+        (id, sources),
+        (data, text, digest),
+        bundle,
+        false,
+    ))
+}
+
+/// `bundle`, freshly compiled from source, deciding on bytecode: the cached
+/// program where the entry under its key holds one, else compiled here and
+/// written for the next load. Where the bytecode compiler refuses, the bundle
+/// stays interpreted and says why ([`Fallback`]).
+///
+/// `keep_ast` keeps the interpreter beside the program, for a surface whose
+/// checks read the AST. The hot path drops it, so a miss and a hit hand the
+/// mediated call the same shape of bundle.
+fn with_bytecode(
+    root: &Path,
+    (id, sources): (&str, &[(String, String)]),
+    (data, text, digest): (&serde_json::Value, &str, &[u8; 32]),
+    bundle: Bundle,
+    keep_ast: bool,
+) -> Bundle {
+    // ONE ENTRY PER ROW, WHOEVER LOADS IT. The hot path strips `test_` rules
+    // before it keys ([`without_test_rules`]), so a checked load keys and
+    // compiles its program from the same stripped text: otherwise the two
+    // overwrite each other's entry and every load after a hook call is a miss.
+    // The checked bundle keeps its full-text interpreter for `policy test`
+    // and the checks; only the verdict program is the stripped one, which the
+    // hot path already proves answers alike.
+    let stripped: Vec<(String, String)>;
+    let sources = if keep_ast {
+        stripped = sources
+            .iter()
+            .map(|(path, text)| (path.clone(), without_test_rules(text)))
+            .collect();
+        &stripped[..]
+    } else {
+        sources
+    };
+    let key = cache_key(id, sources, digest);
+    let path = cache_path(root, id);
+    if keep_ast
+        && let Some((_, compiled)) = path
+            .as_deref()
+            .and_then(|path| read_program(path, &key, text))
+    {
+        return compiled.into_bundle(bundle, keep_ast);
+    }
+    let program = if keep_ast {
+        match compile(id, sources, data) {
+            Ok(program) => {
+                program.seed_stripped_from(&bundle);
+                Some(program)
+            }
+            Err(err) => return interpreted_because(bundle, Fallback::CompileRefused, &err),
+        }
+    } else {
+        None
+    };
+    let program = program.as_ref().unwrap_or(&bundle);
+    let compiled = match Compiled::from_bundle(program, data) {
+        Ok(compiled) => compiled,
+        Err((why, detail)) => {
+            if let Some(path) = path.as_deref() {
+                remember_reads(path, &key, program);
+            }
+            return interpreted_because(bundle, why, &detail);
+        }
     };
     if let Some(path) = path {
-        write_cached(&path, &key, &bundle, &compiled);
+        write_cached(&path, &key, program, &compiled);
         // THE RETIRED LOCATION GOES ON A MISS (CLOUD-2315): format 1 wrote
         // beside the state rather than under `cache/`, and nothing reads it now.
         // Here, never on a hit, so the warm path pays nothing for the move.
@@ -2053,7 +2888,298 @@ fn compile_cached(
             let _ = std::fs::remove_dir_all(dir.join("policy"));
         }
     }
-    Ok(compiled.into_bundle(bundle))
+    compiled.into_bundle(bundle, keep_ast)
+}
+
+/// Every rule of `bundle` whose value over `input` differs between bytecode and
+/// the interpreter, as `rule: bytecode <v> interpreter <v>` (#1276).
+///
+/// A diagnostic for localising a split the parity gate reports to the rule
+/// that introduces it: every non-test rule becomes an entry point, so an
+/// intermediate set that diverges is named rather than only the `violation`
+/// it feeds. Empty where there is no interpreter or nothing compiles.
+#[doc(hidden)]
+#[must_use]
+pub fn rule_splits(bundle: &Bundle, data: &serde_json::Value, input: &str) -> Vec<String> {
+    use regorus::languages::rego::compiler::Compiler;
+    let Some(source) = bundle.evaluator.engine() else {
+        return Vec::new();
+    };
+    let Some(guarded) = guarded_sources(source) else {
+        return Vec::new();
+    };
+    let mut engine = new_engine();
+    let Ok(value) = regorus::Value::from_json_str(&data.to_string()) else {
+        return Vec::new();
+    };
+    if engine.add_data(value.clone()).is_err() {
+        return Vec::new();
+    }
+    for (path, text) in guarded {
+        if engine.add_policy(path, text).is_err() {
+            return Vec::new();
+        }
+    }
+    let Some(first) = bundle.packages.iter().find_map(|package| {
+        ANSWERED_RULES.iter().find_map(|rule| {
+            engine
+                .compile_with_entrypoint(&entry_point(package, rule).as_str().into())
+                .ok()
+        })
+    }) else {
+        return Vec::new();
+    };
+    let names: Vec<String> = first
+        .get_rules()
+        .keys()
+        .map(ToString::to_string)
+        .filter(|name| !name.rsplit('.').next().unwrap_or("").starts_with("test_"))
+        .collect();
+    let mut splits = Vec::new();
+    let Ok(parsed) = regorus::Value::from_json_str(input) else {
+        return Vec::new();
+    };
+    let mut engine = source.clone();
+    if engine.set_input_json(input).is_err() {
+        return Vec::new();
+    }
+    for name in names {
+        let Ok(program) = Compiler::compile_from_policy(&first, &[name.as_str()]) else {
+            splits.push(format!("{name}: bytecode refused"));
+            continue;
+        };
+        let mut vm = regorus::rvm::vm::RegoVM::new();
+        vm.load_program(program);
+        vm.set_strict_builtin_errors(true);
+        vm.set_max_instructions(usize::MAX);
+        if vm.set_data(value.clone()).is_err() {
+            continue;
+        }
+        vm.set_input(parsed.clone());
+        let bytecode = vm.execute_entry_point_by_name(&name);
+        let interpreted = engine.eval_rule(name.clone());
+        let shown = |v: &regorus::Value| format!("{v}");
+        let (left, right) = (
+            bytecode
+                .as_ref()
+                .map_or_else(|err| format!("fault {err:?}"), shown),
+            interpreted
+                .as_ref()
+                .map_or_else(|err| format!("fault {err:?}"), shown),
+        );
+        if left == right {
+            continue;
+        }
+        // Sets and arrays as their difference, so a long answer names what
+        // differs rather than a prefix the two share.
+        let members = |v: &regorus::Value| -> Option<BTreeSet<String>> {
+            match v {
+                regorus::Value::Set(items) => Some(items.iter().map(shown).collect()),
+                regorus::Value::Array(items) => Some(items.iter().map(shown).collect()),
+                _ => None,
+            }
+        };
+        let cut = |s: &str| s.chars().take(600).collect::<String>();
+        if let (Ok(a), Ok(b)) = (&bytecode, &interpreted)
+            && let (Some(a), Some(b)) = (members(a), members(b))
+        {
+            let only = |x: &BTreeSet<String>, y: &BTreeSet<String>| {
+                cut(&x.difference(y).cloned().collect::<Vec<_>>().join(" | "))
+            };
+            splits.push(format!(
+                "{name}: only bytecode [{}] only interpreter [{}]",
+                only(&a, &b),
+                only(&b, &a)
+            ));
+        } else {
+            splits.push(format!(
+                "{name}: bytecode {} interpreter {}",
+                cut(&left),
+                cut(&right)
+            ));
+        }
+    }
+    splits
+}
+
+/// The first rule whose head is a partial SET under an indexed reference —
+/// `f[k] contains v` — as `path:line`, or `None` (#1276).
+///
+/// regorus 0.15's bytecode compiler accepts the head and answers it as the
+/// flat set of every `v`, dropping the keys
+/// (`a_keyed_partial_set_is_refused_bytecode_rather_than_flattened`). A
+/// miscompile it does not refuse, so batten refuses it: the bundle stays on
+/// the interpreter with [`Fallback::KeyedPartialSet`]. Also `None` where the AST
+/// will not serialise, which [`guarded_sources`] then reports.
+fn keyed_partial_set(ast: &Ast) -> Option<String> {
+    first_construct(ast, &|map| {
+        let head = map.get("Set")?;
+        head.get("refr")?.get("RefBrack")?;
+        head.get("span")?.get("line")?.as_u64()
+    })
+}
+
+/// The first `else` following a body that can ITERATE, as `path:line`, or
+/// `None` (#1276).
+///
+/// regorus 0.15's bytecode drops an `else` after a body that fails by
+/// iterating nothing — `release-tracking.rego`'s `first_job(path)` answered
+/// `""` interpreted and undefined on bytecode, so a finding vanished. A body
+/// failing on a comparison or an undefined call keeps it
+/// (`a_rule_else_after_an_empty_iteration_is_lost_on_bytecode` pins both).
+/// So an `else` is refused when a body before it holds a `some`, an `every`,
+/// or a bracket index by a variable — every spelling of iteration, and some
+/// that only look up, which costs the interpreter's speed and never a verdict.
+fn rule_else(ast: &Ast) -> Option<String> {
+    fn iterates(node: &serde_json::Value) -> bool {
+        match node {
+            serde_json::Value::Object(map) => {
+                ["SomeIn", "SomeVars", "Every"]
+                    .iter()
+                    .any(|key| map.contains_key(*key))
+                    || map
+                        .get("RefBrack")
+                        .and_then(|brack| brack.get("index"))
+                        .is_some_and(|index| index.get("Var").is_some())
+                    || map.values().any(iterates)
+            }
+            serde_json::Value::Array(items) => items.iter().any(iterates),
+            _ => false,
+        }
+    }
+    first_construct(ast, &|map| {
+        let bodies = map.get("bodies")?.as_array()?;
+        let is_else =
+            |body: &serde_json::Value| body.get("is_else").and_then(serde_json::Value::as_bool);
+        let at = bodies.iter().position(|body| is_else(body) == Some(true))?;
+        bodies[..at]
+            .iter()
+            .any(|body| body.get("query").is_some_and(iterates))
+            .then(|| bodies[at].get("span")?.get("line")?.as_u64())?
+    })
+}
+
+/// The first `:=` the guard splice cannot cover, as `path:line`, or `None`
+/// (#1276): a left side binding no variable the guard can name and not a bare
+/// `_` — `[_, _] := e`, `{"k": _} := e`.
+///
+/// Every other `:=` is guarded ([`statement_guard`]), which is what makes the
+/// bytecode fail its body over an undefined right side as the interpreter does
+/// (CLOUD-2696). This shape would bind `Undefined` unguarded, so a module using
+/// it is refused at load ([`check_loaded`]) rather than decided differently on
+/// the hook path, and never compiled to bytecode.
+fn unguardable_assignment(ast: &Ast) -> Option<String> {
+    first_construct(ast, &|map| {
+        let assign = map
+            .get("literal")?
+            .get("Expr")?
+            .get("expr")?
+            .get("AssignExpr")?;
+        if assign.get("op")?.as_str()? != "ColEq" {
+            return None;
+        }
+        let lhs = assign.get("lhs")?;
+        if lhs
+            .get("Var")
+            .and_then(|var| var.get("value"))
+            .and_then(serde_json::Value::as_str)
+            .is_some()
+        {
+            return None;
+        }
+        let mut vars = BTreeSet::new();
+        bound_vars(lhs, &mut vars);
+        vars.remove("_");
+        if !vars.is_empty() {
+            return None;
+        }
+        map.get("span")?.get("line")?.as_u64()
+    })
+}
+
+/// The first AST object `matches` answers a line for, as `path:line`.
+fn first_construct(
+    ast: &Ast,
+    matches: &dyn Fn(&serde_json::Map<String, serde_json::Value>) -> Option<u64>,
+) -> Option<String> {
+    fn found(
+        node: &serde_json::Value,
+        matches: &dyn Fn(&serde_json::Map<String, serde_json::Value>) -> Option<u64>,
+    ) -> Option<u64> {
+        match node {
+            serde_json::Value::Object(map) => {
+                matches(map).or_else(|| map.values().find_map(|value| found(value, matches)))
+            }
+            serde_json::Value::Array(items) => items.iter().find_map(|item| found(item, matches)),
+            _ => None,
+        }
+    }
+    ast.0.iter().find_map(|policy| {
+        let line = found(policy.get("ast")?, matches)?;
+        let path = policy.get("source")?.get("file")?.as_str()?;
+        Some(format!("{path}:{line}"))
+    })
+}
+
+/// Every `input` path `bundle`'s non-test rules read, dotted (`facts.land-live`,
+/// `call.command`), from the [`describe`] reading; empty without an
+/// interpreter (#1276).
+///
+/// What the parity gate sets to `null` and removes in each case input: a
+/// builtin over a fact that is null or absent is where the two evaluators part
+/// (a `concat` over a `null` element faults the bytecode's whole bundle where
+/// the interpreter reads the call as undefined), and a module's own cases
+/// rarely pass a null.
+#[doc(hidden)]
+#[must_use]
+pub fn input_paths(bundle: &Bundle) -> Vec<String> {
+    let Some(described) = bundle.described() else {
+        return Vec::new();
+    };
+    let paths: BTreeSet<String> = described
+        .iter()
+        .flat_map(|module| &module.rules)
+        .filter(|rule| !rule.name.starts_with("test_"))
+        .flat_map(|rule| rule.input_paths.iter().cloned())
+        .collect();
+    paths.into_iter().collect()
+}
+
+/// Every `input` path the non-test rules of the one module `source` read,
+/// dotted as [`input_paths`] renders them, or `None` when it will not parse or
+/// cannot be described (CLOUD-2789).
+///
+/// What an admission's epoch is narrowed to (`epoch::for_rule`): a module row
+/// compiles from its one file, so these paths are the whole of what its input
+/// can hand it. Parsed, never compiled against a table: the question is which
+/// names the code reads, not what they evaluate to.
+pub(crate) fn module_input_paths(path: &str, source: &str) -> Option<BTreeSet<String>> {
+    let mut engine = new_engine();
+    engine.add_policy(path.to_owned(), source.to_owned()).ok()?;
+    let described = describe(&engine)?;
+    Some(
+        described
+            .iter()
+            .flat_map(|module| &module.rules)
+            .filter(|rule| !rule.name.starts_with("test_"))
+            .flat_map(|rule| rule.input_paths.iter().cloned())
+            .collect(),
+    )
+}
+
+/// `bundle`, still on its interpreter, recording why.
+fn interpreted_because(bundle: Bundle, why: Fallback, detail: &dyn std::fmt::Display) -> Bundle {
+    let Evaluator::Interpreted { engine, .. } = bundle.evaluator else {
+        return bundle;
+    };
+    Bundle {
+        evaluator: Evaluator::Interpreted {
+            engine,
+            why,
+            detail: Some(detail.to_string().into()),
+        },
+        ..bundle
+    }
 }
 
 /// What an entry's body records beside the bytecode, on its first line.
@@ -2063,18 +3189,21 @@ struct CacheHeader {
     packages: BTreeSet<Vec<String>>,
     entries: BTreeSet<(Vec<String>, String)>,
     facts: Vec<String>,
+    /// The tree read set (step 13a); absent reads as [`Reads::Opaque`].
+    #[serde(default)]
+    reads: Option<Vec<String>>,
 }
 
 /// The cache format; a change to [`CacheHeader`] or to how bytecode is written
 /// bumps it, which makes every older entry a miss. `2` since the entry moved
 /// onto `crate::cache` (CLOUD-2315): the key left the header for the entry's own
 /// key line, and the binary is identified by its build ID. `3` keys the pattern
-/// table by its digest rather than its text.
-const CACHE_FORMAT: &str = "batten-policy-rvm-3";
+/// table by its digest rather than its text. `4` records the tree read set
+/// (step 13a), without which a bytecode bundle can only answer `Opaque`.
+const CACHE_FORMAT: &str = "batten-policy-rvm-5";
 
 /// The entry for row `id`, under the repository's cache directory: one file per
 /// row, overwritten on a miss, so the cache never grows past the row count.
-//MUTANT cache-root-relative|s@repo_state_dir(\&crate::git::canonical(root))@repo_state_dir(root)@|a_warm_load_from_the_working_directory_compiles_no_engine
 fn cache_path(root: &Path, id: &str) -> Option<std::path::PathBuf> {
     // Resolved once per root, not once per row (CLOUD-2315): every bundle of a
     // load asked, and each answer canonicalised the root, derived the state
@@ -2116,13 +3245,32 @@ fn cache_path(root: &Path, id: &str) -> Option<std::path::PathBuf> {
 /// included, is a miss, and a relink to identical code is not. The pattern
 /// table enters by its digest, taken once per load, which names its content
 /// exactly as its text would.
-//MUTANT cache-key-ignores-source|s@        fields.push(source.as_bytes());@        let _ = source;@|an_edited_module_is_not_answered_from_stale_bytecode
 fn cache_key(id: &str, sources: &[(String, String)], data: &[u8; 32]) -> String {
+    cache_key_over(id, sources, data, library())
+}
+
+/// [`cache_key`] over the library texts `library`, apart so a case can vary them.
+fn cache_key_over(
+    id: &str,
+    sources: &[(String, String)],
+    data: &[u8; 32],
+    library: &[(&str, std::borrow::Cow<'_, str>)],
+) -> String {
     let mut fields: Vec<&[u8]> = Vec::with_capacity(2 + 2 * sources.len());
     fields.push(id.as_bytes());
     for (path, source) in sources {
         fields.push(path.as_bytes());
         fields.push(source.as_bytes());
+    }
+    // THE LIBRARY A BUNDLE COMPOSES IS PART OF ITS PROGRAM (CLOUD-2253). The
+    // binary's identity keyed it while only a rebuild could change it; under a
+    // sweep's overlay one binary compiles many library texts, and an entry
+    // keyed without it answered every mutant with the unmutated program.
+    if asks_library(sources) {
+        for (path, source) in library {
+            fields.push(path.as_bytes());
+            fields.push(source.as_bytes());
+        }
     }
     fields.push(data);
     crate::cache::key(CACHE_FORMAT, &fields)
@@ -2150,6 +3298,32 @@ fn data_value(text: &str) -> Option<regorus::Value> {
     })
 }
 
+/// The program the entry at `path` holds under `key`, with its header: `None`
+/// for a miss, an unreadable entry, or one holding only a read set.
+fn read_program(path: &Path, key: &str, data: &str) -> Option<(CacheHeader, Compiled)> {
+    let bytes = crate::cache::read(path, key)?;
+    let split = bytes.iter().position(|byte| *byte == b'\n')?;
+    let (head, body) = bytes.split_at(split);
+    let header: CacheHeader = serde_json::from_slice(head).ok()?;
+    // Only a whole program: a partial one is regorus asking to recompile, and
+    // none at all is an interpreted bundle's read set ([`remember_reads`]).
+    let program = body.get(1..).filter(|program| !program.is_empty())?;
+    let regorus::rvm::program::DeserializationResult::Complete(program) =
+        regorus::rvm::program::Program::deserialize_binary(program).ok()?
+    else {
+        return None;
+    };
+    let compiled = Compiled {
+        program: std::sync::Arc::new(program),
+        data: data_value(data)?,
+        entries: header.entries.clone(),
+        facts: header.facts.clone(),
+        reads: header.reads.clone(),
+        cached: true,
+    };
+    Some((header, compiled))
+}
+
 /// The cached bundle for `id`, when the entry at `path` was written from
 /// exactly these inputs.
 fn read_cached(
@@ -2159,22 +3333,7 @@ fn read_cached(
     sources: &[(String, String)],
     data: &str,
 ) -> Option<Bundle> {
-    let bytes = crate::cache::read(path, key)?;
-    let split = bytes.iter().position(|byte| *byte == b'\n')?;
-    let (head, body) = bytes.split_at(split);
-    let header: CacheHeader = serde_json::from_slice(head).ok()?;
-    // Only a whole program: a partial one is regorus asking to recompile.
-    let regorus::rvm::program::DeserializationResult::Complete(program) =
-        regorus::rvm::program::Program::deserialize_binary(body.get(1..)?).ok()?
-    else {
-        return None;
-    };
-    let compiled = Compiled {
-        program: std::sync::Arc::new(program),
-        data: data_value(data)?,
-        entries: header.entries,
-        facts: header.facts,
-    };
+    let (header, compiled) = read_program(path, key, data)?;
     Some(Bundle {
         id: id.to_owned(),
         modules: sources
@@ -2185,9 +3344,49 @@ fn read_cached(
         packages: header.packages,
         severity: crate::severity::RuleSeverity::Deny,
         predicate_severity: BTreeMap::new(),
-        evaluator: Evaluator::Compiled(std::sync::Arc::new(compiled)),
+        evaluator: Evaluator::Compiled(std::sync::Arc::new(compiled), None),
         described: std::sync::OnceLock::new(),
+        ast: std::sync::OnceLock::new(),
+        reads: std::sync::OnceLock::new(),
     })
+}
+
+/// Seed interpreted `bundle`'s read set from the entry at `path` under `key`,
+/// or describe it and write an entry holding it: the same [`CacheHeader`]
+/// with no program after it, which [`read_cached`] never reads as bytecode.
+///
+/// THE HALF A ROW IS JUDGED IN IS READ OFF THIS SET ([`Bundle::tree_reads`]),
+/// so a bundle the bytecode compiler cannot express, which every load
+/// compiles afresh, still classifies once per key rather than once per half.
+/// Best-effort like every entry: one that cannot be read or written costs a
+/// description, never an answer.
+fn remember_reads(path: &Path, key: &str, bundle: &Bundle) {
+    let held = crate::cache::read(path, key).and_then(|bytes| {
+        let head = bytes.split(|byte| *byte == b'\n').next()?;
+        serde_json::from_slice::<CacheHeader>(head).ok()
+    });
+    if let Some(header) = held {
+        let reads = header.reads.map_or(Reads::Opaque, |keys| {
+            Reads::Known(keys.into_iter().collect())
+        });
+        let _ = bundle.reads.set(reads);
+        return;
+    }
+    let header = CacheHeader {
+        declared: bundle.declared.clone(),
+        packages: bundle.packages.clone(),
+        entries: BTreeSet::new(),
+        facts: Vec::new(),
+        reads: match bundle.tree_reads() {
+            Reads::Known(keys) => Some(keys.into_iter().collect()),
+            Reads::Opaque => None,
+        },
+    };
+    let Ok(mut bytes) = serde_json::to_vec(&header) else {
+        return;
+    };
+    bytes.push(b'\n');
+    crate::cache::write(path, key, &bytes);
 }
 
 /// Write the entry for `bundle`, atomically; a failure leaves the next call a
@@ -2198,6 +3397,7 @@ fn write_cached(path: &Path, key: &str, bundle: &Bundle, compiled: &Compiled) {
         packages: bundle.packages.clone(),
         entries: compiled.entries.clone(),
         facts: compiled.facts.clone(),
+        reads: compiled.reads.clone(),
     };
     let (Ok(mut bytes), Ok(program)) = (
         serde_json::to_vec(&header),
@@ -2219,6 +3419,14 @@ const ANSWERED_RULES: [&str; 5] = [
     REWRITE_RULE,
 ];
 
+/// Whether the bytecode compiler's `err` refused an entry point for not being
+/// defined, rather than a construct the bundle uses.
+fn undefined_entry_point(err: &str) -> bool {
+    ["not found", "undefined", "not a valid rule path"]
+        .iter()
+        .any(|words| err.contains(words))
+}
+
 /// The entry point a `(package, rule)` pair compiles to.
 fn entry_point(package: &[String], rule: &str) -> String {
     let mut path = String::from(PACKAGE_QUERY);
@@ -2231,13 +3439,72 @@ fn entry_point(package: &[String], rule: &str) -> String {
     path
 }
 
-//MUTANT bootstrap-entry-fixed|s@candidates.iter().find_map(@candidates.iter().take(1).find_map(@|the_repositorys_bundles_answer_alike_compiled_and_interpreted
 impl Compiled {
-    /// Compile `bundle`'s interpreter to bytecode, or `None` where the bytecode
-    /// compiler cannot express a rule it defines.
-    fn from_bundle(bundle: &Bundle, data: &serde_json::Value) -> Option<Self> {
+    /// Compile `bundle`'s interpreter to bytecode, or say why the bytecode
+    /// compiler cannot express it: the [`Fallback`] and the compiler's words.
+    fn from_bundle(
+        bundle: &Bundle,
+        data: &serde_json::Value,
+    ) -> std::result::Result<Self, (Fallback, String)> {
+        // The constructs regorus 0.15 compiles WRONGLY rather than refusing:
+        // batten refuses them, so a bundle using one decides on the
+        // interpreter, which answers as OPA does (#1276).
+        // ONE RENDER OF THE AST for the refusals and the guard (CLOUD-2830).
+        let ast = bundle.ast();
+        if let Some(ast) = ast {
+            if let Some(at) = unguardable_assignment(ast) {
+                return Err((Fallback::GuardUnavailable, at));
+            }
+            if let Some(at) = keyed_partial_set(ast) {
+                return Err((Fallback::KeyedPartialSet, at));
+            }
+            if let Some(at) = rule_else(ast) {
+                return Err((Fallback::RuleElse, at));
+            }
+        }
+        Self::compile_guarded(bundle, data, ast)
+    }
+
+    /// [`Self::from_bundle`] without batten's refusals of known miscompiles:
+    /// the cases that pin each refusal compile around it.
+    #[cfg(test)]
+    fn compile_unchecked(
+        bundle: &Bundle,
+        data: &serde_json::Value,
+    ) -> std::result::Result<Self, (Fallback, String)> {
+        Self::compile_guarded(bundle, data, bundle.ast())
+    }
+
+    /// The program compiled from `ast`'s guarded text, `ast` being `bundle`'s
+    /// interpreter's, or `None` where it would not serialise.
+    fn compile_guarded(
+        bundle: &Bundle,
+        data: &serde_json::Value,
+        ast: Option<&Ast>,
+    ) -> std::result::Result<Self, (Fallback, String)> {
         use regorus::languages::rego::compiler::Compiler;
-        let mut engine = bundle.evaluator.engine()?.clone();
+        // `Debug`, not `Display`: the compiler's errors can render empty.
+        let refused = |err: &dyn std::fmt::Debug| (Fallback::CompileRefused, format!("{err:?}"));
+        // The program is compiled from the guarded text ([`guarded_sources`]),
+        // over the same data the interpreter holds. `compile` already refused
+        // a data document that will not load, so those two arms do not fire.
+        let value = regorus::Value::from_json_str(&data.to_string()).map_err(|e| refused(&e))?;
+        let mut engine = new_engine();
+        engine.add_data(value.clone()).map_err(|e| refused(&e))?;
+        if bundle.evaluator.engine().is_none() {
+            return Err((Fallback::GuardUnavailable, String::from("no interpreter")));
+        }
+        let Some(guarded) = ast.and_then(guarded_sources_of) else {
+            return Err((
+                Fallback::GuardUnavailable,
+                String::from("the AST would not serialise, or an offset is not a boundary"),
+            ));
+        };
+        for (path, text) in guarded {
+            engine
+                .add_policy(path.clone(), text)
+                .map_err(|e| (Fallback::GuardedSourceRefused, format!("{path}: {e}")))?;
+        }
         let mut candidates = Vec::new();
         for package in &bundle.packages {
             for rule in ANSWERED_RULES {
@@ -2247,11 +3514,26 @@ impl Compiled {
         // regorus prepares the whole rule set whichever entry point it is
         // handed, but refuses one the bundle does not define, so the first
         // defined candidate stands in for all of them.
+        let mut last = None;
         let policy = candidates.iter().find_map(|(package, rule)| {
             engine
                 .compile_with_entrypoint(&entry_point(package, rule).as_str().into())
+                .map_err(|err| last = Some(format!("{err:?}")))
                 .ok()
-        })?;
+        });
+        let Some(policy) = policy else {
+            return Err(match last {
+                // Every candidate refused for being undefined is a bundle with
+                // nothing to answer; anything else is the compiler's refusal.
+                // regorus 0.15 words an undefined entry point "not a valid rule
+                // path", which neither older spelling matched.
+                Some(err) if !undefined_entry_point(&err) => (Fallback::CompileRefused, err),
+                other => (
+                    Fallback::NoAnsweredRule,
+                    other.unwrap_or_else(|| String::from("no package")),
+                ),
+            });
+        };
         let rules = policy.get_rules();
         let entries: BTreeSet<(Vec<String>, String)> = candidates
             .into_iter()
@@ -2259,24 +3541,44 @@ impl Compiled {
             .collect();
         let names: Vec<String> = entries.iter().map(|(p, r)| entry_point(p, r)).collect();
         let names: Vec<&str> = names.iter().map(String::as_str).collect();
-        let program = Compiler::compile_from_policy(&policy, &names).ok()?;
-        Some(Self {
+        let program = Compiler::compile_from_policy(&policy, &names).map_err(|e| refused(&e))?;
+        Ok(Self {
             program,
-            data: regorus::Value::from_json_str(&data.to_string()).ok()?,
+            data: value,
+            cached: false,
             entries,
             facts: bundle
                 .session_start_facts()
                 .into_iter()
                 .map(str::to_owned)
                 .collect(),
+            reads: match bundle.tree_reads() {
+                Reads::Known(keys) => Some(keys.into_iter().collect()),
+                Reads::Opaque => None,
+            },
         })
     }
 
-    /// `bundle` evaluating through this bytecode rather than its interpreter.
-    fn into_bundle(self, bundle: Bundle) -> Bundle {
+    /// `bundle` evaluating through this bytecode rather than its interpreter,
+    /// which it keeps for its AST readers where `keep_ast`.
+    fn into_bundle(self, bundle: Bundle, keep_ast: bool) -> Bundle {
+        let ast = match bundle.evaluator {
+            Evaluator::Interpreted { engine, .. } if keep_ast => Some(std::sync::Arc::new(*engine)),
+            Evaluator::Compiled(_, engine) if keep_ast => engine,
+            _ => None,
+        };
         Bundle {
-            evaluator: Evaluator::Compiled(std::sync::Arc::new(self)),
-            described: std::sync::OnceLock::new(),
+            evaluator: Evaluator::Compiled(std::sync::Arc::new(self), ast),
+            described: if keep_ast {
+                bundle.described
+            } else {
+                std::sync::OnceLock::new()
+            },
+            ast: if keep_ast {
+                bundle.ast
+            } else {
+                std::sync::OnceLock::new()
+            },
             ..bundle
         }
     }
@@ -2399,11 +3701,30 @@ fn relative_package(package: &str) -> Option<Vec<String>> {
 /// could not exercise.
 #[must_use]
 pub fn deny(bundle: &Bundle, input: &str) -> Look<Vec<Violation>> {
+    deny_why(bundle, input).map_or(Look::CouldNotLook, Look::Is)
+}
+
+/// [`deny`], with the reason a could-not-look carries (CLOUD-2789): the tree
+/// surface reports a module that could not look by rule AND reason, so the
+/// reason has to survive the evaluation rather than fold into one variant.
+///
+/// # Errors
+///
+/// The could-not-look arms of [`deny`], each as a fixed phrase naming which.
+pub fn deny_why(bundle: &Bundle, input: &str) -> Result<Vec<Violation>, String> {
     // ONE EVALUATION for both shapes, because the engine is the unit now: the
     // answer comes back once and is walked twice, rather than paying an
     // evaluation per rule name.
-    let Some(answered) = answer(bundle, input, &[DENY_RULE, VIOLATION_RULE]) else {
-        return Look::CouldNotLook;
+    denials(bundle, answer(bundle, input, &[DENY_RULE, VIOLATION_RULE]))
+}
+
+/// The violations an answer carries, or why it could not look: it carries none
+/// readable, or names an id the bundle never declared.
+fn denials(bundle: &Bundle, answered: Option<Answer>) -> Result<Vec<Violation>, String> {
+    let Some(answered) = answered else {
+        return Err(String::from(
+            "the module faulted evaluating its input (an undefined reference or a runtime error)",
+        ));
     };
 
     let mut violations = Vec::new();
@@ -2414,7 +3735,7 @@ pub fn deny(bundle: &Bundle, input: &str) -> Look<Vec<Violation>> {
             subjects: Vec::new(),
             counted: false,
         })),
-        None => return Look::CouldNotLook,
+        None => return Err(String::from("its `deny` set is not a set of strings")),
     }
     match collect_violations(&answered, &bundle.packages) {
         Some(entries) => {
@@ -2422,15 +3743,17 @@ pub fn deny(bundle: &Bundle, input: &str) -> Look<Vec<Violation>> {
                 if let Some(named) = entry.rule.as_deref()
                     && !bundle.declared.contains(named)
                 {
-                    return Look::CouldNotLook;
+                    return Err(format!(
+                        "a violation names `{named}`, which the bundle never declared"
+                    ));
                 }
                 violations.push(entry);
             }
         }
-        None => return Look::CouldNotLook,
+        None => return Err(String::from("its `violation` set has an unreadable entry")),
     }
 
-    Look::Is(violations)
+    Ok(violations)
 }
 
 /// The ids of this bundle's rules that pre-approve the call (CLOUD-1949).
@@ -2464,7 +3787,6 @@ pub struct Rewrite {
 }
 
 /// Whether a module may rewrite this tool input key ([`REWRITABLE`]).
-//MUTANT rewrite-key-unchecked|s@^    REWRITABLE.contains(\&key)$@    true@|a_rewrite_outside_the_allowlist_is_refused
 #[must_use]
 pub fn rewritable(key: &str) -> bool {
     REWRITABLE.contains(&key)
@@ -2528,7 +3850,8 @@ pub fn rewrite(bundle: &Bundle, input: &str) -> Look<Vec<Rewrite>> {
 #[must_use]
 pub fn strings(bundle: &Bundle, input: &str, rule: &str) -> Look<Vec<String>> {
     // An arbitrary rule name has no entry point, so this reads the interpreter
-    // only — its callers load with every check, never from the cache.
+    // only — its callers load with every check, never from the cache. Not a
+    // verdict evaluation, so it is not counted in [`execution_census`].
     let Some(engine) = bundle.evaluator.engine() else {
         return Look::CouldNotLook;
     };
@@ -2541,6 +3864,23 @@ pub fn strings(bundle: &Bundle, input: &str, rule: &str) -> Look<Vec<String>> {
     };
     let answered = Answer::of(&answered);
     collect_string_list(&answered, &bundle.packages, rule).map_or(Look::CouldNotLook, Look::Is)
+}
+
+/// Are `rule`'s sources in the working tree at all (CLOUD-2840, `lint::run`)?
+/// A `module` row's file; a `bundle` row's root, by its path alone; a preset is
+/// read from the binary, so it is always there.
+///
+/// ABSENCE ONLY, NEVER A FAULT. A bundle root that is there but empty or
+/// unlistable is not absent: it is loaded, and `bundle_members` refuses it, so a
+/// gate that enables nothing is never read as a gap that stands the set checks
+/// down.
+#[must_use]
+pub fn sources_in_tree(root: &Path, rule: &Rule) -> bool {
+    match (rule.module.as_deref(), rule.bundle.as_deref()) {
+        (Some(module), _) => root.join(module).exists(),
+        (None, Some(bundle)) => root.join(bundle.trim_end_matches('/')).exists(),
+        (None, None) => true,
+    }
 }
 
 /// The `.rego` modules inside an enabled bundle root, in sorted order.
@@ -2690,7 +4030,7 @@ fn bundle_members(
 /// A [`UsageError`] (exit `1`) naming the offending key and the module path.
 /// Pointer-only: never a line of the module body.
 fn check_tree_paths_are_emittable(rule: &Rule, bundle: &Bundle, source: &str) -> Result<()> {
-    let tree_scoped = rule.scope == crate::rules::RuleScope::Tree;
+    let tree_scoped = rule.scope == crate::preset_catalog::RuleScope::Tree;
     let emittable = tree_keys();
     let Some(described) = bundle.described() else {
         // Could-not-look on the AST is not a refusal: `load` has already
@@ -2817,12 +4157,12 @@ fn record_raised(
 /// A RETIRED class is excluded deliberately — its token is a tombstone rather
 /// than a name in use, and refusing a row for spelling one would refuse a name
 /// nothing answers to.
-fn collidable_tokens(verdicts: &[crate::verdict::DeclaredVerdict]) -> BTreeSet<String> {
+fn collidable_tokens(verdicts: &[crate::config_model::DeclaredVerdict]) -> BTreeSet<String> {
     // ALL THREE SOURCES. The consumer's rows, this binary's native sites, and
     // the VENDORED PRESETS — the third is the one that bites: `trunk push
     // forced` is a preset's class, and a set built from the first two refuses
     // a name the collapse arm requires.
-    let vendored = crate::preset::verdict_rows();
+    let vendored = crate::config_check::preset::verdict_rows();
     verdicts
         .iter()
         .filter(|entry| !entry.retired())
@@ -2864,7 +4204,7 @@ fn collidable_tokens(verdicts: &[crate::verdict::DeclaredVerdict]) -> BTreeSet<S
 /// A [`UsageError`] (exit `1`) naming the module and the id.
 fn check_finding_ids(
     sources: &[(String, String)],
-    vocabulary: Option<&crate::verdict::Vocabulary>,
+    vocabulary: Option<&crate::config_model::Vocabulary>,
     tokens: &BTreeSet<String>,
 ) -> Result<()> {
     let Some(grammar) = vocabulary else {
@@ -2961,8 +4301,6 @@ pub(crate) fn finding_ids(text: &str) -> BTreeSet<String> {
 /// # Errors
 ///
 /// A [`UsageError`] (exit `1`) naming the row and which direction it broke.
-//MUTANT-SUITE crates/batten/tests/it/rules_drift.rs
-//MUTANT identity-arm-dropped|s@            Some(class) if rule.id != class => findings.push(format!(@            Some(class) if false \&\& rule.id != class => findings.push(format!(@|a_sole_raiser_whose_id_differs_from_its_class_is_refused_at_load
 fn check_collapse(
     rules: &[Rule],
     per_rule: &BTreeMap<String, BTreeSet<String>>,
@@ -3027,7 +4365,7 @@ fn check_collapse(
 }
 
 fn check_registry_is_exhausted(
-    verdicts: &[crate::verdict::DeclaredVerdict],
+    verdicts: &[crate::config_model::DeclaredVerdict],
     emitted: &BTreeSet<String>,
 ) -> Result<()> {
     let native = crate::verdict::native_tokens();
@@ -3073,13 +4411,11 @@ explain` and its routes have never been walked by anybody. Delete the row, or gi
 /// # Errors
 ///
 /// None today; the `Result` stays so every caller keeps one fault channel.
-//MUTANT-SUITE crates/batten/tests/it/vendored_skew.rs
-//MUTANT skew-bricks-the-boundary|s@        registry.retain(\x7crow\x7c row.id != entry.id);@        if registry.iter().any(\x7crow\x7c row.id == entry.id) { return Err(UsageError::raise(entry.id)); }@|a_branch_declaring_a_class_the_binary_ships_still_adjudicates
 pub fn registry_for(
-    verdicts: &[crate::verdict::DeclaredVerdict],
-) -> Result<Vec<crate::verdict::DeclaredVerdict>> {
+    verdicts: &[crate::config_model::DeclaredVerdict],
+) -> Result<Vec<crate::config_model::DeclaredVerdict>> {
     let mut registry = verdicts.to_vec();
-    for entry in crate::verdict::vendored() {
+    for entry in crate::config_check::verdict::vendored() {
         registry.retain(|row| row.id != entry.id);
         registry.push(entry);
     }
@@ -3097,10 +4433,8 @@ pub fn registry_for(
 /// # Errors
 ///
 /// A [`UsageError`] (exit `1`) naming every colliding token.
-//MUTANT-SUITE crates/batten/tests/it/vendored_skew.rs
-//MUTANT skew-lands-unrefused|s@    if let Some(first) = collisions.first() {@    if let Some(first) = collisions.first().filter(\x7c_\x7c false) {@|a_class_the_binary_ships_is_still_refused_by_check
-fn check_no_vendored_collision(verdicts: &[crate::verdict::DeclaredVerdict]) -> Result<()> {
-    let vendored: BTreeSet<String> = crate::verdict::vendored()
+fn check_no_vendored_collision(verdicts: &[crate::config_model::DeclaredVerdict]) -> Result<()> {
+    let vendored: BTreeSet<String> = crate::config_check::verdict::vendored()
         .into_iter()
         .map(|entry| entry.id)
         .collect();
@@ -3152,7 +4486,7 @@ fn check_no_vendored_collision(verdicts: &[crate::verdict::DeclaredVerdict]) -> 
 fn check_verdicts_are_declared(
     rule: &Rule,
     bundle: &Bundle,
-    registry: &[crate::verdict::DeclaredVerdict],
+    registry: &[crate::config_model::DeclaredVerdict],
     source: &str,
 ) -> Result<()> {
     // Derived here rather than handed in, so the call site is one line at each
@@ -3319,7 +4653,7 @@ fn check_patterns(
     declared: &BTreeSet<&str>,
     source: &str,
     // Module path to the VENDORED source it was ejected from (CLOUD-2290).
-    vendored: &BTreeMap<String, &'static str>,
+    vendored: &BTreeMap<String, std::borrow::Cow<'static, str>>,
 ) -> Result<()> {
     let Some(described) = bundle.described() else {
         // Could-not-look on the AST is not a refusal, for the reason the sibling
@@ -3499,7 +4833,7 @@ fn claim_ids(
 /// can never fire, two that contradict, a cycle — and nothing decided any of
 /// them. At 33 committed rows that was still tractable by reading; it does not
 /// stay tractable, and "read it carefully" is not a gate: non-negotiable rule 3
-/// makes a model verdict inadmissible, so the alternative to a decidable
+/// makes a gated-model verdict inadmissible, so the alternative to a decidable
 /// mechanism here is not careful review, it is nothing.
 ///
 /// # Why the sweep has to be DRIVEN
@@ -3560,6 +4894,7 @@ struct Described {
 }
 
 /// One top-level rule, as [`Described`] reads it.
+#[derive(Clone)]
 struct DescribedRule {
     /// The rule's own name — `violation`, `rules`, `test_no_force_push`.
     name: String,
@@ -3673,14 +5008,27 @@ struct DescribedRule {
 /// the one this reads. Never an empty description, which would report a module
 /// with no rules at all.
 fn describe(engine: &regorus::Engine) -> Option<Vec<Described>> {
+    let Some(ast) = Ast::of(engine) else {
+        AST_DESCRIPTIONS.fetch_add(1, Ordering::Relaxed);
+        return None;
+    };
+    describe_of(&ast)
+}
+
+/// [`describe`] over an [`Ast`] already in hand.
+fn describe_of(ast: &Ast) -> Option<Vec<Described>> {
     AST_DESCRIPTIONS.fetch_add(1, Ordering::Relaxed);
-    let json = engine.get_ast_as_json().ok()?;
-    let policies: Vec<serde_json::Value> = serde_json::from_str(&json).ok()?;
     let mut described = Vec::new();
-    for policy in &policies {
+    for policy in &ast.0 {
         // `source.file` and nothing else. The sibling `source.contents` carries
         // the whole policy body, and this function never touches it — rule 4.
         let path = policy.get("source")?.get("file")?.as_str()?.to_owned();
+        // THE ENGINE'S OWN LIBRARY IS NOT A CONSUMER MODULE (CLOUD-2840): the
+        // lints over what a consumer registered do not read it, as they do not
+        // read a preset.
+        if LIBRARY.iter().any(|(library, _)| *library == path) {
+            continue;
+        }
         let ast = policy.get("ast")?;
         let package = reference_path(ast.get("package")?.get("refr")?)?;
 
@@ -3867,7 +5215,7 @@ pub fn call_input_schema() -> Result<String> {
             facts.insert(fact.as_str().to_owned(), fact.schema_fragment());
         }
     }
-    let document = serde_json::json!({
+    let mut document = serde_json::json!({
         "$schema": "http://json-schema.org/draft-07/schema#",
         "title": "batten mediated-call policy input",
         "description": "The document a `scope = \"mediated_call\"` Rego module reads as `input`. Companion to policy-input.schema.json, which describes the TREE surface: the two share no keys, and a module type checked against the wrong one is CLOUD-845's defect deliberately introduced. Generated from `Fact::ALL` filtered to `Surface::Hook` by `batten generate schema --surface policy-call` (CLOUD-879); edit the facts, never this file.",
@@ -3902,7 +5250,7 @@ pub fn call_input_schema() -> Result<String> {
                     // undefined path that denies nothing — the same load-bearing
                     // line the `facts` object below carries, for the same reason.
                     "segments": {
-                        "type": "array",
+                        "type": ["array", "null"],
                         "description": "`hook::segments` over `command`: one entry per shell-separated element, quote-aware. For the SPAN's structure -- its terminator, its input redirection, its raw text. A PROGRAM is anchored on `programs`, not on `words[0]`, which is the first word and not the first program (CLOUD-1382).",
                         "items": {
                             "type": "object",
@@ -3915,6 +5263,9 @@ pub fn call_input_schema() -> Result<String> {
                                 // CLOUD-1949: output sent into a file, which
                                 // makes any reader in the segment a writer.
                                 "output-redirect": {"type": "boolean"},
+                                // #1276: the output redirections' targets,
+                                // never an operator token or a `&` duplication.
+                                "redirect-writes": {"type": "array", "items": {"type": "string"}},
                                 // CLOUD-1381. `null` at the top level; a
                                 // `kind`/`role` pair inside a control-flow node,
                                 // so a module decides from the node rather than
@@ -3981,7 +5332,182 @@ pub fn call_input_schema() -> Result<String> {
             },
         },
     });
+    extend_call_schema(&mut document);
+    segment_schema_keys(&mut document);
     Ok(serde_json::to_string_pretty(&document)?)
+}
+
+/// Step 23 (#1276, CLOUD-2775): an interpreter's spawn whose argv is not a
+/// literal — reached but unreadable — names the file it came from and whether
+/// that file is tracked and clean. Absent on every other `programs` entry.
+fn opaque_reach_keys(program: &mut serde_json::Map<String, serde_json::Value>) {
+    for (key, kind) in [
+        ("opaque", "boolean"),
+        ("source", "string"),
+        ("trusted", "boolean"),
+    ] {
+        program.insert(key.to_owned(), serde_json::json!({ "type": kind }));
+    }
+}
+
+/// The call's `lap-held` key (CLOUD-2832): each of the call's writes that lands
+/// in the live lap's checkout, judged by the checkout it lands in.
+fn lap_held_schema() -> serde_json::Value {
+    serde_json::json!({
+        "type": ["array", "null"],
+        "description": "Each write of this call that lands in the checkout a live `land` lap holds (`input.facts[\"land-live\"]`): `{\"path\": <target as written>}` for a write tool's or an output redirection's target, `{\"git\": <subcommand>}` for a git program acting there. Judged by the checkout the write lands in, never by its path prefix, so a clone nested inside the lap's directory is not the lap's. NULL while no lap is live, or where the writes could not be placed.",
+        "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "path": {"type": "string"},
+                "git": {"type": ["string", "null"]}
+            }
+        }
+    })
+}
+
+/// CLOUD-2840: every assignment a segment's programs run under, as
+/// `NAME=value` with quotes resolved, wrappers included — read PER LINE (a
+/// newline-joined segment's later line keeps its own prefix) and THROUGH
+/// `env -S`, whose string is split into the command (`hook.rs`'s
+/// `segment_assignments`). Added here rather than in the literal, which is at
+/// `json!`'s recursion limit.
+fn segment_schema_keys(document: &mut serde_json::Value) {
+    if let Some(segment) = document
+        .pointer_mut("/properties/call/properties/segments/items/properties")
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        segment.insert(
+            "assigns".to_owned(),
+            serde_json::json!({
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Every assignment the segment's programs run under, as `NAME=value` with quotes resolved, wrappers included: read per line (a later line of a newline-joined segment keeps its own prefix) and through `env -S`, whose string is split into the command. The value rides with the name, because an inert name can carry a value that is not (`GIT_PAGER=./x`)."
+            }),
+        );
+    }
+}
+
+/// The keys `call_input_schema` adds after its `json!` document is built: one
+/// more key inline exceeds the macro's recursion limit.
+///
+/// * `forge` (CLOUD-2689): a forge event's tokens, never a body.
+/// * a segment's `redirects` (CLOUD-2670): the suffix of its `words`.
+/// * a program's `subcommand` and `global-options` (CLOUD-2354): its first verb
+///   past its own value-taking options, and the words before it.
+/// * a program's `via`, `unread`, `nested` and `tasks`, and the call's
+///   `task-programs` (step 14) and `step-programs` (step 21).
+/// * the call's `lap-held` (CLOUD-2832), from [`lap_held_schema`].
+fn extend_call_schema(document: &mut serde_json::Value) {
+    let forge = serde_json::json!({
+        "type": ["object", "null"],
+        "additionalProperties": false,
+        "properties": {
+            "event": {"type": ["string", "null"]},
+            "action": {"type": ["string", "null"]},
+            "repo": {"type": ["string", "null"]},
+            "number": {"type": ["integer", "null"]},
+            "sha": {"type": ["string", "null"]},
+            "ref": {"type": ["string", "null"]},
+            "key": {"type": ["string", "null"]},
+        },
+    });
+    if let Some(call) = document
+        .pointer_mut("/properties/call/properties")
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        call.insert("forge".to_owned(), forge);
+        call.insert("lap-held".to_owned(), lap_held_schema());
+        // CLOUD-2709: the kind of machine, as the environment declared it —
+        // `disposable` where `BATTEN_ENVIRONMENT` says so, `machine` otherwise.
+        call.insert(
+            "host".to_owned(),
+            serde_json::json!({"type": "string", "enum": ["disposable", "machine"]}),
+        );
+        // CLOUD-2672: where the call stands, what it reaches, and its home.
+        call.insert(
+            "cwd".to_owned(),
+            serde_json::json!({"type": ["string", "null"]}),
+        );
+        call.insert(
+            "roots".to_owned(),
+            serde_json::json!({"type": ["array", "null"], "items": {"type": "string"}}),
+        );
+        call.insert(
+            "home".to_owned(),
+            serde_json::json!({"type": ["string", "null"]}),
+        );
+    }
+    if let Some(segment) = document
+        .pointer_mut("/properties/call/properties/segments/items/properties")
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        segment.insert(
+            "redirects".to_owned(),
+            serde_json::json!({"type": "array", "items": {"type": "string"}}),
+        );
+    }
+    if let Some(program) = document
+        .pointer_mut("/properties/call/properties/programs/items/properties")
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        program.insert(
+            "subcommand".to_owned(),
+            serde_json::json!({"type": ["string", "null"]}),
+        );
+        program.insert(
+            "global-options".to_owned(),
+            serde_json::json!({"type": ["array", "null"], "items": {"type": "string"}}),
+        );
+        // Step 14: how the entry was reached, whether its text parsed, the
+        // verb after the subcommand, and the tasks a `mise` starts.
+        program.insert(
+            "via".to_owned(),
+            serde_json::json!({"type": ["string", "null"], "enum": [null, "script", "cargo run", "step run", "ci step", "exec", "task"]}),
+        );
+        program.insert("unread".to_owned(), serde_json::json!({"type": "boolean"}));
+        program.insert(
+            "receipted".to_owned(),
+            serde_json::json!({"type": "boolean"}),
+        );
+        program.insert(
+            "nested".to_owned(),
+            serde_json::json!({"type": ["string", "null"]}),
+        );
+        program.insert(
+            "tasks".to_owned(),
+            serde_json::json!({"type": ["array", "null"], "items": {"type": "string"}}),
+        );
+        opaque_reach_keys(program);
+    }
+    // Step 14: every program the call's tasks reach, each a `programs` entry
+    // carrying the `task` whose body ran it; `null` where the task receipt
+    // could not be read.
+    let entry = document
+        .pointer("/properties/call/properties/programs/items")
+        .cloned();
+    if let (Some(mut entry), Some(call)) = (
+        entry,
+        document
+            .pointer_mut("/properties/call/properties")
+            .and_then(serde_json::Value::as_object_mut),
+    ) {
+        if let Some(properties) = entry
+            .get_mut("properties")
+            .and_then(serde_json::Value::as_object_mut)
+        {
+            properties.insert("task".to_owned(), serde_json::json!({"type": "string"}));
+        }
+        call.insert(
+            "task-programs".to_owned(),
+            serde_json::json!({"type": ["array", "null"], "items": entry.clone()}),
+        );
+        call.insert(
+            "step-programs".to_owned(),
+            serde_json::json!({"type": ["array", "null"], "items": entry}),
+        );
+    }
 }
 
 /// A reference expression as a dotted path: `batten.trunk_based`, `violation`.
@@ -4018,21 +5544,48 @@ fn reference_path(expr: &serde_json::Value) -> Option<String> {
 /// bracket index (`input.tree.documents["x"]`) simply stops the chain, which is
 /// what the caller wants: the KEY is the first segment and the rest is the
 /// module's business.
+///
+/// **The longest resolvable reference only** (step 13a): the head of a chain
+/// is not recorded beside it, so `input.tree.documents` yields `tree.documents`
+/// and never also `tree`. A chain whose outer link does not resolve — a
+/// variable index, `input.tree[k]` — records its longest resolvable head,
+/// `tree`. A bare `input` that is not the head of a chain (`x := input`) is
+/// recorded as the empty path, so a reader asking "which keys" can tell an
+/// unknowable read from none.
 fn collect_input_paths(value: &serde_json::Value, found: &mut Vec<String>) {
+    collect_input_paths_at(value, found, false);
+}
+
+/// [`collect_input_paths`], told whether `value` is the `refr` of a chain whose
+/// outer link already resolved — in which case `value` is a head, not a read.
+fn collect_input_paths_at(value: &serde_json::Value, found: &mut Vec<String>, head: bool) {
     match value {
         serde_json::Value::Object(object) => {
-            if let Some(path) = reference_path(value)
-                && let Some(rest) = path.strip_prefix("input.")
-            {
-                found.push(rest.to_owned());
+            let resolved = reference_path(value);
+            if !head && let Some(path) = resolved.as_deref() {
+                if path == "input" {
+                    found.push(String::new());
+                } else if let Some(rest) = path.strip_prefix("input.") {
+                    found.push(rest.to_owned());
+                }
             }
-            for child in object.values() {
-                collect_input_paths(child, found);
+            // A link that resolved makes its `refr` a head; one that did not
+            // (a variable index) leaves the `refr` as the longest read.
+            let chained = resolved.is_some() || head;
+            for (name, child) in object {
+                match name.as_str() {
+                    "RefDot" | "RefBrack" => {
+                        for (field, inner) in child.as_object().into_iter().flatten() {
+                            collect_input_paths_at(inner, found, field == "refr" && chained);
+                        }
+                    }
+                    _ => collect_input_paths_at(child, found, false),
+                }
             }
         }
         serde_json::Value::Array(items) => {
             for item in items {
-                collect_input_paths(item, found);
+                collect_input_paths_at(item, found, false);
             }
         }
         _ => {}
@@ -4351,6 +5904,1005 @@ impl Suite {
     }
 }
 
+// ─── The suite on bytecode (#1276) ───────────────────────────────────────────
+
+/// The `data` key a desugared `with` reads its rules' values from.
+const WITH_DATA: &str = "__batten_with";
+
+/// One case's place in its bundle's suite program (#1276).
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+struct PlannedTest {
+    /// The module the case is written in.
+    module: String,
+    /// The case's own name.
+    name: String,
+    /// The program entry point deciding it, or why the program cannot.
+    decided_by: std::result::Result<String, String>,
+    /// Every `with` statement's context, in the order the case writes them.
+    contexts: Vec<PlannedContext>,
+}
+
+/// One desugared `with` statement: its context, and what it reads under it.
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+struct PlannedContext {
+    /// The key its values sit under in `data.__batten_with`.
+    key: String,
+    /// The entry point evaluating its `input` term, where it has one.
+    input: Option<String>,
+    /// Each `data.batten.patterns` override: the key under the table (`None`
+    /// for the whole table) and the entry point evaluating its term.
+    patterns: Vec<(Option<String>, String)>,
+    /// Each rule the statement reads under the context: name and entry point.
+    rules: Vec<(String, String)>,
+}
+
+/// A bundle's `test_` rules, desugared and compiled to bytecode (#1276).
+///
+/// # Why a desugaring at all
+///
+/// regorus 0.15's bytecode compiler refuses `with`, and nearly every case
+/// writes one: `some v in violation with input as {…}`. So `policy test` ran
+/// every case on the tree-walking interpreter, every lap. A `with` is undone
+/// here in three steps, each on bytecode:
+///
+/// 1. each `with` term is its own rule, evaluated in the case's own context;
+/// 2. each rule the statement reads is evaluated again with the VM's `input`
+///    (and pattern table) set to those values — the context the `with` names;
+/// 3. the statement reads those values from `data.__batten_with` instead, so
+///    the case itself runs with no `with` left in it.
+///
+/// A case the steps cannot express — a `with` inside a nested query, a helper
+/// that writes its own `with`, a function reading the input under one — keeps
+/// the interpreter and says so ([`Fallback::TestWith`]), counted on `-vv`.
+struct SuiteProgram {
+    program: std::sync::Arc<regorus::rvm::program::Program>,
+    /// The bundle's `data` document, the pattern table.
+    data: regorus::Value,
+    tests: Vec<PlannedTest>,
+    /// Read from the `.rvm` entry rather than compiled by this process.
+    cached: bool,
+}
+
+/// What a module's rules are, by name, for the desugaring: whether the name
+/// is a function, whether it (transitively) writes a `with`, and whether it
+/// (transitively) reads `input` or `data`.
+#[derive(Default)]
+struct RuleFacts {
+    function: bool,
+    with: bool,
+    reads: bool,
+    refs: BTreeSet<String>,
+}
+
+/// `text[start..end]` for an AST span, widened over a string literal's
+/// delimiters, which regorus's span of a string excludes (`guarded_sources`).
+fn spanned(text: &str, start: usize, end: usize) -> Option<&str> {
+    let quote = |at: usize| matches!(text.as_bytes().get(at), Some(b'"' | b'`'));
+    let start = if start > 0 && quote(start - 1) {
+        start - 1
+    } else {
+        start
+    };
+    let end = if quote(end) { end + 1 } else { end };
+    text.get(start..end)
+}
+
+/// A node's own `span`, as byte offsets.
+fn span_of(node: &serde_json::Value) -> Option<(usize, usize)> {
+    let span = node.get("span")?;
+    Some((
+        usize::try_from(span.get("start")?.as_u64()?).ok()?,
+        usize::try_from(span.get("end")?.as_u64()?).ok()?,
+    ))
+}
+
+/// Whether `key` appears anywhere under `node`.
+fn holds_key(node: &serde_json::Value, key: &str) -> bool {
+    match node {
+        serde_json::Value::Object(map) => {
+            map.contains_key(key) || map.values().any(|value| holds_key(value, key))
+        }
+        serde_json::Value::Array(items) => items.iter().any(|item| holds_key(item, key)),
+        _ => false,
+    }
+}
+
+/// Every variable `node` references: its name, its span, and whether it is a
+/// called function's name. A dotted callee (`regex.match`) names no rule and
+/// is skipped.
+fn referenced_vars(node: &serde_json::Value, found: &mut Vec<(String, usize, usize, bool)>) {
+    match node {
+        serde_json::Value::Object(map) => {
+            if let Some(var) = map.get("Var") {
+                if let (Some(name), Some((start, end))) = (
+                    var.get("value").and_then(serde_json::Value::as_str),
+                    span_of(var),
+                ) {
+                    found.push((name.to_owned(), start, end, false));
+                }
+                return;
+            }
+            if let Some(call) = map.get("Call") {
+                if let Some(var) = call.get("fcn").and_then(|fcn| fcn.get("Var"))
+                    && let (Some(name), Some((start, end))) = (
+                        var.get("value").and_then(serde_json::Value::as_str),
+                        span_of(var),
+                    )
+                {
+                    found.push((name.to_owned(), start, end, true));
+                }
+                if let Some(params) = call.get("params") {
+                    referenced_vars(params, found);
+                }
+                return;
+            }
+            for value in map.values() {
+                referenced_vars(value, found);
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for item in items {
+                referenced_vars(item, found);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// The variables a case body binds at its top level: `some` declarations, a
+/// `some … in`'s key and value, and the left side of `:=` or either side of
+/// `=` — never a rule's name, which `=` only reads.
+fn case_locals(
+    stmts: &[serde_json::Value],
+    text: &str,
+    facts: &BTreeMap<String, RuleFacts>,
+) -> BTreeSet<String> {
+    let mut locals = BTreeSet::new();
+    for stmt in stmts {
+        let Some(literal) = stmt.get("literal") else {
+            continue;
+        };
+        if let Some(some) = literal.get("SomeVars") {
+            for var in some
+                .get("vars")
+                .and_then(serde_json::Value::as_array)
+                .into_iter()
+                .flatten()
+            {
+                if let Some(name) = span_of(&serde_json::json!({ "span": var }))
+                    .and_then(|(start, end)| text.get(start..end))
+                {
+                    locals.insert(name.to_owned());
+                }
+            }
+        }
+        if let Some(some) = literal.get("SomeIn") {
+            for side in ["key", "value"] {
+                if let Some(node) = some.get(side) {
+                    bound_vars(node, &mut locals);
+                }
+            }
+        }
+        if let Some(assign) = literal
+            .get("Expr")
+            .and_then(|expr| expr.get("expr"))
+            .and_then(|expr| expr.get("AssignExpr"))
+        {
+            let mut bound = BTreeSet::new();
+            if let Some(lhs) = assign.get("lhs") {
+                bound_vars(lhs, &mut bound);
+            }
+            if assign.get("op").and_then(serde_json::Value::as_str) == Some("Eq")
+                && let Some(rhs) = assign.get("rhs")
+            {
+                bound_vars(rhs, &mut bound);
+            }
+            locals.extend(bound.into_iter().filter(|name| !facts.contains_key(name)));
+        }
+    }
+    locals.remove("_");
+    locals
+}
+
+/// The variable a reference chain starts from: `a` for `a`, `a.b` and `a[k]`.
+fn base_var(expr: &serde_json::Value) -> Option<String> {
+    if let Some(var) = expr.get("Var") {
+        return Some(var.get("value")?.as_str()?.to_owned());
+    }
+    ["RefDot", "RefBrack"]
+        .iter()
+        .find_map(|link| base_var(expr.get(link)?.get("refr")?))
+}
+
+/// Every package's rules, by name, with what [`RuleFacts`] records, closed
+/// over references.
+fn package_facts(policies: &[serde_json::Value]) -> BTreeMap<String, BTreeMap<String, RuleFacts>> {
+    let mut packages: BTreeMap<String, BTreeMap<String, RuleFacts>> = BTreeMap::new();
+    for policy in policies {
+        let Some(ast) = policy.get("ast") else {
+            continue;
+        };
+        let Some(package) = ast
+            .get("package")
+            .and_then(|package| package.get("refr"))
+            .and_then(reference_path)
+        else {
+            continue;
+        };
+        let facts = packages.entry(package).or_default();
+        for rule in ast
+            .get("rules")
+            .and_then(serde_json::Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            // THE BASE VARIABLE, which is what a reference names: `latest[id] :=`
+            // is the rule `latest`, and `head_of` answers nothing for a head
+            // indexed by a variable, which left such a rule unread under `with`.
+            let (name, function) = if let Some(spec) = rule.get("Spec") {
+                let head = spec.get("head");
+                let Some(name) = head.and_then(|head| {
+                    ["Compr", "Set", "Func"]
+                        .iter()
+                        .find_map(|shape| base_var(head.get(shape)?.get("refr")?))
+                }) else {
+                    continue;
+                };
+                (name, head.is_some_and(|head| head.get("Func").is_some()))
+            } else if let Some(name) = rule
+                .get("Default")
+                .and_then(|default| default.get("refr"))
+                .and_then(base_var)
+            {
+                (name, false)
+            } else {
+                continue;
+            };
+            let mut vars = Vec::new();
+            referenced_vars(rule, &mut vars);
+            let entry = facts.entry(name).or_default();
+            entry.function |= function;
+            entry.with |= holds_key(rule, "with_mods");
+            entry.reads |= vars.iter().any(|(var, ..)| var == "input" || var == "data");
+            entry.refs.extend(vars.into_iter().map(|(var, ..)| var));
+        }
+    }
+    for facts in packages.values_mut() {
+        // BOUNDED BY THE RULE COUNT (CLOUD-2789): each pass reads the sets as
+        // the previous one left them, so it carries a flag one reference
+        // further, and no chain of distinct rules is longer than the rules.
+        // `len + 1` passes reach the fixed point and see it hold; a change that
+        // stops a pass from converging ends with a wrong answer a case can
+        // see, rather than spinning until the suite's timeout.
+        for _ in 0..=facts.len() {
+            let reads: BTreeSet<String> = facts
+                .iter()
+                .filter(|(_, fact)| fact.reads)
+                .map(|(name, _)| name.clone())
+                .collect();
+            let with: BTreeSet<String> = facts
+                .iter()
+                .filter(|(_, fact)| fact.with)
+                .map(|(name, _)| name.clone())
+                .collect();
+            let mut changed = false;
+            for (name, fact) in facts.iter_mut() {
+                let reaches =
+                    |set: &BTreeSet<String>| fact.refs.iter().any(|r| r != name && set.contains(r));
+                if !fact.reads && reaches(&reads) {
+                    fact.reads = true;
+                    changed = true;
+                }
+                if !fact.with && reaches(&with) {
+                    fact.with = true;
+                    changed = true;
+                }
+            }
+            if !changed {
+                break;
+            }
+        }
+    }
+    packages
+}
+
+/// What one case's statement walk reads throughout: its module's text and
+/// package, the package's rule facts, and the variables the case binds.
+struct CaseText<'a> {
+    text: &'a str,
+    package: &'a str,
+    facts: &'a BTreeMap<String, RuleFacts>,
+    locals: &'a BTreeSet<String>,
+}
+
+/// A variable a statement references: name, span, and whether it is called.
+type ReferencedVar = (String, usize, usize, bool);
+
+/// One case desugared: the rules it becomes, and its contexts — or why it
+/// cannot be ([`SuiteProgram`]).
+fn plan_case(
+    at: usize,
+    spec: &serde_json::Value,
+    text: &str,
+    (package, facts): (&str, &BTreeMap<String, RuleFacts>),
+) -> std::result::Result<(String, Vec<PlannedContext>), String> {
+    let (name, stmts) = case_statements(spec)?;
+    let locals = case_locals(stmts, text, facts);
+    let case = CaseText {
+        text,
+        package,
+        facts,
+        locals: &locals,
+    };
+    let mut lines: Vec<String> = Vec::new();
+    let mut contexts = Vec::new();
+    let mut prelude = String::new();
+    let mut plain = true;
+    for (index, stmt) in stmts.iter().enumerate() {
+        let literal = stmt.get("literal").ok_or("no literal")?;
+        if holds_key(literal, "with_mods") {
+            return Err(String::from("a `with` inside a nested query"));
+        }
+        let mut vars = Vec::new();
+        referenced_vars(literal, &mut vars);
+        if vars
+            .iter()
+            .any(|(var, ..)| !locals.contains(var) && facts.get(var).is_some_and(|fact| fact.with))
+        {
+            return Err(String::from("a helper that writes its own `with`"));
+        }
+        let (start, end) = span_of(stmt).ok_or("no span")?;
+        let mods = stmt
+            .get("with_mods")
+            .and_then(serde_json::Value::as_array)
+            .filter(|mods| !mods.is_empty());
+        let Some(mods) = mods else {
+            lines.push(
+                spanned(text, start, end)
+                    .ok_or("a span off its text")?
+                    .to_owned(),
+            );
+            continue;
+        };
+        let plain_before = plain;
+        plain = false;
+        let key = format!("c{at}_{index}");
+        let (statement, read) = redirected_statement(&case, start, mods, &vars, &key)?;
+        lines.push(statement);
+        let mut context = PlannedContext {
+            key,
+            input: None,
+            patterns: Vec::new(),
+            rules: read
+                .into_iter()
+                .map(|rule| {
+                    let entry = format!("data.{package}.{rule}");
+                    (rule, entry)
+                })
+                .collect(),
+        };
+        let hoist = plain_before.then(|| &lines[..index]);
+        with_terms(&case, mods, (at, index), hoist, &mut context, &mut prelude)?;
+        contexts.push(context);
+    }
+    Ok((
+        format!("\n{name} if {{\n\t{}\n}}\n{prelude}", lines.join("\n\t")),
+        contexts,
+    ))
+}
+
+/// A case's name and its one body's statements, or why it cannot be
+/// desugared: a case taking arguments or assigning a value, or one with an
+/// `else` or a second body.
+fn case_statements(
+    spec: &serde_json::Value,
+) -> std::result::Result<(String, &Vec<serde_json::Value>), String> {
+    let head = spec.get("head").ok_or("no head")?;
+    let (name, _) = head_of(head).ok_or("no head")?;
+    if head.get("Func").is_some() {
+        return Err(String::from("a case taking arguments"));
+    }
+    if head
+        .get("Compr")
+        .and_then(|compr| compr.get("assign"))
+        .is_some_and(|assign| !assign.is_null())
+    {
+        return Err(String::from("a case assigning a value"));
+    }
+    let bodies = spec
+        .get("bodies")
+        .and_then(serde_json::Value::as_array)
+        .ok_or("no body")?;
+    let [body] = bodies.as_slice() else {
+        return Err(String::from("an `else` or a second body"));
+    };
+    let stmts = body
+        .get("query")
+        .and_then(|query| query.get("stmts"))
+        .and_then(serde_json::Value::as_array)
+        .ok_or("no statements")?;
+    Ok((name, stmts))
+}
+
+/// A `with` statement's text up to its first modifier, each rule it reads
+/// redirected to the value its context computes under `data.__batten_with`
+/// at `key`, and the rules so read. A read of `input` or `data`, or a function
+/// reading the input, under `with` is refused.
+fn redirected_statement(
+    case: &CaseText<'_>,
+    start: usize,
+    mods: &[serde_json::Value],
+    vars: &[ReferencedVar],
+    key: &str,
+) -> std::result::Result<(String, BTreeSet<String>), String> {
+    let text = case.text;
+    let (cut, _) = span_of(&mods[0]).ok_or("no span")?;
+    let from = if start > 0 && matches!(text.as_bytes().get(start - 1), Some(b'"' | b'`')) {
+        start - 1
+    } else {
+        start
+    };
+    let mut statement = text
+        .get(from..cut)
+        .ok_or("a span off its text")?
+        .trim_end()
+        .to_owned();
+    let mut edits = Vec::new();
+    let mut read = BTreeSet::new();
+    for (var, var_start, var_end, called) in vars {
+        if case.locals.contains(var) {
+            continue;
+        }
+        if var == "input" || var == "data" {
+            return Err(String::from("a read of `input` or `data` under `with`"));
+        }
+        let Some(fact) = case.facts.get(var) else {
+            continue;
+        };
+        if !fact.reads {
+            continue;
+        }
+        if *called || fact.function {
+            return Err(String::from("a function reading the input under `with`"));
+        }
+        edits.push((
+            var_start - from,
+            var_end - from,
+            format!("data.{WITH_DATA}[\"{key}\"][\"{var}\"]"),
+        ));
+        read.insert(var.clone());
+    }
+    edits.sort_by_key(|(at, ..)| std::cmp::Reverse(*at));
+    for (edit_start, edit_end, replacement) in edits {
+        if edit_end > statement.len()
+            || !statement.is_char_boundary(edit_start)
+            || !statement.is_char_boundary(edit_end)
+        {
+            return Err(String::from("a span off its text"));
+        }
+        statement.replace_range(edit_start..edit_end, &replacement);
+    }
+    Ok((statement, read))
+}
+
+/// Each `with` term of statement `index` of case `at`, as a rule in `prelude`
+/// its `context` names: `input` and the pattern table are the targets a term
+/// may replace. `hoist` is the statements before this one where none of them
+/// bound under `with`, which a term reading a case variable is evaluated
+/// under; `None` refuses such a term.
+fn with_terms(
+    case: &CaseText<'_>,
+    mods: &[serde_json::Value],
+    (at, index): (usize, usize),
+    hoist: Option<&[String]>,
+    context: &mut PlannedContext,
+    prelude: &mut String,
+) -> std::result::Result<(), String> {
+    for (term_at, modifier) in mods.iter().enumerate() {
+        let target = modifier
+            .get("refr")
+            .and_then(reference_path)
+            .ok_or("a `with` on a computed path")?;
+        let term = modifier.get("as").ok_or("no term")?;
+        let (term_start, term_end) = term
+            .as_object()
+            .and_then(|object| object.values().next())
+            .and_then(span_of)
+            .ok_or("no span")?;
+        let term_text = spanned(case.text, term_start, term_end).ok_or("a span off its text")?;
+        let mut term_vars = Vec::new();
+        referenced_vars(term, &mut term_vars);
+        let hoisted = term_vars
+            .iter()
+            .any(|(var, _, _, called)| !called && case.locals.contains(var));
+        let rule = format!("__batten_in_{at}_{index}_{term_at}");
+        let body = if hoisted {
+            let Some(before) = hoist else {
+                return Err(String::from(
+                    "a `with` term reading a variable bound under `with`",
+                ));
+            };
+            format!(" if {{\n\t{}\n}}", before.join("\n\t"))
+        } else {
+            String::new()
+        };
+        for piece in ["\n", rule.as_str(), " := ", term_text, body.as_str(), "\n"] {
+            prelude.push_str(piece);
+        }
+        let entry = format!("data.{}.{rule}", case.package);
+        match target.as_str() {
+            "input" if context.input.is_none() => context.input = Some(entry),
+            "data.batten.patterns" => context.patterns.push((None, entry)),
+            other => match other.strip_prefix("data.batten.patterns.") {
+                Some(key) if !key.contains('.') => {
+                    context.patterns.push((Some(key.to_owned()), entry));
+                }
+                _ => return Err(format!("a `with` on `{other}`")),
+            },
+        }
+    }
+    Ok(())
+}
+
+/// The desugared sources, `(path, text)`, and each case's plan.
+type Planned = (Vec<(String, String)>, Vec<PlannedTest>);
+
+/// Every module's text with its cases desugared, and each case's plan
+/// ([`SuiteProgram`]). `None` where the AST will not serialise.
+fn plan_suite(ast: &Ast) -> Option<Planned> {
+    let policies = &ast.0;
+    let packages = package_facts(policies);
+    // A case NAME DEFINED TWICE in a package is one rule with two bodies,
+    // which a desugared single body cannot stand for.
+    let mut seen: BTreeMap<(String, String), usize> = BTreeMap::new();
+    for policy in policies {
+        let package = reference_path(policy.get("ast")?.get("package")?.get("refr")?)?;
+        for rule in policy.get("ast")?.get("rules")?.as_array()? {
+            if let Some((name, _)) = rule
+                .get("Spec")
+                .and_then(|spec| spec.get("head"))
+                .and_then(head_of)
+                .filter(|(name, _)| name.starts_with(TEST_PREFIX))
+            {
+                *seen.entry((package.clone(), name)).or_insert(0) += 1;
+            }
+        }
+    }
+    let mut sources = Vec::new();
+    let mut tests = Vec::new();
+    for policy in policies {
+        let source = policy.get("source")?;
+        let path = source.get("file")?.as_str()?.to_owned();
+        let text = source.get("contents")?.as_str()?;
+        let ast = policy.get("ast")?;
+        let package = reference_path(ast.get("package")?.get("refr")?)?;
+        let empty = BTreeMap::new();
+        let facts = packages.get(&package).unwrap_or(&empty);
+        let mut generated = String::new();
+        for rule in ast.get("rules")?.as_array()? {
+            let Some(spec) = rule.get("Spec") else {
+                continue;
+            };
+            let Some((name, _)) = spec
+                .get("head")
+                .and_then(head_of)
+                .filter(|(name, _)| name.starts_with(TEST_PREFIX))
+            else {
+                continue;
+            };
+            let planned = if seen.get(&(package.clone(), name.clone())) == Some(&1) {
+                plan_case(tests.len(), spec, text, (&package, facts))
+            } else {
+                Err(String::from("a case defined more than once"))
+            };
+            let (decided_by, contexts) = match planned {
+                Ok((rules, contexts)) => {
+                    generated.push_str(&rules);
+                    (Ok(format!("data.{package}.{name}")), contexts)
+                }
+                Err(why) => (Err(why), Vec::new()),
+            };
+            tests.push(PlannedTest {
+                module: path.clone(),
+                name,
+                decided_by,
+                contexts,
+            });
+        }
+        sources.push((path, format!("{}{generated}", without_test_rules(text))));
+    }
+    Some((sources, tests))
+}
+
+/// The key a bundle's suite program is cached under: its modules as written
+/// and its `data` document, which is everything [`plan_suite`] reads.
+fn suite_key(id: &str, engine: &regorus::Engine) -> Option<String> {
+    let sources: Vec<(String, String)> = engine
+        .get_policies()
+        .ok()?
+        .iter()
+        .map(|source| (source.file().clone(), source.contents().clone()))
+        .collect();
+    let data = engine.get_data().to_json_str().ok()?;
+    Some(cache_key(
+        &format!("{id}\0suite"),
+        &sources,
+        blake3::hash(data.as_bytes()).as_bytes(),
+    ))
+}
+
+/// What one desugared `with` statement reads under its context.
+enum Reading {
+    /// The values of the rules it reads, by name.
+    Values(regorus::Value),
+    /// A `with` term that is undefined, which leaves the statement undefined.
+    Undefined,
+}
+
+impl SuiteProgram {
+    /// `id`'s suite program: the cached entry under `root` where it holds one,
+    /// else compiled from `engine` and written for the next run. `Err` is why
+    /// no case can decide on bytecode.
+    fn load(
+        id: &str,
+        (engine, ast): (&regorus::Engine, Option<&Ast>),
+        root: Option<&Path>,
+    ) -> std::result::Result<Self, (Fallback, String)> {
+        let key = suite_key(id, engine);
+        let path = root.and_then(|root| cache_path(root, &format!("{id}\0suite")));
+        if let (Some(path), Some(key)) = (path.as_deref(), key.as_deref())
+            && let Some(program) = Self::read(path, key, engine)
+        {
+            return Ok(program);
+        }
+        let program = Self::compile_with(engine, ast)?;
+        if let (Some(path), Some(key)) = (path.as_deref(), key.as_deref()) {
+            program.write(path, key);
+        }
+        Ok(program)
+    }
+
+    fn read(path: &Path, key: &str, engine: &regorus::Engine) -> Option<Self> {
+        let bytes = crate::cache::read(path, key)?;
+        let split = bytes.iter().position(|byte| *byte == b'\n')?;
+        let (head, body) = bytes.split_at(split);
+        let tests: Vec<PlannedTest> = serde_json::from_slice(head).ok()?;
+        let regorus::rvm::program::DeserializationResult::Complete(program) =
+            regorus::rvm::program::Program::deserialize_binary(body.get(1..)?).ok()?
+        else {
+            return None;
+        };
+        Some(Self {
+            program: std::sync::Arc::new(program),
+            data: engine.get_data(),
+            tests,
+            cached: true,
+        })
+    }
+
+    fn write(&self, path: &Path, key: &str) {
+        let (Ok(mut bytes), Ok(program)) = (
+            serde_json::to_vec(&self.tests),
+            self.program.serialize_binary(),
+        ) else {
+            return;
+        };
+        bytes.push(b'\n');
+        bytes.extend_from_slice(&program);
+        crate::cache::write(path, key, &bytes);
+    }
+
+    /// Desugar and compile, with batten's refusals of regorus's known
+    /// miscompiles and the `:=` guard, exactly as a verdict program
+    /// ([`Compiled::compile_unchecked`]).
+    fn compile(engine: &regorus::Engine) -> std::result::Result<Self, (Fallback, String)> {
+        Self::compile_with(engine, Ast::of(engine).as_ref())
+    }
+
+    /// [`Self::compile`] over `engine`'s [`Ast`] already in hand, or `None`
+    /// where it would not serialise.
+    fn compile_with(
+        engine: &regorus::Engine,
+        ast: Option<&Ast>,
+    ) -> std::result::Result<Self, (Fallback, String)> {
+        use regorus::languages::rego::compiler::Compiler;
+        let refused = |err: &dyn std::fmt::Debug| (Fallback::CompileRefused, format!("{err:?}"));
+        let unserialisable = || {
+            (
+                Fallback::GuardUnavailable,
+                String::from("the AST would not serialise, or an offset is not a boundary"),
+            )
+        };
+        let (sources, tests) = ast.and_then(plan_suite).ok_or_else(unserialisable)?;
+        let data = engine.get_data();
+        let mut desugared = new_engine();
+        desugared.add_data(data.clone()).map_err(|e| refused(&e))?;
+        for (path, text) in &sources {
+            desugared
+                .add_policy(path.clone(), text.clone())
+                .map_err(|e| (Fallback::GuardedSourceRefused, format!("{path}: {e}")))?;
+        }
+        // ONE RENDER OF THE DESUGARED AST for the refusals and the guard
+        // (CLOUD-2830).
+        let ast = Ast::of(&desugared).ok_or_else(unserialisable)?;
+        if let Some(at) = unguardable_assignment(&ast) {
+            return Err((Fallback::GuardUnavailable, at));
+        }
+        if let Some(at) = keyed_partial_set(&ast) {
+            return Err((Fallback::KeyedPartialSet, at));
+        }
+        if let Some(at) = rule_else(&ast) {
+            return Err((Fallback::RuleElse, at));
+        }
+        let guarded = guarded_sources_of(&ast).ok_or_else(unserialisable)?;
+        let mut compiling = new_engine();
+        compiling.add_data(data.clone()).map_err(|e| refused(&e))?;
+        for (path, text) in guarded {
+            compiling
+                .add_policy(path.clone(), text)
+                .map_err(|e| (Fallback::GuardedSourceRefused, format!("{path}: {e}")))?;
+        }
+        let mut entries = BTreeSet::new();
+        for test in &tests {
+            if let Ok(entry) = &test.decided_by {
+                entries.insert(entry.clone());
+            }
+            for context in &test.contexts {
+                entries.extend(context.input.iter().cloned());
+                entries.extend(context.patterns.iter().map(|(_, entry)| entry.clone()));
+                entries.extend(context.rules.iter().map(|(_, entry)| entry.clone()));
+            }
+        }
+        let first = entries.iter().next().ok_or_else(|| {
+            (
+                Fallback::TestWith,
+                String::from("no case the suite program can express"),
+            )
+        })?;
+        let policy = compiling
+            .compile_with_entrypoint(&first.as_str().into())
+            .map_err(|e| refused(&e))?;
+        let rules = policy.get_rules();
+        let names: Vec<&str> = entries
+            .iter()
+            .filter(|entry| rules.contains_key(entry.as_str()))
+            .map(String::as_str)
+            .collect();
+        let program = Compiler::compile_from_policy(&policy, &names).map_err(|e| refused(&e))?;
+        Ok(Self {
+            program,
+            data,
+            tests,
+            cached: false,
+        })
+    }
+
+    /// A VM over this program, `data` and `input`: one evaluation.
+    fn vm(&self, input: &regorus::Value, data: regorus::Value) -> Option<regorus::rvm::vm::RegoVM> {
+        BYTECODE_EVALUATIONS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let mut vm = regorus::rvm::vm::RegoVM::new();
+        vm.load_program(self.program.clone());
+        vm.set_strict_builtin_errors(true);
+        vm.set_max_instructions(usize::MAX);
+        vm.set_data(data).ok()?;
+        vm.set_input(input.clone());
+        Some(vm)
+    }
+
+    /// Each case's verdict over `input`, in plan order: `Some(passed)` where the
+    /// program decided it, `None` where it could not and the interpreter must.
+    fn run(&self, input: &regorus::Value) -> Vec<Option<bool>> {
+        let mut outer = None;
+        let mut plain = None;
+        self.tests
+            .iter()
+            .map(|test| {
+                let entry = test.decided_by.as_ref().ok()?;
+                if test.contexts.is_empty() {
+                    if plain.is_none() {
+                        plain = self.vm(input, self.data.clone());
+                    }
+                    let answer = plain.as_mut()?.execute_entry_point_by_name(entry);
+                    if answer.is_err() {
+                        // A faulted VM is never asked again.
+                        plain = None;
+                    }
+                    return Some(matches!(answer, Ok(regorus::Value::Bool(true))));
+                }
+                let mut with = regorus::Value::new_object();
+                for context in &test.contexts {
+                    let Reading::Values(values) = self.context(context, input, &mut outer)? else {
+                        // A `with` term that is undefined: the statement is.
+                        return Some(false);
+                    };
+                    with.as_object_mut()
+                        .ok()?
+                        .insert(regorus::Value::from(context.key.as_str()), values);
+                }
+                let mut data = self.data.clone();
+                data.as_object_mut()
+                    .ok()?
+                    .insert(regorus::Value::from(WITH_DATA), with);
+                let mut vm = self.vm(input, data)?;
+                Some(matches!(
+                    vm.execute_entry_point_by_name(entry),
+                    Ok(regorus::Value::Bool(true))
+                ))
+            })
+            .collect()
+    }
+
+    /// The values of the rules `context`'s statement reads, under the input and
+    /// pattern table its `with` names. `None` is could-not-decide (a term or a
+    /// rule faulted).
+    fn context(
+        &self,
+        context: &PlannedContext,
+        input: &regorus::Value,
+        outer: &mut Option<regorus::rvm::vm::RegoVM>,
+    ) -> Option<Reading> {
+        let mut term = |entry: &str| -> Option<regorus::Value> {
+            if outer.is_none() {
+                *outer = self.vm(input, self.data.clone());
+            }
+            let value = outer.as_mut()?.execute_entry_point_by_name(entry);
+            if value.is_err() {
+                // A faulted VM is never asked again (`Compiled::evaluate_all`).
+                *outer = None;
+            }
+            value.ok()
+        };
+        let mut data = self.data.clone();
+        for (key, entry) in &context.patterns {
+            let value = term(entry)?;
+            if value == regorus::Value::Undefined {
+                return Some(Reading::Undefined);
+            }
+            let batten = data
+                .as_object_mut()
+                .ok()?
+                .get_mut(&regorus::Value::from("batten"))?;
+            let table = batten.as_object_mut().ok()?;
+            match key {
+                None => {
+                    table.insert(regorus::Value::from("patterns"), value);
+                }
+                Some(key) => {
+                    table
+                        .get_mut(&regorus::Value::from("patterns"))?
+                        .as_object_mut()
+                        .ok()?
+                        .insert(regorus::Value::from(key.as_str()), value);
+                }
+            }
+        }
+        let input = match &context.input {
+            Some(entry) => {
+                let value = term(entry)?;
+                if value == regorus::Value::Undefined {
+                    return Some(Reading::Undefined);
+                }
+                value
+            }
+            None => input.clone(),
+        };
+        let mut vm = self.vm(&input, data)?;
+        let mut values = regorus::Value::new_object();
+        for (rule, entry) in &context.rules {
+            let value = vm.execute_entry_point_by_name(entry).ok()?;
+            if value != regorus::Value::Undefined {
+                values
+                    .as_object_mut()
+                    .ok()?
+                    .insert(regorus::Value::from(rule.as_str()), value);
+            }
+        }
+        Some(Reading::Values(values))
+    }
+}
+
+/// Every case of `bundle` whose bytecode verdict differs from the
+/// interpreter's over `input`, or that the suite program cannot decide, as
+/// one line each (#1276). The parity gate for [`SuiteProgram`]'s desugaring.
+#[doc(hidden)]
+#[must_use]
+pub fn suite_splits(bundle: &Bundle, input: &str) -> Vec<String> {
+    let Some(engine) = bundle.evaluator.engine() else {
+        return vec![format!("{}: no interpreter", bundle.id)];
+    };
+    let has_cases = describe(engine).is_some_and(|described| {
+        described.iter().any(|module| {
+            module
+                .rules
+                .iter()
+                .any(|rule| rule.name.starts_with(TEST_PREFIX))
+        })
+    });
+    if !has_cases {
+        return Vec::new();
+    }
+    let program = match SuiteProgram::compile(engine) {
+        Ok(program) => program,
+        Err((why, detail)) => return vec![format!("{}: {}: {detail}", bundle.id, why.as_str())],
+    };
+    let Ok(document) = regorus::Value::from_json_str(input) else {
+        return vec![format!("{}: the input will not parse", bundle.id)];
+    };
+    let mut reference = engine.clone();
+    if reference.set_input_json(input).is_err() {
+        return vec![format!("{}: the input will not parse", bundle.id)];
+    }
+    let packages: BTreeMap<String, String> = describe(engine)
+        .into_iter()
+        .flatten()
+        .map(|described| (described.path, described.package))
+        .collect();
+    let mut splits = Vec::new();
+    for (test, decided) in program.tests.iter().zip(program.run(&document)) {
+        let package = packages.get(&test.module).map_or("", String::as_str);
+        let expected = matches!(
+            reference.eval_rule(format!("data.{package}.{}", test.name)),
+            Ok(regorus::Value::Bool(true))
+        );
+        splits.extend(case_split(&bundle.id, test, decided, expected));
+    }
+    splits
+}
+
+/// One case's [`suite_splits`] line: `None` where the bytecode `decided` the
+/// interpreter's `expected` verdict, else what split them.
+///
+/// Apart from the evaluation so a case can hand it a disagreement: both
+/// engines are given one data and one input, so no fixture makes them differ,
+/// and the line a real miscompile would print is decided here.
+fn case_split(
+    bundle: &str,
+    test: &PlannedTest,
+    decided: Option<bool>,
+    expected: bool,
+) -> Option<String> {
+    let at = format!("{bundle}: {} {}", test.module, test.name);
+    match (decided, &test.decided_by) {
+        (Some(verdict), _) if verdict == expected => None,
+        (Some(verdict), _) => Some(format!("{at}: bytecode {verdict} interpreter {expected}")),
+        (None, Err(why)) => Some(format!("{at}: not on bytecode: {why}")),
+        (None, Ok(_)) => Some(format!("{at}: not on bytecode: a term or a rule faulted")),
+    }
+}
+
+/// How many cases the coverage sweep ran on the interpreter (#1276): a
+/// report, never a verdict, so it is counted apart from [`execution_census`].
+static COVERAGE_CASES: AtomicUsize = AtomicUsize::new(0);
+
+/// How many cases this process's coverage sweeps ran on the interpreter.
+#[must_use]
+pub fn coverage_cases() -> usize {
+    COVERAGE_CASES.load(Ordering::Relaxed)
+}
+
+/// `input` as a document, parsed once per process per distinct text
+/// (CLOUD-2830).
+///
+/// `policy test` hands every bundle the input its row declares, and rows that
+/// declare the same facts are handed the same text. Parsing it into regorus's
+/// value, and dropping that value after each bundle, measured 20% of the run's
+/// samples. A value is shared by reference count, so a clone handed out here is
+/// the same document, never a copy; keyed by the whole text's digest, so two
+/// texts never share one.
+fn parsed_input(input: &str) -> anyhow::Result<regorus::Value> {
+    type Parsed = std::collections::HashMap<[u8; 32], regorus::Value>;
+    thread_local! {
+        static PARSED: std::cell::RefCell<Parsed> = std::cell::RefCell::default();
+    }
+    let key = *blake3::hash(input.as_bytes()).as_bytes();
+    if let Some(found) = PARSED.with(|parsed| parsed.borrow().get(&key).cloned()) {
+        return Ok(found);
+    }
+    let value = regorus::Value::from_json_str(input)?;
+    PARSED.with(|parsed| parsed.borrow_mut().insert(key, value.clone()));
+    Ok(value)
+}
+
 /// Run a bundle's own `test_` rules and report what they left unexercised
 /// (CLOUD-835).
 ///
@@ -4382,11 +6934,57 @@ impl Suite {
 /// A [`UsageError`] (exit `1`) when the input will not parse. A config fault,
 /// kept apart from a test failure because that is CLOUD-202's whole lesson: a
 /// run that could not evaluate must not be reported as one that found nothing.
-pub fn test(bundle: &Bundle, input: &str, mediated: bool) -> Result<Look<Suite>> {
+pub fn test(
+    bundle: &Bundle,
+    input: &str,
+    mediated: bool,
+    cache: Option<&Path>,
+) -> Result<Look<Suite>> {
     let Some(described) = bundle.described() else {
         return Ok(Look::CouldNotLook);
     };
+    let Discovered {
+        cases: discovered,
+        mut untested_modules,
+        bare_only_modules,
+    } = discover(described, mediated);
+    let Some(engine) = bundle.evaluator.engine() else {
+        return Ok(Look::CouldNotLook);
+    };
+    let document = parsed_input(input).map_err(|err| {
+        UsageError::raise(format!(
+            "`{}` was handed an input document that will not parse: {err}",
+            bundle.pointer()
+        ))
+    })?;
+    let (mut passed, mut failed) = verdicts(bundle, engine, &document, &discovered, cache);
+    let Some(unexercised) = unexercised(bundle, engine, &document, &discovered, described) else {
+        return Ok(Look::CouldNotLook);
+    };
+    passed.sort();
+    failed.sort();
+    untested_modules.sort();
+    Ok(Look::Is(Suite {
+        passed,
+        failed,
+        unexercised,
+        untested_modules,
+        bare_only_modules,
+    }))
+}
 
+/// A bundle's cases and the modules that carry none ([`test`]'s discovery).
+struct Discovered {
+    /// Each `test_` rule and its entry point, in module order.
+    cases: Vec<(TestId, String)>,
+    /// The modules declaring no `test_` rule.
+    untested_modules: Vec<String>,
+    /// The mediated modules whose cases never pass a compound command.
+    bare_only_modules: Vec<String>,
+}
+
+/// Every `test_` rule `described` declares, by prefix over the AST.
+fn discover(described: &[Described], mediated: bool) -> Discovered {
     let mut untested_modules = Vec::new();
     let mut bare_only_modules = Vec::new();
     let mut discovered = Vec::new();
@@ -4420,53 +7018,163 @@ pub fn test(bundle: &Bundle, input: &str, mediated: bool) -> Result<Look<Suite>>
             bare_only_modules.push(module.path.clone());
         }
     }
+    Discovered {
+        cases: discovered,
+        untested_modules,
+        bare_only_modules,
+    }
+}
 
-    let Some(engine) = bundle.evaluator.engine() else {
-        return Ok(Look::CouldNotLook);
-    };
-    let mut engine = engine.clone();
-    engine.set_enable_coverage(true);
-    engine.set_input_json(input).map_err(|err| {
-        UsageError::raise(format!(
-            "`{}` was handed an input document that will not parse: {err}",
-            bundle.pointer()
-        ))
-    })?;
-
+/// Each case's verdict over `document`: the cases that passed, then those
+/// that failed, in discovery order.
+fn verdicts(
+    bundle: &Bundle,
+    engine: &regorus::Engine,
+    document: &regorus::Value,
+    discovered: &[(TestId, String)],
+    cache: Option<&Path>,
+) -> (Vec<TestId>, Vec<TestId>) {
     // A TEST THAT ANSWERS ANYTHING BUT `true` HAS FAILED. `false` and undefined
-    // are one answer here, and an `eval_rule` that errors is a third spelling of
+    // are one answer here, and an evaluation that errors is a third spelling of
     // the same thing — a test whose body faults has not passed. None of the
     // three is a config fault: the set already compiled, at load.
+    //
+    // DECIDED ON BYTECODE (#1276): the cases run on the bundle's suite program,
+    // cached beside its verdict program. A case the program cannot express
+    // runs on the interpreter, and is counted against it with its reason.
+    let program = if discovered.is_empty() {
+        Err((Fallback::TestWith, String::from("no case")))
+    } else {
+        SuiteProgram::load(&bundle.id, (engine, bundle.ast()), cache)
+    };
+    let (decided, cached, why) = match &program {
+        Ok(program) => {
+            let decided: BTreeMap<(&str, &str), Option<bool>> = program
+                .tests
+                .iter()
+                .zip(program.run(document))
+                .map(|(test, decided)| ((test.module.as_str(), test.name.as_str()), decided))
+                .collect();
+            (decided, program.cached, Fallback::TestWith)
+        }
+        Err((why, _)) => (BTreeMap::new(), false, *why),
+    };
+    let mut interpreter: Option<regorus::Engine> = None;
     let mut passed = Vec::new();
     let mut failed = Vec::new();
-    for (id, path) in &discovered {
-        if matches!(
-            engine.eval_rule(path.clone()),
-            Ok(regorus::Value::Bool(true))
-        ) {
+    for (id, path) in discovered {
+        let verdict =
+            if let Some(Some(verdict)) = decided.get(&(id.module.as_str(), id.name.as_str())) {
+                record_as(&bundle.id, Execution::Bytecode { cached });
+                *verdict
+            } else {
+                record_as(&bundle.id, Execution::Interpreted(why));
+                if interpreter.is_none() {
+                    let mut fresh = engine.clone();
+                    // The document already parsed above, not the text again.
+                    fresh.set_input(document.clone());
+                    interpreter = Some(fresh);
+                }
+                matches!(
+                    interpreter
+                        .as_mut()
+                        .map(|engine| engine.eval_rule(path.clone())),
+                    Some(Ok(regorus::Value::Bool(true)))
+                )
+            };
+        if verdict {
             passed.push(id.clone());
         } else {
             failed.push(id.clone());
         }
     }
+    (passed, failed)
+}
 
-    // `file.code` is untouched: a coverage report is the most payload-shaped
-    // thing in this crate and rule 4 admits a pointer.
-    let Ok(report) = engine.get_coverage_report() else {
-        return Ok(Look::CouldNotLook);
-    };
-    let mut entered: BTreeMap<&str, &BTreeSet<u32>> = BTreeMap::new();
-    for file in &report.files {
-        entered.insert(file.path.as_str(), &file.covered);
+/// The predicates `bundle` publishes that no case entered, or `None` where
+/// the coverage read did not happen (CLOUD-251).
+///
+/// THE COVERAGE SWEEP IS THE INTERPRETER'S ONE JOB HERE (#1276), and it stops
+/// as soon as it has answered. Coverage is a report about which predicates the
+/// cases ENTERED, which bytecode cannot read; it decides only `unexercised`, so
+/// once every published predicate is entered no further case can change the
+/// answer. Cases are swept in doubling batches, so a suite that covers
+/// everything early pays for a few cases, and a predicate no case enters still
+/// costs the whole sweep, exactly as before.
+fn unexercised(
+    bundle: &Bundle,
+    engine: &regorus::Engine,
+    document: &regorus::Value,
+    discovered: &[(TestId, String)],
+    described: &[Described],
+) -> Option<Vec<String>> {
+    let mut unexercised: Vec<String> = bundle.declared.iter().cloned().collect();
+    if !unexercised.is_empty() && !discovered.is_empty() {
+        let mut sweep = engine.clone();
+        sweep.set_enable_coverage(true);
+        // The document already parsed, not the text again.
+        sweep.set_input(document.clone());
+        let mut swept = 0;
+        let mut batch = 1;
+        // BOUNDED BY THE CASE COUNT (CLOUD-2789): every pass runs at least one
+        // case, so `discovered.len()` passes reach the end. A batch that stops
+        // growing then ends the sweep with a wrong answer a case can see,
+        // rather than spinning until the suite's timeout.
+        for _ in 0..discovered.len() {
+            if swept == discovered.len() || unexercised.is_empty() {
+                break;
+            }
+            let upto = (swept + batch).min(discovered.len());
+            for (_, path) in &discovered[swept..upto] {
+                let _ = sweep.eval_rule(path.clone());
+            }
+            COVERAGE_CASES.fetch_add(upto - swept, Ordering::Relaxed);
+            swept = upto;
+            batch *= 2;
+            // `file.code` is untouched: a coverage report is the most
+            // payload-shaped thing in this crate and rule 4 admits a pointer.
+            let Ok(report) = sweep.get_coverage_report() else {
+                return None;
+            };
+            // Cases ran and the report mentions nothing at all: the coverage
+            // read did not happen, which is a different answer from "no test
+            // entered anything" and must not be reported as one (CLOUD-251).
+            if report.files.iter().all(|file| file.covered.is_empty()) {
+                if sweep_spent(swept, discovered.len()) {
+                    return None;
+                }
+                continue;
+            }
+            let entered: BTreeMap<&str, &BTreeSet<u32>> = report
+                .files
+                .iter()
+                .map(|file| (file.path.as_str(), &file.covered))
+                .collect();
+            unexercised.retain(|id| !entered_predicate(described, &entered, id));
+        }
     }
+    Some(unexercised)
+}
 
-    // Tests ran and the report mentions nothing at all: the coverage read did
-    // not happen, which is a different answer from "no test entered anything"
-    // and must not be reported as one (CLOUD-251).
-    if !discovered.is_empty() && report.files.iter().all(|file| file.covered.is_empty()) {
-        return Ok(Look::CouldNotLook);
-    }
+/// Whether a sweep that has run `swept` of `total` cases and read an empty
+/// coverage report is done: only once every case has run. Before that a later
+/// batch may yet report.
+///
+/// Apart from the sweep so a case can reach it: a bundle that compiles runs
+/// only cases that cover at least their own line (measured: a constant, a
+/// `false`, a `default` and a `true` case each cover theirs), and one that
+/// faults is refused at compile, so no fixture produces the empty report.
+const fn sweep_spent(swept: usize, total: usize) -> bool {
+    swept == total
+}
 
+/// Whether a case entered the rule raising predicate `id`: its HEAD line is
+/// covered in `entered` (CLOUD-835).
+fn entered_predicate(
+    described: &[Described],
+    entered: &BTreeMap<&str, &BTreeSet<u32>>,
+    id: &str,
+) -> bool {
     // A PUBLISHED PREDICATE NO TEST MADE FIRE. Two halves, and each is doing
     // work:
     //
@@ -4479,41 +7187,15 @@ pub fn test(bundle: &Bundle, input: &str, mediated: bool) -> Result<Look<Suite>>
     //   — see [`DescribedRule::head_line`] for the measurement. This is what
     //   makes the term CLOUD-418's "shown able to fail" rather than "shown to
     //   have been evaluated".
-    let mut unexercised = Vec::new();
-    for id in &bundle.declared {
-        let mut reached = false;
-        for module in described {
-            let Some(covered) = entered.get(module.path.as_str()) else {
-                continue;
-            };
-            for rule in &module.rules {
-                if rule.name == RULES_RULE || !rule.literals.iter().any(|text| text == id) {
-                    continue;
-                }
-                if covered.contains(&rule.head_line) {
-                    reached = true;
-                    break;
-                }
-            }
-            if reached {
-                break;
-            }
-        }
-        if !reached {
-            unexercised.push(id.clone());
-        }
-    }
-
-    passed.sort();
-    failed.sort();
-    untested_modules.sort();
-    Ok(Look::Is(Suite {
-        passed,
-        failed,
-        unexercised,
-        untested_modules,
-        bare_only_modules,
-    }))
+    described.iter().any(|module| {
+        entered.get(module.path.as_str()).is_some_and(|covered| {
+            module.rules.iter().any(|rule| {
+                rule.name != RULES_RULE
+                    && rule.literals.iter().any(|text| text == id)
+                    && covered.contains(&rule.head_line)
+            })
+        })
+    })
 }
 
 /// Whether a string literal carries a shell list operator (CLOUD-857).
@@ -4625,15 +7307,270 @@ pub fn analyse(bundle: &Bundle) -> Result<Look<Analysis>> {
     Ok(Look::Is(Analysis { swept, unswept }))
 }
 
+/// Run each registered module's own `test_` rules (CLOUD-835).
+///
+/// **The gap this closes.** `crates/batten/tests/it/policy_modules.rs` exercises
+/// the *evaluator*; nothing exercises a *module*. That is a blocker rather than
+/// a nicety because the retirement campaign has to move 1,570 of 2,485 bats
+/// cases onto policy rows, and CLOUD-202 measured the trap that makes an
+/// untested port worse than none — the shell tasks spell `1 = violation,
+/// 2 = could not read` and this contract is the exact inverse.
+///
+/// **The fixture is the row's own `documents`.** No new config key: CLOUD-833
+/// already gave a tree-scoped policy row the documents it hands its bundle, and
+/// `crate::rules::tree_document` already parses them and returns the ones the tree does
+/// not carry rather than guessing. Non-negotiable 6 keeps configuration narrow,
+/// and this is the reuse that honours it.
+///
+/// # Exit codes, and the two faults kept apart
+///
+/// `2` when a test failed or a published predicate went unexercised — the row's
+/// §7(b) is explicit that the latter is *"reported, not green"*. `1` when the
+/// suite could not run: a declared fixture the tree does not carry, or a sweep
+/// that did not happen. Separating them is CLOUD-202's whole lesson, and
+/// `tests/policy_test.rs` asserts each independently so the port cannot
+/// reintroduce the inversion it exists to avoid.
+///
+/// # Errors
+///
+/// A [`UsageError`] (exit `1`) when the config will not resolve or a registered
+/// module will not load — both refused by [`load`] with their own
+/// message, at the boundary where a config fault belongs.
+/// The tree input one policy suite runs against.
+///
+/// Split out of `run_policy_test` so that function reads as a loop over rows;
+/// what it holds is the pair of deliberate omissions, which are easier to see
+/// stated together than buried in an argument list.
+///
+/// **A SUITE RUNS AGAINST NO PRODUCED RECORD** (CLOUD-851). A module's tests must
+/// decide the same way on every machine, and the sink store is per-checkout state
+/// that differs between them — so a test that wants a baseline supplies it with
+/// `with input as`, the same way a mediated-call suite supplies its call.
+///
+/// **AND AGAINST NO GIT FACT**, for exactly the same reason (CLOUD-907). HEAD, the
+/// branch, the remotes and whether a ref resolves are all per-checkout state: a
+/// suite that read them would pass on the author's machine and fail in CI's
+/// detached, remote-less clone, which is a test asserting its environment rather
+/// than its module.
+pub(crate) fn suite_input(
+    rule: &crate::config_model::Rule,
+    documents: &std::collections::BTreeMap<(String, crate::rules::Wanted), crate::rules::Acquired>,
+    tracked: &[String],
+) -> Result<SuiteInput> {
+    Ok(suite_input_of(
+        &SuiteDeclared::of(rule, tracked)?,
+        documents,
+        tracked,
+    ))
+}
+
+/// A suite input and the declared paths it could not acquire.
+pub(crate) type SuiteInput = (String, Vec<(String, crate::rules::NotAcquired)>);
+
+/// Everything of a row [`suite_input`] reads: the paths it declares in each
+/// form, matched against the tracked list, and its base (CLOUD-2830).
+///
+/// THE KEY A RUN PROJECTS BY. Rows declaring the same paths are handed the same
+/// input, and projecting the acquired facts into it again for each measured
+/// 12% of `policy test`'s samples; `policy test` projects once per distinct
+/// value of this.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) struct SuiteDeclared {
+    documents: Vec<String>,
+    lines: Vec<String>,
+    invocations: Vec<String>,
+    uses: Vec<String>,
+    units: Vec<String>,
+    base: Option<String>,
+}
+
+impl SuiteDeclared {
+    /// What `rule` declares over `tracked`.
+    pub(crate) fn of(rule: &crate::config_model::Rule, tracked: &[String]) -> Result<Self> {
+        Ok(Self {
+            documents: crate::rules::declared_documents(rule, tracked)?,
+            lines: crate::rules::declared_lines(rule, tracked)?,
+            invocations: crate::rules::declared_invocations(rule, tracked)?,
+            uses: crate::rules::declared_uses(rule, tracked)?,
+            units: crate::rules::declared_units(rule, tracked)?,
+            base: rule.base.clone(),
+        })
+    }
+}
+
+/// [`suite_input`] for a declaration already matched.
+pub(crate) fn suite_input_of(
+    declared: &SuiteDeclared,
+    documents: &std::collections::BTreeMap<(String, crate::rules::Wanted), crate::rules::Acquired>,
+    tracked: &[String],
+) -> SuiteInput {
+    // A mediated-call row declares no documents, so its tests run against `{}`
+    // and supply their own input with `with input as` — OPA and Conftest's own
+    // shape, and the reason neither surface needs a fixture key.
+    crate::rules::tree_document(
+        documents,
+        &crate::config_check::rules::Declared {
+            documents: &declared.documents,
+            lines: &declared.lines,
+            invocations: &declared.invocations,
+            uses: &declared.uses,
+            units: &declared.units,
+            base: declared.base.as_deref(),
+            // EMPTY, unlike its neighbours above, and the asymmetry is the
+            // point (CLOUD-1167). `documents` and the three beside it name paths
+            // INSIDE the repository, so a declared one that is missing is a
+            // fixture the author owes. An `[[rule.external]]` row names a file
+            // outside it — a launcher's settings, a toolchain's data directory —
+            // which is legitimately absent on a CI runner, in a fresh container,
+            // and on any host that does not run that launcher. Resolving the
+            // declared list here would report every such host as a missing
+            // fixture and fail `policy test` for a file the module's own `test_`
+            // rules never read: they supply their input with `with input as`,
+            // which is what this call is building the SHAPE for.
+            //
+            // Whether a declared out-of-root file actually resolves is `check`'s
+            // question, and `check` answers it the way the family requires — the
+            // id goes to `input.tree.missing` with its cause and the row is
+            // skipped, rather than running against a fabricated empty document.
+            // EMPTY for `external`'s reason: a staged read needs an index this
+            // shape-building call has no reason to open.
+            staged: &[],
+            // Nothing to fall back FOR: the list above is empty, so no path ever
+            // reaches the extension test this would answer.
+            staged_format: None,
+            external: &[],
+        },
+        tracked,
+        // A module's own `test_` rules supply their input with `with input as`,
+        // so every member here is empty for one reason: this call builds the
+        // SHAPE, and the case chooses the values.
+        &crate::rules::Resolved {
+            traversals: &serde_json::Value::Null,
+            review: &crate::facts::Look::IsNot,
+            produced: &std::collections::BTreeMap::new(),
+            records: &std::collections::BTreeMap::new(),
+            records_blocked: &std::collections::BTreeMap::new(),
+            git: &crate::git::GitFacts::default(),
+            symbols: &crate::facts::Look::IsNot,
+            external: &std::collections::BTreeMap::new(),
+            state: None,
+            forge: None,
+            tool_verdicts: None,
+            plan: None,
+            minted: None,
+            captured: None,
+            shell: None,
+        },
+    )
+}
+
+/// Whether one policy module's own `test_<case>` rule passes under `root`'s
+/// committed config: `Some(true)` passed, `Some(false)` failed, `None` when no
+/// registered rule's module is `module` or the module declares no such test
+/// (CLOUD-2255).
+///
+/// THE MUTATION SWEEP'S REGO SUITE, IN PROCESS. A `#MUTANT` row in a module
+/// that names one of the module's own tests is judged by that test, the way
+/// `opa test --run` selects one: through the same load, input and evaluator
+/// `policy test` uses, over the staged (mutated) tree, so the registry data the
+/// module reads is supplied and nothing is spawned. Conftest, the other `.rego`
+/// suite, supplies none of it.
+///
+/// # Errors
+///
+/// When the config under `root` does not resolve or a bundle does not load:
+/// could-not-look, never a pass.
+pub fn case(root: &Path, module: &str, case: &str) -> Result<Option<bool>> {
+    let config = crate::resolve::resolve(root, &crate::resolve::Overrides::default())?;
+    let Some(rule) = config.rules.iter().find(|rule| {
+        rule.kind == crate::config_model::RuleKind::Policy && rule.module.as_deref() == Some(module)
+    }) else {
+        return Ok(None);
+    };
+    // EVERY ROW LOADED, ONE EVALUATED: the registry check holds the declared
+    // verdicts against the raisers among the loaded bundles, so loading the one
+    // row would refuse every class another module raises.
+    let bundles = load(
+        root,
+        &config.rules,
+        Vocabulary {
+            patterns: &config.patterns,
+            verdicts: &config.verdicts,
+            words: (!config.vocabulary.is_empty()).then_some(&config.vocabulary),
+            recorders: &config.recorders,
+            registers: &config.registers,
+            traversals: &config.traversals,
+            records: &config.records,
+        },
+        ModuleChecks::Run,
+        None,
+    )?;
+    let Some(bundle) = bundles.iter().find(|bundle| bundle.id() == rule.id) else {
+        return Ok(None);
+    };
+    let tracked = crate::git::tree_files(root)?;
+    let documents =
+        crate::rules::acquire_declared(std::slice::from_ref(rule), root, &tracked, &tracked)?;
+    let (input, _) = suite_input(rule, &documents, &tracked)?;
+    let crate::facts::Look::Is(suite) = test(
+        bundle,
+        &input,
+        rule.scope == crate::preset_catalog::RuleScope::MediatedCall,
+        Some(root),
+    )?
+    else {
+        return Ok(None);
+    };
+    let name = format!("test_{case}");
+    let named = |ids: &[TestId]| ids.iter().any(|id| id.name == name);
+    Ok(if named(&suite.passed) {
+        Some(true)
+    } else if named(&suite.failed) {
+        Some(false)
+    } else {
+        None
+    })
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
-
+    #[cfg(test)]
     /// One module publishing `a`, refusing a write, with one test that does.
     const MODULE: &str = "package batten.a\nimport rego.v1\n\nrules contains \"a\"\n\n\
 violation contains {\"rule\": \"a\", \"verdict\": \"a\"} if {\n\tinput.call.operation == \"write\"\n}\n\n\
 test_a_write_is_refused if {\n\tcount(violation) == 1 with input as {\"call\": {\"operation\": \"write\"}}\n}\n";
+
+    /// A bundle composing the library keys on the library's text (CLOUD-2253):
+    /// under the sweep's overlay one binary compiles many library texts, so an
+    /// entry keyed without it answers a mutant with the unmutated program. A
+    /// bundle that never asks keys without it.
+    ///
+    /// Fails by: the library left out of a composing bundle's key, or added to
+    /// a bundle's that never asks.
+    #[test]
+    fn a_bundle_composing_the_library_keys_on_its_text() {
+        use std::borrow::Cow;
+        let asks = sources_of(&[("a.rego", "x if data.batten.library.read_only(input)")]);
+        let alone = sources_of(&[("a.rego", MODULE)]);
+        let one = [(
+            "lib.rego",
+            Cow::Borrowed("package batten.library\nx := 1\n"),
+        )];
+        let two = [(
+            "lib.rego",
+            Cow::Borrowed("package batten.library\nx := 2\n"),
+        )];
+        assert_ne!(
+            cache_key_over("r", &asks, &[0; 32], &one),
+            cache_key_over("r", &asks, &[0; 32], &two)
+        );
+        assert_eq!(
+            cache_key_over("r", &alone, &[0; 32], &one),
+            cache_key_over("r", &alone, &[0; 32], &two)
+        );
+    }
 
     fn sources_of(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
         pairs
@@ -4654,11 +7591,275 @@ test_a_write_is_refused if {\n\tcount(violation) == 1 with input as {\"call\": {
         }
     }
 
+    /// The desugared sources, and each case by name with how it is decided.
+    type Plans = (
+        Vec<(String, String)>,
+        Vec<(String, std::result::Result<String, String>)>,
+    );
+
+    /// Fails by: a rule's function head folded into its facts with `&=`, so
+    /// no rule is ever recorded as a function.
+    #[test]
+    fn a_function_rule_is_recorded_as_one_and_a_plain_rule_is_not() {
+        const MODULE: &str = "package batten.p\nimport rego.v1\n\nf(x) := input.a\n\nr := 1\n";
+        let bundle = bundle_of("row", &[("policy/a.rego", MODULE)]);
+        let engine = bundle.evaluator.engine().expect("an interpreter");
+        let ast = Ast::of(engine).expect("the AST serialises");
+        let packages = package_facts(&ast.0);
+        let rules = packages.values().next().expect("the package's facts");
+        assert!(
+            rules["f"].function,
+            "{:?}",
+            rules.keys().collect::<Vec<_>>()
+        );
+        assert!(!rules["r"].function);
+    }
+
+    /// Fails by: a `with` or an input read carried less than the whole way
+    /// along a chain of rules: the propagation's `!` dropped, so a rule
+    /// already marked is the only one marked again, or the fixed point left
+    /// after the first pass that changed anything, so a rule two references
+    /// away is never reached (CLOUD-2789).
+    #[test]
+    fn a_with_and_an_input_read_reach_every_rule_a_chain_leads_to() {
+        const MODULE: &str = "package batten.p\nimport rego.v1\n\n\
+            c if {\n\tinput.x with input as {\"x\": 1}\n}\n\n\
+            b if {\n\tc\n}\n\n\
+            a if {\n\tb\n}\n";
+        let bundle = bundle_of("row", &[("policy/a.rego", MODULE)]);
+        let engine = bundle.evaluator.engine().expect("an interpreter");
+        let ast = Ast::of(engine).expect("the AST serialises");
+        let packages = package_facts(&ast.0);
+        let rules = packages.values().next().expect("the package's facts");
+        assert!(
+            rules["c"].with && rules["c"].reads,
+            "the premise: `c` writes a `with` and reads the input"
+        );
+        for name in ["b", "a"] {
+            assert!(rules[name].with, "`{name}` reaches the `with`");
+            assert!(rules[name].reads, "`{name}` reaches the input read");
+        }
+    }
+
+    /// Each case of one module by name with how it is decided, and the
+    /// desugared sources the suite program compiles.
+    fn planned(source: &str) -> Plans {
+        let bundle = bundle_of("row", &[("policy/a.rego", source)]);
+        let engine = bundle.evaluator.engine().expect("an interpreter");
+        let ast = Ast::of(engine).expect("the AST serialises");
+        let (sources, tests) = plan_suite(&ast).expect("the suite plans");
+        let tests = tests
+            .into_iter()
+            .map(|test| (test.name, test.decided_by))
+            .collect();
+        (sources, tests)
+    }
+
+    /// Fails by: a rule two references from `input`, or from a `with`, left
+    /// unmarked (the spread stops a level short or never starts), or a rule
+    /// reaching neither marked anyway; or a spread that never settles.
+    #[test]
+    fn reads_and_with_spread_through_references_and_nowhere_else() {
+        const MODULE: &str = "package batten.p\nimport rego.v1\n\n\
+            a := input.x\n\nb := a\n\nc := b\n\nd := 1\n\n\
+            w if {\n\tcount([1]) == 1 with data.q as 1\n}\n\nv := w\n\nu := v\n";
+        let bundle = bundle_of("row", &[("policy/a.rego", MODULE)]);
+        let engine = bundle.evaluator.engine().expect("an interpreter");
+        let ast = Ast::of(engine).expect("the AST serialises");
+        let packages = package_facts(&ast.0);
+        let rules = packages.values().next().expect("the package's facts");
+        let marked = |flag: fn(&RuleFacts) -> bool| -> Vec<&str> {
+            rules
+                .iter()
+                .filter(|(_, fact)| flag(fact))
+                .map(|(name, _)| name.as_str())
+                .collect()
+        };
+        // `w`'s `with data.q` reads `data` too, so its chain reads; `d` alone
+        // reaches neither.
+        assert_eq!(marked(|fact| fact.reads), ["a", "b", "c", "u", "v", "w"]);
+        assert_eq!(marked(|fact| fact.with), ["u", "v", "w"]);
+    }
+
+    /// A module whose one case writes `with data.batten.patterns.<key>` as
+    /// `key`, over a rule reading `data.batten.patterns.a.b`.
+    fn patterns_case(key: &str, term: &str) -> String {
+        format!(
+            "package batten.a\nimport rego.v1\n\nrules contains \"a\"\n\n\
+violation contains {{\"rule\": \"a\", \"verdict\": \"a\"}} if {{\n\tdata.batten.patterns.a.b == 1\n}}\n\n\
+test_patterns if {{\n\tcount(violation) == 1 with data.batten.patterns.{key} as {term}\n}}\n"
+        )
+    }
+
+    /// Fails by: a `with` on a DOTTED key under the pattern table taken as a
+    /// key of the table itself, which the desugaring cannot override.
+    #[test]
+    fn a_with_on_a_dotted_pattern_key_keeps_the_interpreter() {
+        let (_, whole) = planned(&patterns_case("a", "{\"b\": 1}"));
+        assert!(
+            whole[0].1.is_ok(),
+            "THE PREMISE: a single key plans: {whole:?}"
+        );
+        let (_, dotted) = planned(&patterns_case("a.b", "1"));
+        let why = dotted[0].1.as_ref().expect_err("a dotted key cannot plan");
+        assert!(why.contains("data.batten.patterns.a.b"), "{why}");
+    }
+
+    /// Fails by: a helper's own `with`, which sits inside its body's list of
+    /// statements, not seen, so a case reading the helper is desugared and
+    /// the helper's `with` reaches the bytecode compiler.
+    #[test]
+    fn a_helper_writing_its_own_with_keeps_the_interpreter() {
+        let source = "package batten.a\nimport rego.v1\n\nrules contains \"a\"\n\n\
+violation contains {\"rule\": \"a\", \"verdict\": \"a\"} if {\n\tinput.call.operation == \"write\"\n}\n\n\
+writes_with if {\n\tcount(violation) == 1 with input as {\"call\": {\"operation\": \"write\"}}\n}\n\n\
+test_helper if {\n\twrites_with\n}\n";
+        let (_, tests) = planned(source);
+        let why = tests[0]
+            .1
+            .as_ref()
+            .expect_err("the helper's `with` cannot plan");
+        assert!(why.contains("helper"), "{why}");
+    }
+
+    /// Fails by: a string literal's opening quote cut off its span, so the
+    /// desugared case is no longer Rego.
+    #[test]
+    fn a_string_keeps_both_quotes_in_the_desugared_case() {
+        let source = "package batten.a\nimport rego.v1\n\nrules contains \"a\"\n\n\
+violation contains {\"rule\": \"a\", \"verdict\": \"a\"} if {\n\tinput == \"write\"\n}\n\n\
+test_string if {\n\t\"x\" == \"x\"\n\tcount(violation) == 1 with input as \"write\"\n}\n";
+        let (sources, tests) = planned(source);
+        assert!(tests[0].1.is_ok(), "{tests:?}");
+        let text = &sources[0].1;
+        assert!(text.contains(":= \"write\""), "{text}");
+        assert!(text.contains("\t\"x\" == \"x\""), "{text}");
+    }
+
+    /// Fails by: a suite program not written to its cache, so every run
+    /// compiles it again.
+    #[test]
+    fn a_suite_program_is_read_back_from_its_cache() {
+        let bundle = bundle_of("row", &[("policy/a.rego", MODULE)]);
+        let engine = bundle.evaluator.engine().expect("an interpreter");
+        let root = crate::scratch::scratch("policy-suite-cache");
+        let Ok(first) = SuiteProgram::load("row", (engine, bundle.ast()), Some(&root)) else {
+            panic!("the suite program compiles");
+        };
+        assert!(!first.cached, "THE PREMISE: an empty cache holds nothing");
+        let Ok(second) = SuiteProgram::load("row", (engine, bundle.ast()), Some(&root)) else {
+            panic!("the suite program loads");
+        };
+        assert!(second.cached);
+    }
+
+    /// Fails by: a split invented, or a case-only rule taken as an entry, in
+    /// the parity diagnostics over a bundle whose engines agree.
+    #[test]
+    fn agreeing_engines_report_no_split_and_name_only_non_test_input() {
+        let bundle = bundle_of("row", &[("policy/a.rego", MODULE)]);
+        assert_eq!(suite_splits(&bundle, "{}"), Vec::<String>::new());
+        assert_eq!(
+            rule_splits(&bundle, &serde_json::json!({}), "{}"),
+            Vec::<String>::new()
+        );
+        let paths = input_paths(&bundle);
+        assert!(
+            !paths.is_empty() && paths.iter().all(|path| !path.is_empty()),
+            "{paths:?}"
+        );
+        assert_eq!(bytecode(bundle).fallback_detail(), None);
+    }
+
     fn suite_of(bundle: &Bundle, mediated: bool) -> Suite {
-        match test(bundle, "{}", mediated).expect("the input parses") {
+        match test(bundle, "{}", mediated, None).expect("the input parses") {
             Look::Is(suite) => suite,
             Look::CouldNotLook | Look::IsNot => panic!("the sweep ran"),
         }
+    }
+
+    /// Fails by: a string's opening delimiter looked for after the span's
+    /// start rather than before it, so the literal is cut at its first byte.
+    #[test]
+    fn a_spanned_string_keeps_both_its_delimiters() {
+        assert_eq!(spanned("x = \"abc\"", 5, 8), Some("\"abc\""));
+        assert_eq!(spanned("x = abc", 4, 7), Some("abc"));
+    }
+
+    /// Fails by: the `test_` rules' reads reported as the module's, and its
+    /// verdict rules' reads dropped.
+    #[test]
+    fn a_bundles_input_paths_are_its_verdict_rules_reads() {
+        const READS: &str = "package batten\n\nimport rego.v1\n\n\
+            violation contains \"a\" if input.tree.staged == 1\n\n\
+            test_reads_more if {\n\tinput.tree.tracked == 1\n\tinput.facts.session == 1\n}\n";
+        let bundle = bundle_of("row", &[("policy/a.rego", READS)]);
+        assert_eq!(input_paths(&bundle), [String::from("tree.staged")]);
+    }
+
+    /// Fails by: a case's `with` on one named pattern key refused as a `with`
+    /// on a path the plan cannot bind, so the case leaves the bytecode.
+    #[test]
+    fn a_with_on_one_pattern_key_stays_on_bytecode() {
+        const KEYED: &str = "package batten.p\n\nimport rego.v1\n\n\
+            violation contains \"hit\" if data.batten.patterns.foo == 1\n\n\
+            test_a_keyed_pattern_is_read if {\n\
+            \tcount(violation) == 1 with data.batten.patterns.foo as 1\n}\n";
+        let bundle = compile(
+            "row",
+            &sources_of(&[("policy/p.rego", KEYED)]),
+            &serde_json::json!({"batten": {"patterns": {"foo": 0}}}),
+        )
+        .expect("the fixture compiles");
+        assert_eq!(suite_splits(&bundle, "{}"), Vec::<String>::new());
+    }
+
+    /// Fails by: two set answers that differ reported whole rather than as
+    /// what each holds that the other does not. The two engines are handed
+    /// different `data` here, which is how a split is made to appear.
+    #[test]
+    fn a_set_split_names_each_sides_own_members() {
+        const SET: &str = "package batten.s\n\nimport rego.v1\n\n\
+            violation contains x if some x in data.extra\n";
+        let bundle = bundle_of("row", &[("policy/s.rego", SET)]);
+        let splits = rule_splits(&bundle, &serde_json::json!({"extra": ["a"]}), "{}");
+        assert_eq!(splits.len(), 1, "{splits:?}");
+        assert!(
+            splits[0].contains("only bytecode [\"a\"] only interpreter []"),
+            "{splits:?}"
+        );
+    }
+
+    /// Fails by: an empty coverage report read as final before every case has
+    /// run (a later batch may yet report), or swept on past the last case, so
+    /// a coverage read that never happened reads as "no case entered anything".
+    #[test]
+    fn an_empty_coverage_report_is_final_only_once_every_case_ran() {
+        assert!(super::sweep_spent(3, 3));
+        assert!(!super::sweep_spent(1, 3));
+    }
+
+    /// Fails by: a bytecode verdict that differs from the interpreter's read
+    /// as agreement, so the parity gate never reports the miscompile it exists
+    /// for; or one that agrees reported as a split.
+    #[test]
+    fn a_case_split_is_reported_only_where_the_verdicts_differ() {
+        let test = PlannedTest {
+            module: String::from("policy/a.rego"),
+            name: String::from("test_a"),
+            decided_by: Ok(String::from("data.a.test_a")),
+            contexts: Vec::new(),
+        };
+        assert_eq!(super::case_split("row", &test, Some(true), true), None);
+        assert_eq!(super::case_split("row", &test, Some(false), false), None);
+        assert_eq!(
+            super::case_split("row", &test, Some(true), false).as_deref(),
+            Some("row: policy/a.rego test_a: bytecode true interpreter false")
+        );
+        assert_eq!(
+            super::case_split("row", &test, Some(false), true).as_deref(),
+            Some("row: policy/a.rego test_a: bytecode false interpreter true")
+        );
     }
 
     #[test]
@@ -4685,7 +7886,7 @@ test_a_write_is_refused if {\n\tcount(violation) == 1 with input as {\"call\": {
         let bundles = [a.clone(), quiet];
         assert_eq!(publishers_of(&bundles, "a"), BTreeSet::from(["row"]));
         assert!(publishers_of(&bundles, "nothing").is_empty());
-        assert_eq!(preset_names(), crate::preset::names());
+        assert_eq!(preset_names(), crate::preset_catalog::names());
     }
 
     #[test]
@@ -4706,6 +7907,36 @@ test_a_write_is_refused if {\n\tcount(violation) == 1 with input as {\"call\": {
             panic!("the bundle answers");
         };
         assert!(allowed.is_empty());
+    }
+
+    /// The stripped bundle a checked load's program is taken from reads what
+    /// describing its own text reads, without describing it: the seed is the
+    /// full reading less the `test_` rules. A `test_` rule here reads a tree key
+    /// and a fact no verdict rule reads, so a seed that kept them, or dropped a
+    /// verdict rule, answers differently from describing the stripped text.
+    #[test]
+    fn a_stripped_bundle_seeded_from_the_full_reading_reads_what_describing_it_reads() {
+        const READS: &str = "package batten\n\nimport rego.v1\n\n\
+            violation contains \"a\" if input.tree.staged == 1\n\n\
+            test_reads_more if {\n\tinput.tree.tracked == 1\n\tinput.facts.session == 1\n}\n";
+        let full = bundle_of("row", &[("policy/a.rego", READS)]);
+        let stripped = || bundle_of("row", &[("policy/a.rego", &without_test_rules(READS))]);
+        let described = stripped();
+        let seeded = stripped();
+        let before = ast_descriptions();
+        seeded.seed_stripped_from(&full);
+        assert_eq!(ast_descriptions() - before, 1, "the full bundle, once");
+        assert_eq!(
+            seeded.tree_reads(),
+            Reads::Known(BTreeSet::from([String::from("staged")]))
+        );
+        let before = ast_descriptions();
+        assert_eq!(seeded.tree_reads(), described.tree_reads());
+        assert_eq!(
+            seeded.session_start_facts(),
+            described.session_start_facts()
+        );
+        assert_eq!(ast_descriptions() - before, 1, "only the control describes");
     }
 
     /// A suite is a violation when a test fails, a predicate goes unexercised,
@@ -4790,24 +8021,40 @@ rules contains not_quoted\n";
 
     #[test]
     fn a_preset_row_compiles_its_scope_s_modules_less_what_it_excepts() {
-        let manifest = crate::preset::find("git").expect("git ships");
-        let module = manifest.modules[0].name();
+        let manifest = crate::preset_catalog::find("git").expect("git ships");
+        let names: Vec<_> = manifest
+            .modules
+            .iter()
+            .map(crate::preset_catalog::PresetModule::name)
+            .collect();
         let sources = preset_sources(&git_row(""), manifest, "git").unwrap();
-        assert_eq!(sources.len(), 1);
+        assert_eq!(sources.len(), names.len());
+        assert!(names.len() > 1, "the fixture needs a module to keep");
         assert!(
             preset_sources(&git_row("except = [\"no-such-module\"]\n"), manifest, "git").is_err()
         );
+        let one = preset_sources(
+            &git_row(&format!("except = [\"{}\"]\n", names[0])),
+            manifest,
+            "git",
+        )
+        .unwrap();
+        assert_eq!(
+            one.len(),
+            names.len() - 1,
+            "an excepted module is not compiled"
+        );
+        let every = names
+            .iter()
+            .map(|name| format!("\"{name}\""))
+            .collect::<Vec<_>>()
+            .join(", ");
         assert!(
-            preset_sources(
-                &git_row(&format!("except = [\"{module}\"]\n")),
-                manifest,
-                "git"
-            )
-            .is_err(),
+            preset_sources(&git_row(&format!("except = [{every}]\n")), manifest, "git").is_err(),
             "excepting every module decides nothing"
         );
         let mut tree = git_row("");
-        tree.scope = crate::rules::RuleScope::Tree;
+        tree.scope = crate::preset_catalog::RuleScope::Tree;
         assert!(
             preset_sources(&tree, manifest, "git").is_err(),
             "no module at that scope"
@@ -4816,7 +8063,7 @@ rules contains not_quoted\n";
 
     #[test]
     fn an_ejected_copy_is_paired_with_the_vendored_module_its_header_names() {
-        let manifest = crate::preset::find("git").expect("git ships");
+        let manifest = crate::preset_catalog::find("git").expect("git ships");
         let module = &manifest.modules[0];
         let copy = format!(
             "# batten-ejected: git/{} version {}\npackage x\n",
@@ -4833,7 +8080,7 @@ rules contains not_quoted\n";
         ]);
         assert_eq!(
             originals,
-            BTreeMap::from([("policy/git/copy.rego".to_owned(), module.source)])
+            BTreeMap::from([("policy/git/copy.rego".to_owned(), module.text())])
         );
     }
 
@@ -4865,7 +8112,7 @@ rules contains not_quoted\n";
         policy_row(id, scope, "module = \"policy/m.rego\"", extra)
     }
 
-    fn class(id: &str, extra: &str) -> crate::verdict::DeclaredVerdict {
+    fn class(id: &str, extra: &str) -> crate::config_model::DeclaredVerdict {
         toml::from_str(&format!(
             "id = \"{id}\"\ngloss = \"g\"\nclass = \"c\"\n{extra}"
         ))
@@ -4881,7 +8128,299 @@ rules contains not_quoted\n";
     fn bytecode(bundle: Bundle) -> Bundle {
         Compiled::from_bundle(&bundle, &serde_json::json!({}))
             .expect("the fixture compiles to bytecode")
-            .into_bundle(bundle)
+            .into_bundle(bundle, false)
+    }
+
+    /// [`bytecode`] past batten's own refusals of known miscompiles, to show
+    /// what regorus would answer.
+    fn bytecode_unchecked(bundle: Bundle) -> Bundle {
+        Compiled::compile_unchecked(&bundle, &serde_json::json!({}))
+            .expect("regorus compiles the fixture")
+            .into_bundle(bundle, false)
+    }
+
+    /// CLOUD-2696's shape: a helper function undefined for the call, bound with
+    /// `:=` and then negated over. Both evaluators must read the undefined
+    /// helper as no violation. Fails by: the bytecode deciding a violation the
+    /// interpreter — and so `policy test` — does not.
+    const UNDEFINED_HELPER: &str = r#"package batten.helper
+
+import rego.v1
+
+rules contains "commit name refused"
+
+subject(args) := message if {
+	some i, word in args
+	word == "-m"
+	message := args[i + 1]
+}
+
+violation contains {"rule": "commit name refused", "verdict": "commit name refused", "subjects": []} if {
+	some program in input.call.programs
+	message := subject(program.arguments)
+	not regex.match(`^feat`, message)
+}
+"#;
+
+    #[test]
+    fn an_undefined_helper_decides_alike_in_both_evaluators() {
+        let none = r#"{"call":{"programs":[{"arguments":["commit","--amend"]}]}}"#;
+        let wrong = r#"{"call":{"programs":[{"arguments":["commit","-m","fix: x"]}]}}"#;
+        let right = r#"{"call":{"programs":[{"arguments":["commit","-m","feat: x"]}]}}"#;
+        let interpreted = bundle_of("row", &[("policy/h.rego", UNDEFINED_HELPER)]);
+        // As `compile_cached` builds it, and nothing re-decides its answer.
+        let compiled = bytecode(bundle_of("row", &[("policy/h.rego", UNDEFINED_HELPER)]));
+        assert!(compiled.is_bytecode());
+        let before = engines_constructed();
+        let _ = verdicts(&compiled, wrong);
+        assert_eq!(
+            engines_constructed() - before,
+            0,
+            "the program decides a refusal alone: no interpreter is built to re-decide it"
+        );
+        let refused = Some(vec!["commit name refused".to_owned()]);
+        for (evaluator, bundle) in [("interpreted", &interpreted), ("bytecode", &compiled)] {
+            assert_eq!(
+                verdicts(bundle, none),
+                Some(Vec::new()),
+                "{evaluator}: no -m, no subject"
+            );
+            assert_eq!(verdicts(bundle, wrong), refused, "{evaluator}");
+            assert_eq!(verdicts(bundle, right), Some(Vec::new()), "{evaluator}");
+        }
+    }
+
+    /// A `:=` whose right side is a string literal, the last token of its
+    /// statement (#1276). Fails by: the guard spliced inside the literal, so the
+    /// bytecode binds `"x; p == p"` and refuses nothing where the interpreter
+    /// refuses — `rules-drift.rego`'s `authority_needed`, measured.
+    const LITERAL_BINDING: &str = "package batten.lit\nimport rego.v1\n\n\
+        named contains p if {\n\tinput.go\n\tp := \"x\"\n}\n\n\
+        deny contains \"tok\" if {\n\t\"x\" in named\n}\n\n\
+        raw contains q if {\n\tinput.go\n\tq := `y`\n}\n\n\
+        deny contains \"raw\" if {\n\t\"y\" in raw\n}\n";
+
+    #[test]
+    fn a_binding_ending_in_a_string_literal_decides_alike_in_both_evaluators() {
+        let guarded = guarded_sources(
+            bundle_of("row", &[("policy/l.rego", LITERAL_BINDING)])
+                .evaluator
+                .engine()
+                .expect("interpreted"),
+        )
+        .expect("the guard splices");
+        assert!(
+            guarded[0].1.contains("p := \"x\"; p == p"),
+            "the guard follows the closing quote: {}",
+            guarded[0].1
+        );
+        assert!(
+            guarded[0].1.contains("q := `y`; q == q"),
+            "and a raw string's backtick: {}",
+            guarded[0].1
+        );
+        let interpreted = bundle_of("row", &[("policy/l.rego", LITERAL_BINDING)]);
+        let compiled = bytecode(bundle_of("row", &[("policy/l.rego", LITERAL_BINDING)]));
+        for (evaluator, bundle) in [("interpreted", &interpreted), ("bytecode", &compiled)] {
+            assert_eq!(
+                verdicts(bundle, GO),
+                Some(vec!["raw".to_owned(), "tok".to_owned()]),
+                "{evaluator}"
+            );
+            assert_eq!(verdicts(bundle, STOP), Some(Vec::new()), "{evaluator}");
+        }
+    }
+
+    /// `_ := e` as a braceless body, the spelling of "e is defined" (#1276):
+    /// `ci-parity.rego`'s `on_pull_request(path) if _ :=
+    /// triggers(path).pull_request`. Fails by: the wildcard left unguarded, so
+    /// the bytecode binds `Undefined` and `on("b")` holds where the interpreter
+    /// — and OPA — say it does not.
+    const WILDCARD_BINDING: &str = "package batten.w\nimport rego.v1\n\n\
+        on(x) if _ := input.triggers[x]\n\n\
+        deny contains x if {\n\tsome x in [\"a\", \"b\"]\n\ton(x)\n}\n";
+
+    #[test]
+    fn a_wildcard_binding_decides_alike_in_both_evaluators() {
+        let input = r#"{"triggers":{"a":{}}}"#;
+        let interpreted = bundle_of("row", &[("policy/w.rego", WILDCARD_BINDING)]);
+        let compiled = bytecode(bundle_of("row", &[("policy/w.rego", WILDCARD_BINDING)]));
+        for (evaluator, bundle) in [("interpreted", &interpreted), ("bytecode", &compiled)] {
+            assert_eq!(
+                verdicts(bundle, input),
+                Some(vec!["a".to_owned()]),
+                "{evaluator}: only the defined trigger holds"
+            );
+        }
+    }
+
+    /// A `:=` whose pattern names no variable cannot be guarded (#1276).
+    /// Fails by: the shape reaching bytecode, where it binds `Undefined`
+    /// unguarded and the body holds over a missing pair.
+    const UNGUARDABLE: &str = "package batten.u\nimport rego.v1\n\n\
+        deny contains \"pair\" if {\n\t[_, _] := input.pair\n}\n";
+
+    #[test]
+    fn a_binding_naming_no_variable_is_refused_bytecode() {
+        let interpreted = bundle_of("row", &[("policy/u.rego", UNGUARDABLE)]);
+        assert_eq!(verdicts(&interpreted, "{}"), Some(Vec::new()), "no pair");
+        let refused = Compiled::from_bundle(&interpreted, &serde_json::json!({}))
+            .err()
+            .expect("the shape is not compiled");
+        assert_eq!(refused.0, Fallback::GuardUnavailable, "{refused:?}");
+        assert_eq!(refused.1, "policy/u.rego:5", "names the statement");
+        let named = bundle_of("row", &[("policy/n.rego", LITERAL_BINDING)]);
+        assert!(
+            named.ast().and_then(unguardable_assignment).is_none(),
+            "a named binding is guardable"
+        );
+    }
+
+    /// A function's `else` after a body that fails, three ways (#1276):
+    /// `release-tracking.rego`'s `first_job(path)` answered `""` interpreted and
+    /// undefined on bytecode, over a path with no calls.
+    const FUNCTION_ELSE: &str = "package batten.e\nimport rego.v1\n\n\
+        f(x) := \"body\" if { x == 1 } else := \"else\"\n\n\
+        g(x) := m if { m := min({v | some v in x}) } else := \"else\"\n\n\
+        h(x) := c if {\n\ts := {v | some v in x}\n\tsome c in x\n\tc == min(s)\n} else := \"else\"\n\n\
+        i(x) := c if { some c in x } else := \"else\"\n\n\
+        j(x) := c if { c := x[_] } else := \"else\"\n\n\
+        k := c if { some c in input.none } else := \"else\"\n\n\
+        deny contains \"f\" if f(2) == \"else\"\n\n\
+        deny contains \"g\" if g([]) == \"else\"\n\n\
+        deny contains \"h\" if h([]) == \"else\"\n\n\
+        deny contains \"i\" if i([]) == \"else\"\n\n\
+        deny contains \"j\" if j([]) == \"else\"\n\n\
+        deny contains \"k\" if k == \"else\"\n";
+
+    /// The upstream defect, pinned: regorus 0.15's bytecode drops an `else`
+    /// after a body that fails by ITERATING NOTHING (`some c in []`, `x[_]`
+    /// over `[]`), where a body failing on a comparison or an undefined call
+    /// takes it. Batten therefore keeps every bundle with an `else` on the
+    /// interpreter ([`Fallback::RuleElse`]); this case says which spellings the
+    /// bytecode gets wrong, so the refusal can narrow when regorus is fixed.
+    #[test]
+    fn a_rule_else_after_an_empty_iteration_is_lost_on_bytecode() {
+        let interpreted = bundle_of("row", &[("policy/e.rego", FUNCTION_ELSE)]);
+        let all: Vec<String> = ["f", "g", "h", "i", "j", "k"].map(str::to_owned).into();
+        assert_eq!(verdicts(&interpreted, "{}"), Some(all), "interpreted");
+        let refused = Compiled::from_bundle(&interpreted, &serde_json::json!({}))
+            .err()
+            .expect("a bundle with an `else` is not compiled");
+        assert_eq!(refused.0, Fallback::RuleElse, "{refused:?}");
+        // What regorus's bytecode answers past the refusal: the `else` kept
+        // after a failing comparison (`f`) or an undefined call (`g`), and
+        // lost after every body that iterates nothing (`h` to `k`). When this
+        // fails, regorus changed: narrow `rule_else` to what it still drops.
+        let forced = bytecode_unchecked(bundle_of("row", &[("policy/e.rego", FUNCTION_ELSE)]));
+        assert_eq!(
+            verdicts(&forced, "{}"),
+            Some(vec!["f".to_owned(), "g".to_owned()]),
+            "the upstream defect, as regorus 0.15 has it"
+        );
+    }
+
+    /// A partial SET under a variable key, `f[k] contains v` (#1276): regorus
+    /// 0.15's bytecode answers it as the flat set of every `v`, dropping the
+    /// keys, where the interpreter (and OPA) answer `{k: {v, …}}`. Measured on
+    /// `module-layering.rego`'s `forbidden[from] contains to`. The upstream
+    /// repro is this module over `{}`: `data.batten.k.f` is `{"a": {"x"},
+    /// "b": {"y"}}` interpreted and `{"x", "y"}` on bytecode.
+    const KEYED_SET: &str = "package batten.k\nimport rego.v1\n\n\
+        f[k] contains v if {\n\tsome k, vs in {\"a\": {\"x\"}, \"b\": {\"y\"}}\n\tsome v in vs\n}\n\n\
+        deny contains \"keyed\" if f.b == {\"y\"}\n";
+
+    #[test]
+    fn a_keyed_partial_set_is_refused_bytecode_rather_than_flattened() {
+        let interpreted = bundle_of("row", &[("policy/k.rego", KEYED_SET)]);
+        assert_eq!(
+            verdicts(&interpreted, "{}"),
+            Some(vec!["keyed".to_owned()]),
+            "the interpreter answers the keyed set"
+        );
+        let refused = Compiled::from_bundle(&interpreted, &serde_json::json!({}))
+            .err()
+            .expect("the bytecode would flatten it, so it is not compiled");
+        assert_eq!(refused.0, Fallback::KeyedPartialSet, "{refused:?}");
+        assert!(
+            refused.1.contains("policy/k.rego"),
+            "names the module: {refused:?}"
+        );
+    }
+
+    /// The same undefined helper behind an ARRAY pattern, so the guard covers
+    /// every variable a pattern binds. No `with`: the RVM refuses the keyword
+    /// and such a bundle stays interpreted; where the guard lands after a
+    /// modifier is the text-level case below. Fails by: a pattern's variable
+    /// left unguarded.
+    const UNDEFINED_PAIR: &str = r#"package batten.pair
+
+import rego.v1
+
+rules contains "pair refused"
+
+pair(args) := [first, rest] if {
+	some i, word in args
+	word == "-m"
+	first := args[i + 1]
+	rest := args[i + 2]
+}
+
+violation contains {"rule": "pair refused", "verdict": "pair refused", "subjects": []} if {
+	some program in input.call.programs
+	[first, _] := pair(program.arguments)
+	not startswith(first, "feat")
+}
+"#;
+
+    #[test]
+    fn a_pattern_binding_an_undefined_helper_decides_alike_in_both_evaluators() {
+        let none = r#"{"call":{"programs":[{"arguments":["commit","--amend"]}]}}"#;
+        let wrong = r#"{"call":{"programs":[{"arguments":["commit","-m","fix","x"]}]}}"#;
+        let interpreted = bundle_of("row", &[("policy/p.rego", UNDEFINED_PAIR)]);
+        let compiled = bytecode(bundle_of("row", &[("policy/p.rego", UNDEFINED_PAIR)]));
+        assert!(compiled.is_bytecode());
+        for (evaluator, bundle) in [("interpreted", &interpreted), ("bytecode", &compiled)] {
+            assert_eq!(verdicts(bundle, none), Some(Vec::new()), "{evaluator}");
+            assert_eq!(
+                verdicts(bundle, wrong),
+                Some(vec!["pair refused".to_owned()]),
+                "{evaluator}"
+            );
+        }
+    }
+
+    /// Fails by: a `:=` statement left unguarded, a guard for `_` or for an `=`
+    /// statement, or a guard placed before the statement's `with` modifier.
+    #[test]
+    fn every_colon_binding_is_guarded_after_its_whole_statement() {
+        let module = "package batten.g\nimport rego.v1\n\nx if {\n\ta := input.a\n\t[b, _] := input.b with input.c as 1\n\td = input.d\n}\n";
+        let bundle = bundle_of("row", &[("policy/g.rego", module)]);
+        let guarded = guarded_sources(bundle.evaluator.engine().expect("interpreted"))
+            .expect("the AST serializes");
+        assert_eq!(
+            guarded,
+            vec![(
+                String::from("policy/g.rego"),
+                module
+                    .replacen("a := input.a", "a := input.a; a == a", 1)
+                    .replacen("with input.c as 1", "with input.c as 1; b == b", 1),
+            )]
+        );
+    }
+
+    /// Fails by: a bundle that dropped its interpreter keeping the reading or
+    /// the AST its interpreter had already rendered, so an AST reader judges
+    /// a bundle that no longer has one.
+    #[test]
+    fn a_bundle_that_drops_its_interpreter_drops_what_it_had_read() {
+        let bundle = bundle_of("row", &[("policy/d.rego", GATED)]);
+        assert!(bundle.ast().is_some(), "the interpreter renders its AST");
+        assert!(bundle.described().is_some(), "and describes it");
+        let compiled = bytecode(bundle);
+        assert!(compiled.is_bytecode());
+        assert!(compiled.ast().is_none(), "no interpreter, no AST");
+        assert!(compiled.described().is_none(), "no AST, no reading");
     }
 
     #[test]
@@ -4892,7 +8431,10 @@ rules contains not_quoted\n";
             bundle.described().is_none(),
             "bytecode carries no AST to describe"
         );
-        assert!(matches!(test(&bundle, "{}", false), Ok(Look::CouldNotLook)));
+        assert!(matches!(
+            test(&bundle, "{}", false, None),
+            Ok(Look::CouldNotLook)
+        ));
         let tok = Some(vec!["tok".to_owned()]);
         assert!(!Answers::open());
         let before = bytecode_evaluations();
@@ -4971,6 +8513,289 @@ rules contains not_quoted\n";
         assert_eq!(verdicts(&edited, "{}"), Some(vec!["edited".to_owned()]));
     }
 
+    /// Fails by: a suite program written to the cache never read back, so
+    /// every run recompiles and none decides on cached bytecode.
+    #[test]
+    fn a_warm_suite_decides_on_its_cached_program() {
+        let dir = crate::scratch::scratch("policy-suite-cache");
+        crate::testing::contain_state(&dir.join("state"));
+        let root = dir.join("repo");
+        std::fs::create_dir_all(&root).unwrap();
+        let bundle = bundle_of("suite-cached", &[("policy/a.rego", MODULE)]);
+        for _ in 0..2 {
+            test(&bundle, "{}", false, Some(&root)).unwrap();
+        }
+        assert!(
+            execution_census()
+                .iter()
+                .any(|(id, how, _)| id == "suite-cached"
+                    && *how == Execution::Bytecode { cached: true }),
+            "{:?}",
+            execution_census()
+        );
+    }
+
+    /// Fails by: an evaluator rendered as nothing in the `-vv` census.
+    #[test]
+    fn an_execution_names_its_evaluator() {
+        assert_eq!(
+            Execution::Bytecode { cached: true }.to_string(),
+            "bytecode cached"
+        );
+        assert_eq!(
+            Execution::Bytecode { cached: false }.to_string(),
+            "bytecode compiled"
+        );
+        assert_eq!(
+            Execution::Interpreted(Fallback::TestWith).to_string(),
+            format!("interpreter {}", Fallback::TestWith.as_str())
+        );
+    }
+
+    /// Fails by: `Fallback::as_str` answering `""` for every fallback, so the
+    /// `-vv` line and the evaluator report name no reason at all.
+    #[test]
+    fn every_fallback_names_its_own_token() {
+        let tokens = [
+            (Fallback::NotOffered, "not-offered"),
+            (Fallback::GuardUnavailable, "guard-unavailable"),
+            (Fallback::GuardedSourceRefused, "guarded-source-refused"),
+            (Fallback::NoAnsweredRule, "no-answered-rule"),
+            (Fallback::CompileRefused, "compile-refused"),
+            (Fallback::KeyedPartialSet, "keyed-partial-set"),
+            (Fallback::RuleElse, "rule-else"),
+            (Fallback::TestWith, "test-with"),
+        ];
+        for (fallback, token) in tokens {
+            assert_eq!(fallback.as_str(), token, "{fallback:?}");
+        }
+    }
+
+    /// Fails by: a rule both evaluators agree on reported as a split (the
+    /// comparison inverted), so the parity gate reads every bundle as split.
+    #[test]
+    fn rules_the_evaluators_agree_on_are_no_split() {
+        let bundle = bundle_of("row", &[("policy/a.rego", MODULE)]);
+        assert_eq!(
+            rule_splits(&bundle, &serde_json::json!({}), "{}"),
+            Vec::<String>::new()
+        );
+        assert_eq!(
+            rule_splits(
+                &bundle,
+                &serde_json::json!({}),
+                r#"{"call": {"operation": "write"}}"#
+            ),
+            Vec::<String>::new()
+        );
+    }
+
+    /// Fails by: the input paths the parity gate hollows answered as a fixed
+    /// path rather than those the non-test rules read.
+    #[test]
+    fn a_bundles_input_paths_are_what_its_rules_read() {
+        let bundle = bundle_of("row", &[("policy/a.rego", MODULE)]);
+        assert_eq!(input_paths(&bundle), ["call.operation"]);
+    }
+
+    /// Fails by: the interpreter kept on a bytecode bundle that was asked to
+    /// drop it, so its AST readers run on the engine bytecode replaced.
+    #[test]
+    fn a_bytecode_bundle_keeps_its_interpreter_only_when_asked() {
+        let dropped = bytecode(bundle_of("row", &[("policy/a.rego", MODULE)]));
+        assert!(dropped.evaluator.engine().is_none());
+        let bundle = bundle_of("row", &[("policy/a.rego", MODULE)]);
+        let kept = Compiled::from_bundle(&bundle, &serde_json::json!({}))
+            .expect("the fixture compiles to bytecode")
+            .into_bundle(bundle, true);
+        assert!(kept.evaluator.engine().is_some());
+    }
+
+    /// Fails by: a bundle that only defines helpers read as a compile
+    /// refusal (regorus words its undefined entry point "not a valid rule
+    /// path"), or a construct the bytecode compiler refuses read as a bundle
+    /// with nothing to answer.
+    #[test]
+    fn a_bundle_answering_nothing_is_told_from_one_the_compiler_refuses() {
+        let helpers = bundle_of(
+            "row",
+            &[(
+                "policy/a.rego",
+                "package batten.h\nimport rego.v1\n\nhelper(x) := x\n",
+            )],
+        );
+        let reason = Compiled::compile_unchecked(&helpers, &serde_json::json!({}))
+            .err()
+            .map(|(reason, _)| reason);
+        assert_eq!(reason, Some(Fallback::NoAnsweredRule));
+        let with = bundle_of(
+            "row",
+            &[(
+                "policy/a.rego",
+                "package batten.w\nimport rego.v1\n\ndeny contains \"t\" if {\n\tinput.a with input as {\"a\": true}\n}\n",
+            )],
+        );
+        let reason = Compiled::compile_unchecked(&with, &serde_json::json!({}))
+            .err()
+            .map(|(reason, _)| reason);
+        assert_eq!(reason, Some(Fallback::CompileRefused));
+        assert!(undefined_entry_point("not a valid rule path"));
+        assert!(!undefined_entry_point("with is not supported"));
+    }
+
+    /// Fails by: a string literal's opening delimiter missed (the bound read
+    /// as `>=`, which underflows at offset 0, or the step back as `/`).
+    #[test]
+    fn a_span_widens_over_its_string_delimiters() {
+        let text = "x \"ab\" y";
+        assert_eq!(spanned(text, 3, 5), Some("\"ab\""));
+        assert_eq!(spanned(text, 0, 1), Some("x"));
+        assert_eq!(spanned("\"ab\"", 1, 3), Some("\"ab\""));
+    }
+
+    /// Fails by: a key held only by a nested value missed when the outer
+    /// object does not also hold it, or one held at the top missed.
+    #[test]
+    fn a_key_is_held_at_any_depth() {
+        assert!(holds_key(&serde_json::json!({"a": {"b": 1}}), "a"));
+        assert!(holds_key(&serde_json::json!({"x": [{"b": 1}]}), "b"));
+        assert!(!holds_key(&serde_json::json!({"x": 1}), "b"));
+    }
+
+    /// Fails by: a `with` statement cut from the byte before its start when
+    /// no delimiter is there (`||` for `&&`, which also underflows at 0) or
+    /// from after a delimiter (`+` for `-`); or an edit whose start falls
+    /// inside a character applied (`&&` for `||`), which panics.
+    #[test]
+    fn a_with_statement_is_cut_at_its_own_start() {
+        let facts: BTreeMap<String, RuleFacts> = [(
+            String::from("v"),
+            RuleFacts {
+                reads: true,
+                ..RuleFacts::default()
+            },
+        )]
+        .into();
+        let locals = BTreeSet::new();
+        let case = |text| CaseText {
+            text,
+            package: "p",
+            facts: &facts,
+            locals: &locals,
+        };
+        let cut_at = |at: usize| [serde_json::json!({"span": {"start": at, "end": at + 4}})];
+        let bare = case("ab cd WITH");
+        assert_eq!(
+            redirected_statement(&bare, 3, &cut_at(6), &[], "k"),
+            Ok((String::from("cd"), BTreeSet::new()))
+        );
+        let quoted = case("a\"b\" WITH");
+        assert_eq!(
+            redirected_statement(&quoted, 2, &cut_at(5), &[], "k"),
+            Ok((String::from("\"b\""), BTreeSet::new()))
+        );
+        let wide = case("\u{e9}x WITH");
+        let inside = [(String::from("v"), 1, 2, false)];
+        assert_eq!(
+            redirected_statement(&wide, 0, &cut_at(3), &inside, "k"),
+            Err(String::from("a span off its text"))
+        );
+    }
+
+    /// Fails by: a `with` over one key of the pattern table refused as a
+    /// `with` on an unsupported path.
+    #[test]
+    fn a_with_over_one_pattern_key_is_a_pattern_override() {
+        let facts = BTreeMap::new();
+        let locals = BTreeSet::new();
+        let case = CaseText {
+            text: "x with data.batten.patterns.k as 1",
+            package: "p",
+            facts: &facts,
+            locals: &locals,
+        };
+        let modifier = |path: &str| {
+            serde_json::json!({
+                "refr": {"Var": {"value": path}},
+                "as": {"Number": {"span": {"start": 33, "end": 34}}},
+            })
+        };
+        let mut context = PlannedContext {
+            key: String::from("k"),
+            input: None,
+            patterns: Vec::new(),
+            rules: Vec::new(),
+        };
+        let mut prelude = String::new();
+        with_terms(
+            &case,
+            &[modifier("data.batten.patterns.k")],
+            (0, 0),
+            None,
+            &mut context,
+            &mut prelude,
+        )
+        .unwrap();
+        assert_eq!(
+            context.patterns,
+            [(
+                Some(String::from("k")),
+                String::from("data.p.__batten_in_0_0_0")
+            )]
+        );
+        assert!(
+            with_terms(
+                &case,
+                &[modifier("data.batten.patterns.k.deeper")],
+                (0, 0),
+                None,
+                &mut context,
+                &mut prelude,
+            )
+            .is_err()
+        );
+    }
+
+    /// Fails by: the no-case early answer inverted, so a bundle WITH cases
+    /// is never compared and its case that cannot go on bytecode is unsaid.
+    #[test]
+    fn a_case_that_cannot_go_on_bytecode_is_a_suite_split() {
+        let module = "package batten.w\nimport rego.v1\n\nrules contains \"w\"\n\n\
+            violation contains {\"rule\": \"w\", \"verdict\": \"w\"} if {\n\tdata.other.on\n}\n\n\
+            test_w if {\n\tcount(violation) == 1 with data.other as {\"on\": true}\n}\n";
+        let bundle = bundle_of("with-other", &[("policy/w.rego", module)]);
+        let splits = suite_splits(&bundle, "{}");
+        assert_eq!(
+            splits,
+            ["with-other: test-with: no case the suite program can express"]
+        );
+    }
+
+    /// Fails by: the coverage sweep's batch grown by addition rather than
+    /// doubled, or its case count read as zero: a predicate first entered by
+    /// the fourth of seven cases is answered after a sweep of all seven
+    /// (batches of 1, 2 and 4), where `+= 2` stops at four.
+    #[test]
+    fn the_coverage_sweep_doubles_its_batch_and_counts_each_case() {
+        let trivial = |name: &str| format!("test_{name} if {{\n\ttrue\n}}\n\n");
+        let module = format!(
+            "package batten.v\nimport rego.v1\n\nrules contains \"v\"\n\n\
+             violation contains {{\"rule\": \"v\", \"verdict\": \"v\"}} if {{\n\tinput.go\n}}\n\n\
+             {}{}{}test_d if {{\n\tcount(violation) == 1 with input as {{\"go\": true}}\n}}\n\n{}{}{}",
+            trivial("a"),
+            trivial("b"),
+            trivial("c"),
+            trivial("e"),
+            trivial("f"),
+            trivial("g"),
+        );
+        let bundle = bundle_of("swept", &[("policy/v.rego", module.as_str())]);
+        let before = coverage_cases();
+        let suite = suite_of(&bundle, false);
+        assert!(suite.unexercised.is_empty(), "{:?}", suite.unexercised);
+        assert_eq!(coverage_cases() - before, 7);
+    }
+
     #[test]
     fn the_hot_path_reads_a_module_without_its_tests_and_every_other_load_whole() {
         let root = crate::scratch::scratch("policy-read-sources");
@@ -5007,27 +8832,29 @@ rules contains not_quoted\n";
     }
 
     /// Two tree modules, one reading a provider's language, and one mediated.
-    const MIXED: crate::preset::Manifest = crate::preset::Manifest {
+    const MIXED: crate::preset_catalog::Manifest = crate::preset_catalog::Manifest {
         name: "mixed",
-        version: 1,
+        version: semver::Version::new(0, 0, 1),
+        suggested: true,
+        install: None,
         modules: &[
-            crate::preset::PresetModule {
-                scope: crate::rules::RuleScope::Tree,
+            crate::preset_catalog::PresetModule {
+                scope: crate::preset_catalog::RuleScope::Tree,
                 provider: None,
                 pointer: "<preset:mixed>/t1.rego",
-                source: "package t1\n",
+                embedded_source: "package t1\n",
             },
-            crate::preset::PresetModule {
-                scope: crate::rules::RuleScope::Tree,
+            crate::preset_catalog::PresetModule {
+                scope: crate::preset_catalog::RuleScope::Tree,
                 provider: Some("github"),
                 pointer: "<preset:mixed>/t2.rego",
-                source: "package t2\n",
+                embedded_source: "package t2\n",
             },
-            crate::preset::PresetModule {
-                scope: crate::rules::RuleScope::MediatedCall,
+            crate::preset_catalog::PresetModule {
+                scope: crate::preset_catalog::RuleScope::MediatedCall,
                 provider: None,
                 pointer: "<preset:mixed>/m.rego",
-                source: "package m\n",
+                embedded_source: "package m\n",
             },
         ],
         verdicts: &[],
@@ -5132,7 +8959,7 @@ deny contains \"tok\" if {\n\tinput.go\n}\n";
     #[test]
     fn a_module_raises_only_live_declared_tokens_and_names_them_literally() {
         let row = module_row("a", "mediated_call", "");
-        let check = |bundle: &Bundle, registry: &[crate::verdict::DeclaredVerdict]| {
+        let check = |bundle: &Bundle, registry: &[crate::config_model::DeclaredVerdict]| {
             check_verdicts_are_declared(&row, bundle, registry, "policy/a.rego")
                 .map_err(|err| format!("{err:#}"))
         };
@@ -5198,7 +9025,7 @@ deny contains \"tok\" if {\n\tinput.go\n}\n";
         let tokens = collidable_tokens(&[live, retired]);
         assert!(tokens.contains("x y z") && !tokens.contains("old y z"));
         assert!(tokens.contains(native));
-        let vendored = crate::preset::verdict_rows()
+        let vendored = crate::config_check::preset::verdict_rows()
             .into_iter()
             .next()
             .expect("a vendored class");
@@ -5216,7 +9043,7 @@ deny contains \"tok\" if {\n\tinput.go\n}\n";
     #[test]
     fn ids_are_held_to_the_grammar_claimed_once_and_declared_before_a_severity_names_them() {
         let sources = sources_of(&[("policy/x.rego", "rules contains \"x\"\n")]);
-        let grammar = crate::verdict::Vocabulary::default();
+        let grammar = crate::config_model::Vocabulary::default();
         let x = BTreeSet::from(["x".to_owned()]);
         assert!(check_finding_ids(&sources, Some(&grammar), &BTreeSet::new()).is_err());
         assert!(check_finding_ids(&sources, Some(&grammar), &x).is_ok());
@@ -5272,6 +9099,23 @@ test_n_is_declared_and_quiet if {\n\t\"n\" in rules\n\thelper == \"z\"\n\
         assert_eq!(suite.unexercised, vec!["n".to_owned()]);
     }
 
+    /// Fails by: the coverage sweep's batch shrinking rather than doubling,
+    /// so it never runs past the first case and a predicate only the second
+    /// case fires is never entered. A sweep that spins instead hangs the case,
+    /// and the mutation judge's per-case cut files that as the timeout it is
+    /// (CLOUD-2789): the case waits on the sweep ending, never on a clock.
+    #[test]
+    fn a_predicate_only_a_later_case_fires_is_exercised() {
+        let module = "package batten.n\nimport rego.v1\n\nrules contains \"n\"\n\n\
+violation contains {\"rule\": \"n\", \"verdict\": \"n\"} if {\n\tinput.call.operation == \"write\"\n}\n\n\
+test_a_quiet if {\n\tcount(violation) == 0 with input as {\"call\": {\"operation\": \"read\"}}\n}\n\n\
+test_b_fires if {\n\tcount(violation) == 1 with input as {\"call\": {\"operation\": \"write\"}}\n}\n";
+        let suite = suite_of(&bundle_of("row", &[("policy/n.rego", module)]), false);
+        let (passed, unexercised) = (suite.passed.len(), suite.unexercised);
+        assert_eq!(passed, 2);
+        assert!(unexercised.is_empty(), "{unexercised:?}");
+    }
+
     #[test]
     fn a_sweep_names_the_modules_it_never_entered() {
         let dark = "package batten.f\nimport rego.v1\n\nf(x) := x\n";
@@ -5296,15 +9140,646 @@ test_n_is_declared_and_quiet if {\n\t\"n\" in rules\n\thelper == \"z\"\n\
         preset.preset = None;
         assert!(source_key(&preset).is_err());
 
-        let mut config: crate::config::Config = toml::from_str("version = 1\n").unwrap();
+        let mut config: crate::config_model::Config = toml::from_str("version = 1\n").unwrap();
         assert!(Vocabulary::from(&config).words.is_none());
         config
             .vocabulary
             .subject
-            .push(crate::verdict::VocabularyWord {
+            .push(crate::config_model::VocabularyWord {
                 word: "x".to_owned(),
                 gloss: "g".to_owned(),
             });
         assert!(Vocabulary::from(&config).words.is_some());
+    }
+
+    // ── step 13a: the tree read set ────────────────────────────────────────
+
+    /// A tree-scope module with `body` as its one rule body.
+    fn reading(body: &str) -> String {
+        format!(
+            "package batten.reads\n\nimport rego.v1\n\nrules contains \"x probe probex\"\n\n\
+             violation contains {{\"rule\": \"x probe probex\", \"verdict\": \"x probe probex\", \
+             \"subjects\": []}} if {{\n{body}\n}}\n"
+        )
+    }
+
+    fn reads_of(body: &str) -> Reads {
+        let module = reading(body);
+        bundle_of("row", &[("policy/r.rego", &module)]).tree_reads()
+    }
+
+    fn known(keys: &[&str]) -> Reads {
+        Reads::Known(keys.iter().map(|key| (*key).to_owned()).collect())
+    }
+
+    #[test]
+    fn a_dotted_or_literal_index_read_names_its_key() {
+        assert_eq!(
+            reads_of("\tsome path, _ in input.tree.documents\n\tpath != \"\""),
+            known(&["documents"])
+        );
+        assert_eq!(
+            reads_of("\tinput.tree[\"git-index\"] != null"),
+            known(&["git-index"]),
+            "a string-literal index is the dotted read"
+        );
+    }
+
+    #[test]
+    fn a_read_this_reader_cannot_name_is_opaque() {
+        // An alias, a variable index, a bare `input`, and the other surface: each
+        // could read any key, so none may be read as a closed set.
+        for body in [
+            "\tt := input.tree\n\tt.documents != null",
+            "\tsome k\n\tinput.tree[k] != null",
+            "\tx := input\n\tx.tree.documents != null",
+            "\tinput.facts.receipts != null",
+            "\tinput.call.command != null",
+        ] {
+            assert_eq!(reads_of(body), Reads::Opaque, "{body}");
+        }
+    }
+
+    #[test]
+    fn a_test_rules_with_input_is_not_a_read_of_the_enforced_rules() {
+        // CLOUD-2329: 79 of the 106 tree policy rows read as `Opaque` only because
+        // their own `test_` cases rebind `input` with `with input as {...}`. An
+        // enforce never queries a `test_` rule, so its rebinding is no read.
+        let module = format!(
+            "{}\ntest_fires if {{\n\tcount(violation) == 1 with input as {{\"tree\": {{\"documents\": {{}}}}}}\n}}\n",
+            reading("\tinput.tree.documents != null")
+        );
+        assert_eq!(
+            bundle_of("row", &[("policy/r.rego", &module)]).tree_reads(),
+            known(&["documents"])
+        );
+        // The same `with` in a rule an enforce DOES evaluate stays opaque.
+        assert_eq!(
+            reads_of("\tcount(input.tree.documents) == 0 with input as {}"),
+            Reads::Opaque
+        );
+    }
+
+    #[test]
+    fn a_chain_records_its_longest_read_and_never_its_head() {
+        // THE FIX THE OPAQUE ARM DEPENDS ON: the walk used to record every link of
+        // a chain, so `input.tree.documents` also recorded `tree` and every module
+        // would have read as a bare `input.tree`.
+        let module = reading("\tinput.tree.documents.x != null");
+        let bundle = bundle_of("row", &[("policy/r.rego", &module)]);
+        let described = bundle.described().expect("the fixture describes");
+        let paths: Vec<&String> = described
+            .iter()
+            .flat_map(|module| module.rules.iter())
+            .flat_map(|rule| rule.input_paths.iter())
+            .collect();
+        assert_eq!(paths, vec!["tree.documents.x"]);
+    }
+
+    #[test]
+    fn bytecode_carries_the_read_set_and_an_entry_without_one_is_opaque() {
+        let module = reading("\tsome path, _ in input.tree.lines\n\tpath != \"\"");
+        let sources = sources_of(&[("policy/r.rego", &module)]);
+        let data = serde_json::json!({});
+        let bundle = compile("row", &sources, &data).expect("the fixture compiles");
+        let compiled =
+            Compiled::from_bundle(&bundle, &data).expect("the fixture compiles to bytecode");
+        let carried =
+            compiled.into_bundle(compile("row", &sources, &data).expect("compiles"), false);
+        assert!(carried.is_bytecode());
+        assert_eq!(carried.tree_reads(), known(&["lines"]));
+        // An entry written before the read set existed deserialises with none.
+        let header: CacheHeader =
+            serde_json::from_str(r#"{"declared":[],"packages":[],"entries":[],"facts":[]}"#)
+                .expect("an old header still parses");
+        assert!(header.reads.is_none(), "an old entry carries no read set");
+        let old = Compiled::from_bundle(&bundle, &data).expect("bytecode");
+        let old = Compiled {
+            reads: header.reads,
+            ..old
+        }
+        .into_bundle(bundle, false);
+        assert_eq!(old.tree_reads(), Reads::Opaque);
+    }
+
+    /// Fails by: an interpreted bundle describing its read set afresh where an
+    /// entry under its key holds one (both halves of a split `enforce`
+    /// classifying from scratch), the entry it writes read back as bytecode,
+    /// or the set it writes not the one it describes.
+    #[test]
+    fn an_interpreted_bundle_reads_its_read_set_off_the_entry_under_its_key() {
+        let module = reading("\tsome path, _ in input.tree.lines\n\tpath != \"\"");
+        let sources = sources_of(&[("policy/r.rego", &module)]);
+        let data = serde_json::json!({});
+        let path = crate::scratch::scratch("policy-interpreted-reads").join("row.rvm");
+        let key = cache_key("row", &sources, &[0; 32]);
+        let first = compile("row", &sources, &data).expect("the fixture compiles");
+        remember_reads(&path, &key, &first);
+        assert_eq!(first.tree_reads(), known(&["lines"]));
+        assert!(
+            read_cached(&path, &key, "row", &sources, "{}").is_none(),
+            "a read set alone is no bytecode"
+        );
+        let second = compile("row", &sources, &data).expect("the fixture compiles");
+        remember_reads(&path, &key, &second);
+        assert_eq!(second.tree_reads(), known(&["lines"]), "read back");
+        // A SENTINEL THE MODULE NEVER READS proves the entry answered, not a
+        // fresh description.
+        let header = CacheHeader {
+            declared: BTreeSet::new(),
+            packages: BTreeSet::new(),
+            entries: BTreeSet::new(),
+            facts: Vec::new(),
+            reads: Some(vec![String::from("sentinel")]),
+        };
+        let mut bytes = serde_json::to_vec(&header).unwrap();
+        bytes.push(b'\n');
+        crate::cache::write(&path, &key, &bytes);
+        let third = compile("row", &sources, &data).expect("the fixture compiles");
+        remember_reads(&path, &key, &third);
+        assert_eq!(third.tree_reads(), known(&["sentinel"]));
+    }
+
+    /// Fails by: a string's span widened past its opening quote.
+    #[test]
+    fn a_string_span_widens_over_exactly_its_delimiters() {
+        assert_eq!(spanned("x \"ab\" y", 3, 5), Some("\"ab\""));
+        assert_eq!(spanned("x ab y", 2, 4), Some("ab"));
+    }
+
+    /// Fails by: a reading rule refused under `with` only when it is both
+    /// called and a function (`||` for `&&`), so a call of a reading rule, or a
+    /// reading function named bare, is redirected instead of refused.
+    #[test]
+    fn a_reading_function_or_a_called_reader_under_with_is_refused() {
+        let refused = Err(String::from("a function reading the input under `with`"));
+        let locals = BTreeSet::new();
+        let mods = [serde_json::json!({"span": {"start": 6, "end": 10}})];
+        for (function, called) in [(false, true), (true, false)] {
+            let facts: BTreeMap<String, RuleFacts> = [(
+                String::from("r"),
+                RuleFacts {
+                    reads: true,
+                    function,
+                    ..RuleFacts::default()
+                },
+            )]
+            .into();
+            let case = CaseText {
+                text: "x := r WITH",
+                package: "p",
+                facts: &facts,
+                locals: &locals,
+            };
+            assert_eq!(
+                redirected_statement(&case, 0, &mods, &[(String::from("r"), 5, 6, called)], "k"),
+                refused,
+                "function {function}, called {called}"
+            );
+        }
+    }
+
+    /// Fails by: a rewrite whose start falls inside a character applied (a
+    /// panic) because its end happens to fall on a boundary.
+    #[test]
+    fn a_rewrite_off_a_char_boundary_at_either_end_is_refused() {
+        let facts: std::collections::BTreeMap<String, RuleFacts> = std::iter::once((
+            "r".to_owned(),
+            RuleFacts {
+                reads: true,
+                ..RuleFacts::default()
+            },
+        ))
+        .collect();
+        let locals = std::collections::BTreeSet::new();
+        let case = CaseText {
+            text: "\u{e9}\u{e9} r",
+            package: "p",
+            facts: &facts,
+            locals: &locals,
+        };
+        let mods = [serde_json::json!({"span": {"start": 6, "end": 6}})];
+        let at = |start: usize, end: usize| {
+            redirected_statement(&case, 0, &mods, &[("r".to_owned(), start, end, false)], "k")
+        };
+        assert_eq!(at(1, 5), Err(String::from("a span off its text")));
+        assert_eq!(at(5, 6).map(|(_, read)| read.len()), Ok(1));
+    }
+
+    /// Fails by: a span starting at byte 0 widened backwards, which underflows.
+    #[test]
+    fn a_span_at_the_start_of_the_text_is_not_widened_backwards() {
+        assert_eq!(spanned("ab", 0, 2), Some("ab"));
+        assert_eq!(spanned("\"ab\"", 1, 3), Some("\"ab\""));
+    }
+
+    /// Fails by: a key held by the node itself missed unless a value under it
+    /// holds the key too.
+    #[test]
+    fn a_key_the_node_itself_holds_is_held() {
+        assert!(holds_key(&serde_json::json!({"Var": 1}), "Var"));
+        assert!(holds_key(&serde_json::json!([{"x": {"Var": 1}}]), "Var"));
+        assert!(!holds_key(&serde_json::json!({"x": 1}), "Var"));
+    }
+
+    /// Fails by: the parity gate nulling a path no rule reads, and none it does.
+    #[test]
+    fn the_input_paths_are_the_ones_a_rule_reads() {
+        let paths = input_paths(&bundle_of("row", &[("policy/a.rego", MODULE)]));
+        assert!(
+            paths.iter().any(|path| path.contains("operation")),
+            "{paths:?}"
+        );
+        assert!(
+            !paths.iter().any(|path| path.contains("xyzzy")),
+            "{paths:?}"
+        );
+    }
+
+    /// A module whose case binds its pattern row with a single-segment `with`.
+    const PATTERNED: &str = "package batten.p\nimport rego.v1\n\nrules contains \"p\"\n\n\
+violation contains {\"rule\": \"p\", \"verdict\": \"p\"} if {\n\tsome word in data.batten.patterns.p\n\tinput.call.command == word\n}\n\n\
+test_p_matches if {\n\tcount(violation) == 1 with input as {\"call\": {\"command\": \"x\"}} with data.batten.patterns.p as [\"x\"]\n}\n";
+
+    /// A `with` on one pattern row is planned: the plan refuses only a deeper
+    /// path. What the planned case then decides is the run's, not the plan's,
+    /// so every line this suite reports names the case it planned.
+    ///
+    /// Fails by: `with data.batten.patterns.p` refused at planning, as though
+    /// it named a path inside a row, which leaves the suite program no case.
+    #[test]
+    fn a_with_on_one_pattern_row_is_planned() {
+        let bundle = bundle_of("row", &[("policy/p.rego", PATTERNED)]);
+        let splits = suite_splits(&bundle, "{}");
+        assert!(
+            splits
+                .iter()
+                .all(|line| line.contains("test_p_matches") && !line.contains("a `with` on")),
+            "{splits:?}"
+        );
+    }
+
+    /// Fails by: a suite carrying cases skipped as though it had none, so an
+    /// input the program cannot read is never reported.
+    #[test]
+    fn a_suite_with_cases_reports_an_input_it_cannot_read() {
+        let bundle = bundle_of("row", &[("policy/a.rego", MODULE)]);
+        let splits = suite_splits(&bundle, "not json");
+        assert!(
+            splits
+                .iter()
+                .any(|line| line.contains("the input will not parse")),
+            "{splits:?}"
+        );
+    }
+
+    /// Fails by: a rule the bytecode and the interpreter answer alike reported
+    /// as a split.
+    #[test]
+    fn a_rule_both_evaluators_answer_alike_is_no_split() {
+        let bundle = bundle_of("row", &[("policy/a.rego", MODULE)]);
+        let input = r#"{"call": {"operation": "write"}}"#;
+        assert_eq!(
+            rule_splits(&bundle, &serde_json::json!({}), input),
+            Vec::<String>::new()
+        );
+    }
+
+    /// Eight cases, only `test_5` entering the predicate: the sweep doubles its
+    /// batches (1, 2, 4), so it stops after seven cases, where batches growing
+    /// by one (1, 2, 3) stop after six. Each nextest case is its own process,
+    /// so the counter's delta is this sweep's alone.
+    ///
+    /// Fails by: the batches growing by addition, which pays a sweep per case
+    /// on a suite that covers its predicates late.
+    #[test]
+    fn the_coverage_sweep_doubles_its_batches() {
+        let mut module = String::from(
+            "package batten.d\nimport rego.v1\n\nrules contains \"d\"\n\n\
+violation contains {\"rule\": \"d\", \"verdict\": \"d\"} if {\n\tinput.call.operation == \"write\"\n}\n",
+        );
+        for case in 1..=8 {
+            if case == 5 {
+                module.push_str("\ntest_5 if {\n\tcount(violation) == 1 with input as {\"call\": {\"operation\": \"write\"}}\n}\n");
+            } else {
+                for piece in ["\ntest_", &case.to_string(), " if {\n\ttrue\n}\n"] {
+                    module.push_str(piece);
+                }
+            }
+        }
+        let bundle = bundle_of("row", &[("policy/d.rego", &module)]);
+        let before = coverage_cases();
+        let suite = suite_of(&bundle, false);
+        assert!(suite.unexercised.is_empty(), "{:?}", suite.unexercised);
+        assert_eq!(coverage_cases() - before, 7);
+    }
+
+    /// Fails by: a fallback reason with no token, or two sharing one, so a
+    /// `-vv` count cannot say which refusal kept a bundle off bytecode.
+    #[test]
+    fn every_fallback_names_its_own_stable_token() {
+        let all = [
+            Fallback::NotOffered,
+            Fallback::GuardUnavailable,
+            Fallback::GuardedSourceRefused,
+            Fallback::NoAnsweredRule,
+            Fallback::CompileRefused,
+            Fallback::KeyedPartialSet,
+            Fallback::RuleElse,
+            Fallback::TestWith,
+        ];
+        let tokens: BTreeSet<&str> = all.iter().map(|why| why.as_str()).collect();
+        assert_eq!(tokens.len(), all.len(), "{tokens:?}");
+        assert!(!tokens.contains(""), "{tokens:?}");
+        assert_eq!(Fallback::RuleElse.as_str(), "rule-else");
+    }
+
+    /// Fails by: a detail invented for a bundle the compiler never refused, or
+    /// the compiler's own words replaced.
+    #[test]
+    fn a_fallback_detail_is_the_refusal_said_and_nothing_else() {
+        let module = [("policy/d.rego", GATED)];
+        assert_eq!(bundle_of("row", &module).fallback_detail(), None);
+        assert_eq!(bytecode(bundle_of("row", &module)).fallback_detail(), None);
+        let refused = interpreted_because(bundle_of("row", &module), Fallback::RuleElse, &"why");
+        assert_eq!(refused.fallback_detail(), Some("why"));
+    }
+
+    /// Fails by: a statement whose previous line merely ENDS in `if` (a
+    /// reference like `input.motif`) read as a braceless body, so the binding
+    /// and its guard are wrapped in braces the body never had.
+    #[test]
+    fn a_line_ending_in_if_inside_a_braced_body_is_not_a_braceless_head() {
+        const MOTIF: &str = "package batten.m\nimport rego.v1\n\n\
+            deny contains p if {\n\tinput.motif\n\tp := 1\n}\n";
+        let guarded = guarded_sources(
+            bundle_of("row", &[("policy/m.rego", MOTIF)])
+                .evaluator
+                .engine()
+                .expect("interpreted"),
+        )
+        .expect("the guard splices");
+        assert!(
+            guarded[0].1.contains("\tp := 1; p == p\n"),
+            "{}",
+            guarded[0].1
+        );
+        assert!(!guarded[0].1.contains("{ p :="), "{}", guarded[0].1);
+    }
+
+    /// Fails by: the parity gate handed no input path to null, so a fact the
+    /// rules read is never tried absent.
+    #[test]
+    fn input_paths_name_what_the_rules_read() {
+        let paths = input_paths(&bundle_of("row", &[("policy/a.rego", MODULE)]));
+        assert!(paths.contains(&"call.operation".to_owned()), "{paths:?}");
+    }
+
+    /// Fails by: a bundle that answers no rule the boundary reads reported as
+    /// the compiler refusing it.
+    #[test]
+    fn a_bundle_answering_no_rule_is_said_so_not_refused() {
+        const NONE: &str = "package batten.none\nimport rego.v1\n\nhelper := 1\n";
+        let refused = Compiled::from_bundle(
+            &bundle_of("row", &[("policy/none.rego", NONE)]),
+            &serde_json::json!({}),
+        )
+        .err()
+        .expect("nothing to answer");
+        assert_eq!(refused.0, Fallback::NoAnsweredRule, "{refused:?}");
+    }
+
+    /// Fails by: a string literal's opening delimiter, which regorus's span
+    /// excludes, left off the desugared text.
+    #[test]
+    fn a_span_is_widened_over_both_string_delimiters() {
+        assert_eq!(spanned("a \"x\" b", 3, 4), Some("\"x\""));
+        assert_eq!(spanned("a `y` b", 3, 4), Some("`y`"));
+        assert_eq!(spanned("x == 1", 0, 6), Some("x == 1"));
+    }
+
+    /// Fails by: two array answers that differ reported as their whole
+    /// renderings rather than as what each holds alone. Over the keyed set
+    /// regorus 0.15's bytecode flattens, `a` is `[]` on bytecode and `["y"]`
+    /// interpreted.
+    #[test]
+    fn an_array_split_names_the_members_each_side_holds_alone() {
+        const ARRAYED: &str = "package batten.k\nimport rego.v1\n\n\
+            f[k] contains v if {\n\tsome k, vs in {\"a\": {\"x\"}, \"b\": {\"y\"}}\n\tsome v in vs\n}\n\n\
+            a := [v | some v in f.b]\n\n\
+            deny contains \"keyed\" if f.b == {\"y\"}\n";
+        let bundle = bundle_of("row", &[("policy/k.rego", ARRAYED)]);
+        let found = rule_splits(&bundle, &serde_json::json!({}), "{}");
+        assert!(
+            found
+                .iter()
+                .any(|line| line.ends_with(".a: only bytecode [] only interpreter [\"y\"]")),
+            "{found:?}"
+        );
+    }
+
+    fn splits(source: &str) -> Vec<String> {
+        suite_splits(&bundle_of("row", &[("policy/s.rego", source)]), "{}")
+    }
+
+    /// Fails by: a bundle whose cases all decide alike reported as split.
+    #[test]
+    fn a_suite_deciding_alike_has_no_splits() {
+        assert_eq!(splits(MODULE), Vec::<String>::new());
+    }
+
+    /// Fails by: a statement that starts with a string literal desugared
+    /// without its opening quote, plain or under `with`, so the suite program
+    /// will not compile and no case decides on bytecode.
+    #[test]
+    fn a_statement_opening_on_a_string_desugars_whole() {
+        const STRINGS: &str = "package batten.s\nimport rego.v1\n\n\
+            names := input.n\n\n\
+            test_plain if {\n\t\"a\" in [\"a\"]\n}\n\n\
+            test_with if {\n\t\"a\" in names with input as {\"n\": [\"a\"]}\n}\n";
+        assert_eq!(splits(STRINGS), Vec::<String>::new());
+    }
+
+    /// Fails by: a `with` term reading a case's own binding not hoisted under
+    /// the statements that bind it, so the term names an unbound variable.
+    #[test]
+    fn a_with_term_reading_a_case_binding_is_hoisted() {
+        const HOISTED: &str = "package batten.h\nimport rego.v1\n\n\
+            p if input.v == 1\n\n\
+            test_x if {\n\tx := {\"v\": 1}\n\tp with input as x\n}\n";
+        assert_eq!(splits(HOISTED), Vec::<String>::new());
+    }
+
+    /// Fails by: `=` binding only its left side, so a variable unified on the
+    /// RIGHT is not one of the case's own and the `with` term reading it is
+    /// left unhoisted, naming an unbound variable.
+    #[test]
+    fn a_with_term_reading_a_variable_unified_on_the_right_is_hoisted() {
+        const HOISTED: &str = "package batten.h\nimport rego.v1\n\n\
+            p if input.v == 1\n\n\
+            test_x if {\n\t{\"v\": 1} = x\n\tp with input as x\n}\n";
+        assert_eq!(splits(HOISTED), Vec::<String>::new());
+    }
+
+    /// Fails by: a read of `input` under `with` desugared rather than refused.
+    #[test]
+    fn a_read_of_input_under_with_stays_on_the_interpreter() {
+        const READ: &str = "package batten.i\nimport rego.v1\n\n\
+            test_i if {\n\tinput.x == 1 with input as {\"x\": 1}\n}\n\n\
+            test_plain if {\n\t1 == 1\n}\n";
+        let found = splits(READ);
+        assert!(
+            found
+                .iter()
+                .any(|line| line.contains("a read of `input` or `data` under `with`")),
+            "{found:?}"
+        );
+    }
+
+    /// Fails by: a `:=` binding's right side taken as bound, as only `=`'s is,
+    /// so `input` read before a `with` counts as a case local and the read of
+    /// `input` under `with` is desugared rather than refused (CLOUD-2789).
+    #[test]
+    fn a_colon_assignment_reading_input_binds_only_its_left_side() {
+        const READ: &str = "package batten.c\nimport rego.v1\n\n\
+            test_c if {\n\ty := input\n\tinput.x == 1 with input as {\"x\": 1}\n}\n\n\
+            test_plain if {\n\t1 == 1\n}\n";
+        let found = splits(READ);
+        assert!(
+            found
+                .iter()
+                .any(|line| line.contains("a read of `input` or `data` under `with`")),
+            "{found:?}"
+        );
+    }
+
+    /// Fails by: a helper that writes its own `with` not recorded as one, so a
+    /// case calling it is desugared as if the helper were plain.
+    #[test]
+    fn a_case_calling_a_helper_that_writes_with_stays_on_the_interpreter() {
+        const HELPER: &str = "package batten.w\nimport rego.v1\n\n\
+            h if {\n\tinput.x == 1 with input as {\"x\": 1}\n}\n\n\
+            test_h if {\n\th\n}\n\n\
+            test_plain if {\n\t1 == 1\n}\n";
+        let found = splits(HELPER);
+        assert!(
+            found
+                .iter()
+                .any(|line| line.contains("a helper that writes its own `with`")),
+            "{found:?}"
+        );
+    }
+
+    /// Fails by: a cached suite program not read back as one, so every run
+    /// recompiles it.
+    #[test]
+    fn a_written_suite_program_reads_back_as_cached() {
+        let bundle = bundle_of("row", &[("policy/a.rego", MODULE)]);
+        let engine = bundle.evaluator.engine().expect("interpreted");
+        let Ok(program) = SuiteProgram::compile(engine) else {
+            panic!("the suite compiles");
+        };
+        assert!(!program.cached);
+        let path = crate::scratch::scratch("suite-program-cache").join("row.rvm");
+        program.write(&path, "key");
+        let read = SuiteProgram::read(&path, "key", engine).expect("read back");
+        assert!(read.cached);
+        assert_eq!(read.tests.len(), program.tests.len());
+    }
+
+    /// Fails by: the coverage census counting a batch by more than the cases
+    /// it ran. Three cases that never enter the predicate are swept in two
+    /// batches, one case then two.
+    #[test]
+    fn the_coverage_census_counts_each_swept_case_once() {
+        const UNENTERED: &str = "package batten.n\nimport rego.v1\n\nrules contains \"n\"\n\n\
+violation contains {\"rule\": \"n\", \"verdict\": \"n\"} if {\n\tinput.call.operation == \"write\"\n}\n\n\
+test_a if {\n\t\"n\" in rules\n}\n\n\
+test_b if {\n\t\"n\" in rules\n}\n\n\
+test_c if {\n\t\"n\" in rules\n}\n";
+        let bundle = bundle_of("row", &[("policy/n.rego", UNENTERED)]);
+        let before = coverage_cases();
+        let suite = suite_of(&bundle, false);
+        assert_eq!(suite.unexercised, vec!["n".to_owned()]);
+        assert_eq!(coverage_cases() - before, 3);
+    }
+
+    /// Fails by: a bundle already on bytecode, compiled again with its AST
+    /// kept, dropping the interpreter it held (`keep_ast` read as `false` on
+    /// the compiled arm of `into_bundle`).
+    #[test]
+    fn a_compiled_bundle_compiled_again_keeps_its_interpreter_where_asked() {
+        let data = serde_json::json!({});
+        let bundle = bundle_of("row", &[("policy/a.rego", MODULE)]);
+        let first = Compiled::from_bundle(&bundle, &data).expect("compiles to bytecode");
+        let second = Compiled::from_bundle(&bundle, &data).expect("compiles to bytecode");
+        let third = Compiled::from_bundle(&bundle, &data).expect("compiles to bytecode");
+        let kept = first.into_bundle(bundle, true);
+        assert!(kept.as_interpreted().is_some(), "the interpreter is kept");
+        let again = second.into_bundle(kept, true);
+        assert!(again.is_bytecode());
+        assert!(
+            again.as_interpreted().is_some(),
+            "a compiled bundle keeps the interpreter it held"
+        );
+        let dropped = third.into_bundle(again, false);
+        assert!(dropped.as_interpreted().is_none(), "the hot path drops it");
+    }
+
+    /// A bundle compiled without its AST keeps no reading of the AST it
+    /// dropped: what an interpreter rendered before the compile goes with it.
+    ///
+    /// Fails by: `into_bundle` carrying the `described` or `ast` cell across a
+    /// `keep_ast = false` compile (either field left to `..bundle`), so the hot
+    /// path holds a rendered AST for an engine it no longer has (CLOUD-2789).
+    #[test]
+    fn a_bundle_compiled_without_its_ast_keeps_no_reading_of_it() {
+        let data = serde_json::json!({});
+        let bundle = bundle_of("row", &[("policy/a.rego", MODULE)]);
+        assert!(bundle.ast().is_some(), "premise: the interpreter renders");
+        assert!(bundle.described().is_some(), "premise: and describes");
+        let compiled = Compiled::from_bundle(&bundle, &data).expect("compiles to bytecode");
+        let dropped = compiled.into_bundle(bundle, false);
+        assert!(dropped.is_bytecode());
+        assert!(dropped.ast().is_none(), "no AST outlives its interpreter");
+        assert!(dropped.described().is_none(), "nor a description of it");
+    }
+
+    /// A bytecode bundle read as interpreted evaluates on its interpreter, not
+    /// on the bytecode it was compiled to (CLOUD-2789).
+    ///
+    /// Fails by: the interpreter evaluator dropped from `as_interpreted`'s
+    /// bundle, so the parity check compares bytecode against itself.
+    #[test]
+    fn a_bundle_read_as_interpreted_evaluates_on_its_interpreter() {
+        let data = serde_json::json!({});
+        let bundle = bundle_of("row", &[("policy/a.rego", MODULE)]);
+        let compiled = Compiled::from_bundle(&bundle, &data).expect("compiles to bytecode");
+        let kept = compiled.into_bundle(bundle, true);
+        assert!(kept.is_bytecode());
+        let interpreted = kept.as_interpreted().expect("the interpreter is kept");
+        assert!(!interpreted.is_bytecode());
+        assert_eq!(
+            interpreted.execution(),
+            Execution::Interpreted(Fallback::NotOffered)
+        );
+    }
+
+    /// Fails by: a case writing `input` twice desugared as its last write
+    /// rather than refused (the `context.input.is_none()` guard of
+    /// `with_terms` read as `true`).
+    #[test]
+    fn a_case_writing_input_twice_is_refused_bytecode() {
+        let twice = "package batten.w\nimport rego.v1\n\n\
+            violation contains \"w\" if {\n\tinput.go\n}\n\n\
+            test_once if {\n\tcount(violation) == 1 with input as {\"go\": true}\n}\n\n\
+            test_twice if {\n\tcount(violation) == 1 with input as {\"go\": false} with input as {\"go\": true}\n}\n";
+        let splits = suite_splits(&bundle_of("row", &[("policy/w.rego", twice)]), "{}");
+        assert!(
+            splits
+                .iter()
+                .any(|line| line.contains("test_twice") && line.contains("a `with` on `input`")),
+            "a second `with input` is refused, never desugared: {splits:?}"
+        );
     }
 }

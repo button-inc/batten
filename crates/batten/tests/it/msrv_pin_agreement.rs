@@ -285,7 +285,7 @@ fn output_is_pointer_only() {
 fn the_real_trees_three_numbers_agree() {
     // The self-consumption case the retiring suite ended on.
     let output = common::run(
-        &common::at_root(""),
+        common::committed_repo(),
         &["check", "--rule", "version pin other"],
     );
     assert_eq!(

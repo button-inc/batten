@@ -41,8 +41,8 @@ use crate::common;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use batten::config_model::Rule;
 use batten::policy::{self, Bundle};
-use batten::rules::Rule;
 
 /// A module publishing one predicate whose id is not its enabling row's — the
 /// shape that defeated the `declared.id == rule` filter in the first place.
@@ -191,14 +191,17 @@ fn the_fixture_bundles_actually_publish_their_predicates() {
 /// empty set for the first assertion and pass it for exactly the wrong reason.
 #[test]
 fn the_committed_bundles_publish_no_engine_side_rule_name() {
-    let root = common::at_root("batten.toml");
+    // ITS OWN STATE ROOT (CLOUD-2936): the bundle load writes its cache, and
+    // against the developer's store one recording wrote it and the next read it.
+    common::scratch_state_root();
+    let root = common::committed_config_file("admission_narrowing");
     let root = root.parent().expect("the committed config has a parent");
     let config = batten::resolve::resolve(root, &batten::resolve::Overrides::default())
         .expect("the committed config resolves");
     let policy_rows: Vec<_> = config
         .rules
         .iter()
-        .filter(|declared| declared.kind == batten::rules::RuleKind::Policy)
+        .filter(|declared| declared.kind == batten::config_model::RuleKind::Policy)
         .cloned()
         .collect();
     let bundles = policy::load(

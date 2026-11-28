@@ -279,7 +279,7 @@ fn output_is_pointer_only() {
 fn the_real_trees_two_sets_agree() {
     // The self-consumption case the retiring suite ended on.
     let output = common::run(
-        &common::at_root(""),
+        common::committed_repo(),
         &["check", "--rule", "bound carry missing"],
     );
     assert_eq!(

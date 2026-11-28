@@ -102,9 +102,14 @@ identical input, which is the other half of the same design: an unchanged
 repository renders identical bytes, so re-running produces the same text you
 already have, at full cost, with nothing added.
 
-Captured command output is content-addressed and addressed by a handle shaped
-`<stream>:<digest>`. **No verb expands a handle today.** When one ships, this is
-where it belongs; until then, do not construct a command to expand one.
+Captured output is content-addressed by a handle shaped `<stream>:<digest>`. A
+large tool result is replaced by one line, `output point now at /<field>:<lines>
+… <stream>:<digest>; … read <view>.md`, naming each field and where it sits.
+**Expand it, never re-run the call:** `batten capture show <stream>:<digest>
+--field /<name>` (or `--lines FROM:TO`, `--grep <text>`), or read the named view file.
+`batten capture find <key>` and `batten capture list` locate an earlier capture
+without a second call. A field stored as `batten-spilled:` is not inside the view;
+read the raw `captures/<stream>-<digest>` file beside it (CLOUD-2284).
 
 ## What a deny means
 
@@ -128,13 +133,13 @@ look up a definition no longer in context. That line, verbatim:
 A real deny reason, on its first firing in a window:
 
 ```text
-batten deny tool run loose at batten.toml head; read rules/scanning.md — tool select other: a shell text utility stood in for the structured file surface. ... Do: ... Don't: ...
+batten deny path read routed at .serena/memories/core.md read_memory; run batten policy explain protected-mutation — protected-mutation: this path declares its own read route, named after it. ... Do: ... Don't: ...
 ```
 
 and on every later firing in that window:
 
 ```text
-batten deny tool run loose at batten.toml head; read rules/scanning.md
+batten deny path read routed at .serena/memories/core.md read_memory; run batten policy explain protected-mutation
 ```
 
 `batten` says the line is this gate's and not the host's; `deny`, `warn` or
@@ -153,8 +158,12 @@ program: the rule is committed config.
 
 A refusal that admits an override names it:
 `batten override request --rule '<id>' --verdict '<class>' --subject '<s>'`,
-under the admission the row declares. Use it only when the case is one the
-row's author did not foresee. A refusal that names no override admits none.
+under the admission the row declares. Answer on stdin, one line each:
+`precondition=`, `lost=`, `rejected-route=`. `batten override spend --admission
+<address> …` then prints an `Admits-*` block for the commit message, verbatim.
+**A redirect naming a PROCESS ("change it in a pull request") is not a closed
+door**: it says how the diff is reviewed, and the override is the write route. A
+human ask is one yes/no on the override, never a menu of routes.
 
 ## Reading a receipt
 
@@ -259,10 +268,10 @@ startup: 2 row(s), 0 failed
 every session is a row whose check is wrong, and the two renderings are what let
 you see that.
 
-The declared repairs also run on their own at session start — writing a `repair`
-in the committed authority is the authorisation to run it — so `--repair` is for
-provisioning a container out of band, which is what the committed `setup.sh`
-does. A row with no `repair` is reported and never acted on.
+Declared repairs also run by themselves in the session's setup task (a committed
+`repair` is the authorisation to run it), so `--repair` is for provisioning a
+container out of band, as an environment's setup script does after `install.sh`.
+A row with no `repair` is reported and never acted on.
 
 What a row means is its `gloss` in `batten.toml`: the report is pointer-only, so
 the id is all it carries.

@@ -97,8 +97,8 @@
 //! no command surface — `config lint --host-rules` already shipped — so both are
 //! `kind:mechanism`.
 //!
-// carried: mise-tasks/ci-drift.sh crates/batten/src/ci.rs kind:mechanism crates/batten/tests/it/config_lint.rs
-// carried: tests/ci-drift.bats crates/batten/src/ci.rs kind:mechanism crates/batten/tests/it/config_lint.rs
+// carried: mise-tasks/ci-drift.sh crates/batten-base/src/ci.rs kind:mechanism crates/batten/tests/it/config_lint.rs
+// carried: tests/ci-drift.bats crates/batten-base/src/ci.rs kind:mechanism crates/batten/tests/it/config_lint.rs
 //!
 //! ## CARRIED — the decision half, which this file already covered
 //!
@@ -140,6 +140,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
+use batten::capture::StreamedChild as _;
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -249,7 +250,7 @@ fn question(answer: &str) -> serde_json::Value {
 /// ledger this tier reads is one the engine wrote (CLOUD-1078, CLOUD-845).
 fn ask(dir: &Path, answer: &str) -> usize {
     batten::record_asked_for_test(
-        batten::hook::Harness::ClaudeCode,
+        batten::config_model::Harness::ClaudeCode,
         "AskUserQuestion",
         &question(answer),
         dir,
@@ -332,7 +333,7 @@ fn a_question_answered_the_other_way_admits_nothing() {
 fn a_hand_composed_answer_is_never_recorded() {
     let dir = weakening_pr("lint-admit-hand", None);
     let written = batten::record_asked_for_test(
-        batten::hook::Harness::ExitCode,
+        batten::config_model::Harness::ExitCode,
         "AskUserQuestion",
         &question("Admit it"),
         &dir,
@@ -498,6 +499,53 @@ fn a_config_below_the_repository_root_is_not_armed_by_the_roots_claim() {
     );
 }
 
+/// A linked worktree carrying its own `batten.toml` IS the root of its
+/// authority (CLOUD-2532), so its claimed branch is armed at its fork point.
+///
+/// `repo_root` from a linked worktree is the MAIN checkout, so comparing `here`
+/// against it never matched and the claim never armed there: a weakening on a
+/// claimed worktree branch passed the pre-commit lint that refuses it in the
+/// main checkout. The claim is read from the worktree's own git dir, which is
+/// where `git_dir` keys a worktree's receipts.
+#[test]
+fn a_claimed_worktree_branch_is_armed_at_its_fork_point() {
+    let main = weakening_pr("lint-admit-worktree", Some(PAIR));
+    let linked = common::scratch("lint-admit-worktree-linked");
+    let _ = fs::remove_dir_all(&linked);
+    common::git_in(
+        &main,
+        &[
+            "worktree",
+            "add",
+            "--quiet",
+            "-b",
+            "linked",
+            linked.to_str().unwrap_or_default(),
+            "HEAD",
+        ],
+    );
+    let git_dir = common::git_in(&linked, &["rev-parse", "--absolute-git-dir"]);
+    let store = Path::new(git_dir.trim()).join("batten-receipts");
+    fs::create_dir_all(&store).unwrap();
+    fs::write(
+        store.join(batten::claim::receipt_name("linked")),
+        "CLOUD-1\nready-lint pass\n",
+    )
+    .unwrap();
+    let out = lint(&linked, &[]);
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "a claimed worktree branch's unanswered weakening must refuse: {}",
+        stdout(&out)
+    );
+    assert!(
+        stdout(&out).contains("severity-lowered"),
+        "{}",
+        stdout(&out)
+    );
+}
+
 /// Why the FORK POINT and not the trunk's tip: a trunk that moved after the
 /// branch was cut must not be charged to the branch.
 ///
@@ -611,6 +659,41 @@ fn a_rule_switched_off_is_a_smell() {
         stdout(&output).contains("rule-disabled"),
         "got: {}",
         stdout(&output)
+    );
+}
+
+#[test]
+fn a_pin_below_another_key_is_invalid_and_still_loads() {
+    // The pin heads the file, after only `version`: below any other key the file
+    // is refused by name and line, never by a load error, so the engine that
+    // must read the pin to follow it still can.
+    let pin = format!(
+        "engine = {{ release = \"v{}\" }}\n",
+        env!("CARGO_PKG_VERSION")
+    );
+    let dir = repo_with_config(
+        "lint-pin-buried",
+        &format!("version = 1\nunlanded = [\"x\"]\n{pin}"),
+    );
+    let output = lint(&dir, &[]);
+    assert_eq!(output.status.code(), Some(2), "{}", stdout(&output));
+    assert_eq!(
+        stdout(&output),
+        "batten.toml:3 engine-pin-out-of-order\nconfig-lint: 1 smell(s)\n"
+    );
+    let show = common::run(&dir, &["config", "show"]);
+    assert!(
+        show.status.success(),
+        "a buried pin still loads: {}",
+        stdout(&show)
+    );
+    let headed = repo_with_config(
+        "lint-pin-headed",
+        &format!("version = 1\n{pin}unlanded = [\"x\"]\n"),
+    );
+    assert!(
+        !stdout(&lint(&headed, &[])).contains("engine-pin-out-of-order"),
+        "a pin under `version` is in order"
     );
 }
 
@@ -831,7 +914,7 @@ fn the_smell_ids_are_the_same_names_the_check_delta_uses() {
     let checked = batten()
         .args(["check", "--config-from", "origin/main"])
         .current_dir(&repo)
-        .output()
+        .streamed_output()
         .expect("run batten check");
     let checked = String::from_utf8_lossy(&checked.stdout);
     assert!(
@@ -1079,7 +1162,10 @@ fn an_unknown_base_ref_is_a_usage_error() {
 fn config_lint_is_declared_read_in_the_spec() {
     // §5: the derived agent allowlist is `filter(effect == read)`, so a lint that
     // only inspects must say so or it is needlessly excluded.
-    let output = batten().arg("spec").output().expect("run batten spec");
+    let output = batten()
+        .arg("spec")
+        .streamed_output()
+        .expect("run batten spec");
     let spec: serde_json::Value = serde_json::from_slice(&output.stdout).expect("spec is JSON");
     let config = spec["subcommands"]
         .as_array()
@@ -1100,12 +1186,12 @@ fn config_lint_is_declared_read_in_the_spec() {
 fn this_repositorys_own_config_is_clean() {
     // Consumer #1: the lint Batten ships runs against the config Batten is
     // gated by, which is also what `mise run config-lint` asserts in the gate.
-    let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let repo = common::committed_repo().to_path_buf();
     let output = batten()
         .args(["config", "lint"])
         .current_dir(&repo)
         .env_remove("BATTEN_CONFIG_FROM")
-        .output()
+        .streamed_output()
         .expect("run batten config lint");
     assert_eq!(
         output.status.code(),
@@ -1161,7 +1247,7 @@ fn the_two_verbs_agree_on_where_a_weakening_is() {
         .args(["check", "--config-from", "origin/main"])
         .current_dir(&repo)
         .env_remove("BATTEN_CONFIG_FROM")
-        .output()
+        .streamed_output()
         .expect("run batten check");
     let check_out = String::from_utf8_lossy(&check.stdout).into_owned();
 
@@ -1734,7 +1820,7 @@ fn the_drift_report_is_byte_stable_and_reads_stdin() {
             payload.as_bytes(),
         )
         .expect("write payload");
-        child.wait_with_output().expect("run batten")
+        child.streamed_wait().expect("run batten")
     };
 
     let first = piped(&["-J"]);
@@ -1820,4 +1906,371 @@ fn the_armed_comparison_still_reports_a_single_tree_smell() {
     let seen = stdout(&output);
     assert!(seen.contains("empty-protected-set"), "got: {seen}");
     assert!(seen.contains("severity-lowered"), "got: {seen}");
+}
+
+/// A glob widened only to follow a file the branch moved is no weakening, and
+/// a branch with that move and that glob reports nothing for it
+/// (CLOUD-2789).
+///
+/// Fails by: the move-explained finding kept and every other one dropped.
+#[test]
+fn a_glob_that_only_follows_a_moved_file_is_not_reported() {
+    let rule = |glob: &str| {
+        format!(
+            "version = 1\n\n[[rule]]\nid = \"r\"\nkind = \"forbid\"\nglob = \"{glob}\"\n\
+             pattern = \"x\"\nseverity = \"deny\"\nscope = \"tree\"\n"
+        )
+    };
+    let dir = Fixture::new("config-lint-moved-glob")
+        .config(&rule("crates/a/src/**/*.rs"))
+        .files(&[
+            ("crates/a/src/x.rs", "pub fn x() {}\n"),
+            ("crates/a/src/kept.rs", "pub fn kept() {}\n"),
+        ])
+        .git()
+        .base_commit()
+        .build();
+    fs::create_dir_all(dir.join("crates/b/src")).unwrap();
+    common::git_in(&dir, &["mv", "crates/a/src/x.rs", "crates/b/src/x.rs"]);
+    let base = fs::read_to_string(dir.join("batten.toml")).unwrap();
+    fs::write(
+        dir.join("batten.toml"),
+        base.replace("crates/a/src/**/*.rs", "crates/{a,b}/src/**/*.rs"),
+    )
+    .unwrap();
+    common::git_in(&dir, &["commit", "-q", "-am", "move x into b"]);
+    let today = batten::waiver::Date::parse("2026-08-10").unwrap();
+    let found: Vec<String> = batten::lint::run(&dir, Some("origin/main"), today)
+        .unwrap()
+        .iter()
+        .map(batten::lint::Smell::line_text)
+        .collect();
+    assert!(
+        !found
+            .iter()
+            .any(|line| line.contains("rule-predicate-changed")),
+        "{found:?}"
+    );
+    // THE PREMISE: the same glob change with no move IS reported.
+    let unmoved = Fixture::new("config-lint-unmoved-glob")
+        .config(&rule("crates/a/src/**/*.rs"))
+        .files(&[("crates/a/src/kept.rs", "pub fn kept() {}\n")])
+        .git()
+        .base_commit()
+        .build();
+    let base = fs::read_to_string(unmoved.join("batten.toml")).unwrap();
+    fs::write(
+        unmoved.join("batten.toml"),
+        base.replace("crates/a/src/**/*.rs", "crates/{a,b}/src/**/*.rs"),
+    )
+    .unwrap();
+    fs::write(unmoved.join("crates/a/src/x.rs"), "pub fn x() {}\n").unwrap();
+    fs::create_dir_all(unmoved.join("crates/b/src")).unwrap();
+    fs::write(unmoved.join("crates/b/src/y.rs"), "pub fn y() {}\n").unwrap();
+    common::git_in(&unmoved, &["add", "-A"]);
+    common::git_in(&unmoved, &["commit", "-q", "-m", "add y in b"]);
+    let found: Vec<String> = batten::lint::run(&unmoved, Some("origin/main"), today)
+        .unwrap()
+        .iter()
+        .map(batten::lint::Smell::line_text)
+        .collect();
+    assert!(
+        found
+            .iter()
+            .any(|line| line.contains("rule-predicate-changed")),
+        "{found:?}"
+    );
+}
+
+/// Fails by: `config lint` passing a config whose committed module this engine
+/// cannot evaluate — a call to a function it does not carry — so `engine gate`,
+/// which asks this verb under the pinned release, passes a tree where every
+/// mediated call is then refused `engine-cannot-adjudicate` (CLOUD-2840: the
+/// install gate calling `data.batten.library.read_only` ahead of the release
+/// that carries it). A module that loads still passes.
+#[test]
+fn a_module_this_engine_cannot_evaluate_is_refused_not_dropped() {
+    let rule = "version = 1\n\n[[rule]]\nid = \"m\"\n\
+                no_fix_reason = \"class 3 (a call rewrite): nothing persists to repair\"\n\
+                kind = \"policy\"\nscope = \"mediated_call\"\nmodule = \"policy/m.rego\"\n\
+                severity = \"deny\"\n";
+    let module = |body: &str| {
+        format!(
+            "package batten.m\nimport rego.v1\n\nrules contains \"m\"\n\n\
+             violation contains {{\"rule\": \"m\", \"verdict\": \"call name refused\"}} if {{\n\t{body}\n}}\n"
+        )
+    };
+    let dir = Fixture::new("config-lint-unevaluable")
+        .config(rule)
+        .file(
+            "policy/m.rego",
+            &module("data.batten.nothing.here(input.call)"),
+        )
+        .build();
+    let output = lint(&dir, &[]);
+    assert_ne!(output.status.code(), Some(0), "{output:?}");
+    let said = common::stderr(&output);
+    assert!(
+        said.contains("policy/m.rego") && said.contains("data.batten.nothing.here"),
+        "the refusal names the module and the call it cannot evaluate: {output:?}"
+    );
+    let dir = Fixture::new("config-lint-evaluable")
+        .config(rule)
+        .file("policy/m.rego", &module("input.call.go"))
+        .build();
+    let output = lint(&dir, &[]);
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+}
+
+/// Fails by: a module the working config registers and its BASE lacks read as a
+/// load failure, so `config lint` against `origin/main` (verify, CI, a claimed
+/// branch's fork point) aborts on every branch that adds a module — the shape
+/// of #1276, which adds nine. Absent at the base is no load failure: the lint
+/// reads the smells and exits as it always did.
+#[test]
+fn a_module_the_base_lacks_is_no_load_failure() {
+    let rule = "version = 1\n\n[[rule]]\nid = \"m\"\n\
+                no_fix_reason = \"class 3 (a call rewrite): nothing persists to repair\"\n\
+                kind = \"policy\"\nscope = \"mediated_call\"\nmodule = \"policy/m.rego\"\n\
+                severity = \"deny\"\n";
+    let module = "package batten.m\nimport rego.v1\n\nrules contains \"m\"\n\n\
+                  violation contains {\"rule\": \"m\", \"verdict\": \"call name refused\"} if {\n\
+                  \tinput.call.go\n}\n";
+    let dir = Fixture::new("config-lint-base-lacks-module")
+        .config("version = 1\n")
+        .git()
+        .undeclared_trunk()
+        .base_commit()
+        .config(rule)
+        .file("policy/m.rego", module)
+        .work_commit()
+        .build();
+    let output = lint(&dir, &["--config-from", "origin/main"]);
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert!(
+        !common::stderr(&output).contains("absent at"),
+        "absence at the base is no refusal: {output:?}"
+    );
+}
+
+/// A policy row registering `policy/{name}.rego`, raising a declared verdict.
+fn module_rule(name: &str) -> String {
+    format!(
+        "[[rule]]\nid = \"{name}\"\n\
+         no_fix_reason = \"class 3 (a call rewrite): nothing persists to repair\"\n\
+         kind = \"policy\"\nscope = \"mediated_call\"\nmodule = \"policy/{name}.rego\"\n\
+         severity = \"deny\"\n\n"
+    )
+}
+
+/// A module for [`module_rule`] whose one condition is `body`.
+fn module_text(name: &str, body: &str) -> String {
+    format!(
+        "package batten.{name}\nimport rego.v1\n\nrules contains \"{name}\"\n\n\
+         violation contains {{\"rule\": \"{name}\", \"verdict\": \"call name refused\"}} if {{\n\t{body}\n}}\n"
+    )
+}
+
+/// A claimed branch whose work commit adds `name`'s module, its condition `body`.
+fn claimed_branch_adding(fixture: &str, name: &str, body: &str) -> PathBuf {
+    // `must_land_on` because a fixture has no remote default branch: without a
+    // declared target the claimed run finds no fork point and stays unarmed,
+    // and the case would read the tree and prove nothing (as `weakening_pr`).
+    let head = "version = 1\nmust_land_on = \"origin/main\"\n";
+    let dir = Fixture::new(fixture)
+        .config(head)
+        .git()
+        .undeclared_trunk()
+        .base_commit()
+        .config(&format!("{head}\n{}", module_rule(name)))
+        .file(&format!("policy/{name}.rego"), &module_text(name, body))
+        .work_commit()
+        .build();
+    claim(&dir);
+    dir
+}
+
+/// Fails by: a module the branch ADDS skipped because the fork point lacks it,
+/// so under claimed arming a bare `config lint` (what `engine gate` runs with
+/// the pinned release) passes a module that release cannot evaluate — B1's
+/// own shape, `install-gate.rego` being absent on main (CLOUD-2840).
+#[test]
+fn a_claimed_branch_adding_an_unevaluable_module_is_refused() {
+    let dir = claimed_branch_adding(
+        "config-lint-claimed-unevaluable",
+        "m",
+        "data.batten.nothing.here(input.call)",
+    );
+    let output = lint(&dir, &[]);
+    let said = common::stderr(&output);
+    assert_ne!(output.status.code(), Some(0), "{output:?}");
+    assert!(
+        said.contains("policy/m.rego") && said.contains("data.batten.nothing.here"),
+        "the added module is judged from the tree: {output:?}"
+    );
+}
+
+/// The anti-vacuity half: an added module that loads passes, so the case
+/// above refuses the call and not the addition.
+#[test]
+fn a_claimed_branch_adding_an_evaluable_module_passes() {
+    let dir = claimed_branch_adding("config-lint-claimed-evaluable", "m", "input.call.go");
+    let output = lint(&dir, &[]);
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+}
+
+/// Fails by: one module absent everywhere disarming the load check for every
+/// other rule, so an unevaluable module beside it passes.
+#[test]
+fn one_absent_module_never_disarms_the_load_check() {
+    let dir = Fixture::new("config-lint-one-absent")
+        .config(&format!(
+            "version = 1\n\n{}{}",
+            module_rule("m"),
+            module_rule("gone")
+        ))
+        .file(
+            "policy/m.rego",
+            &module_text("m", "data.batten.nothing.here(input.call)"),
+        )
+        .build();
+    let output = lint(&dir, &[]);
+    assert_ne!(output.status.code(), Some(0), "{output:?}");
+    assert!(
+        common::stderr(&output).contains("data.batten.nothing.here"),
+        "the present module is still judged: {output:?}"
+    );
+}
+
+/// A branch whose work commit MODIFIES `name`'s module from `base_body` to
+/// `work_body`; claimed, so a bare `config lint` is armed at the fork point too.
+fn branch_modifying(fixture: &str, name: &str, base_body: &str, work_body: &str) -> PathBuf {
+    let head = "version = 1\nmust_land_on = \"origin/main\"\n";
+    let config = format!("{head}\n{}", module_rule(name));
+    let module = format!("policy/{name}.rego");
+    let dir = Fixture::new(fixture)
+        .config(&config)
+        .file(&module, &module_text(name, base_body))
+        .git()
+        .undeclared_trunk()
+        .base_commit()
+        .file(&module, &module_text(name, work_body))
+        .work_commit()
+        .build();
+    claim(&dir);
+    dir
+}
+
+/// Fails by: a MODIFIED module judged by its BASE text, so a branch that fixes
+/// a module the engine could not load is refused for the text it replaced —
+/// #1276's own shape, `egress-fencing.rego`'s base copy judged against the
+/// working `[[verdict]]` table, so `verify:config-lint` exited 1 (CLOUD-2840).
+#[test]
+fn a_modified_module_is_judged_by_its_working_text() {
+    let dir = branch_modifying(
+        "config-lint-modified-fixed",
+        "m",
+        "data.batten.nothing.here(input.call)",
+        "input.call.go",
+    );
+    for extra in [&["--config-from", "origin/main"][..], &[]] {
+        let output = lint(&dir, extra);
+        assert_eq!(output.status.code(), Some(0), "{extra:?}: {output:?}");
+    }
+}
+
+/// Fails by: a MODIFIED module read at the base, so a branch that makes it
+/// unevaluable passes, and `engine gate` (the pinned release asking this verb)
+/// passes a module that release cannot load — the added-module case's shape,
+/// reached through an edit instead of an addition (CLOUD-2840).
+#[test]
+fn a_modified_module_the_engine_cannot_evaluate_is_refused() {
+    let dir = branch_modifying(
+        "config-lint-modified-unevaluable",
+        "m",
+        "input.call.go",
+        "data.batten.nothing.here(input.call)",
+    );
+    for extra in [&["--config-from", "origin/main"][..], &[]] {
+        let output = lint(&dir, extra);
+        let said = common::stderr(&output);
+        assert_ne!(output.status.code(), Some(0), "{extra:?}: {output:?}");
+        assert!(
+            said.contains("policy/m.rego") && said.contains("data.batten.nothing.here"),
+            "{extra:?}: the modified module is judged by the text it runs: {output:?}"
+        );
+    }
+}
+
+/// A module `name` publishing each of `ids`, each raising on its own field.
+fn module_publishing(name: &str, ids: &[&str]) -> String {
+    use std::fmt::Write as _;
+    let mut declared = String::new();
+    let mut raised = String::new();
+    for id in ids {
+        write!(declared, "rules contains \"{id}\"\n\n").expect("a String takes every write");
+        write!(
+            raised,
+            "violation contains {{\"rule\": \"{id}\", \"verdict\": \"call name refused\"}} if {{\n\
+             \tinput.call.{id}\n}}\n\n"
+        )
+        .expect("a String takes every write");
+    }
+    format!("package batten.{name}\nimport rego.v1\n\n{declared}{raised}")
+}
+
+/// Fails by: one load mixing sources, so a base-read module's claims meet a
+/// tree-read module's: moving the predicate id `x` out of a MODIFIED module
+/// into an ADDED one reads as two modules declaring it, and the move is
+/// refused as a collision it is not (CLOUD-2840). Judged against the base it
+/// answers as it does on the tree alone.
+#[test]
+fn moving_an_id_into_an_added_module_is_no_collision() {
+    let head = "version = 1\n";
+    let dir = Fixture::new("config-lint-id-moved")
+        .config(&format!("{head}\n{}", module_rule("a")))
+        .file("policy/a.rego", &module_publishing("a", &["a", "x"]))
+        .git()
+        .undeclared_trunk()
+        .base_commit()
+        .config(&format!("{head}\n{}{}", module_rule("a"), module_rule("b")))
+        .file("policy/a.rego", &module_publishing("a", &["a"]))
+        .file("policy/b.rego", &module_publishing("b", &["b", "x"]))
+        .work_commit()
+        .build();
+    let against_base = lint(&dir, &["--config-from", "origin/main"]);
+    let tree = lint(&dir, &[]);
+    for output in [&against_base, &tree] {
+        assert!(
+            !common::stderr(output).contains("both declare"),
+            "the id was moved, not duplicated: {output:?}"
+        );
+    }
+    assert_eq!(
+        against_base.status.code(),
+        tree.status.code(),
+        "{against_base:?}"
+    );
+}
+
+/// Fails by: a bundle root that is THERE but holds no module read as sources
+/// absent, so the rule is left unloaded, the set checks stand down, and a gate
+/// enabling nothing passes as configured. Only a root that is not there at all
+/// is absent; this one is refused, naming it (CLOUD-2840).
+#[test]
+fn an_empty_bundle_root_is_refused_not_unloaded() {
+    let config = "version = 1\n\n[[rule]]\nid = \"b\"\n\
+                  no_fix_reason = \"class 3 (a call rewrite): nothing persists to repair\"\n\
+                  kind = \"policy\"\nscope = \"mediated_call\"\nbundle = \"policy/b/\"\n\
+                  severity = \"deny\"\n";
+    let dir = Fixture::new("config-lint-empty-bundle")
+        .config(config)
+        .file("policy/b/README.md", "no module here\n")
+        .build();
+    let output = lint(&dir, &[]);
+    assert_ne!(output.status.code(), Some(0), "{output:?}");
+    assert!(
+        common::stderr(&output).contains("carries no `.rego` module"),
+        "the empty root is named: {output:?}"
+    );
 }

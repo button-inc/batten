@@ -49,9 +49,19 @@ batten override request --rule protected-mutation \
 #   precondition=…   the class's precondition and the fact satisfying it here
 #   lost=…           what is lost if you do not override
 #   rejected-route=… which declared route you rejected, and why it does not apply
+# then ONE yes/no to the owner through the host's question tool, naming
+# `protected-mutation policy/<module>.rego`, with an `Admit…` option
 batten override spend --admission <address> --rule protected-mutation \
   --verdict "path write refused" --subject policy/<module>.rego
 ```
+
+**The owner opens it, never the agent (CLOUD-2926).** `protected-mutation` is an
+owner-only route: `spend` admits only when `.batten/asked.jsonl` holds the
+owner's answer, recorded by the question hook after the admission was issued,
+naming the same rule, verdict and path, and selecting an affirming option. Your
+stdin answers are the recorded reasoning; they never authorize. Without the
+owner's answer `spend` exits 3 and the admission stays issued, so it spends once
+the owner says yes.
 
 `spend` prints an `Admits-*` block that goes in the commit message. It is
 **self-verifying**: the address is computed over the binding _and the answers_,
@@ -232,9 +242,14 @@ that distinguishes a passing gate from an absent one.
 
 A **tree**-scoped module (`scope = "tree"`, run by `batten check`) reads
 `input.tree.documents`, `input.tree.lines`, `input.tree.invocations`,
-`input.tree.uses`, `input.tree.tracked`, `input.tree.traversals`, `input.tree.missing`,
+`input.tree.uses`, `input.tree.units` (per-unit syntax counts off the one lossless
+parse — CLOUD-1008), `input.tree.base` (the same `units` and `uses` read at a row's
+declared `base`), `input.tree.coupling` (M-score, Decoupling Level, propagation cost
+and largest cycle over the `uses` graph, head and base — CLOUD-2821),
+`input.tree.tracked`, `input.tree.traversals`, `input.tree.missing`,
 `input.tree.produced`, `input.tree.records`, `input.tree["records-blocked"]`,
-`input.tree.landing`, and the git
+`input.tree.landing`, `input.tree.shell` (the shell detector's answer over the
+declared `[census.shell]` homes, both sides of the delta — CLOUD-2625), and the git
 family —
 `input.tree.git-head`, `input.tree.git-refs`, `input.tree.git-ranges`,
 `input.tree.git-remote`, `input.tree.git-status`, `input.tree.git-worktrees`,
@@ -333,7 +348,7 @@ its spelling, so it is worth the extra sentence.** A declared id ABSENT from the
 map was never dispatched, and that absence is the ONLY thing a predicate over it
 may refuse on. Its `findings` are pointers — `{path, line, clause}`, with no
 field an agent's prose could occupy — and a module refusing on what the agent
-CONCLUDED would be a model verdict wearing an exit code, which non-negotiable
+CONCLUDED would be a gated-model verdict wearing an exit code, which non-negotiable
 rule 3 forbids. `forge-verdict-required` refuses the opposite arm for a reason
 that does not carry: the forge is a third party that may legitimately not have
 judged yet, where a review this branch was supposed to dispatch and did not is
@@ -362,13 +377,22 @@ over an arbitrary timestamp, that is its own row with its own argument to make.
 A **mediated-call** module (`scope = "mediated_call"`, run by `batten hook`)
 reads `input.call.command`, `input.call.segments`, `input.call.programs`,
 `input.call.event`, `input.call.operation`, `input.call.tool`,
-`input.call.arguments`, `input.call.writes`,
+`input.call.arguments`, `input.call.writes`, `input.call["lap-held"]` (each of
+the call's writes that lands in a live `land` lap's checkout, as `{path}` or
+`{git}`, `null` while no lap is live — CLOUD-2832),
 `input.call["run-in-background"]`, `input.call["background-max"]` (the host's
 background ceiling in milliseconds, `null` where the host reports none —
 CLOUD-2365), `input.call["final-message"]`,
-`input.call.transcript`, `input.call["stop-repeat"]` and
+`input.call.transcript`, `input.call.forge` (a forge event's tokens — event,
+action, repo, number, sha, ref and key — `null` on every host event,
+CLOUD-2689), `input.call["stop-repeat"]` and
 `input.call["permission-mode"]` (the host's mode, `null` when it sent none —
-CLOUD-1949), plus the `facts` object.
+CLOUD-1949), `input.call.cwd` (the call's canonical start directory),
+`input.call.roots` (the sorted canonical roots of every directory the call acts
+on, `[]` when none is in a repository and `null` when one cannot be placed) and
+`input.call.home` (the session's canonical home, `null` where it has none) —
+CLOUD-2672, `input.call.host` (`disposable` where `BATTEN_ENVIRONMENT` declares
+the container so, `machine` otherwise — CLOUD-2709), plus the `facts` object.
 
 **A segment's `construct` is the one field that is about the command's SHAPE
 rather than its text** (CLOUD-1381), and it is worth its own sentence because it
@@ -400,35 +424,44 @@ receipt store could not be located.
 `input.facts["red-head"]` is the current branch's red-head record a red landing
 stop wrote — each failed run with whether its log was read, and each check still
 running — or `null` when the branch has none (CLOUD-2270).
+`input.facts["install-pending"]` is the session setup task's `{state, task,
+pid, pending, dispatch, dispatching}`: its state from the task registry
+(`undispatched` where `SessionStart` prepared setup and the agent has not
+dispatched it yet, with `pid` null), the call's command-position programs that
+resolve to nothing, under the environment manager's install root, or are the
+manager itself, empty once the task said `ok`, the one dispatch command, and
+whether this call is that dispatch; `null` where no setup was prepared
+(CLOUD-2840).
+`input.facts["shell-introduced"]` is `{look, reason}` for a write: whether it
+authors shell (`is`, `is-not`, `could-not-look`) and, when `is`, by `shell-path`
+or `shebang` — decided in Rust by `shell.rs`, never the content (CLOUD-2335).
 `input.facts["pinned-programs"]` is the landed example; `input.facts.tasks` is
 the task runner's own argv, read from a receipt minted at session start so the
 mediated path parses no manifest (CLOUD-856); and `input.facts.extracted` is a
 declared extractor's COUNT over this session's transcript — an integer over
 typed events, never a byte of the session (CLOUD-1172).
 
-**`extracted` WILL NOT GROW AN ARM THAT READS PROSE, AND THAT IS A DECIDED
-REFUSAL RATHER THAN AN UNBUILT FEATURE** (CLOUD-1254). The count landed for two
-named programs and carries neither, so the temptation is to widen it until it
-does. It cannot be widened, and the reason is one level down rather than in this
-family: `transcript.rs`'s own header states that every event is built from a
+**TEXT NEVER CROSSES INTO A MODULE; THE ENGINE MAY READ IT** (CLOUD-1254,
+CLOUD-1921). `transcript.rs`'s header states that every event is built from a
 TYPED field — a call's `name`, a result's `is_error` boolean, a hook's
 `exitCode` — and that _"the free-text payload is never interpreted and never
 emitted"_, because a transcript is the richest source of secrets the engine can
-be pointed at. So the stream a member reduces holds no prose to match.
+be pointed at. That is a rule about what a MODULE receives, and it holds: no
+span of session text, no score, no vector reaches `input.*`.
 
-`finding-sink-check` is the measured instance and its first arm is a regex over
-assistant prose (`[[pattern]] finding-citation`, which `record decide
-turn-writes` applies in `crates/batten/src/turn.rs` and keeps only as a
-boolean), joined per turn against that turn's own tool calls with a negated arm. An extraction expressing
-that join would have to retain the prose to match it — and a predicate built on
-prose is a classifier wearing a gate's clothes, which is non-negotiable rule 3
-and which `transcript.rs` refuses at its own header. The refusal is therefore
-about the SUBSTRATE, not about the reduction's shape: a count of stranded turns
-would be a perfectly admissible RESULT, and there is nothing to compute it from.
+It is not a rule that the engine never reads text. `record decide turn-writes`
+already applies `[[pattern]] finding-citation` to assistant prose in
+`crates/batten-base/src/turn.rs` and keeps only a boolean. That shape — the engine
+reads, reduces to a typed fact, the module decides over the fact — is the
+admissible one, and a Batten-managed classifier is the same shape with a better
+reducer: pinned by digest, deterministic, its text kept in the engine, only a
+label from a closed set reaching the module (CLOUD-1921). Rule 3 forbids the
+GATED model's judgement, never a model Batten runs (house-style, principle 3;
+`mem:doctrine/model-verdict`).
 
-Read this the way the missing INSTANT key below is read. It is not a gap for the
-next author to close; it is a route already walked to its end, and the thing at
-the end is a rule refusing it.
+So `extracted` may grow an arm whose result is typed — a count of stranded turns,
+a label — however its reducer reads. What it may never grow is an arm whose
+RESULT carries the text.
 
 `programs` is the ARGV ALREADY READ (CLOUD-1028), and it is NOT `segments` under
 another name: one entry per segment, each carrying the EFFECTIVE program, the
@@ -492,13 +525,42 @@ whatever this paragraph said.
 program per segment, resolved through environment assignments, wrapper programs
 and the shell grammar above — with `name` for the program reached through a
 path, `arguments` for what THAT program was handed, and `mediated` for whether
-the pin selected it. So the correct predicate is still short, and it correlates:
+the pin selected it. For `git`, `gh` and `mise` it also carries `subcommand`,
+the first bare word past the program's own value-taking options, and
+`global-options`, the words before it verbatim (CLOUD-2354); both are `null` for
+a program with no declared option table. So the correct predicate is still
+short, and it correlates:
 
 ```rego
 some program in input.call.programs
 program.name == "git"
-"push" in program.arguments
+program.subcommand == "push"
 ```
+
+Never `"push" in program.arguments`: membership fires on `git commit -m push`.
+And never parse the global options in Rego: the engine's table is the one copy,
+and a module that needs to judge them reads `global-options`.
+
+**`programs` is RECURSIVE, and `batten` and `cargo` have tables too** (step 14).
+A program that runs other programs is followed into them by the engine, once,
+for every module: a shell's `-c` script, `eval`'s words, `exec`, the binary
+`cargo run` starts (named by `-p`/`--bin`, else the workspace's one binary),
+the argv after `--` in `batten step run`, `find -exec`, `watch` and `env -S`.
+Each inner entry carries `via` (`script`, `cargo run`, `step run`, `ci step`,
+`exec`; `null` where the call wrote it), `unread` (`true` where its text would not parse and was read by
+whitespace, so an unparseable script is not a bypass) and `receipted` (`true`
+for everything a `batten step run` reaches, the binary a `cargo run` inside it
+starts included, since the run writes that step's receipt). `batten`'s verb is its
+`subcommand` and the verb after it is `nested` (`batten land lap` is
+`land`/`lap`), and a `mise` entry's `tasks` is every task it starts by any run
+spelling. `input.call["task-programs"]` follows those tasks into their bodies
+from the task receipt (`null` where it could not be read), so a module classifies
+a `mise run` by what it reaches rather than by a list of task names.
+`input.call["step-programs"]` is every program a task body runs under `step
+run` (`null` where the receipt could not be read): the land stages, derived from
+the manifest, so a stage gate names no step. Never
+re-derive any of these in Rego: `policy/land-stage-direct.rego` reads them and
+parses nothing.
 
 Reach for `arguments` rather than the segment's words whenever a flag has to be
 the program's own: a `git status` beside an `hg push --force` is two facts, and
@@ -506,9 +568,12 @@ reading the whole segment merges them into a refusal nobody can act on.
 
 `input.call.segments` is still `hook::segments` projected — the same quote-aware
 tokenizer `shape` and `pipeline` rows are decided by — one entry per list
-element, each carrying `words`, `raw`, the `terminator` that followed it
+element, each carrying `words`, `redirects` (the redirection tokens, which are
+the suffix of `words` — CLOUD-2670), `raw`, the `terminator` that followed it
 (`"&&"`, `";"`, `"||"`, `"|"`, `"&"`, or `null` where the command ended), and
-`input-redirect`. Read it for the SPAN's own structure, which is what those
+`input-redirect`. A program's `arguments` exclude its redirections: they are
+what it was handed, and a redirection is never handed to the program. Read it
+for the SPAN's own structure, which is what those
 fields are: what the element's status is handed to, whether it binds stdin, what
 was literally written. A program is not one of them.
 

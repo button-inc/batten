@@ -44,54 +44,11 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context as _, Result, bail};
-use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
 
+use crate::config_model::Prune;
+#[cfg(test)]
+use crate::config_model::default_root;
 use crate::error::UsageError;
-
-/// The `[prune]` table: the build tree, what to keep, and the collector's band.
-///
-/// CONSUMER CONFIG, NOT A CONST (non-negotiable rule 1): which directory a
-/// project builds into and how much free space its builds need are facts about
-/// THAT project.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct Prune {
-    /// The build directory, relative to the repository root.
-    #[serde(default = "default_root")]
-    pub root: String,
-    /// Copies retained per stem. See the module header for why this is 2.
-    ///
-    /// The bound is in the SCHEMA as well as in [`Prune::validate`] (raised on
-    /// #734): an editor validating against the published schema is the surface
-    /// most consumers meet first.
-    #[serde(default = "default_keep")]
-    #[schemars(range(min = 1))]
-    pub keep: usize,
-    /// RETIRED (CLOUD-2198): the warm floor. Read and ignored, so a config
-    /// written for the floor model still loads while its pin moves; the
-    /// collector's band ([`Prune::min_free_mb`]) replaces it.
-    #[serde(default, skip_serializing)]
-    pub warm: Option<serde_json::Value>,
-    /// RETIRED (CLOUD-2198): the cold floor. Read and ignored, as `warm`.
-    #[serde(default, skip_serializing)]
-    pub cold: Option<serde_json::Value>,
-    /// RETIRED (CLOUD-2198): the escalation's regrowable roots. Read and
-    /// ignored, as `warm`: the collector never drops a cache whole.
-    #[serde(default, skip_serializing)]
-    pub regrowable: Option<serde_json::Value>,
-    /// Below this much free space, in MB, the disk collector runs (CLOUD-2197):
-    /// on every mediated call, and throughout `land` and `mutate sweep`. Nix's
-    /// `min-free`. Declared with [`Prune::max_free_mb`] or not at all; absent,
-    /// the collector runs at [`DEFAULT_FREE_BAND`].
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub min_free_mb: Option<u64>,
-    /// Once triggered, the collector frees space until this much is free, in
-    /// MB, then stops. Nix's `max-free`; above [`Prune::min_free_mb`], so the
-    /// pair is a hysteresis band rather than a threshold that re-fires at once.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub max_free_mb: Option<u64>,
-}
 
 /// The band a `[prune]` table declaring none collects at, `(min_free_mb,
 /// max_free_mb)`: measured on #1132 (2026-10-12), each targeted build consumed
@@ -99,23 +56,31 @@ pub struct Prune {
 /// after a collection.
 pub const DEFAULT_FREE_BAND: (u64, u64) = (4096, 8192);
 
-fn default_root() -> String {
-    String::from("target")
-}
-
-const fn default_keep() -> usize {
-    2
-}
-
-//MUTANT default-band-off|s@            _ => Some(DEFAULT_FREE_BAND),@            _ => None,@|an_undeclared_band_collects_at_the_default
-impl Prune {
+/// `Prune` behaviour that belongs to this module's layer, not the type's (CLOUD-2793).
+pub trait PruneExt: Sized {
     /// Validate the table at load.
     ///
     /// # Errors
     ///
     /// `keep = 0`, which deletes the artifact the next build reads, and a band
     /// that is half-declared or has no width.
-    pub fn validate(&self) -> Result<()> {
+    fn validate(&self) -> Result<()>;
+
+    /// The collector's band (CLOUD-2197): the declared one, or
+    /// [`DEFAULT_FREE_BAND`] where `[prune]` declares none.
+    ///
+    /// **ON BY DEFAULT, because off was measured to fail.** A declared band is
+    /// a key the pinned release must read, so a branch carrying the collector
+    /// had to hold the keys until a release shipped them — and with them held
+    /// the collector it carried never armed, and that branch's own `verify`
+    /// filled the disk (2026-10-13, #1132). The band belongs to the code that
+    /// collects, so the code carries it; the keys only move it.
+    #[must_use]
+    fn free_band(&self) -> Option<(u64, u64)>;
+}
+
+impl PruneExt for Prune {
+    fn validate(&self) -> Result<()> {
         if self.keep == 0 {
             return Err(UsageError::raise(
                 "[prune]: `keep = 0` deletes the artifact the next build reads, which is a clean rather than a prune",
@@ -138,17 +103,7 @@ impl Prune {
         Ok(())
     }
 
-    /// The collector's band (CLOUD-2197): the declared one, or
-    /// [`DEFAULT_FREE_BAND`] where `[prune]` declares none.
-    ///
-    /// **ON BY DEFAULT, because off was measured to fail.** A declared band is
-    /// a key the pinned release must read, so a branch carrying the collector
-    /// had to hold the keys until a release shipped them — and with them held
-    /// the collector it carried never armed, and that branch's own `verify`
-    /// filled the disk (2026-10-13, #1132). The band belongs to the code that
-    /// collects, so the code carries it; the keys only move it.
-    #[must_use]
-    pub const fn free_band(&self) -> Option<(u64, u64)> {
+    fn free_band(&self) -> Option<(u64, u64)> {
         match (self.min_free_mb, self.max_free_mb) {
             (Some(min), Some(max)) => Some((min, max)),
             _ => Some(DEFAULT_FREE_BAND),
@@ -255,9 +210,30 @@ impl Readings {
 /// It does not try to tell current from stale: cargo keeps every generation's
 /// fingerprint, so "has a fingerprint" would mark everything live and reclaim
 /// nothing, which is CLOUD-766's disk exhaustion back.
-//MUTANT-SUITE crates/batten/tests/it/target_prune.rs
-//MUTANT examples-never-pruned|s@\.chain(examples)@.chain(Vec::<PathBuf>::new())@|superseded_example_generations_are_reclaimed_like_deps
-pub(crate) fn reclaim_superseded(root: &Path, keep: usize) -> (usize, u64) {
+/// The flag a stoppable walk ends on (CLOUD-2789): the disk watcher's, set when
+/// the run it watches returns. `None` is a walk no one stops — the hook's and
+/// `target prune`'s, which a deadline or the verb's own end bounds.
+///
+/// A TRAIT, SO THIS MODULE NAMES NO STOP OF ITS OWN: the collector hands its
+/// lock wait's stop in, and `prune` reaches nothing new for it (the modules
+/// ratchet's propagation score, CLOUD-2789).
+pub(crate) type Halt<'a> = Option<&'a dyn Raised>;
+
+/// A flag a stoppable walk ends on once it is raised.
+pub(crate) trait Raised {
+    /// Whether it has been raised.
+    fn raised(&self) -> bool;
+}
+
+/// Whether `halt` has been raised.
+pub(crate) fn halted(halt: Halt<'_>) -> bool {
+    halt.is_some_and(Raised::raised)
+}
+
+///
+/// A PASS ENDS at the first `deps` boundary after `halt` is set: one over a
+/// 21 GB tree outlived the step it watched (CLOUD-2789). `None` never ends it.
+pub(crate) fn reclaim_superseded(root: &Path, keep: usize, halt: Halt<'_>) -> (usize, u64) {
     let mut pruned = 0;
     let mut bytes = 0;
     // `examples` BESIDE `deps` (CLOUD-2047). cargo writes an example target's
@@ -267,20 +243,36 @@ pub(crate) fn reclaim_superseded(root: &Path, keep: usize) -> (usize, u64) {
     // every bench: 56 units for 4 examples, 1,082 MB, measured 2026-09-30. Only an
     // `examples` whose parent is a profile (it carries `.fingerprint`) is a cargo
     // output; the name alone is one a fixture under `target/` could spell.
-    let examples: Vec<PathBuf> = directories_named(root, "examples")
+    let examples: Vec<PathBuf> = directories_named(root, "examples", halt)
         .into_iter()
         .filter(|dir| {
             dir.parent()
                 .is_some_and(|profile| profile.join(".fingerprint").is_dir())
         })
         .collect();
-    for deps in directories_named(root, "deps").into_iter().chain(examples) {
+    for deps in directories_named(root, "deps", halt)
+        .into_iter()
+        .chain(examples)
+    {
+        if halted(halt) {
+            break;
+        }
         let Ok(_building) = claim(root, &deps) else {
             continue;
         };
         let fingerprints = deps.parent().map(|profile| profile.join(".fingerprint"));
+        // A GENERATION THE CURRENT GRAPH STILL READS IS NOT SUPERSEDED
+        // (CLOUD-2789): a root not rebuilt since an edit still links the older
+        // one, and removing it costs that root a rebuild.
+        let live = fingerprints.as_deref().map(live_units).unwrap_or_default();
         for victims in superseded_in(&deps, keep).values() {
-            for victim in victims {
+            for victim in victims.iter().filter(|victim| {
+                !victim
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .and_then(artifact_hash)
+                    .is_some_and(|hash| live.contains(hash))
+            }) {
                 let size = victim.metadata().map_or(0, |meta| meta.len());
                 if std::fs::remove_file(victim).is_ok() {
                     pruned += 1;
@@ -443,7 +435,6 @@ fn reclaim_superseded_debuginfo(deps: &Path) -> (usize, u64) {
 }
 
 /// Every `<owner>.….rcgu.dwo` name `owner`'s own artifacts in `deps` carry.
-//MUTANT superseded-dwo-kept|s@^            named.extend(@            let _ = (@|a_live_units_superseded_dwo_are_reclaimed_and_its_current_set_kept
 fn named_debuginfo(deps: &Path, owner: &str) -> std::collections::BTreeSet<String> {
     let mut named = std::collections::BTreeSet::new();
     let Ok(pattern) = regex::bytes::Regex::new(&format!(
@@ -462,7 +453,7 @@ fn named_debuginfo(deps: &Path, owner: &str) -> std::collections::BTreeSet<Strin
         if !std::fs::symlink_metadata(&path).is_ok_and(|meta| meta.is_file()) {
             continue;
         }
-        if let Ok(contents) = std::fs::read(&path) {
+        if let Ok(contents) = crate::fsio::read(&path) {
             named.extend(
                 pattern
                     .find_iter(&contents)
@@ -535,9 +526,6 @@ const RECLAIMED_KINDS: &[&str] = &["rlib", "rmeta", "so"];
 /// toolchain or flag change is a real new generation of the same unit, and
 /// keying on it would leave the old toolchain's output unreclaimable. `local` and
 /// `deps` are left out because they are what changes between generations.
-//MUTANT-SUITE crates/batten/tests/it/target_prune.rs
-//MUTANT supersede-key-drops-path|s@"target", "path", "profile",@"target", "profile",@|three_versions_of_one_crate_all_survive
-//MUTANT supersede-key-drops-profile|s@"path", "profile", "features",@"path", "features",@|two_profiles_of_one_crate_both_survive
 const UNIT_IDENTITY: &[&str] = &["target", "path", "profile", "features", "compile_kind"];
 
 /// Every unit identity recorded under a profile's `.fingerprint`, by hash.
@@ -591,7 +579,7 @@ fn unit_identity(dir: &Path) -> Option<String> {
         })
         .collect();
     documents.sort();
-    let text = std::fs::read_to_string(documents.first()?).ok()?;
+    let text = crate::fsio::read_to_string(documents.first()?).ok()?;
     let document: serde_json::Value = serde_json::from_str(&text).ok()?;
     Some(
         UNIT_IDENTITY
@@ -604,6 +592,176 @@ fn unit_identity(dir: &Path) -> Option<String> {
             .collect::<Vec<_>>()
             .join("\u{1f}"),
     )
+}
+
+/// THE UNITS THE PROFILE'S CURRENT BUILD GRAPH STILL REFERENCES, by the hash
+/// their fingerprint directory and artifacts share (CLOUD-2789).
+///
+/// **Never by mtime.** Cargo does not touch a dependency it reuses, so the
+/// stable third-party units every warm build reads — the `gix-*` family,
+/// `regorus`, `jsonschema` — were the OLDEST by mtime and went first: the next
+/// build recompiled 67 units, 1,128 s against a 599 s cold build, after a
+/// one-function edit (measured on #1276, the schema mirror's target).
+///
+/// The graph is cargo's own, read from `.fingerprint`: each unit's document
+/// lists its dependencies by fingerprint VALUE (`deps[][3]`), the `u64` whose
+/// little-endian bytes are the hex in that dependency's own fingerprint file.
+/// A unit nothing depends on is a ROOT; among roots of one kind — package,
+/// target kind, and the [`UNIT_IDENTITY`] fields, so a check, a build, a test
+/// and every feature set are kinds of their own — the most recently written is
+/// the current one, and every unit it reaches is live. A root an edit replaced,
+/// and everything only it reached, is not.
+///
+/// A directory with no readable document is not in the graph: cargo cannot
+/// reuse what it cannot read, so it is never a unit to protect.
+pub(crate) fn live_units(fingerprints: &Path) -> std::collections::HashSet<String> {
+    struct Node {
+        hash: String,
+        kind: String,
+        deps: Vec<u64>,
+        written: std::time::SystemTime,
+    }
+    let mut nodes: Vec<Node> = Vec::new();
+    let mut by_value: std::collections::HashMap<u64, usize> = std::collections::HashMap::new();
+    let Ok(entries) = std::fs::read_dir(fingerprints) else {
+        return std::collections::HashSet::new();
+    };
+    for entry in entries.flatten() {
+        if !entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+            continue;
+        }
+        let dir = entry.path();
+        let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
+            continue;
+        };
+        let Some((package, hash)) = name.rsplit_once('-') else {
+            continue;
+        };
+        let Some(node) = graph_node(&dir) else {
+            continue;
+        };
+        let at = nodes.len();
+        for value in node.values {
+            by_value.insert(value, at);
+        }
+        nodes.push(Node {
+            hash: hash.to_owned(),
+            kind: format!("{package}\u{1f}{}", node.kind),
+            deps: node.deps,
+            written: node.written,
+        });
+    }
+    let mut depended = vec![false; nodes.len()];
+    for node in &nodes {
+        for value in &node.deps {
+            if let Some(&at) = by_value.get(value) {
+                depended[at] = true;
+            }
+        }
+    }
+    let mut current: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+    for (at, node) in nodes.iter().enumerate().filter(|(at, _)| !depended[*at]) {
+        current
+            .entry(node.kind.as_str())
+            .and_modify(|best| {
+                if node.written > nodes[*best].written {
+                    *best = at;
+                }
+            })
+            .or_insert(at);
+    }
+    let mut live = vec![false; nodes.len()];
+    let mut reach: Vec<usize> = current.into_values().collect();
+    while let Some(at) = reach.pop() {
+        if std::mem::replace(&mut live[at], true) {
+            continue;
+        }
+        reach.extend(
+            nodes[at]
+                .deps
+                .iter()
+                .filter_map(|value| by_value.get(value).copied()),
+        );
+    }
+    nodes
+        .into_iter()
+        .zip(live)
+        .filter_map(|(node, live)| live.then_some(node.hash))
+        .collect()
+}
+
+/// One fingerprint directory as the graph reads it: the values its fingerprint
+/// files carry, the dependency values its documents list, its kind, and when
+/// cargo last wrote it.
+struct GraphNode {
+    values: Vec<u64>,
+    deps: Vec<u64>,
+    kind: String,
+    written: std::time::SystemTime,
+}
+
+/// [`GraphNode`] for `dir`, or `None` where no document parses.
+fn graph_node(dir: &Path) -> Option<GraphNode> {
+    let mut documents: Vec<PathBuf> = std::fs::read_dir(dir)
+        .ok()?
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.extension().is_some_and(|ext| ext == "json")
+                && !path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name.starts_with("dep-"))
+        })
+        .collect();
+    documents.sort();
+    let mut node = GraphNode {
+        values: Vec::new(),
+        deps: Vec::new(),
+        kind: String::new(),
+        written: std::time::UNIX_EPOCH,
+    };
+    for path in documents {
+        let Ok(text) = crate::fsio::read_to_string(&path) else {
+            continue;
+        };
+        let Ok(document) = serde_json::from_str::<serde_json::Value>(&text) else {
+            continue;
+        };
+        // THE FINGERPRINT FILE BESIDE ITS DOCUMENT, `lib-x` for `lib-x.json`:
+        // its hex is the value a dependent's document names this unit by, and
+        // its mtime is when cargo last built the unit.
+        let value_file = path.with_extension("");
+        if let Ok(hex) = crate::fsio::read_to_string(&value_file)
+            && let Ok(value) = u64::from_str_radix(hex.trim(), 16)
+        {
+            node.values.push(value.swap_bytes());
+        }
+        if let Ok(written) = std::fs::metadata(&value_file).and_then(|meta| meta.modified()) {
+            node.written = node.written.max(written);
+        }
+        node.deps.extend(
+            document
+                .get("deps")
+                .and_then(serde_json::Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(|dep| dep.get(3).and_then(serde_json::Value::as_u64)),
+        );
+        let target_kind = path
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .unwrap_or_default();
+        node.kind = std::iter::once(target_kind.to_owned())
+            .chain(UNIT_IDENTITY.iter().map(|field| {
+                document
+                    .get(field)
+                    .map_or_else(String::new, ToString::to_string)
+            }))
+            .collect::<Vec<_>>()
+            .join("\u{1f}");
+    }
+    (!node.kind.is_empty()).then_some(node)
 }
 
 /// Files grouped by `(stem, kind, unit identity)`, each group holding only what
@@ -756,12 +914,9 @@ pub fn sampler(path: PathBuf) -> Result<impl FnMut() -> Result<u64> + Send> {
 ///
 /// **The committed file, never a layered view.** `[prune]` is authority-only, so
 /// there is no override for this read to miss.
-//MUTANT-SUITE crates/batten/src/prune.rs
-//MUTANT prune-table-alone-unread|s@    let declared = table.get("prune")?.as_table()?;@    let declared = table.get("prune-unread")?.as_table()?;@|a_config_this_build_outran_still_yields_its_prune_table
-//MUTANT prune-table-alone-unvalidated|s@    prune.validate().ok()?;@    let _ = prune.validate();@|a_prune_table_that_fails_validation_is_not_read_alone
 #[must_use]
 pub fn declared_alone(dir: &Path) -> Option<Prune> {
-    let text = std::fs::read_to_string(dir.join(crate::config::CONFIG_FILE)).ok()?;
+    let text = crate::fsio::read_to_string(dir.join(crate::config_model::CONFIG_FILE)).ok()?;
     let table: toml::Table = toml::from_str(&text).ok()?;
     let declared = table.get("prune")?.as_table()?;
     let prune: Prune = toml::from_str(&toml::to_string(declared).ok()?).ok()?;
@@ -771,6 +926,20 @@ pub fn declared_alone(dir: &Path) -> Option<Prune> {
 
 /// The lock cargo holds on a profile directory for the whole of a build.
 const BUILD_LOCK: &str = ".cargo-lock";
+
+/// EVERY LOCK CARGO TAKES ON A PROFILE DIRECTORY (CLOUD-2789), any one of which
+/// held means a build is reading or writing it.
+///
+/// Since cargo split the build directory from the artifact directory it takes
+/// `.cargo-build-lock` (exclusive) in the BUILD directory, and `.cargo-lock`
+/// (shared) and `.cargo-artifact-lock` (exclusive) in the ARTIFACT directory —
+/// traced on 1.98. A mutation sweep sets `CARGO_TARGET_DIR` to its own tree and
+/// `CARGO_BUILD_BUILD_DIR` to the checkout's `target`, so while it compiled and
+/// linked from `target/debug/deps` the only lock held there was
+/// `.cargo-build-lock`. Reading `.cargo-lock` alone, the collector found the
+/// profile free and removed the `libbstr`/`libregex` rlibs the sweep was about
+/// to link: `rust-lld: cannot open …/target/debug/deps/libbstr-….rlib`.
+pub(crate) const BUILD_LOCKS: [&str; 3] = [BUILD_LOCK, ".cargo-build-lock", ".cargo-artifact-lock"];
 
 /// Take the build lock of every profile `path` sits in or holds, or `None` if a
 /// build holds any of them.
@@ -788,19 +957,21 @@ const BUILD_LOCK: &str = ".cargo-lock";
 /// same lock blocking, so a build starting mid-reclaim waits, then finds a tree
 /// that is simply colder. A lock that cannot be opened is no lock at all — a tree
 /// cargo never built into, which is exactly what the pass already handled.
-//MUTANT-SUITE crates/batten/tests/it/prune_watch.rs
-//MUTANT reclaim-under-held-lock|s@^            Err(std::fs::TryLockError::WouldBlock) => return Err(profile.join(BUILD_LOCK)),$@            Err(std::fs::TryLockError::WouldBlock) => {}@|a_tree_a_build_holds_is_never_collected
 pub(crate) fn claim(root: &Path, path: &Path) -> Result<Vec<std::fs::File>, PathBuf> {
     let enclosing = path.ancestors().take_while(|dir| dir.starts_with(root));
     let nested = PROFILE_DIRS.iter().map(|profile| path.join(profile));
     let mut held = Vec::new();
-    for profile in enclosing.map(Path::to_path_buf).chain(nested) {
-        let Ok(lock) = std::fs::File::open(profile.join(BUILD_LOCK)) else {
+    let locks = enclosing
+        .map(Path::to_path_buf)
+        .chain(nested)
+        .flat_map(|profile| BUILD_LOCKS.map(|name| profile.join(name)));
+    for path in locks {
+        let Ok(lock) = std::fs::File::open(&path) else {
             continue;
         };
         match lock.try_lock() {
             Ok(()) => held.push(lock),
-            Err(std::fs::TryLockError::WouldBlock) => return Err(profile.join(BUILD_LOCK)),
+            Err(std::fs::TryLockError::WouldBlock) => return Err(path),
             // An error that is not contention says nothing about a build, and
             // refusing on it would let one unreadable lock wedge every reclaim.
             Err(std::fs::TryLockError::Error(_)) => {}
@@ -845,16 +1016,26 @@ fn name_matches(candidate: &std::ffi::OsStr, declared: &str) -> bool {
 /// escalation, handed to `remove_dir_all`. The predecessor was safe by accident
 /// of its instrument (`find -type d` does not follow without `-L`); the port made
 /// it a decision, and review caught the window between the two on #734.
-pub(crate) fn directories_named(root: &Path, name: &str) -> Vec<PathBuf> {
-    directories_named_outside(root, name, &[])
+///
+/// A WALK ENDS where `halt` is set, with what it found so far (CLOUD-2789).
+pub(crate) fn directories_named(root: &Path, name: &str, halt: Halt<'_>) -> Vec<PathBuf> {
+    directories_named_outside(root, name, &[], halt)
 }
 
 /// [`directories_named`], never descending into a directory one of
-/// `shielded` names.
-fn directories_named_outside(root: &Path, name: &str, shielded: &[&str]) -> Vec<PathBuf> {
+/// `shielded` names, and ending at the next directory once `halt` is set.
+fn directories_named_outside(
+    root: &Path,
+    name: &str,
+    shielded: &[&str],
+    halt: Halt<'_>,
+) -> Vec<PathBuf> {
     let mut found = Vec::new();
     let mut stack = vec![root.to_path_buf()];
     while let Some(dir) = stack.pop() {
+        if halted(halt) {
+            break;
+        }
         let Ok(entries) = std::fs::read_dir(&dir) else {
             continue;
         };
@@ -903,6 +1084,25 @@ const fn mebibytes(bytes: u64) -> u64 {
 mod tests {
     use super::*;
 
+    /// A walk ends only on a flag that is set: no flag and an unset one never
+    /// stop it.
+    ///
+    /// Fails by: `halted` answering `false` always, so a stoppable walk ran to
+    /// the end of a tree after its watcher stopped (the census timed out on it
+    /// rather than failing).
+    #[test]
+    fn a_walk_is_halted_only_by_a_set_flag() {
+        let flag = match batten_facts::lock_wait::Stop::new() {
+            Ok(flag) => flag,
+            Err(why) => panic!("a stop: {why}"),
+        };
+        assert!(!halted(None), "a walk no one stops");
+        assert!(!halted(Some(&flag)), "an unset flag");
+        flag.raise();
+        assert!(halted(Some(&flag)), "a set flag halts");
+    }
+
+    #[cfg(test)]
     /// The volume a suite is writing to has room for more than the one MiB a
     /// constant reading would claim.
     ///
@@ -946,13 +1146,13 @@ mod tests {
     /// A directory holding exactly `config` as its committed authority.
     fn authority(name: &str, config: &str) -> PathBuf {
         let root = build_root(name);
-        if let Err(why) = std::fs::write(root.join(crate::config::CONFIG_FILE), config) {
+        if let Err(why) = std::fs::write(root.join(crate::config_model::CONFIG_FILE), config) {
             panic!("fixture: could not write the config: {why}");
         }
         root
     }
 
-    /// `#MUTANT prune-table-alone-unread` reddens here. The config carries a key
+    /// A mutant that leaves the prune table unread reddens here. The config carries a key
     /// no build knows — the shape a release meets on every branch that adds one —
     /// and the collector still gets its band.
     #[test]
@@ -970,7 +1170,7 @@ mod tests {
         assert_eq!(read.free_band(), Some((100, 200)));
     }
 
-    /// `#MUTANT prune-table-alone-unvalidated` reddens here: reading the table alone
+    /// A mutant skipping the table's validation reddens here: reading the table alone
     /// must not skip the check a whole-file load would have refused.
     #[test]
     fn a_prune_table_that_fails_validation_is_not_read_alone() {
@@ -1015,6 +1215,7 @@ mod tests {
             regrowable: None,
             min_free_mb: min,
             max_free_mb: max,
+            caches: Vec::new(),
         };
         assert!(table(None, None).validate().is_ok(), "the arm switched off");
         assert!(table(Some(10), Some(20)).validate().is_ok());
@@ -1174,7 +1375,7 @@ mod tests {
         variant(&profile, "demo", "a3a3a3a3a3a3a3a3", 1000);
         variant(&profile, "other", "b1b1b1b1b1b1b1b1", 9000);
 
-        let (pruned, _) = reclaim_superseded(&root, 1);
+        let (pruned, _) = reclaim_superseded(&root, 1, None);
 
         let prints = profile.join(".fingerprint");
         assert_eq!(pruned, 2, "keep 1 of three `demo` variants");
@@ -1231,7 +1432,7 @@ mod tests {
         put(&deps.join(&named), b"k");
         put(&deps.join(format!("demo-{new}.old.rcgu.dwo")), b"gone");
         assert_eq!(
-            reclaim_superseded(&root, 1),
+            reclaim_superseded(&root, 1, None),
             (4, 5 + 7 + 3 + 4),
             "the old generation, two orphans and one superseded dwo"
         );
@@ -1289,7 +1490,13 @@ mod tests {
             taken: 0,
         };
         let taken: Vec<u64> = (0..3)
-            .map(|_| readings.take(Path::new(".")).unwrap_or(0))
+            .map(|_| {
+                readings
+                    .take(&crate::fixture_root::fixture_root(
+                        "declared_readings_are_taken_in_order_and_the_last_repeats",
+                    ))
+                    .unwrap_or(0)
+            })
             .collect();
         assert_eq!(taken, [5, 3, 3]);
     }
@@ -1306,6 +1513,7 @@ mod tests {
         let banded = Prune {
             min_free_mb: Some(1),
             max_free_mb: Some(2),
+            caches: Vec::new(),
             ..empty
         };
         assert!(banded.validate().is_ok());
@@ -1389,7 +1597,8 @@ mod tests {
     fn building(profile: &Path) -> std::fs::File {
         mkdir(profile);
         let lock = profile.join(BUILD_LOCK);
-        let held = std::fs::File::create(&lock).and_then(|file| file.lock().map(|()| file));
+        let held = std::fs::File::create(&lock)
+            .and_then(|file| file.try_lock().map(|()| file).map_err(std::io::Error::from));
         match held {
             Ok(file) => file,
             Err(why) => panic!("fixture: could not lock {}: {why}", lock.display()),
@@ -1405,12 +1614,16 @@ mod tests {
         let build = building(&profile);
 
         assert_eq!(
-            reclaim_superseded(&root, 1),
+            reclaim_superseded(&root, 1, None),
             (0, 0),
             "nothing under a held lock"
         );
 
         drop(build);
-        assert_eq!(reclaim_superseded(&root, 1).0, 1, "released, keep 1 of 2");
+        assert_eq!(
+            reclaim_superseded(&root, 1, None).0,
+            1,
+            "released, keep 1 of 2"
+        );
     }
 }

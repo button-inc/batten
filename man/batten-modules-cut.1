@@ -1,0 +1,25 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH batten-modules-cut 1  batten 
+.SH NAME
+batten\-modules\-cut \- Move a closed set of crate\-root modules into a new sibling package, respelling every path, no shim
+.SH SYNOPSIS
+\fBbatten modules cut\fR [\fB\-\-dry\-run\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIfrom\fR> <\fIname\fR> <\fImodules\fR> 
+.SH DESCRIPTION
+Move a closed set of crate\-root modules into a new sibling package, respelling every path, no shim
+.SH OPTIONS
+.TP
+\fB\-\-dry\-run\fR
+Print each path the cut would write or remove, and write nothing
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+<\fIfrom\fR>
+The package directory to cut from, relative to the workspace root (crates/batten)
+.TP
+<\fIname\fR>
+The new package\*(Aqs name; it lands beside the one cut from
+.TP
+<\fImodules\fR>
+The crate\-root modules that move, by name

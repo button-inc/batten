@@ -93,7 +93,7 @@ fn record(dir: &Path, check: &str) {
     let output = batten()
         .args(["receipt", "record", check])
         .current_dir(dir)
-        .output()
+        .streamed_output()
         .expect("run batten receipt record");
     assert!(
         output.status.success(),
@@ -106,7 +106,7 @@ fn verified(dir: &Path) -> (i32, String) {
     let output = batten()
         .args(["receipt", "verified"])
         .current_dir(dir)
-        .output()
+        .streamed_output()
         .expect("run batten receipt verified");
     let mut text = String::from_utf8_lossy(&output.stdout).into_owned();
     text.push_str(&String::from_utf8_lossy(&output.stderr));
@@ -293,6 +293,62 @@ fn a_moved_trunk_expires_the_receipt_taken_against_the_old_one() {
         "a receipt taken against a moved trunk is stale: {text}"
     );
     assert!(text.contains("NOT verified"), "got {text}");
+}
+
+/// Record `check` under a lap's speculation on `base` (CLOUD-2253 A3).
+fn record_speculating(dir: &Path, check: &str, base: &str) {
+    let output = batten()
+        .args(["receipt", "record", check])
+        .env("BATTEN_SPEC_BASE", base)
+        .current_dir(dir)
+        .streamed_output()
+        .expect("run batten receipt record");
+    assert!(
+        output.status.success(),
+        "recording {check} failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+/// A commit on HEAD touching `name`, and its sha.
+fn commit(dir: &Path, name: &str) -> String {
+    fs::write(dir.join(name), "fn x() {}\n").expect("write the file");
+    git_in(dir, &["add", name]);
+    git_in(dir, &["commit", "-q", "-m", &format!("chore: {name}")]);
+    out_of(dir, &["rev-parse", "HEAD"])
+}
+
+/// **A WON SPECULATION RE-VERIFIES NOTHING** (CLOUD-2253 A3). A gate run over a
+/// head replayed onto the lease holder's head judged that head as its base, and
+/// the receipt says so: while the bet is pending the trunk it was taken against
+/// still answers, once the holder lands the receipt is current, and a trunk
+/// that went anywhere else expires it.
+///
+/// Fails by: the receipt recording the tracking ref it happened to read, so the
+/// trunk reaching the judged base reads as stale and the gate runs again over
+/// byte-identical inputs; or only one (head, base) slot kept, so the pending
+/// bet's own laps re-run the gate.
+#[test]
+fn a_won_speculation_is_answered_from_the_receipt_its_gate_minted() {
+    let dir = repo("receipt-verified-speculation");
+    let holder = commit(&dir, "holder.rs");
+    let _head = commit(&dir, "mine.rs");
+    record_speculating(&dir, "verify", &holder);
+    record_speculating(&dir, "linear-check", &holder);
+    let (code, text) = verified(&dir);
+    assert_eq!(code, 0, "the bet is pending and the trunk stood: {text}");
+
+    git_in(&dir, &["update-ref", "refs/remotes/origin/main", &holder]);
+    let (code, text) = verified(&dir);
+    assert_eq!(code, 0, "the holder landed on the judged base: {text}");
+
+    let elsewhere = out_of(&dir, &["rev-parse", "HEAD~2"]);
+    git_in(&dir, &["checkout", "-q", "-b", "other", &elsewhere]);
+    let moved = commit(&dir, "other.rs");
+    git_in(&dir, &["checkout", "-q", "-"]);
+    git_in(&dir, &["update-ref", "refs/remotes/origin/main", &moved]);
+    let (code, text) = verified(&dir);
+    assert_eq!(code, 2, "a trunk that took something else is stale: {text}");
 }
 
 /// An amend expires the receipt, because it produces a new HEAD.

@@ -9,6 +9,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
+use batten::capture::StreamedChild as _;
 
 use std::path::{Path, PathBuf};
 
@@ -49,7 +50,7 @@ target = "answer-the-operator.rego"
 /// The operator typing a prompt.
 fn prompt() -> serde_json::Value {
     serde_json::json!({
-        "type": "user", "sessionId": "s-1",
+        "type": "user", "sessionId": common::session_id("s-1"),
         "message": {"role": "user", "content": PROSE},
     })
 }
@@ -57,7 +58,7 @@ fn prompt() -> serde_json::Value {
 /// The operator sending a message while a turn runs, as the host records it.
 fn queued() -> serde_json::Value {
     serde_json::json!({
-        "type": "attachment", "sessionId": "s-1",
+        "type": "attachment", "sessionId": common::session_id("s-1"),
         "attachment": {"type": "queued_command", "prompt": PROSE,
                        "commandMode": "prompt", "origin": {"kind": "human"},
                        "humanTurn": true},
@@ -66,14 +67,14 @@ fn queued() -> serde_json::Value {
 
 fn said() -> serde_json::Value {
     serde_json::json!({
-        "type": "assistant", "sessionId": "s-1",
+        "type": "assistant", "sessionId": common::session_id("s-1"),
         "message": {"role": "assistant", "content": [{"type": "text", "text": PROSE}]},
     })
 }
 
 fn acted(index: usize) -> serde_json::Value {
     serde_json::json!({
-        "type": "assistant", "sessionId": "s-1",
+        "type": "assistant", "sessionId": common::session_id("s-1"),
         "message": {"role": "assistant", "content": [
             {"type": "tool_use", "id": format!("t{index}"), "name": "Bash",
              "input": {"command": PROSE}}
@@ -83,7 +84,7 @@ fn acted(index: usize) -> serde_json::Value {
 
 fn result(index: usize) -> serde_json::Value {
     serde_json::json!({
-        "type": "user", "sessionId": "s-1",
+        "type": "user", "sessionId": common::session_id("s-1"),
         "message": {"role": "user", "content": [
             {"type": "tool_result", "tool_use_id": format!("t{index}"), "content": PROSE}
         ]},
@@ -134,7 +135,7 @@ fn channels(dir: &Path, home: &Path, transcript: &Path) -> String {
             .write_all(envelope.as_bytes())
             .expect("write the envelope");
     }
-    let outcome = child.wait_with_output().expect("run batten hook");
+    let outcome = child.streamed_wait().expect("run batten hook");
     format!(
         "{}{}",
         String::from_utf8_lossy(&outcome.stdout),
@@ -209,7 +210,7 @@ fn tool_results_are_not_the_operator_speaking() {
 /// string whose `origin.kind` is not `human`.
 fn notified() -> serde_json::Value {
     serde_json::json!({
-        "type": "user", "sessionId": "s-1", "origin": {"kind": "task-notification"},
+        "type": "user", "sessionId": common::session_id("s-1"), "origin": {"kind": "task-notification"},
         "message": {"role": "user", "content": PROSE},
     })
 }
@@ -231,7 +232,7 @@ fn a_queued_message_marked_only_by_origin_is_the_operator() {
         prompt(),
         said(),
         serde_json::json!({
-            "type": "attachment", "sessionId": "s-1",
+            "type": "attachment", "sessionId": common::session_id("s-1"),
             "attachment": {"type": "queued_command", "prompt": PROSE,
                            "commandMode": "prompt", "origin": {"kind": "human"}},
         }),
@@ -241,6 +242,103 @@ fn a_queued_message_marked_only_by_origin_is_the_operator() {
         refused(&records, "origin-only"),
         "origin.kind human is the operator"
     );
+}
+
+/// A Claude Code Stop over `transcript`: the exit code and both channels.
+fn stopped(dir: &Path, home: &Path, transcript: &Path, active: bool) -> (Option<i32>, String) {
+    let envelope = serde_json::json!({
+        "hook_event_name": "Stop",
+        "session_id": common::session_id("s-1"),
+        "stop_hook_active": active,
+        "transcript_path": transcript.display().to_string(),
+    })
+    .to_string();
+    let mut invocation = batten();
+    invocation
+        .current_dir(dir)
+        .state_home(home)
+        .args(["adjudicate", "--harness", "claude-code"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    let mut child = invocation.spawn().expect("spawn batten hook");
+    {
+        use std::io::Write as _;
+        child
+            .stdin
+            .take()
+            .expect("the child's stdin")
+            .write_all(envelope.as_bytes())
+            .expect("write the envelope");
+    }
+    let outcome = child.streamed_wait().expect("run batten hook");
+    (
+        outcome.status.code(),
+        format!(
+            "{}{}",
+            String::from_utf8_lossy(&outcome.stdout),
+            String::from_utf8_lossy(&outcome.stderr)
+        ),
+    )
+}
+
+/// CLOUD-2861: a turn the operator opened and only tool calls answered cannot
+/// end. The refusal names the message's transcript line and nothing on it.
+///
+/// Fails by: the Stop rung removed, where the finding is only advice and the
+/// Stop exits 0.
+#[test]
+fn a_stop_after_an_operator_message_answered_by_tools_alone_is_refused() {
+    let (dir, home, transcript) = fixture("stop-refused", &[said(), prompt(), acted(0)]);
+    let (code, out) = stopped(&dir, &home, &transcript, false);
+    assert_eq!(code, Some(2), "{out}");
+    assert!(out.contains(TOKEN), "{out}");
+    assert!(
+        out.contains("session.jsonl:2"),
+        "the operator line is named\n{out}"
+    );
+    assert!(
+        !out.contains(PROSE),
+        "no session text may reach any output\n{out}"
+    );
+}
+
+#[test]
+fn a_stop_after_one_text_block_ends() {
+    let (dir, home, transcript) =
+        fixture("stop-answered", &[prompt(), acted(0), result(0), said()]);
+    let (code, out) = stopped(&dir, &home, &transcript, false);
+    assert_eq!(code, Some(0), "{out}");
+}
+
+#[test]
+fn a_stop_after_a_task_notification_ends_without_text() {
+    let records = [prompt(), said(), acted(0), notified(), acted(1)];
+    let (dir, home, transcript) = fixture("stop-notified", &records);
+    let (code, out) = stopped(&dir, &home, &transcript, false);
+    assert_eq!(code, Some(0), "{out}");
+}
+
+/// One refusal per operator message: the receipt holds the second Stop open,
+/// and the finding still reaches the advisory channel.
+///
+/// Fails by: the receipt unread or unwritten, which refuses every Stop over
+/// the same message (CLOUD-889's loop).
+#[test]
+fn the_second_stop_over_the_same_message_is_advice() {
+    let (dir, home, transcript) = fixture("stop-twice", &[prompt(), acted(0)]);
+    let (first, out) = stopped(&dir, &home, &transcript, false);
+    assert_eq!(first, Some(2), "{out}");
+    let (second, out) = stopped(&dir, &home, &transcript, false);
+    assert_eq!(second, Some(0), "{out}");
+    assert!(out.contains(TOKEN), "the finding stays advice\n{out}");
+}
+
+#[test]
+fn a_stop_with_stop_hook_active_is_never_refused() {
+    let (dir, home, transcript) = fixture("stop-active", &[prompt(), acted(0)]);
+    let (code, out) = stopped(&dir, &home, &transcript, true);
+    assert_eq!(code, Some(0), "{out}");
 }
 
 #[test]

@@ -1,0 +1,23 @@
+[package]
+name = "batten-stream"
+description = "The one stream implementation Batten moves every child process's bytes through: chunk by chunk, with backpressure."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+
+# A LEAF, AS `batten-fsio` IS (#1276): only `std` below it and no edge into
+# `batten`, which re-exports it as `crate::stream`. Every module that spawns
+# reaches it, so inside `batten` it would sit in every spawner's closure and
+# push three plumbing modules past the boundary the split plan rests on.
+
+[features]
+# A test's handle on a pump in a state it sets (`Pumping::held`): `batten`
+# enables it from its dev-dependencies only, so no shipped build carries it.
+seam = []
+
+[lints]
+workspace = true

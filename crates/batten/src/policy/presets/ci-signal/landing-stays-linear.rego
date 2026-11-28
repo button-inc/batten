@@ -135,7 +135,7 @@ lane_fields[pair[0]] := pair[1] if {
 # read as zero is a clean window over input nobody parsed. Undefined alone would
 # leave every rule unfired, so `torn` reads it as a refusal.
 lane_count_of(key) := number if {
-	raw := lane_fields[key]
+	raw = lane_fields[key]
 	regex.match("^[0-9]+$", raw)
 	number := to_number(raw)
 }
@@ -170,7 +170,7 @@ lane_torn if {
 # would compute by hand — which is the property the decider's own comment asked for
 # ("a gate that rounds is a gate that disagrees with the number it printed").
 lane_ratio(key) := value if {
-	landings := lane_count_of("landings")
+	landings = lane_count_of("landings")
 	landings > 0
 	value := (lane_count_of(key) * 100) / landings
 }

@@ -241,7 +241,7 @@ fn this_repositorys_own_workflows_hold_the_floor() {
     // The self-consumption case the retiring suite ended on: the floor is a live
     // claim about this repository, checked rather than asserted.
     let output = common::run(
-        &common::at_root(""),
+        common::committed_repo(),
         &["check", "--rule", "provision pin stale"],
     );
     assert_eq!(

@@ -25,7 +25,7 @@
 //! # What this row does NOT decide
 //!
 //! Whether a given session actually claimed before branching. That is not a
-//! property of the tree, and a rule resolving to it would be the model verdict
+//! property of the tree, and a rule resolving to it would be the gated-model verdict
 //! non-negotiable rule 3 forbids. The prose carries the position; this keeps the
 //! prose from evaporating.
 
@@ -37,7 +37,8 @@ use crate::common;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use batten::rules::{self, Rule};
+use batten::config_model::Rule;
+use batten::rules;
 
 /// The row as `batten.toml` declares it, deserialized rather than
 /// struct-literalled: `Rule` carries `deny_unknown_fields`, so this goes through
@@ -73,7 +74,7 @@ const SOUND_RULES: &str = "\
 
 /// A scratch tree carrying the two instruction files, plus the committed module.
 fn tree(name: &str, index: Option<&str>, rules_doc: Option<&str>) -> PathBuf {
-    let root = common::scratch(&format!("claim-order-{name}"));
+    let root = common::scratch_repo(&format!("claim-order-{name}"));
     if let Some(body) = index {
         common::write(&root, "AGENTS.md", body);
     }
@@ -251,7 +252,7 @@ fn this_repository_states_the_order_today() {
     // reason `findings_declared_by` states; the scratch name is this case's own,
     // because nextest runs each case in its own process and a shared name is a
     // wipe under another process's read.
-    let only = common::scratch("claim-order-vocabulary-real-tree");
+    let only = common::scratch_repo("claim-order-vocabulary-real-tree");
     install_module(&only);
     let found = findings_declared_by(&root, &only);
     assert!(

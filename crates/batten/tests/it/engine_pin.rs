@@ -9,11 +9,17 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
+use batten::capture::Streamed as _;
+use batten::capture::StreamedChild as _;
 
 use std::path::{Path, PathBuf};
 use std::process::Output;
 
-const RELEASE: &str = concat!("v", env!("CARGO_PKG_VERSION"));
+/// This build's identity as a tag (CLOUD-2903): `v` plus a dev pre-release for
+/// every build the suite runs, since no test build is the marked release.
+fn this_build() -> String {
+    batten::engine::release()
+}
 
 fn repo(name: &str, config: &str) -> PathBuf {
     let dir = common::scratch(name);
@@ -54,7 +60,7 @@ fn run_engine(binary: &Path, dir: &Path, args: &[&str], local: bool) -> Output {
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
     common::spawn_copy(&mut command)
-        .wait_with_output()
+        .streamed_wait()
         .expect("run batten")
 }
 
@@ -80,9 +86,10 @@ fn shared() -> PathBuf {
 
 #[test]
 fn a_release_pin_naming_this_build_loads() {
+    let release = this_build();
     let dir = repo(
         "engine-pin-release-same",
-        &format!("version = 1\nengine = {{ release = \"{RELEASE}\" }}\n"),
+        &format!("version = 1\nengine = {{ release = \"{release}\" }}\n"),
     );
     let output = run(&shared(), &dir, &["config", "show"]);
     assert!(output.status.success(), "{}", text(&output));
@@ -121,12 +128,21 @@ fn a_source_pin_matching_the_stamp_loads() {
     common::write(&dir, "crates/engine/src/lib.rs", "// the engine\n");
     common::git_in(&dir, &["add", "crates"]);
     let binary = private_binary(&dir);
-    let stamped = run(&binary, &dir, &["engine", "stamp"]);
-    assert!(stamped.status.success(), "{}", text(&stamped));
     let digest = text(&run(&binary, &dir, &["engine", "digest"]))
         .trim()
         .to_owned();
     assert_eq!(digest.len(), 64, "a digest is 64 hex: {digest}");
+    // `engine stamp` REFUSES here (CLOUD-2903): this binary was built from
+    // batten's tree, not the fixture's, so it cannot attest the fixture. The
+    // stamp this case loads under is written as the install writes it.
+    let refused = run(&binary, &dir, &["engine", "stamp"]);
+    assert!(!refused.status.success(), "{}", text(&refused));
+    assert!(
+        text(&refused).contains("built from source"),
+        "{}",
+        text(&refused)
+    );
+    batten::engine::stamp(&binary, &digest).unwrap();
     common::write(
         &dir,
         "batten.toml",
@@ -251,11 +267,12 @@ fn the_digest_moves_when_a_tracked_engine_file_changes_and_not_for_an_untracked_
 
 #[test]
 fn a_local_override_cannot_set_the_pin() {
+    let release = this_build();
     let dir = repo("engine-pin-local", "version = 1\n");
     common::write(
         &dir,
         "batten.local.toml",
-        &format!("version = 1\nengine = {{ release = \"{RELEASE}\" }}\n"),
+        &format!("version = 1\nengine = {{ release = \"{release}\" }}\n"),
     );
     let output = run(&shared(), &dir, &["config", "show"]);
     let said = text(&output);
@@ -263,5 +280,523 @@ fn a_local_override_cannot_set_the_pin() {
     assert!(
         said.contains("`engine`"),
         "the refusal names the key: {said}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// CLOUD-2595: the pin is followed before the parse and written into a config
+// that pins nothing, as the `engine` key at the head of the file.
+//
+// The follow and write cases need a served release, so they reuse the install
+// suite's loopback TLS host rather than a fourth copy of it (CLOUD-2431). Its
+// release ships a shell script, so a followed engine is observed by its output.
+// They are Linux-only, as the install suite's are: the fixture archive is a tar
+// of a `#!/bin/sh` script.
+// ---------------------------------------------------------------------------
+
+use crate::engine_install::{WANTED, release_host, served_env};
+
+/// What the fixture release's binary prints when a follow runs it.
+const FIXTURE_SAYS: &str = "the fixture release";
+
+/// The release `config` pins, read as the engine reads it.
+fn pinned(config: &str) -> Option<String> {
+    batten::engine::declared(config)?.release
+}
+
+/// `batten <args>` in `dir` with the follow armed: no `BATTEN_ENGINE_UPDATED`,
+/// state inside the case, neither `CI` nor the local-engine override ambient,
+/// `stdin` on a pipe when given.
+fn following(dir: &Path, args: &[&str], env: &[(&str, &str)], stdin: Option<&str>) -> Output {
+    use common::StateHome as _;
+    use std::io::Write as _;
+    let mut command = common::batten();
+    command
+        .state_dir(&dir.join("data"))
+        .args(args)
+        .current_dir(dir)
+        .env("HOME", dir)
+        .env_remove("CI")
+        .env_remove("CLAUDE_PROJECT_DIR")
+        .env_remove("BATTEN_ENGINE_UPDATED")
+        .env_remove(batten::engine::LOCAL_ENV)
+        .env_remove("BATTEN_RELEASES")
+        .env_remove("BATTEN_VERSION_FROM_REF")
+        .env_remove("BATTEN_VERSION")
+        .env_remove("BATTEN_INSTALL_DIR")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    for (name, value) in env {
+        command.env(name, value);
+    }
+    let mut child = command.spawn().expect("spawn batten");
+    let mut pipe = child.stdin.take().expect("piped stdin");
+    if let Some(input) = stdin {
+        pipe.write_all(input.as_bytes()).expect("write stdin");
+    }
+    drop(pipe);
+    child.streamed_wait().expect("run batten")
+}
+
+/// `engine install` into a directory of the case's own, as the bootstrap's last
+/// step runs it.
+fn installing(dir: &Path, env: &[(&str, &str)]) -> Output {
+    let named = dir.join("bin");
+    let named = named.display().to_string();
+    let mut env = env.to_vec();
+    env.push(("BATTEN_INSTALL_DIR", named.as_str()));
+    env.push(("BATTEN_ALLOW_OFF_PATH", "1"));
+    following(dir, &["engine", "install"], &env, None)
+}
+
+/// A config this build refuses at load, whatever else it says.
+const REFUSED_HERE: &str = "version = 1\nnot_a_key = true\n";
+
+#[test]
+fn a_pin_over_a_file_this_build_refuses_is_followed_before_the_parse() {
+    if !cfg!(target_os = "linux") {
+        return;
+    }
+    let dir = common::scratch_repo("engine-pin-followed-unparsed");
+    let (_host, served) = release_host(&dir, WANTED, WANTED);
+    // A file THIS build refuses, so only a pin read before the parse can get
+    // the call judged — and a `[[provision]] batten` row, which pins nothing,
+    // never stands in for the key (CLOUD-2595's row pin is retired).
+    common::write(
+        &dir,
+        "batten.toml",
+        &format!(
+            "version = 1\nengine = {{ release = \"{WANTED}\" }}\nnot_a_key = true\n\n\
+             [[provision]]\nname = \"batten\"\nversion = \"0.0.1\"\n"
+        ),
+    );
+    let output = following(&dir, &["config", "show"], &served_env(&served), None);
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains(FIXTURE_SAYS),
+        "the pinned release ran instead of this build: {}",
+        text(&output)
+    );
+    assert!(output.status.success(), "{}", text(&output));
+}
+
+#[test]
+fn a_config_without_a_pin_gains_one_after_a_clean_load() {
+    let release = this_build();
+    if !cfg!(target_os = "linux") {
+        return;
+    }
+    let dir = common::scratch_repo("engine-pin-key-written");
+    let (_host, served) = release_host(&dir, &release, &release);
+    common::write(&dir, "batten.toml", "version = 1\n");
+    let output = installing(&dir, &served_env(&served));
+    assert!(output.status.success(), "{}", text(&output));
+    let config = std::fs::read_to_string(dir.join("batten.toml")).unwrap();
+    // A DEV BUILD NEVER PINS ITSELF (CLOUD-2906): every test build is a dev
+    // pre-release, published and answering, and still writes nothing. The
+    // release half is `lib.rs`'s `only_a_release_build_adopts_its_own_pin`.
+    assert_eq!(pinned(&config), None, "{config}");
+    assert!(
+        !text(&output).contains("(pinned "),
+        "nothing is reported written: {}",
+        text(&output)
+    );
+}
+
+/// Fails by: the hook writing the pin itself, which runs the adoption inline at
+/// `SessionStart` (CLOUD-2840 moved it into the setup task), or the dispatched
+/// task not writing it.
+#[test]
+fn the_setup_task_writes_the_pin_and_the_hook_does_not() {
+    let release = this_build();
+    if !cfg!(target_os = "linux") {
+        return;
+    }
+    let dir = common::scratch_repo("engine-pin-key-session");
+    let (_host, served) = release_host(&dir, &release, &release);
+    common::write(&dir, "batten.toml", "version = 1\n");
+    let payload = serde_json::json!({
+        "session_id": "cloud-2595-start",
+        "transcript_path": "/dev/null",
+        "cwd": dir.display().to_string(),
+        "hook_event_name": "SessionStart",
+        "source": "startup",
+    })
+    .to_string();
+    let hook = following(
+        &dir,
+        &["adjudicate", "--harness", "claude-code"],
+        &served_env(&served),
+        Some(&payload),
+    );
+    // THE SETUP TASK WRITES IT, NEVER THE HOOK (CLOUD-2840): `SessionStart`
+    // does in-process work only and advises the dispatch, and the task the
+    // agent dispatches adopts the engine key.
+    let config = std::fs::read_to_string(dir.join("batten.toml")).unwrap();
+    assert_eq!(
+        pinned(&config),
+        None,
+        "the hook writes no pin: {config} {}",
+        text(&hook)
+    );
+    let output = following(&dir, &["startup", "--session"], &served_env(&served), None);
+    let config = std::fs::read_to_string(dir.join("batten.toml")).unwrap();
+    // A dev build never pins itself at a session start either (CLOUD-2906).
+    assert_eq!(pinned(&config), None, "{config} {}", text(&output));
+}
+
+/// Under `--config-in` another directory's file is the authority, so a clean
+/// load there says nothing about this file: it is never written.
+#[test]
+fn a_session_under_config_in_never_writes_the_pin() {
+    let release = this_build();
+    if !cfg!(target_os = "linux") {
+        return;
+    }
+    let dir = common::scratch_repo("engine-pin-key-config-in");
+    let (_host, served) = release_host(&dir, &release, &release);
+    common::write(&dir, "batten.toml", "version = 1\n");
+    let elsewhere = dir.join("elsewhere");
+    common::write(&elsewhere, "batten.toml", "version = 1\n");
+    let payload = serde_json::json!({
+        "session_id": "cloud-2595-config-in",
+        "transcript_path": "/dev/null",
+        "cwd": dir.display().to_string(),
+        "hook_event_name": "SessionStart",
+        "source": "startup",
+    })
+    .to_string();
+    let elsewhere = elsewhere.display().to_string();
+    let mut env = served_env(&served);
+    env.push(("BATTEN_CONFIG_IN", elsewhere.as_str()));
+    let output = following(
+        &dir,
+        &["adjudicate", "--harness", "claude-code"],
+        &env,
+        Some(&payload),
+    );
+    assert_eq!(
+        std::fs::read_to_string(dir.join("batten.toml")).unwrap(),
+        "version = 1\n",
+        "{}",
+        text(&output)
+    );
+    // The hook adopts nothing at all (CLOUD-2840); the setup task is the
+    // writer, so the override is asserted where the write would happen.
+    let task = following(&dir, &["startup", "--session"], &env, None);
+    assert_eq!(
+        std::fs::read_to_string(dir.join("batten.toml")).unwrap(),
+        "version = 1\n",
+        "the setup task under --config-in: {}",
+        text(&task)
+    );
+}
+
+#[test]
+fn a_config_that_fails_to_load_is_never_written() {
+    let release = this_build();
+    if !cfg!(target_os = "linux") {
+        return;
+    }
+    let dir = common::scratch_repo("engine-pin-key-unloaded");
+    let (_host, served) = release_host(&dir, &release, &release);
+    common::write(&dir, "batten.toml", REFUSED_HERE);
+    let _ = installing(&dir, &served_env(&served));
+    assert_eq!(
+        std::fs::read_to_string(dir.join("batten.toml")).unwrap(),
+        REFUSED_HERE,
+        "a file this engine refuses is not one it pins"
+    );
+}
+
+#[test]
+fn the_written_pin_preserves_every_other_byte() {
+    let release = this_build();
+    if !cfg!(target_os = "linux") {
+        return;
+    }
+    let dir = common::scratch_repo("engine-pin-key-bytes");
+    let (_host, served) = release_host(&dir, &release, &release);
+    let original = "# the consumer's own words\nversion   =   1\n\n# trailing comment, no newline";
+    common::write(&dir, "batten.toml", original);
+    let output = installing(&dir, &served_env(&served));
+    assert!(output.status.success(), "{}", text(&output));
+    let config = std::fs::read_to_string(dir.join("batten.toml")).unwrap();
+    // A dev build writes no pin (CLOUD-2906), so every byte is the file's own.
+    // Where a pin goes is `engine::adopted`'s own cases.
+    assert_eq!(config, original, "{release} writes no byte");
+}
+
+#[test]
+fn init_writes_the_pin() {
+    let release = this_build();
+    if !cfg!(target_os = "linux") {
+        return;
+    }
+    let dir = common::scratch_repo("engine-pin-key-init");
+    let (_host, served) = release_host(&dir, &release, &release);
+    let _ = std::fs::remove_file(dir.join("batten.toml"));
+    let output = following(&dir, &["init"], &served_env(&served), None);
+    assert!(output.status.success(), "{}", text(&output));
+    let config = std::fs::read_to_string(dir.join("batten.toml")).unwrap();
+    // `init` under a dev build writes the config and no pin (CLOUD-2906).
+    assert_eq!(pinned(&config), None, "{config}");
+    assert!(
+        !text(&output).contains("(pinned "),
+        "init reports no pin: {}",
+        text(&output)
+    );
+}
+
+/// An install that placed ANOTHER release never writes the running engine's:
+/// the pin would name bytes nobody installed.
+#[test]
+fn an_install_of_a_named_version_writes_no_pin() {
+    let release = this_build();
+    if !cfg!(target_os = "linux") {
+        return;
+    }
+    // THE RUNNING ENGINE'S OWN RELEASE IS SERVED, sums and all, so the only
+    // thing keeping its pin out of the file is that a NAMED version installed.
+    let dir = common::scratch_repo("engine-pin-key-named");
+    let (_host, served) = release_host(&dir, &release, &release);
+    common::write(&dir, "batten.toml", "version = 1\n");
+    let mut env = served_env(&served);
+    env.push(("BATTEN_VERSION", &release));
+    let output = installing(&dir, &env);
+    assert!(output.status.success(), "{}", text(&output));
+    assert_eq!(
+        std::fs::read_to_string(dir.join("batten.toml")).unwrap(),
+        "version = 1\n",
+        "{}",
+        text(&output)
+    );
+}
+
+/// A checkout CI builds is never dirtied by the write.
+#[test]
+fn ci_never_writes_the_pin() {
+    let release = this_build();
+    if !cfg!(target_os = "linux") {
+        return;
+    }
+    let dir = common::scratch_repo("engine-pin-key-ci");
+    let (_host, served) = release_host(&dir, &release, &release);
+    common::write(&dir, "batten.toml", "version = 1\n");
+    let mut env = served_env(&served);
+    env.push(("CI", "true"));
+    let output = installing(&dir, &env);
+    assert!(output.status.success(), "{}", text(&output));
+    assert_eq!(
+        std::fs::read_to_string(dir.join("batten.toml")).unwrap(),
+        "version = 1\n",
+        "{}",
+        text(&output)
+    );
+}
+
+#[test]
+fn a_followed_pin_names_itself_once() {
+    let release = this_build();
+    if !cfg!(target_os = "linux") {
+        return;
+    }
+    let dir = common::scratch_repo("engine-pin-key-says-once");
+    let (_host, served) = release_host(&dir, WANTED, WANTED);
+    common::write(
+        &dir,
+        "batten.toml",
+        &format!("version = 1\nengine = {{ release = \"{WANTED}\" }}\n"),
+    );
+    let payload = serde_json::json!({
+        "session_id": "cloud-2595-named",
+        "transcript_path": "/dev/null",
+        "cwd": dir.display().to_string(),
+        "permission_mode": "default",
+        "hook_event_name": "PreToolUse",
+        "tool_name": "Bash",
+        "tool_input": { "command": "ls" },
+    })
+    .to_string();
+    let line = format!("batten: this binary is {release}; following the pinned {WANTED}");
+    let args = ["adjudicate", "--harness", "claude-code"];
+    let first = following(&dir, &args, &served_env(&served), Some(&payload));
+    assert!(
+        String::from_utf8_lossy(&first.stderr).contains(&line),
+        "the first follow of a session names both engines: {}",
+        text(&first)
+    );
+    let second = following(&dir, &args, &served_env(&served), Some(&payload));
+    assert!(
+        !String::from_utf8_lossy(&second.stderr).contains(&line),
+        "and the session hears it once: {}",
+        text(&second)
+    );
+}
+
+/// Fails by: `--require-source` passing a release pin, which sends the tree
+/// build a release-pinned session should never run (CLOUD-2840). The refusal is
+/// a verdict (`2`), names the one route to a release, and writes nothing.
+#[test]
+fn require_source_refuses_a_release_pin_and_names_the_install() {
+    let release = this_build();
+    let config = format!("version = 1\nengine = {{ release = \"{release}\" }}\n");
+    let dir = repo("engine-pin-require-source-release", &config);
+    let output = run(&shared(), &dir, &["engine", "pin", "--require-source"]);
+    assert_eq!(output.status.code(), Some(2), "{}", text(&output));
+    assert!(
+        text(&output).contains("batten engine install"),
+        "the refusal names the install: {}",
+        text(&output)
+    );
+    assert_eq!(
+        std::fs::read_to_string(dir.join("batten.toml")).unwrap(),
+        config,
+        "the guard writes nothing"
+    );
+}
+
+/// Fails by: `--require-source` refusing the cases a tree build is right for —
+/// a source pin, or no pin at all.
+#[test]
+fn require_source_admits_a_source_pin_and_no_pin() {
+    let source = repo(
+        "engine-pin-require-source-source",
+        "version = 1\nengine = { source = \"0000\" }\n",
+    );
+    let output = run(&shared(), &source, &["engine", "pin", "--require-source"]);
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output));
+    let unpinned = repo("engine-pin-require-source-none", "version = 1\n");
+    let output = run(&shared(), &unpinned, &["engine", "pin", "--require-source"]);
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output));
+}
+
+/// THE TREE'S OWN BUILD ANSWERS THE RELEASE ITS PACKAGE NAMES, AND A COPY
+/// OUTSIDE IT DOES NOT (CLOUD-2903). The private copy sits inside the fixture's
+/// tree, so it is that tree's build; the shared binary sits outside, so it is
+/// judged by its identity, a dev pre-release, which is not the release. Before
+/// this row the shared binary loaded here, because every build reported the
+/// package version.
+#[test]
+fn a_checkout_build_answers_its_own_release_pin_and_a_copy_outside_does_not() {
+    let declared = batten::engine::declared_release();
+    let dir = repo(
+        "engine-pin-own-release",
+        &format!("version = 1\nengine = {{ release = \"{declared}\" }}\n"),
+    );
+    let private = private_binary(&dir);
+    let inside = run(&private, &dir, &["config", "show"]);
+    assert!(inside.status.success(), "{}", text(&inside));
+
+    let outside = run(&shared(), &dir, &["config", "show"]);
+    let said = text(&outside);
+    assert!(!outside.status.success(), "{said}");
+    assert!(
+        said.contains(&declared) && said.contains(batten::config::VERSION),
+        "the refusal names the pin and this build's identity: {said}"
+    );
+    let local = run_engine(&shared(), &dir, &["config", "show"], true);
+    assert!(local.status.success(), "{}", text(&local));
+
+    common::write(
+        &dir,
+        "batten.toml",
+        "version = 1\nengine = { release = \"v0.0.1\" }\n",
+    );
+    let other = run(&private, &dir, &["config", "show"]);
+    assert!(!other.status.success(), "{}", text(&other));
+    assert!(
+        text(&other).contains(batten::engine::REPAIR_PINNED),
+        "{}",
+        text(&other)
+    );
+}
+
+/// THE VERSION IS THE IDENTITY OF THE TREE IT WAS BUILT FROM (CLOUD-2903):
+/// `batten --version` is a dev pre-release of the next patch, and it equals the
+/// identity rendered from facts this case gathers ITSELF — the line from its
+/// environment and git, HEAD's committer second, and `engine digest`'s fold over
+/// the workspace — so it discriminates `build.rs`'s own gathering and shows the
+/// build's digest is `engine stamp`'s. Before this row it was `batten 0.0.220`.
+#[test]
+fn the_version_is_the_identity_of_the_tree_it_was_built_from() {
+    use batten::build_identity as identity;
+
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .canonicalize()
+        .unwrap();
+    let output = run_engine(&shared(), &root, &["--version"], true);
+    assert!(output.status.success(), "{}", text(&output));
+    let printed = String::from_utf8(output.stdout).unwrap();
+
+    let reading = |args: &[&str]| -> Option<String> {
+        let out = common::git_command(&root, args)
+            .streamed_output()
+            .expect("run git");
+        let said = String::from_utf8(out.stdout).ok()?.trim().to_owned();
+        (out.status.success() && !said.is_empty()).then_some(said)
+    };
+    let branch = reading(&["symbolic-ref", "--quiet", "--short", "HEAD"]);
+    let facts = identity::Facts {
+        package: String::from(env!("CARGO_PKG_VERSION")),
+        marker: None,
+        line: Some(
+            identity::line(
+                std::env::var(identity::BUILD_PR).ok().as_deref(),
+                std::env::var("GITHUB_REF").ok().as_deref(),
+                branch.as_deref(),
+            )
+            .unwrap(),
+        ),
+        committed: reading(&["show", "-s", "--format=%ct", "HEAD"]).map(|ct| ct.parse().unwrap()),
+        digest: batten::engine::digest(&root)
+            .ok()
+            .map(|digest| digest[..identity::DIGEST_HEX].to_owned()),
+    };
+    assert_eq!(
+        printed,
+        format!("batten {}\n", identity::identity(&facts).unwrap())
+    );
+
+    let version = semver::Version::parse(printed.trim().trim_start_matches("batten ")).unwrap();
+    let package = semver::Version::parse(env!("CARGO_PKG_VERSION")).unwrap();
+    assert!(
+        version.pre.as_str().starts_with("dev."),
+        "an unmarked build is a dev pre-release: {printed}"
+    );
+    assert_eq!(
+        version.cmp_precedence(&package),
+        std::cmp::Ordering::Greater,
+        "it ranks above the release it follows: {printed}"
+    );
+    assert_eq!(
+        (version.major, version.minor, version.patch),
+        (package.major, package.minor, package.patch + 1),
+        "it is a pre-release of the next patch: {printed}"
+    );
+}
+
+/// THE PARITY THE BUILD'S FOLD OWES `engine stamp` (CLOUD-2903): one digest,
+/// held by this case rather than by a shared function, so `engine` names
+/// nothing new.
+#[test]
+fn the_build_fold_is_engine_stamps_digest() {
+    let dir = repo("engine-pin-build-fold", "version = 1\n");
+    let files: [(&str, &str); 3] = [
+        ("Cargo.toml", "a"),
+        ("crates/x.rs", "b"),
+        ("README.md", "c"),
+    ];
+    let mut inputs = std::collections::BTreeMap::new();
+    for (path, body) in files {
+        common::write(&dir, path, body);
+        common::git_in(&dir, &["add", path]);
+        inputs.insert(path.to_owned(), body.as_bytes().to_vec());
+    }
+    inputs.insert(String::from("batten.toml"), b"version = 1\n".to_vec());
+    assert_eq!(
+        Some(batten::engine::digest(&dir).unwrap()),
+        batten::build_identity::source_digest(&inputs)
     );
 }

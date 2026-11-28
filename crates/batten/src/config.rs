@@ -45,1215 +45,39 @@
 //! no fallback to a built-in grammar and no directory walk. A named directory
 //! with no `batten.toml` is could-not-look, for exactly `--config-from`'s reason.
 
-use std::collections::BTreeMap;
-use std::fs;
+use crate::attribution::AttributionExt as _;
+use crate::census::ShellCensusExt as _;
+use crate::commit::CommitExt as _;
+use crate::prune::PruneExt as _;
+#[cfg(test)]
+use crate::rules::RuleExt as _;
+#[cfg(test)]
+use crate::rules::RuleKindExt as _;
+use crate::sbom::DeclaredExt as _;
 use std::io;
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
-use clap::ValueEnum;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use crate::config_model::Rule;
+use crate::error::Native;
 use crate::error::UsageError;
-use crate::rules::Rule;
-use crate::verdict::Native;
-use crate::{outputs, waiver};
 
-/// The config schema version this build understands. A file declaring any other
-/// version is refused rather than partially interpreted.
-pub const SUPPORTED_VERSION: u32 = 1;
-
-/// The committed authority Batten reads: the repo `batten.toml` in the working
-/// directory. No upward walk, no `conf.d` merge (§8).
-pub const CONFIG_FILE: &str = "batten.toml";
-
-/// Where the derived authority schema is published, repo-relative.
-///
-/// Named once because two readers need it and a second spelling is a second
-/// authority: `schema-check` regenerates and diffs the committed file, and
-/// `config deprecations` reads the copy at a release ref. `/`-separated, as git
-/// addresses a blob.
-pub const SCHEMA_PATH: &str = "schema/batten.schema.json";
-
-/// How strictly Batten applies its gates — the ordered, policy-bearing key the
-/// §8 raise-only rule is defined over.
-///
-/// The ordering **is** the policy semantics: `Permissive < Standard < Strict`,
-/// so "tighten" is the computable predicate `candidate >= current` rather than a
-/// judgement call. Derived `Ord` follows declaration order, which is why the
-/// variants are declared weakest-first; [`tests::strictness_orders_weakest_first`]
-/// pins that so a reordering cannot silently invert the clamp.
-///
-/// Resolution is this issue's deliverable (CLOUD-29); the verbs that *read* the
-/// resolved value attach as they land (`--fail-on-warning` is CLOUD-49).
-#[derive(
-    Debug,
-    Clone,
-    Copy,
-    PartialEq,
-    Eq,
-    PartialOrd,
-    Ord,
-    Default,
-    Deserialize,
-    Serialize,
-    ValueEnum,
-    JsonSchema,
-)]
-#[serde(rename_all = "snake_case")]
-#[clap(rename_all = "snake_case")]
-#[non_exhaustive]
-pub enum Strictness {
-    /// Advisory: findings are reported without failing the run.
-    Permissive,
-    /// The default: a finding is a violation.
-    #[default]
-    Standard,
-    /// Everything `Standard` fails on, plus anything advisory.
-    Strict,
-}
-
-/// A parsed, validated `batten.toml`.
-///
-/// `deny_unknown_fields` makes an unrecognised key a hard error (§8): the config
-/// surface stays narrow and a typo can never silently disable a gate.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct Config {
-    /// Rows this build could not resolve and dropped, so the rest of the file
-    /// still decides (CLOUD-1428).
-    ///
-    /// Not a config key — `skip` keeps it out of both the deserializer and the
-    /// derived schema, so an author cannot write it and the published surface
-    /// does not grow. It is the loader's own reading about the file, carried on
-    /// the value so every caller can report it rather than each re-deriving it.
-    ///
-    /// **Empty is the answer, not the default.** A reader that treats a
-    /// non-empty list as advisory has reintroduced the defect one layer along:
-    /// each entry is a gate that is OFF, and CLOUD-251's "never a silent pass"
-    /// is what makes reporting it half the change.
-    #[serde(skip)]
-    pub unresolvable: Vec<Unresolvable>,
-    /// The config schema version. Must equal [`SUPPORTED_VERSION`].
-    pub version: u32,
-    /// The minimum Batten version permitted to read this file (semver).
-    /// Enforced at parse time by [`check_min_version`]: a binary below it is
-    /// refused with a [`UsageError`] (→ exit `1`) rather than allowed to report
-    /// green over rules it does not understand (CLOUD-33).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub min_batten_version: Option<String>,
-    /// The exact engine this file needs: a release tag or a source digest
-    /// (CLOUD-2061). Read from the raw text before the parse by
-    /// [`crate::engine::check`]; authority-only, as `min_batten_version` is.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub engine: Option<crate::engine::Pin>,
-    /// How strictly the gates apply. Absent means "this file does not speak to
-    /// strictness", which is what lets [`crate::resolve`] attribute the
-    /// effective value to the layer that actually set it. Policy-bearing, so an
-    /// override may only raise it (§8).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub strictness: Option<Strictness>,
-    /// Whether a `warn`-severity finding is promoted to a violation (CLOUD-49).
-    /// Absent means "this file does not speak to the setting", which is what
-    /// lets [`crate::resolve`] attribute the effective value to the layer that
-    /// actually set it. Policy-bearing, so an override may only turn it *on*
-    /// (§8): `false` over a committed `true` is refused, never applied.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub fail_on_warning: Option<bool>,
-    /// Whether `batten engine outdated --notice` may tell a session the pin is
-    /// behind (CLOUD-2279). Absent is on; `false` silences it, as `CI` and
-    /// `BATTEN_NO_UPDATE_NOTICE` do. Read raw by the notice, never through a
-    /// load, so a config this engine cannot load still hears it.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub update_notice: Option<bool>,
-    /// The declarative rules run against the repository. Absent or empty means
-    /// "no rules configured" and nothing is reported. Which of these a given
-    /// verb admits is the §5 effect split: `check` runs only non-spawning kinds
-    /// and refuses the rest, `enforce` runs all of them (CLOUD-170).
-    ///
-    /// Every rule pins its `severity` explicitly — the key is required, with no
-    /// implicit fallback — and carries a separate `scope` key whose vocabulary
-    /// never conflates with severity's (CLOUD-61). Both disciplines are
-    /// enforced at parse time: omission or conflation is a usage error here,
-    /// never a value quietly assumed.
-    #[serde(default, rename = "rule", skip_serializing_if = "Vec::is_empty")]
-    pub rules: Vec<Rule>,
-    /// The paths policy applies to, as an **ordered include/exclude list**: a
-    /// plain glob includes, a `!`-prefixed glob excludes, and an exclude beats
-    /// an include (CLOUD-37). Absent or empty means the set is empty — nothing
-    /// is in scope — not "everything", because a set that silently defaults to
-    /// universal membership is the widening a policy engine must never do.
-    ///
-    /// Not to be confused with [`Rule::scope`] ([`crate::rules::RuleScope`]),
-    /// which is a per-rule axis saying *where a rule looks*. The two share a
-    /// token and nothing else; their vocabularies never cross, exactly as
-    /// severity's three axes do not (see [`crate::severity`]).
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub scope: Vec<String>,
-    /// Paths whose modification is guarded. A plain include set — no `!`
-    /// entries — evaluated independently of [`Config::scope`] and
-    /// [`Config::unlanded`]. CLOUD-31's config-trust diff defends this set.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub protected: Vec<String>,
-    /// The refinement gate's consumer-set thresholds (CLOUD-472). Absent means
-    /// this file does not speak to them, which every reader takes as
-    /// could-not-look rather than as a default.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub ready: Option<Ready>,
-    /// The landing mechanism's own paths, for the CI-side staleness read
-    /// (CLOUD-1148 §2).
-    ///
-    /// Absent is could-not-look and exempts everything, which matches the
-    /// precondition's whole posture: it fails open at every unknown, because a
-    /// reading it cannot take would stop every job in the fleet where waving one
-    /// matrix through costs one matrix.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub lease: Option<Lease>,
-    /// Which receipts a head must carry to be called verified (CLOUD-1338).
-    ///
-    /// Absent REFUSES rather than exempting, which is the opposite direction to
-    /// `[lease]` above and deliberately so: this is a gate about the tree in
-    /// hand, where that one is an economy about somebody else's runner.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub receipt: Option<Receipt>,
-    /// This consumer's board column vocabulary. Absent means this file does not
-    /// speak to it, which every reader takes as could-not-look rather than as a
-    /// default — see [`Board`] for why a default would be the violation again.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub board: Option<crate::board::Board>,
-    /// Accepted invocation-latency regressions (CLOUD-1163 unit 10). Absent
-    /// means this file accepts none, which is the safe direction — an absent
-    /// table cannot exempt a path.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub perf: Option<Perf>,
-    /// The mutation sweep's committed enforced set (CLOUD-2010). Absent means
-    /// this file declares none, and `batten mutate` then reads only the
-    /// raise-only `$MUTANT_GATES` — both empty is a usage error, never an empty
-    /// sweep.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub mutate: Option<Mutate>,
-    /// Programs that only ever READ the operands they are given, so naming a
-    /// [`Config::protected`] path is not a mutation (CLOUD-1141).
-    ///
-    /// # This list is safe to be incomplete, and `verbs` was not
-    ///
-    /// The verb table enumerates MUTATIONS, so a program missing from it wrote a
-    /// protected file unrefused — measured, `python3 -c "open('batten.toml','w')"`
-    /// and `perl -pi -e` were allowed where `echo >`, `sed -i` and `tee` were
-    /// denied. An allowlist-by-omission whose omissions are holes.
-    ///
-    /// This list inverts that. A protected path named by a program in NEITHER
-    /// table is refused, so the failure mode of forgetting an entry here is a
-    /// visible false refusal somebody fixes in a minute — and the failure mode of
-    /// forgetting a writer is no longer a silent hole. That direction is the
-    /// whole point; a longer verb table would have closed two instances and left
-    /// the shape.
-    ///
-    /// **A program in `verbs` is already known** and is never consulted here: the
-    /// verb table encodes its argv grammar, so `git add batten.toml` stays
-    /// allowed because `git`'s mutating rows did not match, not because `git` is
-    /// listed below.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub protected_readers: Vec<String>,
-    /// Paths whose work is not yet landed. A plain include set, evaluated
-    /// independently of the other two: a path may be `unlanded` without being
-    /// `protected`, and the sets must never be collapsed (CLOUD-37).
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub unlanded: Vec<String>,
-    /// Which files make up the governing config surface the `config_epoch`
-    /// hashes (CLOUD-32). Absent means the default: this file alone.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub epoch: Option<Epoch>,
-    /// Which files carry the contract a running session read at start
-    /// (CLOUD-461). Absent means the predicate is not used here, which
-    /// [`crate::contract::surface`] reports as **could not look** rather than as
-    /// "nothing moved".
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub contract: Option<Contract>,
-    /// The mutating-verb table (CLOUD-36): which programs change the world, in
-    /// the one §5 effect vocabulary. Consumer-specific by nature, so it lives
-    /// here and never in the crate (non-negotiable rule 1); the type and its
-    /// lookup are [`crate::verbs`].
-    #[serde(default, rename = "verb", skip_serializing_if = "Vec::is_empty")]
-    pub verbs: Vec<crate::verbs::MutatingVerb>,
-    /// The named-regex table (CLOUD-885): every expression a policy module may
-    /// apply, declared once and referenced by id.
-    ///
-    /// Consumer-specific by nature for exactly [`Config::verbs`]'s reason — a
-    /// tracker-key expression is a consumer identifier, so it lives here and
-    /// never in the crate (non-negotiable rule 1). A module reaches it at
-    /// `data.batten.patterns["<id>"]`; writing one inline is refused at load,
-    /// which is what prices a one-off pattern against a field access over an
-    /// already-parsed document. The type and its validation are
-    /// [`crate::pattern`].
-    #[serde(default, rename = "pattern", skip_serializing_if = "Vec::is_empty")]
-    pub patterns: Vec<crate::pattern::NamedPattern>,
-    /// The declared-walk table (CLOUD-1866): every graph traversal a module may
-    /// read the answer of, declared once and referenced by id.
-    ///
-    /// Consumer-specific for [`Config::patterns`]'s reason and more sharply:
-    /// which frontmatter field carries an edge, and what a chain terminates at,
-    /// are a consumer's vocabulary, so they live here and never in the crate
-    /// (non-negotiable rule 1). A module reads the answer at
-    /// `input.tree.traversals["<id>"]` and is handed a REDUCTION — a boolean, a
-    /// count, or the node names along the chain — never the walk.
-    ///
-    /// **Declaring it is also what bounds it**: [`crate::graph`] cannot walk
-    /// what no row asked for, so a `check`'s cost is a property of this table
-    /// rather than of the tree's size. The type and its validation are
-    /// [`crate::traversal`].
-    #[serde(default, rename = "traversal", skip_serializing_if = "Vec::is_empty")]
-    pub traversals: Vec<crate::traversal::DeclaredTraversal>,
-    /// The declared-key-set table (CLOUD-2005): every set a `reference` rule may
-    /// resolve a cited token against, declared once and referenced by id.
-    ///
-    /// Consumer-specific for [`Config::traversals`]'s reason: which file holds a
-    /// register, which column is its key, which frontmatter node names it, are a
-    /// consumer's vocabulary (non-negotiable rule 1). The type, the one GFM row
-    /// grammar and the validation are [`crate::register`].
-    #[serde(default, rename = "register", skip_serializing_if = "Vec::is_empty")]
-    pub registers: Vec<crate::register::DeclaredRegister>,
-    /// The refusal vocabulary (CLOUD-1050): every verdict a gate may reach for,
-    /// its one-line gloss, its class definition and its closed route list.
-    ///
-    /// **The sole authority for BOTH emitters** — a Rego `violation` and a
-    /// native `Refusal` name a token out of this one table, which is the
-    /// reversal CLOUD-1050 records of its own first review: a policy-only
-    /// registry beside a native authority is two vocabularies that disagree the
-    /// first time either moves. A module reaches it at
-    /// `data.batten.verdicts["<id>"]`; a token nothing declares is refused at
-    /// load, and a declared token nothing emits is refused the other way, so the
-    /// table and the emitters cannot drift. The type and its validation are
-    /// [`crate::verdict`].
-    #[serde(default, rename = "verdict", skip_serializing_if = "Vec::is_empty")]
-    pub verdicts: Vec<crate::verdict::DeclaredVerdict>,
-    /// The three positional word lists every class and route name is drawn from
-    /// (CLOUD-1284), and the tokenizer pin they were measured under.
-    ///
-    /// A **dictionary rather than a per-class essay**: a name spends three words
-    /// and each word's meaning is declared once, so the marginal class costs no
-    /// new prose. `verdict::validate` holds every name to it, which is what makes
-    /// the naming convention a gate rather than a habit.
-    #[serde(default, skip_serializing_if = "crate::verdict::Vocabulary::is_empty")]
-    pub vocabulary: crate::verdict::Vocabulary,
-    /// The per-path-class redirect table (CLOUD-280): what to run instead,
-    /// keyed by what is protected rather than by the verb reaching for it.
-    ///
-    /// Consulted before [`MutatingVerb::redirect`], which stays the fallback, so
-    /// the behaviour CLOUD-96 shipped is the floor rather than a regression.
-    /// Deliberately a sibling of [`Config::protected`] rather than a widening of
-    /// it: that set keeps its element type, so [`crate::trust`]'s
-    /// `protected[<entry>]` weakening keys are untouched.
-    ///
-    /// [`MutatingVerb::redirect`]: crate::verbs::MutatingVerb::redirect
-    #[serde(default, rename = "redirect", skip_serializing_if = "Vec::is_empty")]
-    pub redirects: Vec<crate::redirect::Redirect>,
-    /// The agent-sourced facts this repository declares (CLOUD-776): a name, and
-    /// the command whose output answers it.
-    ///
-    /// The channel these open is the one that removes a choice rather than making
-    /// it. A fact the engine cannot reach used to mean *the engine spawns* or *we
-    /// implement less*; a declared fact means the gate denies with
-    /// [`crate::refusal::Fix::Run`], the AGENT's own tool runs the command, and
-    /// the harness hands the bytes back on the post-tool event. Batten executes
-    /// nothing, so house-style §5's read promise is untouched.
-    ///
-    /// Consumer-specific by nature, which is why the rows live here and never in
-    /// the crate (non-negotiable rule 1): `gh pr list --search …` names a forge, a
-    /// query syntax and a workflow, and the engine knows only that a fact has a
-    /// name and a command.
-    #[serde(default, rename = "fact", skip_serializing_if = "Vec::is_empty")]
-    pub facts: Vec<crate::facts::Declared>,
-    /// Receipts minted from the tool result that earned them (CLOUD-1024).
-    ///
-    /// The complement of `[[fact]]` above, on the other selector: a fact is keyed
-    /// to a COMMAND the agent ran, a mint to the TOOL whose result carries the
-    /// evidence. Both are written by the boundary on the post-tool event, from
-    /// bytes the harness hands back rather than text the agent re-typed, which is
-    /// CLOUD-526's measured forgery surface.
-    ///
-    /// Consumer-specific by nature, and this table is where non-negotiable rule 1
-    /// is paid: `get_issue`, `issue-read`, `id` and `updatedAt` name a tracker,
-    /// its tools and its schema, and every one of them is DECLARED here rather
-    /// than chosen by the engine.
-    ///
-    /// This paragraph used to assert that a scan of the crate for those names
-    /// found none. It was false — they appear throughout `crates/batten/src`,
-    /// including in prose explaining the rule — and nothing re-ran it, which is
-    /// the class `assertion_gates.rs` now refuses. What rule 1 actually requires
-    /// is that the engine not CHOOSE them, and that is what this table is for.
-    #[serde(default, rename = "mint", skip_serializing_if = "Vec::is_empty")]
-    pub mints: Vec<crate::mint::Declared>,
-    /// Records written from the tool result that earned them (CLOUD-1051).
-    ///
-    /// The third selector on the post-tool event, and the one that can carry a
-    /// value another gate decided. A `[[mint]]` renders a template over the
-    /// payload; a `[[recorder]]` may additionally run a declared program and
-    /// record its verdict, which is what a board write's refinement column IS.
-    ///
-    /// Consumer-owned for the same reason `[[mint]]` is, and more so: the column
-    /// names, the verdict tokens and the programs are all a tracker's vocabulary,
-    /// and every one of them is declared here rather than chosen by the engine.
-    /// (The scan this paragraph used to report having run is gone with
-    /// [`Config::mints`]' — same false claim, same reason.)
-    #[serde(default, rename = "recorder", skip_serializing_if = "Vec::is_empty")]
-    pub recorders: Vec<crate::recorder::Declared>,
-    /// The verb-written record families this repository's producers fill
-    /// (CLOUD-1810).
-    ///
-    /// The sibling of [`Self::recorders`] on the other side of one split: a
-    /// `[[recorder]]` row is filled from a mediated tool call, and one of these
-    /// is filled by a producer calling `batten record named <family>`. Both
-    /// project into `input.tree.records`, and until this table existed only the
-    /// first could — so a store a `mise` task wrote was invisible to every
-    /// module, and the row reading it reported clean over a record that said
-    /// otherwise.
-    ///
-    /// **Declared rather than swept**, which is what keeps could-not-look
-    /// readable: an absent record under a declared family is "the producer did
-    /// not run", where the same absence with nothing declared is not a reading at
-    /// all. [`crate::record::Declared`] carries the whole argument.
-    ///
-    /// Consumer-owned, like the two tables above it: which measurements a
-    /// repository records, and what fills each, are facts about that repository
-    /// and never about the engine (non-negotiable rule 1).
-    #[serde(default, rename = "record", skip_serializing_if = "Vec::is_empty")]
-    pub records: Vec<crate::record::Declared>,
-    /// The programs a `[[recorder]]` may run, by id.
-    ///
-    /// Named rather than inline so one program has one spelling, which is
-    /// `[[pattern]]`'s rule one layer over — and so `validate` can refuse a
-    /// recorder naming a program nothing declares instead of leaving a column
-    /// that renders could-not-look forever.
-    #[serde(
-        default,
-        rename = "program",
-        skip_serializing_if = "BTreeMap::is_empty"
-    )]
-    pub programs: BTreeMap<String, crate::recorder::Program>,
-    /// Output predicates over a wrapped command's captured streams (CLOUD-117):
-    /// literals that, found in `batten exec`'s output, promote a lying exit `0`
-    /// to a violation. Consumer-specific by nature — which warning means
-    /// not-actually-done is a property of the tools a repository runs — so it
-    /// lives here and never in the crate (non-negotiable rule 1). The type and
-    /// the predicate are [`crate::outputs`].
-    #[serde(
-        default,
-        rename = "exec_pattern",
-        skip_serializing_if = "Vec::is_empty"
-    )]
-    pub exec_patterns: Vec<crate::outputs::OutputPattern>,
-    /// Output predicates that classify a landing gate's REFUSAL as the
-    /// environment's rather than this tree's (CLOUD-861).
-    ///
-    /// **A separate table from [`Config::exec_patterns`], because the two answer
-    /// opposite questions from the same shape.** That one asks *is this green run
-    /// lying* and promotes a `0`; this one asks *a run already failed, and what
-    /// KIND of failure was it* and promotes nothing. One table serving both would
-    /// have to decide per reader whether a hit means promote-this-success or
-    /// explain-this-failure, and a row written for one reading would silently
-    /// change the other's verdict.
-    ///
-    /// Consumer-specific for [`Config::exec_patterns`]'s reason and then some:
-    /// the literal is a toolchain's wording, and the `reason` is the remedy —
-    /// *which* reclaim task to run is this repository's vocabulary, so putting
-    /// either in the crate is non-negotiable rule 1's plainest violation.
-    /// `crates/batten/tests/it/document_facts.rs` is the gate that would catch it.
-    ///
-    /// The measured case: `target-prune` passed a lap with 6242MB against its
-    /// 4096MB floor, the link step then consumed all of it, and the stop said
-    /// *"Reproduce and fix locally"* over a tree with nothing wrong in it.
-    #[serde(
-        default,
-        rename = "verify_environment_pattern",
-        skip_serializing_if = "Vec::is_empty"
-    )]
-    pub verify_environment_patterns: Vec<crate::outputs::OutputPattern>,
-    /// How `batten exec` owns what it dispatched (CLOUD-427). Absent means the
-    /// defaults, and the default is today's behaviour: Batten makes no process
-    /// group. Authority-only by omission from [`OverrideConfig`] — an uncommitted
-    /// file may not decide that a dispatched tree changes shape, because an
-    /// orchestrator two levels up is built against the shape the repository
-    /// declared. The type and the predicate are [`crate::exec`].
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub exec: Option<crate::exec::ExecConfig>,
-    /// Where a harness keeps its MCP wiring, and what to hand back instead of a
-    /// method's full response (CLOUD-1260). Absent means Batten dispatches
-    /// nothing and reduces nothing.
-    ///
-    /// Consumer-owned for [`Config::mints`]' reason and more sharply: the server
-    /// id, the method names, the field sets and the reduction chosen per method
-    /// are all a tracker's vocabulary, and every one of them is declared here
-    /// rather than chosen by the engine. (The scan this paragraph used to report
-    /// having run is gone with [`Config::mints`]' — same false claim.) The crate knows
-    /// only *dispatch a declared method; reduce by a declared projection*. The
-    /// type, the transport and the reductions are [`crate::mcp`].
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub mcp: Option<crate::mcp::McpConfig>,
-    /// The bound on RESPONSE captures (CLOUD-918). Absent means the engine
-    /// defaults.
-    ///
-    /// **`exec` captures stay unbounded and unchanged**, so the consumer that has
-    /// this behaviour today keeps it: `prune` remains the whole lifecycle there,
-    /// and that store is bounded by how many *distinct* outputs a repository
-    /// produces, because identical bytes are one record. A bound exists for
-    /// responses because response capture changes the growth law — per call rather
-    /// than per distinct output — and inheriting `exec`'s posture into that would
-    /// be adopting a bound computed for a different denominator.
-    ///
-    /// The type and the eviction are [`crate::capture`].
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub capture: Option<crate::capture::CaptureConfig>,
-    /// The suppression markers to count (CLOUD-36). Which comment shape waves
-    /// a rule through is a property of the repository being gated, never of
-    /// Batten; the type and the counting are [`crate::markers`].
-    #[serde(default, rename = "marker", skip_serializing_if = "Vec::is_empty")]
-    pub markers: Vec<crate::markers::Marker>,
-    /// The designed escape hatch (CLOUD-208): per-rule waivers, each carrying a
-    /// required justification and a required expiry.
-    ///
-    /// A waiver suppresses findings of the rule it names, and **lapses on its own
-    /// date** — which is what makes the suppression set stop growing
-    /// monotonically without anyone having to look at it. Not a severity: the
-    /// filter runs over findings before the verdict, and [`crate::severity`]'s
-    /// three axes are untouched. The type and the predicate are
-    /// [`crate::waiver`].
-    #[serde(default, rename = "waiver", skip_serializing_if = "Vec::is_empty")]
-    pub waivers: Vec<crate::waiver::Waiver>,
-    /// Decisions deferred on a condition the tree can check (CLOUD-759).
-    ///
-    /// The condition lives here as DATA rather than as prose in a tracker body,
-    /// which is the whole mechanism: a reversal condition written in an issue is
-    /// re-read by a human or by nobody, and both measured instances were found by
-    /// accident while looking for something else.
-    #[serde(default, rename = "deferral", skip_serializing_if = "Vec::is_empty")]
-    pub deferrals: Vec<crate::deferral::Deferral>,
-    /// The thresholds this repository holds itself to (CLOUD-50). Today one:
-    /// `[budget.instructions]`, the always-loaded instruction set and what it
-    /// may cost. Absent means no budget is declared and none is enforced — a
-    /// threshold nobody wrote down is not a threshold of zero. The type and the
-    /// predicate are [`crate::budget`].
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub budget: Option<crate::budget::Budget>,
-    /// What ONE emitted mediated refusal line may cost (CLOUD-1286). Absent
-    /// means no ceiling is declared and none is enforced, on the same reading as
-    /// `[budget]` above. The type and the predicate are [`crate::refusal`].
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub refusal: Option<crate::refusal::Ceiling>,
-    /// What ONE emission of the advisory channel may cost, across every producer
-    /// (CLOUD-896). Absent means unenforced, on `[budget]`'s reading. The type
-    /// and the predicate are [`crate::advisory`].
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub advisory: Option<crate::advisory::Channel>,
-
-    /// The post-tool outcome signatures this repository recognises (CLOUD-945).
-    ///
-    /// **Consumer config, and that is non-negotiable rule 1 rather than a
-    /// preference**: which codes and which program-specific patterns count as a
-    /// class is the repository's answer, and `crates/batten` holds the matcher
-    /// only. An empty table recognises nothing, which is the honest default —
-    /// an advisory channel that fires on a signature nobody declared is noise
-    /// that nobody chose.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub outcome: Vec<crate::outcome::Signature>,
-    /// What this repository's hooks may cost ONE SESSION (CLOUD-417). Absent
-    /// means unenforced, on `[budget]`'s reading. The type and the predicate are
-    /// [`crate::hookcost`].
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub hook_output: Option<crate::hookcost::Ceiling>,
-    /// The ref work must land on (CLOUD-51) — the target `worktree status`
-    /// judges at-risk work against. Consumer-specific by nature: which ref is
-    /// the trunk is a property of the repository being gated, never of Batten
-    /// (non-negotiable rule 1), so the core ships no default and an absent key
-    /// means the gate has no target rather than a guessed one.
-    ///
-    /// Deliberately not [`Config::unlanded`], which is a path-membership set the
-    /// rule engine evaluates over tree content. The two are orthogonal — one is
-    /// VCS state, the other is which paths policy calls unlanded — and folding
-    /// them together would give one key two meanings.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub must_land_on: Option<String>,
-    /// Side effects this repository attaches to hook events (CLOUD-91), the
-    /// house-style §9 extension surface: `[[hook.action]]` names an event and a
-    /// command already on the operator's PATH, so repo-specific cleanup or
-    /// keepalive is reconstructed here rather than carried by the engine
-    /// (non-negotiable rule 1). Absent means the repository attaches nothing.
-    /// The type, its validator and the spawn are [`crate::action`].
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub hook: Option<crate::action::HookConfig>,
-    /// What this repository's container must be, and how it is repaired
-    /// (CLOUD-1324). Each `[[startup]]` row names a `check` deciding whether
-    /// the environment is right and, optionally, the `repair` that makes it so.
-    ///
-    /// A REPO-COMMITTED RULE RATHER THAN AN ENGINE CONSTANT, which is the whole
-    /// reason the table exists: which preconditions a container needs is a
-    /// property of the project being gated, never of Batten (non-negotiable
-    /// rule 1), and the alternative it replaced was a boolean per repair inside
-    /// a table about hook events. Absent or empty means this repository states
-    /// no preconditions.
-    ///
-    /// Harness-agnostic by construction: a row names a command and an exit code
-    /// and knows nothing about which agent harness is running.
-    ///
-    /// DELIBERATELY NOT `[[provision]]`, which is CLOUD-90's binary manifest —
-    /// a pinned version, a URL and a checksum for one fetched tool. That table
-    /// answers *is this artifact the one we pinned*; this one answers *is this
-    /// container the one we declared*, and folding them together would give one
-    /// noun two subjects. The two are siblings rather than rivals: both are
-    /// house-style §9's check/fix duality, which `provision status`/`provision
-    /// apply` established here first and this table follows.
-    ///
-    /// The type, its validator and the spawn are [`crate::startup`].
-    #[serde(default, rename = "startup", skip_serializing_if = "Vec::is_empty")]
-    pub startup: Vec<crate::startup::Startup>,
-    /// The optional LLM judge's payload-privacy boundary (CLOUD-135): what may
-    /// cross into a model call. Absent means no judge is configured; present and
-    /// empty means pointers and hashes only, which is also what every field
-    /// defaults to. The type and the pure builder are [`crate::judge`].
-    ///
-    /// This table lands **before** the judge that reads it, deliberately: a
-    /// boundary written after the code it bounds is a boundary that code has
-    /// already crossed.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub judge: Option<crate::judge::Judge>,
-    /// The design-evidence audit's one bound (CLOUD-53): how large a single
-    /// capture may be. Absent means the engine default — the corpus arrives on
-    /// stdin and the predicates are the engine's, so a repository that declares
-    /// nothing still gets the full gate. The type and the gates are
-    /// [`crate::design`].
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub design: Option<crate::design::Design>,
-    /// The merge contract this repository commits to (CLOUD-54), **derived**
-    /// from the host ruleset. Absent means the contract is not projected here;
-    /// present, it is what `config lint --host-rules` compares against. The host
-    /// is always the authority — this is a copy a gate polices, never a second
-    /// place the fact is decided.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub ci: Option<crate::ci::Ci>,
-    /// Repository settings the host decides and this tree projects (CLOUD-380).
-    ///
-    /// `[ci]`'s sibling and held to the same rule: the host is the authority, and
-    /// this is a copy `config lint --host-rules` polices. Where `[ci]` projects
-    /// the BRANCH ruleset, this projects the repository object — the settings
-    /// whose change weakens a control and today leaves no diff behind.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub host: Option<crate::ci::Host>,
-    /// What this project's build costs and what to keep of it (CLOUD-1030).
-    /// Absent means the repository runs no prune and `batten target prune` has
-    /// nothing to decide against — a different claim from a floor of zero, which
-    /// is why this is an option rather than a default.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub prune: Option<crate::prune::Prune>,
-    /// Where the task programs live and which crashed task Stop relaunches
-    /// (CLOUD-2370). Absent means the watchdog is off, and `land`'s reap and
-    /// `task alive` fall back to their transitional sources (the environment's
-    /// `BATTEN_TASK_PROGRAM_ROOT`, the `--program-root` flag) or, without one,
-    /// reap nothing and cannot look.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub task: Option<crate::task::TaskTable>,
-    /// The append-only defect ledger (CLOUD-52): where it lives and what may be
-    /// in it. Absent means this repository keeps no in-tree ledger and the gate
-    /// is simply not active.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub defects: Option<crate::defects::Defects>,
-    /// Pinned tools this repository provisions (CLOUD-90): version, URL,
-    /// checksum, unpack behaviour, binary name. Consumer-specific by nature —
-    /// which tools a repository needs is that repository's business, never
-    /// Batten's (non-negotiable rule 1) — so the core carries the mechanism and
-    /// this table carries the answer. The type and both halves of the
-    /// check/fix pair are [`crate::provision`].
-    #[serde(default, rename = "provision", skip_serializing_if = "Vec::is_empty")]
-    pub provisions: Vec<crate::provision::Provision>,
-    /// The completed-session transcript this repository points `check` at
-    /// (CLOUD-95). Host-specific, never consumer-specific: which file a host
-    /// writes its transcript to is a property of the harness, not of any one
-    /// repository, so rule 1 holds. Absent means the repository does not use
-    /// the capability — a different claim from a path that resolves to
-    /// nothing, which is why `resolve` answers with three states and not two.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub transcript: Option<crate::transcript::TranscriptConfig>,
-    /// How the advisory drain paces itself (CLOUD-79): the coalescing window and
-    /// the empty-poll give-up count.
-    ///
-    /// Absent means the defaults apply, which is **not** the reading every other
-    /// optional table here takes. Those are consumer policy — a budget nobody
-    /// declared is not a budget of zero — where this is engine pacing: the drain
-    /// runs on the `hook` surface whether or not a repository has an opinion
-    /// about how often, and an absent table means "no opinion", not "do not
-    /// drain". The type and the state machine are [`crate::drain`].
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub drain: Option<crate::drain::DrainConfig>,
-
-    /// What produced commits may carry about the tooling that made them
-    /// (CLOUD-274), enforcing the attribution decision record (CLOUD-268).
-    /// Absent means this repository declares no attribution policy and the gate
-    /// is simply not active — not that everything is permitted, which is why an
-    /// absent table is a usage error at the gate rather than a silent pass.
-    ///
-    /// Consumer-specific by nature, and the reason it lives here: the engine
-    /// carries the matcher, this file carries the vendor literals. That extends
-    /// non-negotiable rule 1 from consumers to vendors — a grep of `crates/` for
-    /// the configured patterns returns nothing (verified-by: batten-check — the
-    /// rule-1 `forbid` rows over `crates/**` in this repository's own
-    /// `batten.toml`, which run on every gate invocation). The type and the
-    /// predicate are [`crate::attribution`].
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub attribution: Option<crate::attribution::Attribution>,
-    /// How a session credential is PROVED usable before anything is stripped on
-    /// the strength of it (CLOUD-1569).
-    ///
-    /// Consumer config because the forge is the consumer's, which is
-    /// non-negotiable rule 1: the engine holds the mechanism — refuse a known-bad
-    /// credential first, then test the real one — and the endpoint that
-    /// mechanism speaks to is a fact about this repository, not about batten.
-    ///
-    /// Absent means the capability is not declared, which reads as
-    /// could-not-look rather than as healthy: no removal is authorised.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub credential: Option<crate::provision::CredentialProbe>,
-    /// Which forge this repository is hosted on, in the two places the engine
-    /// otherwise assumed one (CLOUD-1622).
-    ///
-    /// **A SEPARATE TABLE FROM `[credential]` ABOVE, and that separation is
-    /// measured rather than tidy.** `[credential] names` answers "which variables
-    /// hold a credential WE hold", and its own doc is explicit that the forge's
-    /// conventional names are deliberately excluded — a host may inject a
-    /// substitutable placeholder under them, so probing those would measure the
-    /// host's credential rather than ours. [`Forge::credential_names`] answers the
-    /// opposite question: which variables hold a token to AUTHENTICATE WITH,
-    /// host-injected job tokens emphatically included. Folding the two would have
-    /// stopped every REST read using the CI-provided token — a live regression,
-    /// and the reason the row's suggestion to reuse the existing key does not
-    /// survive contact with what that key declares.
-    ///
-    /// Absent is could-not-look rather than a default. The engine's own
-    /// spellings are gone rather than kept as a fallback, because a fallback is
-    /// how the seam stayed invisible: it worked here, on this forge, and returned
-    /// a safe-looking nothing everywhere else.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub forge: Option<crate::rest::Forge>,
-    /// The commit-subject convention this repository holds itself to
-    /// (CLOUD-701). Absent means no convention is declared and the gate is not
-    /// active — which the gate reports as exit 1, never as a clean pass over
-    /// commits it had no rule to judge.
-    ///
-    /// Consumer-specific by nature (non-negotiable rule 1): which type words a
-    /// repository admits is that repository's business, so the core carries the
-    /// matcher and this table carries the answer. It lives here rather than in
-    /// the task runner's config because it is a rule about what a commit may be,
-    /// not about how a tool is run. The type and the predicate are
-    /// [`crate::commit`].
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub commit: Option<crate::commit::Commit>,
-    /// The bot lane this repository files rows for (CLOUD-1295). Absent means it
-    /// runs none, and the `pr` verbs say so rather than filing against defaults —
-    /// a lane assembled from engine literals would be a row asserting a bump
-    /// nobody configured.
-    ///
-    /// Consumer-specific by nature, and the reason it lives here rather than in
-    /// the crate: which repository, which bot logins and which manifests a lane
-    /// owns are that repository's business (non-negotiable rule 1), so the core
-    /// carries the matcher and this table carries the answers. The type and the
-    /// predicates are [`crate::bot`].
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub bot_lane: Option<crate::bot::BotLane>,
-    /// How the base-ref authority behaves when the ref cannot be reached
-    /// (CLOUD-720). Absent means the strict default: an unreachable ref refuses.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub trust: Option<Trust>,
-    /// The launcher-provisioned scripts this host re-arms every spawn
-    /// (CLOUD-1704), as the authority states them. Absent means this consumer
-    /// declares none, which is every consumer without a launcher.
-    ///
-    /// Consumer-specific by nature, and that is the whole reason it is a table
-    /// rather than a constant: a script path is somebody's launcher artifact,
-    /// and non-negotiable rule 1 keeps those out of `crates/batten`. The core
-    /// carries the mechanism and this table carries the paths. The type, its
-    /// validator and the write are [`crate::wiring`].
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub wiring: Option<crate::wiring::Wiring>,
-    /// The measurements this consumer declares over its own tree (CLOUD-843):
-    /// where it writes shell, and which files must stay shell. Absent means the
-    /// census has nothing declared to read, which `batten census shell` refuses
-    /// rather than reporting a zero it never measured.
-    ///
-    /// Consumer-specific by nature, for `wiring`'s reason: a manifest path, a
-    /// workflow glob and an exempt file are somebody's layout, and non-negotiable
-    /// rule 1 keeps those out of `crates/batten`. The grammar of "is this line
-    /// shell" is the engine's; where to look is this table's. The type and the
-    /// reading are [`crate::census`].
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub census: Option<crate::census::Census>,
-    /// What `batten sbom` inventories and under which names (CLOUD-843).
-    /// Absent means the verb has no subject to name, which it refuses rather
-    /// than guessing one.
-    ///
-    /// Consumer-specific for `census`'s reason: the subject's name, where its
-    /// documents land, which paths a scan skips and where its licence table
-    /// lives are somebody's layout. The derivation is the engine's; the type and
-    /// the reading are [`crate::sbom`].
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub sbom: Option<crate::sbom::Declared>,
-    /// The step cache's table (CLOUD-424, CLOUD-843): each step a caller brackets
-    /// with `batten step`, the pathspecs whose index entries key its receipt and
-    /// the tool argvs whose answers do. Empty means no step is declared, so every
-    /// `batten step` call is a miss that records nothing.
-    ///
-    /// Consumer-specific by nature, for `startup`'s reason: which steps a
-    /// repository runs and what each reads are facts about that repository
-    /// (non-negotiable rule 1). Read from the committed authority alone, never
-    /// layered. The row and its validator are [`crate::step_table`]; the cache
-    /// that reads the table back lives above this loader and is not named here.
-    #[serde(default, rename = "step", skip_serializing_if = "Vec::is_empty")]
-    pub steps: Vec<crate::step_table::Step>,
-}
-
-/// The `[perf]` table: accepted invocation-latency regressions (CLOUD-1163
-/// unit 10, ported off `mise-tasks/perf-compare.sh`'s `EXEMPT` heredoc).
-///
-/// # Why the rows are config and the THRESHOLD is not
-///
-/// The threshold is a property of the EXPERIMENT — a null comparison of one
-/// identical binary as both arms spread 0.966–1.102, and 1.30 clears that
-/// measured maximum. It says nothing about any consumer, so it stays a constant
-/// in [`crate::perf`] with its measurement beside it.
-///
-/// Each row here is the opposite: it names a path, a date and a REASON, and every
-/// reason this consumer has written cites a tracker key. Non-negotiable rule 1
-/// forbids a consumer identifier anywhere in `crates/batten`, so the table cannot
-/// be a literal in the crate whatever its shape — which is what decides this,
-/// rather than a preference for configurability.
-///
-/// # Why a table rather than a raised threshold
-///
-/// A raised threshold is a repo-wide answer to a one-branch question: it stops
-/// the gate asking about every other path, and nothing records what it was raised
-/// for. A row accepts ONE path at ONE ratio until ONE date, so the gate keeps
-/// asking everything else at the ordinary threshold and the decision expires by
-/// itself. That is `prebuilt-lint`'s waiver semantics (CLOUD-92), one gate over.
-#[derive(Debug, Clone, Default, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub struct Perf {
-    /// The accepted regressions. Absent or empty means every path is judged at
-    /// the ordinary threshold, which is the safe direction: an absent table
-    /// cannot exempt anything.
-    #[serde(default, rename = "exempt", skip_serializing_if = "Vec::is_empty")]
-    pub exempt: Vec<PerfExempt>,
-    /// The wall-clock budget `batten perf latency` holds a command to
-    /// (CLOUD-843). Absent means the verb has nothing to time, which it refuses
-    /// rather than reporting a measurement it never took.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub latency: Option<PerfLatency>,
-}
-
-/// One command's wall-clock budget, in whole seconds.
-///
-/// CONSUMER DATA, for `[perf.exempt]`'s reason: which command a repository
-/// times and what it may cost are that repository's facts, and non-negotiable
-/// rule 1 keeps them out of `crates/batten`. The budget is a ceiling DERIVED
-/// from measurement, never a target chosen in advance, and re-deriving it is a
-/// deliberate commit the verb's drift report prompts.
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub struct PerfLatency {
-    /// The command, as an argv. Its exit status is IGNORED: a red run still
-    /// takes time, and this measures cost rather than correctness.
-    pub command: Vec<String>,
-    /// How many times to run it; the verdict reads the median.
-    pub runs: u32,
-    /// The budget, in whole seconds.
-    pub budget_seconds: u64,
-    /// Seconds over the budget a median may reach before it is drift, so a
-    /// shared runner's noise does not cry wolf.
-    pub slack_seconds: u64,
-    /// A median under `budget_seconds / loose_factor` is drift too: the budget
-    /// has stopped bounding anything.
-    pub loose_factor: u64,
-}
-
-/// One accepted regression: a path, its raised ratio, an expiry and a reason.
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub struct PerfExempt {
-    /// The measured path this accepts, matched exactly against a record's
-    /// `path=` field.
-    pub path: String,
-    /// The ratio this path may reach. **It only ever RAISES the bar**: a branch
-    /// already inside the ordinary threshold is judged by the ordinary
-    /// threshold, so an accepted regression cannot become a licence to drift up
-    /// to it.
-    ///
-    /// **Text rather than a float, and the reason is [`Config`]'s own derive.**
-    /// `Config` is `Eq`, which no `f64` field can be, and the alternative was to
-    /// drop `Eq` from the whole authority so that one row could hold a number —
-    /// a change to every comparison in the crate to save one parse here. The
-    /// value is validated as a positive finite number at load, so the parse
-    /// below cannot be reached with anything else, and text is what the retired
-    /// shell held it as anyway.
-    pub ratio: String,
-    /// The date this acceptance lapses, `YYYY-MM-DD`. A lapsed row stops
-    /// exempting rather than quietly continuing.
-    pub expires: String,
-    /// Why this regression is accepted. Required and non-empty: an exemption
-    /// nobody explained is indistinguishable from a threshold nobody defends.
-    pub reason: String,
-}
-
-impl Perf {
-    /// Prove every row well formed at LOAD, which is where the shell read them
-    /// one at a time and could only refuse the row it happened to reach.
-    ///
-    /// # Errors
-    ///
-    /// A row with an empty path or reason, a non-positive ratio, or an expiry
-    /// that is not `YYYY-MM-DD`; a `[perf.latency]` with no program to time, or
-    /// a zero `runs` or `loose_factor`. Each is a table that would decide the wrong
-    /// thing rather than fail, which is CLOUD-253's rule for every table here.
-    pub fn validate(&self) -> Result<()> {
-        if let Some(latency) = &self.latency {
-            if latency
-                .command
-                .first()
-                .is_none_or(|program| program.trim().is_empty())
-            {
-                return Err(UsageError::raise(
-                    "[perf.latency]: `command` must name a program to time".to_owned(),
-                ));
-            }
-            if latency.runs == 0 || latency.loose_factor == 0 {
-                return Err(UsageError::raise(
-                    "[perf.latency]: `runs` and `loose_factor` must be at least 1; a zero is a \
-                     measurement that decides nothing"
-                        .to_owned(),
-                ));
-            }
-        }
-        for (index, row) in self.exempt.iter().enumerate() {
-            let at = format!("[[perf.exempt]] #{}", index + 1);
-            if row.path.trim().is_empty() {
-                return Err(UsageError::raise(format!("{at}: `path` is empty")));
-            }
-            if row.reason.trim().is_empty() {
-                return Err(UsageError::raise(format!(
-                    "{at} ({}): `reason` is empty. An exemption nobody explained is a \
-                     threshold nobody defends.",
-                    row.path
-                )));
-            }
-            if !row
-                .ratio
-                .parse::<f64>()
-                .is_ok_and(|ratio| ratio.is_finite() && ratio > 0.0)
-            {
-                return Err(UsageError::raise(format!(
-                    "{at} ({}): `ratio` must be a positive number, not `{}`",
-                    row.path, row.ratio
-                )));
-            }
-            // Compared as fixed-width text against `YYYY-MM-DD`, which is what
-            // the shell's `[[ "$expires" < "$TODAY" ]]` did and what keeps this
-            // free of a date dependency. The shape check is what makes that
-            // comparison meaningful: `2026-9-1` sorts before `2026-11-30` and
-            // would lapse a row that has not.
-            let shaped =
-                row.expires.len() == 10
-                    && row.expires.chars().enumerate().all(
-                        |(position, character)| match position {
-                            4 | 7 => character == '-',
-                            _ => character.is_ascii_digit(),
-                        },
-                    );
-            if !shaped {
-                return Err(UsageError::raise(format!(
-                    "{at} ({}): `expires` must be YYYY-MM-DD, not `{}`. It is compared as \
-                     text, so a short field lapses a row that has not.",
-                    row.path, row.expires
-                )));
-            }
-        }
-        Ok(())
-    }
-}
-
-/// The landing lease's own configuration (CLOUD-1148 §2).
-#[derive(
-    Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
-)]
-#[serde(deny_unknown_fields)]
-pub struct Lease {
-    /// The paths that CONSTITUTE the landing mechanism, so a head can be asked
-    /// whether it carries what trunk has.
-    ///
-    /// # A PATH SET RATHER THAN A GREP STRING, and that is the whole point
-    ///
-    /// The predecessor asked this by grepping the head's `mise-tasks/land.sh`
-    /// for `land-lock acquire`. Both halves of that die with the retirement: the
-    /// file is deleted, so the read fails, so the script takes its own fail-open
-    /// path and reports "not judging this head's age" — and every stale head
-    /// passes, silently, which is worse than a wrong answer.
-    ///
-    /// A declared path set survives, because the thing that changes when the
-    /// mechanism moves is WHICH PATHS, and that is config a retirement edits
-    /// rather than a literal a retirement invalidates.
-    ///
-    /// Empty is could-not-look: nothing to compare means no verdict, never a
-    /// clean one.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub landing_paths: Vec<String>,
-
-    /// Branch-name prefixes that land WITHOUT taking the lease, so the runner-side
-    /// precondition must not judge them.
-    ///
-    /// # THE POPULATION IS THE LANDER'S, NOT THE AUTHOR'S
-    ///
-    /// These are branches some other workflow fast-forwards on a `workflow_run`
-    /// completion, so no agent ever holds the lease on their behalf and judging
-    /// them would refuse the run the gate exists to let through. The predecessor
-    /// spelled the same set as a `case` in shell, and its comment carries the
-    /// economics: a cancelled run is `completed`, so those landers DO fire, find
-    /// the checks not green, and stop; nothing retries. Cancelling here would not
-    /// save a matrix, it would DEFER one and add a stall.
-    ///
-    /// **Not the bot-author set** (`[bot_lane] bots`), and the two must not be
-    /// collapsed: that keys on a forge LOGIN and this keys on a branch NAME,
-    /// because what decides the question is which workflow lands the branch. A
-    /// human who names a branch with one of these prefixes gets the same
-    /// treatment, correctly — the lander fires on the name.
-    ///
-    /// **Prefixes on the branch, never a substring anywhere in the ref**, which
-    /// the predecessor's suite pinned as its own case: a `case` arm matching
-    /// mid-ref would exempt a branch that merely mentions one.
-    ///
-    /// Empty means every branch is judged, which is the gate's default and the
-    /// reason this is a short named list rather than a pattern.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub fast_forward_branches: Vec<String>,
-}
-
-/// The `[mutate]` table: which gates `batten mutate` must show able to fail
-/// (CLOUD-2010).
-///
-/// # Why a committed table, and why the variable only raises it
-///
-/// The enforced set was an environment variable that only this repository's own
-/// task runner set, so every consumer's `mutate census` refused with
-/// `MUTANT_GATES is unset` and a consumer's suite could be shown to pass but
-/// never shown able to fail. House-style §8 is the shape: ONE committed
-/// authority, plus raise-only overrides. `$MUTANT_GATES` still adds names; it
-/// can never remove one this table declares.
-///
-/// The `#MUTANT` rows themselves stay beside the code (`mutate.rs`'s `ROW`):
-/// this table names WHICH gates are enforced, never how one is mutated, so it
-/// is not the second authority a manifest of mutations would be.
-#[derive(Debug, Clone, Default, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub struct Mutate {
-    /// The enforced gates. Each entry is a gate name exactly as `$MUTANT_GATES`
-    /// carries one, or — when it contains `*` — a glob over tracked paths,
-    /// expanded sorted to the name each matched file already has as a subject
-    /// (`X` for `policy/X.rego`, the task name for `mise-tasks/X.sh`) and to the
-    /// file's own path only where no other arm names it. A glob matching
-    /// nothing is kept as written, so the census reports it `names-no-subject`.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub gates: Vec<String>,
-    /// Narrows which tracked files the census's declaration arm reads, in
-    /// [`Config::scope`]'s include/exclude grammar. Absent means every tracked
-    /// file — the declaration arm is opt-in by the `#MUTANT` lines a file
-    /// carries, so there is no population to bound by default.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub scope: Vec<String>,
-    /// The `command` mutation runner's argv (CLOUD-2211): a TOML array, never
-    /// word-split, run once with the changed sources it owns appended. Its exit
-    /// is the contract: 0 caught, 2 survived, anything else could-not-look.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub command: Vec<String>,
-}
-
-/// The `[receipt]` table: which receipts a head must carry to be called verified.
-#[derive(Debug, Clone, Default, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub struct Receipt {
-    /// The checks `receipt verified` requires a valid receipt for.
-    ///
-    /// # NON-NEGOTIABLE RULE 1, AND THE ARRAY THIS REPLACES
-    ///
-    /// `receipt.rs` carried `const VERIFIED_BY: [&str; 2] = ["verify",
-    /// "linear-check"]` — two of THIS consumer's task names, compiled into the
-    /// core, which is the rule's plainest shape. A different adopter's gates are
-    /// not called those things, and nothing in the engine could tell them so.
-    ///
-    /// # UNDECLARED FALLS BACK, and this doc said it refused
-    ///
-    /// The hazard is real and unchanged: an empty set would make
-    /// `receipt verified` pass over every head, since *nothing is unverified*
-    /// when nothing is required — a gate that answers clean because it was never
-    /// told what to ask. What closes it is a fallback rather than a refusal.
-    /// [`crate::receipt::verified_by`] resolves an undeclared or empty table to
-    /// [`crate::receipt::VERIFIED_BY`], and its own header records why the first
-    /// draft's usage error could not stand: it refused over a fixture repository
-    /// with no `batten.toml` and no interest in receipts, and that suite's
-    /// subject survives, so the only way to land the refusal was to edit around
-    /// a gate that was right.
-    ///
-    /// The fallback is strictly more general than the `const` it replaced and
-    /// costs an adopter nothing — our names over their receipts resolve to
-    /// `Missing`, so `verified` refuses loudly on their first run rather than
-    /// passing quietly. A wrong answer that announces itself is the acceptable
-    /// failure; a silent one is not.
-    ///
-    /// **Stated here because a field's doc is where a reader looks for what an
-    /// absent key does** (review of #848), and this one asserted a refusal the
-    /// code does not make — with `trust.rs`'s `VerifiedCheckRemoved` repeating
-    /// it, which is how one false premise became two.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub verified_by: Vec<String>,
-}
-
-/// The `[ready]` table: the refinement gate's consumer-set thresholds.
-///
-/// # Why a value and not a `[[pattern]]` row (CLOUD-472)
-///
-/// The first draft of the prose-dialect ratchet spelled its threshold as a
-/// regex over the exempt key range. That is wrong twice. The pattern registry
-/// exists so that one CONCEPT has one spelling — arithmetic is not a concept,
-/// and a range encoded in alternation is unreadable and unmovable. And it makes
-/// the decision turn on key TEXT, which the tracker is known to rewrite: this
-/// consumer already declares `ready-issue-mention-markup` because a bare key
-/// comes back wrapped in `<issue …>` markup, so matching key text is matching
-/// the one thing the round trip mangles.
-#[derive(Debug, Clone, Default, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub struct Ready {
-    /// From which creation instant a Ready block must carry the fenced claims
-    /// object rather than prose. An ISO-8601 UTC stamp, compared verbatim
-    /// against the tracker's own `createdAt`.
-    ///
-    /// **A RATCHET: moving it later is the only direction that tightens.**
-    /// Absent is could-not-look and exempts everything, so a consumer that has
-    /// not opted in is never refused for a question it did not ask.
-    ///
-    /// **An instant rather than a key ordinal, and that is a portability
-    /// decision.** An ordinal reaches no consumer literal — the trailing digits,
-    /// no separator assumed — so it passes `no-tracker-key-in-core`. It still
-    /// requires keys that are numeric AND monotonic with creation order, which
-    /// three popular trackers give and a slug- or UUID-keyed one does not, and it
-    /// would fail SILENTLY there rather than loudly. Every tracker stamps a
-    /// creation time, so this assumes nothing about how a consumer spells a key.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub prose_dialect_required_from: Option<String>,
-    /// The instant from which a row owes a dispatched PRESSURE TEST (CLOUD-472).
-    ///
-    /// A sibling of the field above rather than a reuse of it, and the
-    /// separation is the point: these two ratchets convert different things and
-    /// a consumer must be able to move one without moving the other. Folding
-    /// them into one instant would mean the day you demand a structured claims
-    /// object is also the day you demand an agent dispatch, and a repository
-    /// that wants the first and cannot yet afford the second would have no way
-    /// to say so.
-    ///
-    /// Read exactly as its sibling is — fixed-width ISO-8601 UTC compared
-    /// lexically, absent is could-not-look, and moving it LATER is the only
-    /// direction that tightens.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub pressure_test_required_from: Option<String>,
-    /// The instant from which a `feat` row owes its prior-art search
-    /// (CLOUD-2296), read exactly as its two siblings are.
-    ///
-    /// A ratchet rather than a switch for their reason: a row groomed Ready
-    /// before the claim existed is not made unready by its arrival, so the
-    /// queue a fleet is draining stays pullable.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub prior_art_required_from: Option<String>,
-}
-
-/// The `[trust]` table: what `--config-from` may do when the ref is unreachable.
-///
-/// House style §4 requires the authority to degrade safely rather than fail
-/// open, and CLOUD-31's decision record makes offline last-known-good mandatory.
-/// This table is the operator's half of that: the engine will serve a pinned,
-/// previously validated config **only** where an explicit committed key says it
-/// may.
-///
-/// **Not sniffed from the environment, and that is the design.** Detecting CI
-/// would make a safety property depend on a heuristic about the world. A CI
-/// checkout simply never sets this key, so the honest answer to a missing base
-/// ref there stays "fetch it, or refuse" — which is what CLOUD-236's workflow
-/// step already implements.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct Trust {
-    /// May an unreachable base ref be answered from the last validated config?
-    ///
-    /// Defaults to `false`. Turning it on **lowers the bar**, so it is a
-    /// weakening in its own right ([`crate::trust::WeakeningKind`]) and is
-    /// reported by the same comparison every other weakening goes through — the
-    /// escape hatch is policed by the mechanism it would open. For the same
-    /// reason it lives in the committed authority only: no raise-only override
-    /// layer may set it (§8).
-    ///
-    /// It never reaches a ref that *resolves*. "The ref is good and declares no
-    /// `batten.toml`" refuses in every configuration, or a branch pointing
-    /// `--config-from` at a config-less ref picks its own policy.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub offline_fallback: bool,
-}
-
-/// The `[epoch]` table: which files govern this repository.
-///
-/// Declared as **config** rather than compiled in, because which files govern a
-/// repository is that repository's business: an agent settings file, a
-/// contributor guide, a hook config — each meaningful in one repository and
-/// meaningless in the next. The core therefore carries only the default (this
-/// file), and every consumer's own list lives in that consumer's own config, so
-/// a grep of `crates/batten` for any consumer's identifiers returns nothing
-/// (non-negotiable rule 1; verified-by: batten-check — the rule-1 `forbid` rows over `crates/**` in this repository's own `batten.toml`, which run on every gate invocation).
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct Epoch {
-    /// Repo-relative paths whose bytes the epoch covers. Order is irrelevant —
-    /// [`crate::epoch::tracked_paths`] sorts and deduplicates, so the value is a
-    /// function of the set rather than of how it was written.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub tracked: Vec<String>,
-}
-
-/// The `[contract]` table: which files a running session must re-read when they
-/// move (CLOUD-461).
-///
-/// **A second table rather than a reuse of [`Epoch`], and the reason is
-/// structural.** `[epoch] tracked` is literal repo-relative paths, read one file
-/// each — right for a config epoch, which must be a function of a *stated* set
-/// or the value moves because of what happens to exist beside it. A contract
-/// surface is the opposite case: a rules directory and a task tree, where a
-/// newly added file **is** the drift. Globs are the whole point here and would
-/// be a defect there, so the two tables answer different questions rather than
-/// one table answering both badly.
-///
-/// Declared as config for the reason [`Epoch`] gives: which files carry a
-/// repository's contract is that repository's business, so a grep of
-/// `crates/batten` for any consumer's identifiers returns nothing
-/// (non-negotiable rule 1; verified-by: batten-check — the rule-1 `forbid` rows over `crates/**` in this repository's own `batten.toml`, which run on every gate invocation).
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct Contract {
-    /// Globs over repo-relative `/`-separated paths whose bytes a session is
-    /// told about when they move. Order is irrelevant — the manifest is a
-    /// sorted map, so the snapshot is a function of the set.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub tracked: Vec<String>,
-    /// The subset of `tracked` that is the **hook wiring**, so the notice can
-    /// say the wiring moved without the core knowing any host's file layout
-    /// (CLOUD-525).
-    ///
-    /// Literal paths, not globs: this names specific files a consumer has
-    /// declared to be its wiring, and a glob here would let the notice claim the
-    /// wiring moved because something merely near it did.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub wiring: Vec<String>,
-}
+use crate::config_model::CONFIG_FILE;
+use crate::config_model::Config;
+#[cfg(test)]
+use crate::config_model::Perf;
+#[cfg(test)]
+use crate::config_model::PerfExempt;
+#[cfg(test)]
+use crate::config_model::PerfLatency;
+use crate::config_model::SCHEMA_PATH;
+use crate::config_model::SUPPORTED_VERSION;
+use crate::config_model::Strictness;
+use crate::config_model::Unit;
+use crate::config_model::Unresolvable;
 
 /// Parse and validate a `batten.toml` from `text`, attributing errors to
 /// `source` (a path or label) in their messages.
@@ -1321,7 +145,6 @@ pub fn parse(text: &str, source: &str) -> Result<Config> {
 /// The outer shape here is lenient so no row is built; [`crate::rest::Forge`]
 /// stays strict, so a `[forge]` key this build predates declares nothing rather
 /// than half a table.
-//MUTANT forge-declared-by-full-parse|s@^    let Ok(only) = toml::from_str::<ForgeOnly>(\&text) else {$@    let Ok(only) = parse_ungated(\&text, "x").map(\x7cconfig\x7c ForgeOnly { forge: config.forge }) else {@|declaring_the_forge_parses_no_config
 pub fn declare_for_process(dir: &Path) {
     /// The one table this read needs. No `deny_unknown_fields`: every other
     /// key in the authority is some other reader's.
@@ -1686,7 +509,7 @@ pub const RETIRED_KEYS: &[(&str, &str)] = &[(
 /// Parse a `batten.toml` read from a **git ref**, tolerating the keys
 /// [`RETIRED_KEYS`] names and nothing else.
 ///
-/// [`trust::load_base`] is the one funnel every out-of-band config load passes
+/// [`trust_pin::load_base`] is the one funnel every out-of-band config load passes
 /// through ([`crate::lint`], [`crate::epoch`], [`crate::resolve`]'s
 /// `--config-from`), so this is where the version skew between a ref and this
 /// build is answered — once, rather than per caller.
@@ -1703,7 +526,7 @@ pub const RETIRED_KEYS: &[(&str, &str)] = &[(
 /// As [`parse`], plus a [`UsageError`] (→ exit `1`) when `text` is not TOML at
 /// all.
 ///
-/// [`trust::load_base`]: crate::trust::load_base
+/// [`trust_pin::load_base`]: crate::trust_pin::load_base
 pub fn parse_base(text: &str, source: &str) -> Result<Config> {
     let mut table: toml::Table =
         toml::from_str(text).map_err(|err| config_error(source, text, &err))?;
@@ -1730,7 +553,7 @@ pub fn parse_base(text: &str, source: &str) -> Result<Config> {
 /// cannot disagree.
 ///
 /// `deny_unknown_fields` is what makes the refusal total and free: every
-/// authority-only key (`epoch`, `marker`, `verb`, `budget`, `must_land_on`,
+/// authority-only key (`epoch`, `marker`, `verb`, `budget`, `must_land_on`, `landed_by`,
 /// `judge`, `ci`, `defects`, `provision`, `transcript`, `design`) becomes a hard
 /// parse error here rather than a silently discarded tightening. A hand-maintained
 /// refusal list would be a second authority, and would drift the moment a field
@@ -1764,7 +587,7 @@ pub struct OverrideConfig {
     /// Present only so the refusal can name it, for `min_batten_version`'s
     /// reason: the engine pin is the committed authority's alone (CLOUD-2061).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub engine: Option<crate::engine::Pin>,
+    pub engine: Option<crate::config_model::Pin>,
     /// Raised, never lowered: a committed `strict` cannot be relaxed here.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub strictness: Option<Strictness>,
@@ -1798,7 +621,7 @@ pub struct OverrideConfig {
         rename = "exec_pattern",
         skip_serializing_if = "Vec::is_empty"
     )]
-    pub exec_patterns: Vec<outputs::OutputPattern>,
+    pub exec_patterns: Vec<crate::config_model::OutputPattern>,
     /// Redirects this file **adds**. A duplicate glob is refused.
     ///
     /// Needs no raise-only clamp, and that is a decision rather than an
@@ -1806,11 +629,11 @@ pub struct OverrideConfig {
     /// fires, so there is no bar here to lower. Refusing a redefinition is
     /// coherence with the other append-only tables.
     #[serde(default, rename = "redirect", skip_serializing_if = "Vec::is_empty")]
-    pub redirects: Vec<crate::redirect::Redirect>,
+    pub redirects: Vec<crate::config_model::Redirect>,
     /// Waivers this file adds, for rules the authority does not declare. A
     /// waiver over a committed rule lowers that bar and is refused.
     #[serde(default, rename = "waiver", skip_serializing_if = "Vec::is_empty")]
-    pub waivers: Vec<waiver::Waiver>,
+    pub waivers: Vec<crate::config_model::Waiver>,
 }
 
 /// Parse an *override* layer, without the [`Config::min_batten_version`] gate.
@@ -1828,7 +651,6 @@ pub struct OverrideConfig {
 /// `version`, a table that fails its own validator, or **any key outside the
 /// override surface** — including one that is perfectly valid in the file it was
 /// copied from, which is the case this type exists to catch.
-//MUTANT text-meter-override-unwired|s@^    under(Native::ProseColumnRefused, meter_text(\&config))?;$@    under(Native::ProseColumnRefused, Ok(()))?;@|an_override_column_over_its_cap_is_refused_too
 pub fn parse_override(text: &str, source: &str) -> Result<OverrideConfig> {
     // THE SAME PRUNE THE AUTHORITY GETS, for the same measured reason. A key
     // this build predates in `batten.local.toml` used to fail the whole
@@ -1866,15 +688,15 @@ pub fn parse_override(text: &str, source: &str) -> Result<OverrideConfig> {
     // CLOUD-242 named, and it does not become acceptable for being uncommitted.
     under(
         Native::RuleTableRefused,
-        crate::rules::validate_in(&config.rules, text, source),
+        crate::config_check::rules::validate_in(&config.rules, text, source),
     )?;
     under(
         Native::OutputTableRefused,
-        crate::outputs::validate(&config.exec_patterns),
+        crate::config_check::outputs::validate(&config.exec_patterns),
     )?;
     under(
         Native::WaiverTableRefused,
-        crate::waiver::validate(&config.waivers),
+        crate::config_check::waiver::validate(&config.waivers),
     )?;
     // Always metered: an override is never read from a ref (CLOUD-1642).
     under(Native::ProseColumnRefused, meter_text(&config))?;
@@ -1918,7 +740,7 @@ pub fn override_schema() -> Result<String> {
 /// through untouched — an internal failure stays internal (exit `3`), and an
 /// error that already names a class keeps it. Rewording the refusals themselves
 /// is outside CLOUD-1313.
-fn under<T>(native: crate::verdict::Native, result: Result<T>) -> Result<T> {
+fn under<T>(native: crate::error::Native, result: Result<T>) -> Result<T> {
     result.map_err(|err| match err.downcast::<UsageError>() {
         Ok(usage) if usage.verdict.is_none() => UsageError::raise_as(native, usage.message),
         Ok(usage) => anyhow::Error::new(usage),
@@ -2016,9 +838,6 @@ pub const TEXT_CENSUS: &[TextColumn] = &[
 
 /// The cap a column's values are held to: its census row, else [`TEXT_MAX`].
 ///
-/// A loop rather than a closure, because a `//MUTANT` anchor may not hold `|`.
-//MUTANT text-tier-flattened|s@^            return column.cap;$@            return TEXT_MAX;@|a_column_one_over_its_tier_is_refused_by_pointer_and_at_its_cap_loads
-//MUTANT text-ceiling-census-only|s@^    TEXT_MAX$@    usize::MAX@|an_unlisted_string_column_is_held_to_the_text_ceiling
 fn text_cap(path: &str) -> usize {
     for column in TEXT_CENSUS {
         if column.path == path {
@@ -2640,7 +1459,7 @@ fn validate_remedy_tables(config: &Config) -> Result<()> {
         }));
     under(
         Native::RemedyUnresolved,
-        crate::redirect::validate_remedies(remedies, &rule_ids),
+        crate::config_check::redirect::validate_remedies(remedies, &rule_ids),
     )
 }
 
@@ -2767,7 +1586,7 @@ fn validate_tables(config: &Config, text: &str, source: &str, grammar: Grammar) 
         // second authority over one name, which is the shape the exemption
         // itself exists to avoid. The vendored and native halves stay unfiltered
         // for the other reason: they are never held to a consumer's lists at all.
-        let vendored = crate::preset::verdict_rows();
+        let vendored = crate::config_check::preset::verdict_rows();
         let declared: std::collections::BTreeSet<&str> = config
             .verdicts
             .iter()
@@ -2791,7 +1610,7 @@ fn validate_tables(config: &Config, text: &str, source: &str, grammar: Grammar) 
     }
     under(
         Native::RedirectTableRefused,
-        crate::redirect::validate(&config.redirects),
+        crate::config_check::redirect::validate(&config.redirects),
     )?;
     validate_remedy_tables(config)?;
     // And the MCP table, at load for the identical reason (CLOUD-1260). Every
@@ -2800,7 +1619,7 @@ fn validate_tables(config: &Config, text: &str, source: &str, grammar: Grammar) 
     // without a network and belongs where a config fault is reported, rather than
     // being discovered by the one dispatch that needed it.
     if let Some(mcp) = &config.mcp {
-        crate::mcp::validate(mcp)?;
+        crate::config_check::mcp::validate(mcp)?;
     }
     // And `[receipt] verified_by`, which names checks that must be WRITABLE
     // (review of #848). `receipt record` and `receipt status` already refuse a
@@ -2810,7 +1629,7 @@ fn validate_tables(config: &Config, text: &str, source: &str, grammar: Grammar) 
     // absence rather than at the name that guaranteed it. The inert-typo class
     // every table above is refused at load for.
     if let Some(receipt) = &config.receipt {
-        crate::receipt::validate_verified_by(&receipt.verified_by)?;
+        crate::config_check::receipt::validate_verified_by(&receipt.verified_by)?;
     }
     // And the marker table, for the identical reason in the identical shape
     // (CLOUD-253). Both tables arrived in one commit; CLOUD-242 wired one of
@@ -2819,7 +1638,7 @@ fn validate_tables(config: &Config, text: &str, source: &str, grammar: Grammar) 
     // test below is what stops the next table arriving orphaned the same way.
     under(
         Native::MarkerTableRefused,
-        crate::markers::validate(&config.markers),
+        crate::config_check::markers::validate(&config.markers),
     )?;
     // And the action table, where "validated only by the runner" would be worst
     // of all: an action is a command, and a row that loads clean but names no
@@ -2827,8 +1646,9 @@ fn validate_tables(config: &Config, text: &str, source: &str, grammar: Grammar) 
     // at no moment. Refused at load, so the failure lands on the config rather
     // than as silence at the event.
     if let Some(hook) = &config.hook {
-        crate::action::validate(&hook.actions)?;
-        crate::handler::validate(&hook.handlers)?;
+        crate::config_check::action::validate(&hook.actions)?;
+        crate::config_check::handler::validate(&hook.handlers)?;
+        crate::config_check::githook::validate(&hook.git)?;
     }
     // And the rule table, which used to be validated only by the runner that
     // happened to evaluate it (CLOUD-48). That was defensible while the tree
@@ -2838,11 +1658,11 @@ fn validate_tables(config: &Config, text: &str, source: &str, grammar: Grammar) 
     // coverage. `run_rule` still calls `Rule::validate` as defence in depth.
     under(
         Native::RuleTableRefused,
-        crate::rules::validate_in(&config.rules, text, source),
+        crate::config_check::rules::validate_in(&config.rules, text, source),
     )?;
     under(
         Native::OutputTableRefused,
-        crate::outputs::validate(&config.exec_patterns),
+        crate::config_check::outputs::validate(&config.exec_patterns),
     )?;
     // The same validator over the second pattern table, and deliberately the
     // same class: both are `OutputPattern`, so an empty id, an empty literal, an
@@ -2852,7 +1672,7 @@ fn validate_tables(config: &Config, text: &str, source: &str, grammar: Grammar) 
     // inert-typo shape this call site exists to refuse.
     under(
         Native::VerifyEnvironmentTableRefused,
-        crate::outputs::validate_environment(&config.verify_environment_patterns),
+        crate::config_check::outputs::validate_environment(&config.verify_environment_patterns),
     )?;
     // And the waiver table, where the stakes are inverted from every other row
     // here: a malformed rule fails to gate, but a malformed *waiver* is a hatch
@@ -2860,7 +1680,7 @@ fn validate_tables(config: &Config, text: &str, source: &str, grammar: Grammar) 
     // waiver carries an expiry" true of the resolved config rather than aspirational.
     under(
         Native::WaiverTableRefused,
-        crate::waiver::validate(&config.waivers),
+        crate::config_check::waiver::validate(&config.waivers),
     )?;
     under(
         Native::FactTableRefused,
@@ -2869,17 +1689,17 @@ fn validate_tables(config: &Config, text: &str, source: &str, grammar: Grammar) 
     // The cross-table half (CLOUD-859), which needs both lists and so cannot live
     // in either one's own validator: a `named` receipt row over an agent-sourced
     // check is a gate no record can satisfy.
-    crate::facts::validate_keying(&config.facts, &config.rules)?;
+    crate::config_check::rules::validate_keying(&config.facts, &config.rules)?;
     under(
         Native::MintTableRefused,
-        crate::mint::validate(&config.mints),
+        crate::config_check::mint::validate(&config.mints),
     )?;
     // AFTER the pattern table is validated, because a recorder's `section` names
     // a pattern id and the refusal for a missing one is only honest once the ids
     // are known to be well-formed themselves.
     under(
         Native::RecorderTableRefused,
-        crate::recorder::validate(
+        crate::config_check::recorder::validate(
             &config.recorders,
             &config.programs,
             &config
@@ -2909,8 +1729,6 @@ fn validate_tables(config: &Config, text: &str, source: &str, grammar: Grammar) 
 /// # Errors
 ///
 /// As [`validate_tables`].
-//MUTANT text-meter-unwired|s@^        under(Native::ProseColumnRefused, meter_text(config))?;$@        under(Native::ProseColumnRefused, Ok(()))?;@|every_config_fault_names_its_table_s_declared_class
-//MUTANT text-meter-judges-the-base|s@^    if grammar == Grammar::Enforced {$@    if grammar == grammar {@|an_over_cap_base_ref_is_compared_not_refused
 fn validate_sections(config: &Config, grammar: Grammar) -> Result<()> {
     // The verb-written record families (CLOUD-1810). HERE rather than beside the
     // recorder table one function up, and the placement is forced rather than
@@ -2921,7 +1739,7 @@ fn validate_sections(config: &Config, grammar: Grammar) -> Result<()> {
     // validates is a refusal that cannot fire (CLOUD-253).
     under(
         Native::RecordTableRefused,
-        crate::record::validate(&config.records, &config.recorders),
+        crate::config_check::record::validate(&config.records, &config.recorders),
     )?;
     // `[[forge.query]]` rows (CLOUD-843), AFTER the record table because each
     // row writes a family a `[[record]]` row must declare, and that refusal is
@@ -2929,23 +1747,24 @@ fn validate_sections(config: &Config, grammar: Grammar) -> Result<()> {
     // `?` rather than `under(..)`: `[forge]` is a singleton table, which the
     // `Vec<T>` census does not reach, exactly as `[ci]` and `[perf]` below.
     if let Some(forge) = &config.forge {
-        crate::forge_query::validate(&forge.query, &config.records)?;
+        crate::config_check::forge_query::validate(&forge.query, &config.records)?;
     }
     // `[budget]` is a table rather than a list, so the census below (which scans
     // `Vec<T>` fields) does not reach it — but the failure it guards against is
     // the same one: a table that parses and gates nothing. A `[budget]` header
     // with no `[budget.instructions]` under it is refused here (CLOUD-50).
-    crate::budget::validate(config.budget.as_ref())?;
+    crate::config_check::budget::validate(config.budget.as_ref())?;
     // Same shape, same reason, one table over: a `[refusal]` ceiling nothing can
     // satisfy is refused at load rather than discovered by the first person it
     // fires on.
-    crate::refusal::validate(config.refusal.as_ref()).map_err(UsageError::raise)?;
+    crate::config_check::refusal::validate(config.refusal.as_ref()).map_err(UsageError::raise)?;
     // Same shape, same reason, one table over: a ceiling nothing can satisfy is
     // refused at load rather than discovered by the first advisory it silences.
-    crate::advisory::validate(config.advisory.as_ref()).map_err(UsageError::raise)?;
+    crate::config_check::advisory::validate(config.advisory.as_ref()).map_err(UsageError::raise)?;
     // One table over again: a session ceiling nothing can satisfy is refused at
     // load rather than discovered by the first hook it silences.
-    crate::hookcost::validate(config.hook_output.as_ref()).map_err(UsageError::raise)?;
+    crate::config_check::hookcost::validate(config.hook_output.as_ref())
+        .map_err(UsageError::raise)?;
     // Validated at parse, like `[[verb]]` and `[[marker]]`: CLOUD-242's lesson
     // is that a table nothing validates is coverage that means nothing.
     if let Some(ci) = &config.ci {
@@ -2969,8 +1788,8 @@ fn validate_sections(config: &Config, grammar: Grammar) -> Result<()> {
     if let Some(prune) = &config.prune {
         prune.validate()?;
     }
-    // Same reason: a `[task] program_root` that names no directory corroborates
-    // no live task, so it would read every pid alive and hide each crash.
+    // Same reason: a `[task] program_root` that names no directory is refused
+    // where the error can name the key.
     if let Some(task) = &config.task {
         task.validate()?;
     }
@@ -3015,7 +1834,7 @@ fn validate_sections(config: &Config, grammar: Grammar) -> Result<()> {
     // `[transcript]` is a table too, so the census does not reach it either; the
     // guarded failure is a `path` key present and blank, which would resolve to
     // the repository root and read as an unparseable transcript (CLOUD-95).
-    crate::transcript::validate(config.transcript.as_ref())?;
+    crate::config_check::transcript::validate(config.transcript.as_ref())?;
     // A step row keying nothing, trusting no tool, or reading a pathspec this
     // build cannot — each a receipt that answers for bytes nobody checked — is
     // refused here, where the row is named (CLOUD-843).
@@ -3028,14 +1847,20 @@ fn validate_sections(config: &Config, grammar: Grammar) -> Result<()> {
     // failure would blame the artifact for a typo in this file.
     under(
         Native::ProvisionTableRefused,
-        crate::provision::validate(&config.provisions),
+        crate::config_check::provision::validate(&config.provisions),
     )?;
     // A row that could never decide, a repair that runs nothing, an id declared
     // twice: each refused here rather than once per session, where the failure
     // would look like a broken container instead of a typo in this file.
     under(
         Native::StartupTableRefused,
-        crate::startup::validate(&config.startup),
+        crate::config_check::startup::validate(&config.startup),
+    )?;
+    // A preset install parameterised and never placed, placed and never
+    // parameterised, or given a list it cannot install (CLOUD-2633).
+    under(
+        Native::StartupTableRefused,
+        crate::config_check::startup::validate_installs(&config.rules, &config.startup),
     )?;
     // LAST, after every table validator, so a multi-fault config still reports
     // its table's class first. Working tree only: a config read from a git ref is
@@ -3058,12 +1883,6 @@ fn validate_sections(config: &Config, grammar: Grammar) -> Result<()> {
 const UNKNOWN_KEY: [&str; 2] = ["unknown field", "unknown variant"];
 
 /// Whether a rendered parse error is one of the unknown-key shapes.
-///
-/// Named rather than inlined so the `//MUTANT` rows below can anchor on a line
-/// carrying no `|`: a mutation row is `id|script|case`, split on `|`, so a
-/// closure in the anchor yields five fields and the declaration can only ever
-/// report `malformed-row`. Both rows here did exactly that until it was caught
-/// in review.
 ///
 /// Declared ABOVE `config_error`'s doc block rather than between it and the
 /// function: extracting it into the gap orphaned that whole block onto this
@@ -3103,11 +1922,6 @@ fn names_an_unknown_key(rendered: &str) -> bool {
 ///
 /// Pointer-only (rule 4): the note adds a version and a task name. Every byte of
 /// file content in the output is the parser's own error, unchanged.
-//MUTANT-SUITE crates/batten/tests/it/config_skew.rs
-//MUTANT skew-reads-as-malformed|s@    if !names_an_unknown_key(&rendered) {@    if true {@|an_unknown_key_names_the_rebuild
-//MUTANT the-schema-is-derived-before-the-read|s@^    let Ok(committed) = fs::read_to_string(\&at) else {$@    let _eager = schema(); let Ok(committed) = fs::read_to_string(\&at) else {@|a_failing_load_with_no_committed_schema_derives_nothing
-//MUTANT the-schema-is-derived-every-call|s@^    if let Some(derived) = DERIVED.get() {$@    if let Some(derived) = None::<\&String> {@|the_schema_is_derived_once_per_process
-//MUTANT every-parse-error-blames-skew|s@    if !names_an_unknown_key(&rendered) {@    if false {@|a_schema_fault_that_names_no_unknown_key_does_not_mention_a_rebuild
 pub(crate) fn config_error(source: &str, text: &str, err: &toml::de::Error) -> anyhow::Error {
     let rendered = err.to_string();
     // THE SYNTAX PROBE, AND IT RUNS ONLY HERE — ON THE ERROR PATH (CLOUD-1677).
@@ -3133,7 +1947,7 @@ pub(crate) fn config_error(source: &str, text: &str, err: &toml::de::Error) -> a
         // agent be told to repair the broken part instead of losing the gate
         // surface entirely. `Native::ConfigUnreadable` carries the full argument.
         return UsageError::raise_as(
-            crate::verdict::Native::ConfigUnreadable,
+            crate::error::Native::ConfigUnreadable,
             format!("invalid config {source}: {err}"),
         );
     }
@@ -3144,82 +1958,10 @@ pub(crate) fn config_error(source: &str, text: &str, err: &toml::de::Error) -> a
         "invalid config {source}: {err}\n\
          This build is batten {VERSION}, and an unknown key has two readings it \
          cannot tell apart: the config declares a key this build predates — \
-         rebuild with `mise run install:local` — or the key is a typo. The error \
+         install the engine it pins with `batten engine install` — or the key is \
+         a typo. The error \
          above names the line for either.",
     ))
-}
-
-/// One thing this build could not resolve, dropped so the rest of the file
-/// loads.
-///
-/// Pointer-only by construction (non-negotiable rule 4): what travels is an
-/// ADDRESS in the document — never a byte of it. The parse error quotes the
-/// source line, and that quote is exactly what must not reach a report.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Unresolvable {
-    /// The table the drop happened in: an array-of-tables section like `rule`,
-    /// or a plain `[section]` like `capture`.
-    pub section: String,
-    /// What was dropped there.
-    pub unit: Unit,
-}
-
-/// The GRANULARITY of one drop, which differs because the units do.
-///
-/// **This distinction is the type's whole reason to be an enum, and collapsing
-/// it is what review caught.** Both arms once wrote into one `id: Option<String>`
-/// field whose doc said "not the key" while the plain-section arm put the key
-/// there — so a reader could not tell a row from a key, and
-/// [`crate::lint`]'s positional filter had to trust that an index of `0` on a
-/// key drop would never collide with row `0` of a same-named section.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Unit {
-    /// A whole `[[row]]`, because a row is ONE GATE: a key it cannot read could
-    /// change what that gate enforces, so the honest move is to stop enforcing
-    /// it and say so.
-    Row {
-        /// The row's declared `id`, when it has one. A row without one is still
-        /// reported — by index — because a silent drop is the vacuous pass this
-        /// whole change exists to refuse.
-        id: Option<String>,
-        /// The row's ordinal within its section IN THE SOURCE, which is what
-        /// [`crate::lint`]'s located view filters on.
-        index: usize,
-    },
-    /// One key of a plain `[section]`, because a settings table is not a gate:
-    /// an unknown key there is a setting this build does not have, so the
-    /// honest move is to run on the build's own default and say so. Dropping
-    /// the whole table instead would switch off a feature the file plainly
-    /// wants, which is worse than the disease.
-    ///
-    /// **The key's NAME travels, and that is rule 4 satisfied rather than
-    /// bent.** A key name is the address of the setting that is off — the
-    /// thing a reader has to look up — where the row arm's `id` is the address
-    /// of the gate that is off. Neither is content: the VALUE stays behind, and
-    /// it is the value that could carry a secret.
-    Key(String),
-}
-
-impl Unresolvable {
-    /// The pointer line a report carries.
-    #[must_use]
-    pub fn line(&self) -> String {
-        match &self.unit {
-            Unit::Row { id: Some(id), .. } => format!("{} {id}", self.section),
-            Unit::Row { id: None, index } => format!("{} #{index}", self.section),
-            Unit::Key(key) => format!("{}.{key}", self.section),
-        }
-    }
-
-    /// The row ordinal this drop removed, for a caller pairing rows by
-    /// position. `None` for a key drop, which removes no row.
-    #[must_use]
-    pub const fn row_index(&self) -> Option<usize> {
-        match self.unit {
-            Unit::Row { index, .. } => Some(index),
-            Unit::Key(_) => None,
-        }
-    }
 }
 
 /// How many rows may be dropped before the file is refused outright.
@@ -3300,7 +2042,7 @@ fn binary_is_behind_the_config(source: &str, text: &str) -> bool {
     // READ, THEN DERIVE (CLOUD-1876). A tuple evaluates both arms, so this paid
     // a whole-schema derivation to answer `false` for every source with no
     // sibling artifact — which is every consumer tree, every time.
-    let Ok(committed) = fs::read_to_string(&at) else {
+    let Ok(committed) = crate::fsio::read_to_string(&at) else {
         return false;
     };
     let Ok(derived) = schema() else {
@@ -3342,13 +2084,20 @@ fn floor_is_above_this_build(text: &str) -> bool {
 /// `check_min_version` turns into its own named refusal and the pruning arm
 /// treats as no evidence of skew.
 fn build_is_below(required: &str) -> bool {
-    let (Ok(required), Ok(running)) = (
-        semver::Version::parse(required),
-        semver::Version::parse(VERSION),
-    ) else {
-        return false;
-    };
-    running < required
+    version_is_below(VERSION, required)
+}
+
+/// Whether `running` orders below `required` by semver precedence (CLOUD-2906):
+/// a dev build (`0.0.221-dev.…`) is below its release floor `0.0.221`, and build
+/// metadata is never a floor. An unparsable side answers `false`.
+fn version_is_below(running: &str, required: &str) -> bool {
+    match (
+        crate::version::parse(running),
+        crate::version::parse(required),
+    ) {
+        (Some(running), Some(required)) => crate::version::precedence(&running, &required).is_lt(),
+        _ => false,
+    }
 }
 
 /// Whether this failure is a value naming a VARIANT this build does not have.
@@ -3397,7 +2146,6 @@ enum Header<'a> {
     Table(&'a str),
 }
 
-//MUTANT dotted-row-not-droppable|s@        matches!(self, Self::Row(_))@        matches!(self, Self::Row(name) if !name.contains('.'))@|an_unknown_key_in_a_dotted_row_costs_the_row_not_the_file
 impl<'a> Header<'a> {
     /// The declared name, dots and all.
     fn name(self) -> &'a str {
@@ -3832,7 +2580,6 @@ fn drop_empty_ancestors(table: &mut toml::Table, path: Option<&str>) {
 /// root that is a row anywhere makes the dotted header un-droppable and the
 /// caller falls back to the owning element, so a misread here costs a wider unit
 /// rather than a wrong blank.
-//MUTANT every-dotted-row-droppable|s@    !nests_in_a_row(text, header.root())@    true@|a_dotted_row_nested_in_an_array_element_still_charges_its_owner
 fn addressable_row(text: &str, header: Header<'_>) -> bool {
     if !header.is_row() {
         return false;
@@ -3844,10 +2591,6 @@ fn addressable_row(text: &str, header: Header<'_>) -> bool {
 }
 
 /// Whether `root` is itself declared as an array-of-tables anywhere in `text`.
-///
-/// Named rather than inlined for the `//MUTANT` row above's reason: a mutation
-/// row is `id|script|case` split on `|`, so an anchor carrying a closure yields
-/// five fields and the declaration can only ever report `malformed-row`.
 fn nests_in_a_row(text: &str, root: &str) -> bool {
     headers(text).any(|(_, other)| other.is_row() && other.name() == root)
 }
@@ -4160,7 +2903,6 @@ fn prune_unresolvable<T: serde::de::DeserializeOwned>(source: &str, behind: bool
 type Blank = fn(&mut String, usize, usize);
 
 /// [`prune_unresolvable`], blanking with `blank`.
-//MUTANT dotted-section-read-as-a-key|s@        let Some(rows) = holder.get_mut(leaf).and_then(toml::Value::as_array_mut) else {@        let Some(rows) = holder.get_mut(section.as_str()).and_then(toml::Value::as_array_mut) else {@|an_unknown_key_in_a_dotted_row_costs_the_row_not_the_file
 fn prune_with<T: serde::de::DeserializeOwned>(
     source: &str,
     behind: bool,
@@ -4384,7 +3126,6 @@ fn parse_remembered(text: &str, source: &str) -> Result<Config> {
 
 /// [`parse_remembered`] with the on-disk parse cache switched by `persist`, so a
 /// case can switch it without the process-wide flag every other case reads.
-//MUTANT dropped-row-parse-cached|s@^        if config.unresolvable.is_empty()$@        if true@|an_authority_with_a_dropped_row_is_never_stored_in_the_parse_cache
 fn parse_remembered_with(text: &str, source: &str, persist: bool) -> Result<Config> {
     if let Some(config) = remembered(text, source) {
         return Ok(config);
@@ -4425,7 +3166,6 @@ type LastParse = Option<(std::sync::Arc<String>, String, Config)>;
 static LAST: std::sync::Mutex<LastParse> = std::sync::Mutex::new(None);
 
 /// Whether the memo holds exactly `text` from `source`, and if so, `with` over it.
-//MUTANT config-parse-unremembered|s@^    same.then(\x7c\x7c with(config))$@    None@|one_authority_is_parsed_once_per_process
 fn with_remembered<T>(text: &str, source: &str, with: impl FnOnce(&Config) -> T) -> Option<T> {
     let named = canonical_source(source);
     let last = LAST.lock().ok()?;
@@ -4541,7 +3281,6 @@ fn shared_text(text: &str) -> Option<std::sync::Arc<String>> {
 /// The digest [`read_text`] took of `text`, when `text` IS the allocation it
 /// last handed out and it was read from `named` (CLOUD-2608) — so a digest is
 /// never lent to bytes it was not taken of.
-//MUTANT held-digest-ignores-path|s@(path == named \&\& same_allocation(held, text))@(same_allocation(held, text))@|a_text_read_from_another_path_is_hashed
 fn held_digest(text: &str, named: &str) -> Option<[u8; 32]> {
     let last = LAST_DIGEST.lock().ok()?;
     let (path, digest, held) = last.as_ref()?;
@@ -4566,8 +3305,6 @@ fn digest_key(named: &str) -> String {
 }
 
 /// The digest recorded for `named` beside exactly these stamp `fields`.
-//MUTANT authority-digest-never-believed|s@^    if held != fields {$@    if true {@|an_unchanged_authority_is_keyed_by_its_recorded_digest
-//MUTANT authority-digest-ignores-stamp|s@^    if held != fields {$@    if false {@|an_edited_authority_is_hashed_again
 fn recorded_digest(named: &str, fields: &str) -> Option<[u8; 32]> {
     let body = crate::cache::read(&digest_path(named)?, &digest_key(named))?;
     let text = std::str::from_utf8(&body).ok()?;
@@ -4580,8 +3317,23 @@ fn recorded_digest(named: &str, fields: &str) -> Option<[u8; 32]> {
         .map(|hash| *hash.as_bytes())
 }
 
-/// Record `digest` for `named`, read while its stamp was `fields`.
-fn record_digest(named: &str, fields: &str, digest: &[u8; 32]) {
+/// Record `digest` for `named`, read at `at` while its stamp was `stamp`, when
+/// `wanted` and the read was clear of the racy window measured from before it.
+///
+/// CALLED ON EVERY PATH, SO THE CLOCK DECIDES WHAT IS WRITTEN, NEVER WHICH
+/// FUNCTION RUNS (CLOUD-2904): the racy test sat in the caller, so whether this
+/// ran was a race between a fixture's write and the machine's speed, and 24
+/// cases ran it on one reach recording of unchanged code and not on the next,
+/// moving their mutant keys for nothing.
+fn record_digest(
+    named: &str,
+    (stamp, at): (&crate::cache::Stamp, std::time::Duration),
+    digest: &[u8; 32],
+    wanted: bool,
+) {
+    if !wanted || stamp.racily_clean(at) {
+        return;
+    }
     let Some(path) = digest_path(named) else {
         return;
     };
@@ -4589,7 +3341,7 @@ fn record_digest(named: &str, fields: &str, digest: &[u8; 32]) {
     crate::cache::write(
         &path,
         &digest_key(named),
-        format!("{fields}\n{hex}").as_bytes(),
+        format!("{}\n{hex}", stamp.fields).as_bytes(),
     );
 }
 
@@ -4602,8 +3354,6 @@ fn record_digest(named: &str, fields: &str, digest: &[u8; 32]) {
 ///
 /// The stamp only decides whether a recorded digest is BELIEVED; it never
 /// enters a key, which stays a function of the bytes as `crate::cache` requires.
-//MUTANT authority-digest-recorded-racy|s@ \&\& !stamp.racily_clean(at)@@|an_authority_read_in_its_racy_window_records_no_digest
-//MUTANT authority-digest-believed-while-moving|s@^    let believed = still \&\& cfg!(unix);$@    let believed = cfg!(unix);@|a_file_changed_across_its_read_is_hashed
 fn text_digest(
     path: &Path,
     named: &str,
@@ -4612,13 +3362,13 @@ fn text_digest(
 ) -> [u8; 32] {
     let still = crate::cache::stamp(path).is_some_and(|after| after == *stamp);
     let believed = still && cfg!(unix);
-    if believed && let Some(recorded) = recorded_digest(named, &stamp.fields) {
-        return recorded;
-    }
-    let digest = *blake3::hash(text.as_bytes()).as_bytes();
-    if still && cfg!(unix) && !stamp.racily_clean(at) {
-        record_digest(named, &stamp.fields, &digest);
-    }
+    let recorded = if believed {
+        recorded_digest(named, &stamp.fields)
+    } else {
+        None
+    };
+    let digest = recorded.unwrap_or_else(|| *blake3::hash(text.as_bytes()).as_bytes());
+    record_digest(named, (stamp, at), &digest, believed && recorded.is_none());
     digest
 }
 
@@ -4651,7 +3401,7 @@ static LAST_TEXT: std::sync::Mutex<HeldText> = std::sync::Mutex::new(None);
 /// text out of the `String` the read produced, the first moves it.
 pub fn read_text(path: &Path) -> io::Result<std::sync::Arc<String>> {
     let Some(stamp) = crate::cache::stamp(path) else {
-        return fs::read_to_string(path).map(std::sync::Arc::from);
+        return crate::fsio::read_to_string(path).map(std::sync::Arc::from);
     };
     if let Ok(last) = LAST_TEXT.lock()
         && let Some((held, at, text)) = last.as_ref()
@@ -4660,7 +3410,7 @@ pub fn read_text(path: &Path) -> io::Result<std::sync::Arc<String>> {
         return Ok(std::sync::Arc::clone(text));
     }
     let at = crate::cache::now();
-    let text = std::sync::Arc::new(fs::read_to_string(path)?);
+    let text = std::sync::Arc::new(crate::fsio::read_to_string(path)?);
     // THE DIGEST THE PARSE KEY TAKES, ONLY WHILE THE PARSE CACHE IS ON (CLOUD-2608):
     // the hook re-hashed this 956 KB text on every call to key its parse entry.
     // Off the cache, nothing here touches a cache directory.
@@ -4679,7 +3429,6 @@ pub fn read_text(path: &Path) -> io::Result<std::sync::Arc<String>> {
 
 /// Whether the file read as `held` at `at` is the one `now` describes, by git's
 /// racy rule.
-//MUTANT authority-text-memo-never-stale|s@^    held == now.fields \&\& !now.racily_clean(at)$@    true@|an_authority_edited_between_two_reads_is_read_again
 fn unchanged_since(held: &str, at: std::time::Duration, now: &crate::cache::Stamp) -> bool {
     held == now.fields && !now.racily_clean(at)
 }
@@ -4725,7 +3474,6 @@ fn canonical_source(source: &str) -> String {
 /// The text enters by its BLAKE3, which names it as the text would: the digest
 /// [`read_text`] took where `text` is provably that read ([`held_digest`]),
 /// else one taken here (CLOUD-2608).
-//MUTANT parse-cache-key-ignores-text|s@^    crate::cache::key(PARSE_CACHE_FORMAT, \&\[named.as_bytes(), \&digest\])$@    crate::cache::key(PARSE_CACHE_FORMAT, \&[named.as_bytes()])@|an_edited_authority_is_not_answered_from_the_parse_cache
 fn parse_cache_key(text: &str, source: &str) -> String {
     let named = canonical_source(source);
     let digest =
@@ -4816,11 +3564,19 @@ fn parse_ungated_with(text: &str, source: &str, grammar: Grammar) -> Result<Conf
     Ok(config)
 }
 
-/// The version of the running binary, as `Cargo.toml` declares it.
+/// The identity of the running binary (CLOUD-2903): the package version for
+/// the release build, a dev pre-release for every other
+/// (`crates/batten/build/identity.rs`).
 ///
-/// Read from the compiled-in package version rather than re-typed, so the gate
-/// compares against the build that is actually running.
-pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+/// Stamped once per build by `build.rs` rather than re-typed, so the gate
+/// compares against the build that is actually running, and a build that is
+/// not the release never carries the release's identity.
+pub const VERSION: &str = env!("BATTEN_BUILD_VERSION");
+
+/// The package version `Cargo.toml` declares: the release this source is, or
+/// will be cut as. A floor and a release pin name a release, so the readers
+/// that compare against one of those, rather than name this build, read this.
+pub const PACKAGE_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Refuse a config this build is too old to honour (CLOUD-33).
 ///
@@ -4909,7 +3665,6 @@ pub(crate) fn report(text: &str) {
 /// compiled-in type, and every failing config load used to pay for it again.
 /// Across processes it is still recomputed, so a stale committed artifact still
 /// disagrees with the derivation the next run makes.
-//MUTANT text-schema-uncapped|s@^    cap_text_leaves(\&mut derived)?;$@    let _uncapped = 0;@|every_text_leaf_in_both_schemas_carries_its_census_cap
 pub fn schema() -> Result<String> {
     static DERIVED: std::sync::OnceLock<String> = std::sync::OnceLock::new();
     if let Some(derived) = DERIVED.get() {
@@ -4946,162 +3701,6 @@ static CONFIG_PARSES: std::sync::atomic::AtomicUsize = std::sync::atomic::Atomic
 #[must_use]
 pub fn config_parses() -> usize {
     CONFIG_PARSES.load(std::sync::atomic::Ordering::Relaxed)
-}
-
-impl Config {
-    /// A config that declares no policy at all.
-    ///
-    /// Deliberately not a [`Default`] impl. `version` has exactly one accepted
-    /// value ([`SUPPORTED_VERSION`]), so a derived default would produce a
-    /// `Config` carrying `0` that no loader would accept — a value that looks
-    /// like a config and is not one. Written as a literal rather than parsed from
-    /// a string constant so it needs no fallible path and no `expect`, and so
-    /// that a field added to [`Config`] fails to compile here until someone
-    /// decides what "declares nothing" means for it.
-    ///
-    /// Used where an **absent or unreadable** authority still has to be compared
-    /// against a trusted one (CLOUD-243): granting nothing is exactly what an
-    /// authority that cannot be read grants, so this is the honest comparand —
-    /// every key the trusted side declares then reports as removed.
-    #[must_use]
-    pub fn declaring_nothing() -> Self {
-        Config {
-            credential: None,
-            forge: None,
-            unresolvable: Vec::new(),
-            records: Vec::new(),
-            version: SUPPORTED_VERSION,
-            deferrals: Vec::new(),
-            host: None,
-            min_batten_version: None,
-            engine: None,
-            // Declaring nothing declares no landing path set, which the reader
-            // takes as could-not-look — the same direction every other absent
-            // table here takes.
-            lease: None,
-            receipt: None,
-            strictness: None,
-            fail_on_warning: None,
-            update_notice: None,
-            rules: Vec::new(),
-            patterns: Vec::new(),
-            traversals: Vec::new(),
-            registers: Vec::new(),
-            verdicts: Vec::new(),
-            vocabulary: crate::verdict::Vocabulary::default(),
-            scope: Vec::new(),
-            protected: Vec::new(),
-            // Declaring nothing means declaring no threshold either, which the
-            // reader takes as could-not-look and exempts everything — the same
-            // direction every other field here grants.
-            ready: None,
-            board: None,
-            // Declaring nothing accepts no regression, which is also the safe
-            // reading: an authority that cannot be read must not exempt a path.
-            perf: None,
-            // Declaring nothing enforces no gate. `batten mutate` then reads the
-            // environment alone and refuses when that is empty too, so an
-            // unreadable authority cannot become a sweep over nothing.
-            mutate: None,
-            // No protected paths means the unknown-program clause has nothing to
-            // guard, so an empty reader set costs nothing here and is the honest
-            // value: a config declaring nothing declares no readers either.
-            protected_readers: Vec::new(),
-            unlanded: Vec::new(),
-            contract: None,
-            epoch: None,
-            verbs: Vec::new(),
-            redirects: Vec::new(),
-            facts: Vec::new(),
-            mints: Vec::new(),
-            recorders: Vec::new(),
-            programs: BTreeMap::new(),
-            markers: Vec::new(),
-            exec: None,
-            mcp: None,
-            capture: None,
-            exec_patterns: Vec::new(),
-            // No declared classifier means every gate refusal reads as being
-            // about the tree, which is the advice that was always given and is
-            // right in the common case — the safe direction for an authority
-            // that could not be read.
-            verify_environment_patterns: Vec::new(),
-            waivers: Vec::new(),
-            // An authority that declares no budget grants no exemption from one
-            // either — there is simply no threshold, which is what `None` says.
-            budget: None,
-            refusal: None,
-            advisory: None,
-            outcome: Vec::new(),
-            hook_output: None,
-            must_land_on: None,
-            // An authority that cannot be read attaches no side effects. The
-            // safe direction is unambiguous here: firing a command an
-            // unreadable config might have declared is the one outcome nobody
-            // could justify.
-            hook: None,
-            judge: None,
-            // Declaring no ceiling is not declaring a ceiling of zero: the audit
-            // falls back to the engine default, so an unreadable authority
-            // withholds no gate here — it only fails to tighten one.
-            design: None,
-            ci: None,
-            // No `[prune]` is no build tree named and no floor declared, which is
-            // exactly what an unreadable authority grants: the verb reports that
-            // nothing was asked for rather than inventing a number about somebody
-            // else's target directory.
-            prune: None,
-            task: None,
-            defects: None,
-            provisions: Vec::new(),
-            // Declaring no container preconditions is the ordinary case: a
-            // project that states none has nothing for `batten startup` to
-            // decide, which is a different thing from one whose checks all pass.
-            startup: Vec::new(),
-            // Declaring no transcript is the ordinary case, and it is not the
-            // same as pointing at one that is missing: the first says the
-            // capability was never claimed, the second that it was claimed and
-            // is unavailable. Only the second is worth reporting.
-            transcript: None,
-            // Declaring no drain pacing is "no opinion", which resolves to the
-            // engine's defaults — NOT "do not drain". The asymmetry with the
-            // keys above is deliberate: those are policy this authority grants,
-            // and an authority granting nothing must grant nothing, where this
-            // is pacing for a surface that runs regardless. An authority that
-            // cannot be read still has a drain; it simply has no view on how
-            // often it speaks.
-            drain: None,
-
-            // An authority that declares no attribution policy grants no
-            // exemption from one: there is simply nothing to judge by, and the
-            // gate says so (exit 1) rather than passing over commits it never
-            // read.
-            attribution: None,
-            // And no commit convention: absent is "no rule was declared", which
-            // the gate answers 1 to rather than waving commits through.
-            commit: None,
-            bot_lane: None,
-            // An authority that cannot be read grants no permission to answer
-            // from a pin either. The default is the strict one, and an absent
-            // authority must not be the way to reach the lenient one.
-            trust: None,
-            // An authority declaring no scripts disarms none. Absent is the
-            // honest empty here rather than a conservative default with teeth:
-            // the engine cannot know what a launcher on this host writes, and
-            // guessing a path would be exactly the consumer identifier rule 1
-            // keeps out.
-            wiring: None,
-            // An authority declaring no census declares nowhere shell lives; the
-            // verb says so rather than counting a tree it was told nothing about.
-            census: None,
-            // No subject declared, so `batten sbom` has nothing to name.
-            sbom: None,
-            // An authority declaring no steps keys no receipt: every `batten step`
-            // call is a miss that runs the step and records nothing, which is the
-            // cache off rather than a cache answering for anything.
-            steps: Vec::new(),
-        }
-    }
 }
 
 /// Whether the committed authority was there to read (CLOUD-70).
@@ -5184,14 +3783,14 @@ pub fn defaults() -> Config {
 fn default_rules() -> Vec<Rule> {
     vec![Rule {
         id: "source carry broken".to_owned(),
-        kind: crate::rules::RuleKind::Forbid,
+        kind: crate::config_model::RuleKind::Forbid,
         // Every path, unlike the starter's `**/*/*`. That narrower glob exists
         // to keep the rule off the `batten.toml` that declares it — a `forbid`
         // pattern is a literal, so it appears in its own config — and this layer
         // has no config file to trip over.
         glob: Some("**/*".to_owned()),
         severity: Some(crate::severity::RuleSeverity::Deny),
-        scope: crate::rules::RuleScope::Tree,
+        scope: crate::preset_catalog::RuleScope::Tree,
         pattern: Some("<<<<<<< ".to_owned()),
         regex: None,
         exclude: None,
@@ -5213,6 +3812,9 @@ fn default_rules() -> Vec<Rule> {
         requires_field: None,
         contains: None,
         unless_contains: None,
+        word: None,
+        unless_word: None,
+        on: None,
         require_via: None,
         requires_key: None,
         reason: None,
@@ -5251,6 +3853,7 @@ fn default_rules() -> Vec<Rule> {
         retires_with: None,
         conserves: None,
         admits_with: None,
+        per_file: false,
         format: None,
         node: None,
         derives: None,
@@ -5263,6 +3866,8 @@ fn default_rules() -> Vec<Rule> {
         // over conflict markers and reads no CI language at all (CLOUD-1625).
         provider: None,
         except: Vec::new(),
+        environments: None,
+        install_env: Vec::new(),
         gate: None,
         documents: Vec::new(),
         // Unconditional (CLOUD-125): the zero-config layer has no repository
@@ -5276,6 +3881,7 @@ fn default_rules() -> Vec<Rule> {
         invocation_sources: Vec::new(),
         uses: Vec::new(),
         use_sources: Vec::new(),
+        unit_sources: Vec::new(),
         external: Vec::new(),
         predicate_severity: None,
         no_fix_reason: None,
@@ -5364,6 +3970,44 @@ pub struct AuthoritySite {
     pub required: bool,
 }
 
+/// The directory whose `batten.toml` is the authority for a call made at
+/// `start` (CLOUD-2532).
+///
+/// **The working tree's, then the repository's.** A linked worktree is the
+/// isolation unit for an agent's branch, and its own `batten.toml` is that
+/// branch's authority — so it answers first, from any depth inside the worktree.
+/// [`crate::git::repo_root`] resolves a linked worktree to the MAIN checkout
+/// (the shared common dir), which is right for per-repository state (CLOUD-164)
+/// and was wrong for config: from a worktree subdirectory a call was judged,
+/// claimed and probed by whatever branch the main checkout had out, and a fix
+/// written into the worktree's own file could not unblock it.
+///
+/// A worktree that carries no `batten.toml` still falls through to the
+/// repository's, which is what `hook_worktree_root.rs`'s bare-worktree case
+/// requires: a branch that predates the authority is still governed by it.
+///
+/// # Errors
+///
+/// As [`crate::git::repo_root`]: not a directory, not inside a repository, or a
+/// layout with no working tree to root.
+pub fn authority_root(start: &Path) -> Result<PathBuf> {
+    crate::git::authority_root(start, CONFIG_FILE)
+}
+
+/// The authority as resolved from the directory `here` rather than the working
+/// directory, so an in-process caller resolves what a child spawned in `here`
+/// would: `here` itself when it carries [`CONFIG_FILE`], else
+/// [`authority_root`], else `here`.
+#[must_use]
+pub fn anchor_at(here: &Path) -> PathBuf {
+    if here.join(CONFIG_FILE).is_file() {
+        return here.to_path_buf();
+    }
+    // The worktree's own authority before the repository's (CLOUD-2532): from a
+    // linked worktree's subdirectory, `repo_root` alone is the MAIN checkout.
+    authority_root(here).unwrap_or_else(|_| here.to_path_buf())
+}
+
 /// Locate the one committed authority for a run anchored at `anchor`.
 ///
 /// `config_in` is `--config-in <dir>`, when passed. It names a **directory**,
@@ -5418,7 +4062,7 @@ pub fn load_override(path: &Path) -> Result<OverrideConfig> {
 /// Read a config file, mapping a missing file to a [`UsageError`] and any other
 /// I/O failure to an internal error (→ exit `3`).
 fn read(path: &Path) -> Result<String> {
-    match fs::read_to_string(path) {
+    match crate::fsio::read_to_string(path) {
         Ok(text) => Ok(text),
         Err(err) if err.kind() == io::ErrorKind::NotFound => Err(UsageError::raise(format!(
             "no config found at {}",
@@ -5433,7 +4077,9 @@ fn read(path: &Path) -> Result<String> {
 mod tests {
 
     use super::*;
+    #[cfg(test)]
     use crate::error::UsageError;
+    use std::fs;
 
     // --- `[perf]` and the version floor --------------------------------------
 
@@ -5519,6 +4165,16 @@ mod tests {
             "min_batten_version = \"{VERSION}\"\n"
         )));
         assert!(!floor_is_above_this_build("[unclosed"));
+    }
+
+    #[test]
+    fn a_dev_build_is_below_its_release_floor_and_build_metadata_is_not_a_floor() {
+        let dev = "0.0.221-dev.pr1.20261124T050057Z+3f9c2a1b7d04";
+        assert!(version_is_below(dev, "0.0.221"));
+        assert!(!version_is_below(dev, "0.0.220"));
+        assert!(!version_is_below("1.0.0+a", "1.0.0+b"));
+        assert!(!version_is_below("1.0.0", "1.0.0+b"));
+        assert!(!version_is_below("1.0.0", "not a version"));
     }
 
     #[test]
@@ -5949,6 +4605,17 @@ mod tests {
         (path, named, later)
     }
 
+    /// Plant `digest` as `named`'s record beside stamp `fields`, as
+    /// [`record_digest`] writes one clear of its racy window.
+    fn plant_digest(named: &str, fields: &str, digest: &[u8; 32]) {
+        let hex = blake3::Hash::from(*digest).to_hex();
+        crate::cache::write(
+            &digest_path(named).unwrap(),
+            &digest_key(named),
+            format!("{fields}\n{hex}").as_bytes(),
+        );
+    }
+
     /// Forget both in-process memos, so the next read answers from disk.
     fn forget_reads() {
         *LAST_TEXT.lock().unwrap() = None;
@@ -5968,7 +4635,7 @@ mod tests {
         read_at(&path, later);
         let planted = [7_u8; 32];
         let fields = crate::cache::stamp(&path).unwrap().fields;
-        record_digest(&named, &fields, &planted);
+        plant_digest(&named, &fields, &planted);
         forget_reads();
         let text = read_at(&path, later);
         let expected = if cfg!(unix) {
@@ -5990,6 +4657,27 @@ mod tests {
         assert_eq!(
             held_digest(&text, &named),
             Some(*blake3::hash(b"version = 1\n# edited\n").as_bytes())
+        );
+    }
+
+    /// A wanted digest read clear of the racy window is recorded beside its
+    /// stamp, and one not wanted is not, whatever the clock says.
+    ///
+    /// Fails by: the `wanted` test inverted or dropped, so a fresh read never
+    /// records its digest (every read re-hashes), or a believed one is written
+    /// over.
+    #[test]
+    fn a_wanted_digest_clear_of_its_window_is_recorded_and_no_other() {
+        let (path, named, later) = digested_authority("config-digest-recorded");
+        let stamp = crate::cache::stamp(&path).unwrap();
+        let at = later.duration_since(std::time::UNIX_EPOCH).unwrap();
+        record_digest(&named, (&stamp, at), &[9_u8; 32], false);
+        assert_eq!(recorded_digest(&named, &stamp.fields), None, "not wanted");
+        record_digest(&named, (&stamp, at), &[7_u8; 32], true);
+        assert_eq!(
+            recorded_digest(&named, &stamp.fields),
+            Some([7_u8; 32]),
+            "wanted and clear of the window"
         );
     }
 
@@ -6020,7 +4708,7 @@ mod tests {
             format!("{fields}\n{hex}").as_bytes(),
         );
         assert_eq!(recorded_digest(&named, &fields), None);
-        record_digest(&named, &fields, &[7_u8; 32]);
+        plant_digest(&named, &fields, &[7_u8; 32]);
         assert_eq!(
             recorded_digest(&named, &fields),
             Some([7_u8; 32]),
@@ -6030,17 +4718,27 @@ mod tests {
 
     /// A record beside the stamp taken BEFORE the read is not believed when the
     /// file moved across it: the bytes read may be newer than the stamp says.
+    /// Nor is one written: the hash is of bytes the stamp does not describe.
+    ///
+    /// Fails by: a read the file moved across recording its digest beside the
+    /// stamp from before it (bootstrap shard 7/8 at 34c6e4d1f survived `&&`
+    /// as `||` in `text_digest`'s `wanted`).
     #[test]
     fn a_file_changed_across_its_read_is_hashed() {
         let (path, named, later) = digested_authority("config-digest-moving");
         let before = crate::cache::stamp(&path).unwrap();
-        record_digest(&named, &before.fields, &[7_u8; 32]);
+        plant_digest(&named, &before.fields, &[7_u8; 32]);
         let text = "version = 1\n# moved\n";
         fs::write(&path, text).unwrap();
         let at = later.duration_since(std::time::UNIX_EPOCH).unwrap();
         assert_eq!(
             text_digest(&path, &named, (&before, at), text),
             *blake3::hash(text.as_bytes()).as_bytes()
+        );
+        assert_eq!(
+            recorded_digest(&named, &before.fields),
+            Some([7_u8; 32]),
+            "a moved read writes no record"
         );
     }
 
@@ -6302,12 +5000,12 @@ mod tests {
         ),
         (
             "redirects",
-            "crate::redirect::validate(",
+            "crate::config_check::redirect::validate(",
             Native::RedirectTableRefused,
         ),
         (
             "markers",
-            "crate::markers::validate(",
+            "crate::config_check::markers::validate(",
             Native::MarkerTableRefused,
         ),
         // The LOCATED form (CLOUD-773): the loaders hold the config text, so a
@@ -6316,12 +5014,12 @@ mod tests {
         // an optional locator — so naming it here is naming the whole check.
         (
             "rules",
-            "crate::rules::validate_in(",
+            "crate::config_check::rules::validate_in(",
             Native::RuleTableRefused,
         ),
         (
             "exec_patterns",
-            "crate::outputs::validate(",
+            "crate::config_check::outputs::validate(",
             Native::OutputTableRefused,
         ),
         // The second `OutputPattern` table, sharing the validator and the class
@@ -6332,34 +5030,38 @@ mod tests {
         // fix wired up only one.
         (
             "verify_environment_patterns",
-            "crate::outputs::validate_environment(",
+            "crate::config_check::outputs::validate_environment(",
             Native::VerifyEnvironmentTableRefused,
         ),
         (
             "provisions",
-            "crate::provision::validate(",
+            "crate::config_check::provision::validate(",
             Native::ProvisionTableRefused,
         ),
         (
             "startup",
-            "crate::startup::validate(",
+            "crate::config_check::startup::validate(",
             Native::StartupTableRefused,
         ),
         (
             "waivers",
-            "crate::waiver::validate(",
+            "crate::config_check::waiver::validate(",
             Native::WaiverTableRefused,
         ),
         ("facts", "crate::facts::validate(", Native::FactTableRefused),
-        ("mints", "crate::mint::validate(", Native::MintTableRefused),
+        (
+            "mints",
+            "crate::config_check::mint::validate(",
+            Native::MintTableRefused,
+        ),
         (
             "recorders",
-            "crate::recorder::validate(",
+            "crate::config_check::recorder::validate(",
             Native::RecorderTableRefused,
         ),
         (
             "records",
-            "crate::record::validate(",
+            "crate::config_check::record::validate(",
             Native::RecordTableRefused,
         ),
         (
@@ -6379,7 +5081,7 @@ mod tests {
     /// CLOUD-1313: leaving it out would close the row without closing its cause.
     const CLASSED_BESIDE_THE_TABLES: &[(&str, Native)] = &[
         (
-            "crate::redirect::validate_remedies(",
+            "crate::config_check::redirect::validate_remedies(",
             Native::RemedyUnresolved,
         ),
         // Not a table: a census over every table's prose, run last (CLOUD-1642).
@@ -6413,12 +5115,15 @@ mod tests {
         // this check exists to refuse. It opens no hole either: a real table
         // marked `skip` cannot be written in a `batten.toml` at all, so its row
         // would already be dead by a route with its own gates.
+        // `Config` moved to `config_model` (CLOUD-2789 phase 2); the loader's
+        // validators stayed here, so each half reads its own file.
         let source = include_str!("config.rs");
+        let model = include_str!("config_model.rs");
         let struct_body = {
-            let start = source
+            let start = model
                 .find("pub struct Config {")
                 .expect("Config is declared here");
-            let rest = &source[start..];
+            let rest = &model[start..];
             &rest[..rest.find("\n}").expect("the struct closes")]
         };
         // BOTH bodies, because the loader is two functions and the predicate is
@@ -6621,7 +5326,7 @@ mod tests {
         usage.message.clone()
     }
 
-    /// `#MUTANT text-tier-flattened` reddens here: one column per tier, at its cap
+    /// A mutant flattening the tiers reddens here: one column per tier, at its cap
     /// and one over.
     #[test]
     fn a_column_one_over_its_tier_is_refused_by_pointer_and_at_its_cap_loads() {
@@ -6673,7 +5378,7 @@ mod tests {
         }
     }
 
-    /// `#MUTANT text-ceiling-census-only` reddens here: a column the census does
+    /// A mutant holding only census columns reddens here: a column the census does
     /// not name is still held to the ceiling.
     #[test]
     fn an_unlisted_string_column_is_held_to_the_text_ceiling() {
@@ -6690,7 +5395,7 @@ mod tests {
         assert!(message.contains("rule[0].glob 1537 over 1536"), "{message}");
     }
 
-    /// `#MUTANT text-meter-override-unwired` reddens here.
+    /// A mutant unwiring the override column reddens here.
     #[test]
     fn an_override_column_over_its_cap_is_refused_too() {
         let waiver = |len| {
@@ -6709,7 +5414,7 @@ mod tests {
         );
     }
 
-    /// `#MUTANT text-meter-judges-the-base` reddens here: a config read from a
+    /// A mutant metering the base reddens here: a config read from a
     /// ref is compared, never metered.
     #[test]
     fn an_over_cap_base_ref_is_compared_not_refused() {
@@ -7400,8 +6105,7 @@ mod tests {
     /// call answered from the cache.
     #[test]
     fn one_config_survives_the_parse_cache_unchanged() {
-        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../batten.toml");
-        let text = fs::read_to_string(&path).unwrap();
+        let text = super::committed_config_view();
         let parsed = parse_ungated(&text, "batten.toml").unwrap();
         let dir = crate::scratch::scratch("config-parse-cache-roundtrip");
         let entry = dir.join("entry.cfg");
@@ -7534,7 +6238,8 @@ mod tests {
     fn the_default_rules_pass_the_validator() {
         // Held to the validator every committed rule passes, so a hand-written
         // literal cannot ship a shape the loader would refuse from a file.
-        crate::rules::validate(&defaults().rules).expect("the default rules validate");
+        crate::config_check::rules::validate(&defaults().rules)
+            .expect("the default rules validate");
     }
 
     #[test]
@@ -7550,7 +6255,7 @@ mod tests {
             );
             assert_eq!(
                 rule.scope,
-                crate::rules::RuleScope::Tree,
+                crate::preset_catalog::RuleScope::Tree,
                 "a default rule no tree scan evaluates would gate nothing"
             );
         }
@@ -7624,9 +6329,12 @@ mod tests {
         assert_eq!(config.rules.len(), 1);
         assert_eq!(
             config.rules[0].severity(),
-            crate::severity::RuleSeverity::Warn
+            crate::severity::RuleSeverity::Advise
         );
-        assert_eq!(config.rules[0].scope, crate::rules::RuleScope::Tree);
+        assert_eq!(
+            config.rules[0].scope,
+            crate::preset_catalog::RuleScope::Tree
+        );
     }
 
     #[test]
@@ -7728,5 +6436,63 @@ mod tests {
             crate::cache::read(&entry, &parse_cache_key(&text, &source)).is_none(),
             "a parse that dropped a row must not be served from the cache"
         );
+    }
+}
+
+/// The fields of a `[[step]]` row that only schedule it, in no part of the
+/// config a step key reads (CLOUD-2960).
+pub(crate) const STEP_SCHEDULING: [&str; 4] = ["journal", "group", "depends_on", "run"];
+
+/// The config `text` with what no step key reads removed IN PLACE:
+/// the `engine` pin, each `[[step]]` row's scheduling fields, and a row that
+/// declares nothing else. The view a case reads the config through, so it reads
+/// what the key does (CLOUD-2960). Edited rather than re-serialized, so every
+/// table keeps its layout: a case that reads the file section by section finds
+/// each section where the file wrote it, nested inline tables included.
+#[must_use]
+pub fn config_view(text: &str) -> Option<String> {
+    let mut doc: toml_edit::DocumentMut = text.parse().ok()?;
+    doc.remove("engine");
+    if let Some(rows) = doc
+        .get_mut("step")
+        .and_then(toml_edit::Item::as_array_of_tables_mut)
+    {
+        for row in rows.iter_mut() {
+            for field in STEP_SCHEDULING {
+                row.remove(field);
+            }
+        }
+        rows.retain(|row| row.iter().any(|(key, _)| key != "id"));
+        if rows.is_empty() {
+            doc.remove("step");
+        }
+    }
+    Some(doc.to_string())
+}
+
+/// This repository's committed config as a step key sees it (CLOUD-2960), for
+/// the crate's own unit tests: the twin of the integration suite's
+/// `common::committed_config`, so no case reads bytes its step does not key.
+#[cfg(test)]
+#[must_use]
+pub(crate) fn committed_config_view() -> String {
+    // THE ONE READ OF THE CHECKOUT CONFIG in the crate's sources (CLOUD-2960).
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../batten.toml");
+    let text = std::fs::read_to_string(path).unwrap_or_default();
+    config_view(&text).unwrap_or_default()
+}
+
+/// THE VIEW LOADS (CLOUD-2960): every case reading the committed config reads
+/// it through [`committed_config_view`], so a view the engine cannot load fails
+/// every one of them for a reason that is not theirs.
+///
+/// Fails by: the view's TOML losing or misplacing a value the loader requires.
+#[cfg(test)]
+#[test]
+fn the_view_of_the_committed_config_loads() {
+    let view = committed_config_view();
+    assert!(!view.is_empty(), "the committed config has a view");
+    if let Err(why) = parse_ungated(&view, "view") {
+        panic!("the view does not load: {why:#}");
     }
 }

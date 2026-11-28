@@ -22,7 +22,7 @@ use crate::common;
 
 /// The `toolchain-is-provisioned` row's repair argv, as the engine loads it.
 fn repair() -> Vec<String> {
-    batten::config::load(&common::at_root("batten.toml"))
+    batten::config::load(&common::committed_config_file("lock_installable"))
         .expect("the committed config loads")
         .startup
         .into_iter()
@@ -141,6 +141,8 @@ fn the_lock_installs_without_an_attestation_read() {
         "MISE_LOCKFILE=true",
         "MISE_LOCKED=1",
         "MISE_AQUA_GITHUB_ATTESTATIONS=false",
+        // `github:` tools verify under their own setting (CLOUD-2845).
+        "MISE_GITHUB_GITHUB_ATTESTATIONS=false",
     ] {
         assert!(
             argv.iter().any(|arg| arg == setting),

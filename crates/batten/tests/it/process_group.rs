@@ -22,6 +22,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
+use batten::capture::StreamedChild as _;
 
 use std::fs;
 use std::os::unix::process::ExitStatusExt as _;
@@ -31,16 +32,16 @@ use std::path::{Path, PathBuf};
     reason = "stays, and test-only: the subject is a negotiated process-group protocol with mise's supervisor (CLOUD-427), which is only observable across real processes"
 )]
 use std::process::{Child, Command, Stdio};
-use std::time::{Duration, Instant};
 
 use common::{Fixture, StateHome as _, scratch};
 
-/// How long a case waits for a process to reach a state before giving up.
-///
-/// Generous, because the alternative to waiting is sleeping a fixed interval and
-/// hoping — which is how a suite becomes flaky on a loaded machine. Every wait
-/// here polls for the condition and fails with what it saw.
-const PATIENCE: Duration = Duration::from_secs(20);
+// EVERY WAIT HERE IS ON AN EVENT, NEVER A CLOCK (CLOUD-2789). A process's
+// word arrives through a [`Note`], a tree's death is the EOF of the pipe it was
+// handed as stdin ([`await_tree_gone`]), and anything a case holds alive blocks
+// on the case's [`leash`] rather than sleeping out an interval. A mutant that
+// suppresses an event hangs its case, and the mutation judge's per-case cut
+// files that as the timeout it is; the leash is what ends every held process
+// with the case however the case ends.
 
 /// A repository whose `batten.toml` declares `manage_process_group = <opt_in>`.
 fn repo(name: &str, opt_in: bool) -> PathBuf {
@@ -95,6 +96,20 @@ fn alive(pid: i32) -> bool {
         .success()
 }
 
+/// Block until `pid`'s main thread is blocked waiting on a child, read off the
+/// process table: a fact about the process, never a clock. For a Batten that has
+/// spawned its command, that wait is `exec`'s own, the last point before which
+/// it runs any code of its own.
+///
+/// Off Linux there is no table to read and this answers at once, which is the
+/// case's timing before CLOUD-2936. Answers as well once the process is gone.
+fn await_in_wait(pid: u32) {
+    let wchan = PathBuf::from(format!("/proc/{pid}/wchan"));
+    while fs::read_to_string(&wchan).is_ok_and(|now| now.trim() != "do_wait") {
+        std::thread::yield_now();
+    }
+}
+
 /// Send `signal` to `pid`, by name (`TERM`, `INT`, `KILL`).
 fn signal(pid: u32, name: &str) {
     #[expect(
@@ -108,42 +123,79 @@ fn signal(pid: u32, name: &str) {
     assert!(sent.success(), "could not send {name} to {pid}");
 }
 
-/// Block until `path` exists and is non-empty, then read it trimmed.
-fn await_file(path: &Path) -> String {
-    let deadline = Instant::now() + PATIENCE;
-    while Instant::now() < deadline {
-        if let Ok(text) = fs::read_to_string(path)
-            && !text.trim().is_empty()
-        {
-            return text.trim().to_owned();
-        }
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "the interval of a poll whose exit condition is `read_to_string` returning \
-                      something non-empty, bounded by `PATIENCE` — past that this panics rather \
-                      than waiting longer (CLOUD-1177)"
-        )]
-        std::thread::sleep(Duration::from_millis(20));
-    }
-    panic!("{} never appeared", path.display());
+/// A FIFO a fixture process writes its word to, held open read-write by the
+/// case — the `exec.rs` fixture's shape. A writer opens it with `1<>`, which
+/// never blocks and never loses the bytes, because this end keeps the pipe
+/// alive; [`Note::read`] blocks on the write itself.
+struct Note {
+    path: PathBuf,
+    file: fs::File,
 }
 
-/// Block until `pid` is gone, reporting whether it got there in time.
-fn await_death(pid: i32) -> bool {
-    let deadline = Instant::now() + PATIENCE;
-    while Instant::now() < deadline {
-        if !alive(pid) {
-            return true;
-        }
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "the interval of a poll whose exit condition is `alive` going false, bounded \
-                      by `PATIENCE` — the bound is the ANSWER here, since running out is what this \
-                      reports as `false` (CLOUD-1177)"
-        )]
-        std::thread::sleep(Duration::from_millis(20));
+impl Note {
+    /// Make the FIFO at `path` and hold it.
+    #[expect(
+        clippy::disallowed_types,
+        reason = "stays, test-only: a FIFO is made by `mkfifo`, and no door in `common` makes one"
+    )]
+    fn at(path: PathBuf) -> Self {
+        let made = Command::new("mkfifo")
+            .arg(&path)
+            .status()
+            .expect("run mkfifo");
+        assert!(made.success(), "mkfifo {}", path.display());
+        let file = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&path)
+            .expect("hold the fifo open");
+        Self { path, file }
     }
-    false
+
+    /// The path a script redirects to.
+    fn shown(&self) -> std::path::Display<'_> {
+        self.path.display()
+    }
+
+    /// Block until a write arrives — THE EVENT — and return it trimmed.
+    fn read(&self) -> String {
+        use std::io::Read as _;
+        let mut said = [0_u8; 256];
+        let read = (&self.file).read(&mut said).expect("read the note");
+        String::from_utf8_lossy(&said[..read]).trim().to_owned()
+    }
+}
+
+/// The FIFO every process a case holds alive blocks on, with `read _ < leash`:
+/// no clock keeps it alive, and it ends at the case's exit, when the last
+/// writer — this case's own end — closes, however the case ends.
+fn leash(dir: &Path) -> Note {
+    Note::at(dir.join("leash"))
+}
+
+/// Block until every process that holds the write end of `life` is gone: its
+/// EOF, the event, and the whole of what "the tree died" means here.
+fn await_tree_gone(mut life: std::io::PipeReader) {
+    use std::io::Read as _;
+    let mut rest = Vec::new();
+    let _ = life.read_to_end(&mut rest);
+}
+
+/// [`spawn_exec`], with the tree holding the write end of a pipe as its stdin;
+/// the read end is the case's. A script keeps it past a backgrounded command,
+/// which a shell hands `/dev/null`, with `exec 3<&0`.
+fn spawn_exec_held(
+    dir: &Path,
+    home: &Path,
+    child: &Path,
+    env: &[(&str, &str)],
+) -> (Child, std::io::PipeReader) {
+    let (life, held) = std::io::pipe().expect("a pipe for the tree to hold");
+    let batten = exec_command(dir, home, child, env)
+        .stdin(held)
+        .spawn()
+        .expect("spawn batten exec");
+    (batten, life)
 }
 
 /// Spawn `batten exec -- <script>` in `dir`, with state under `home`.
@@ -184,13 +236,15 @@ fn exec_command(dir: &Path, home: &Path, child: &Path, env: &[(&str, &str)]) -> 
 /// The shape that leaks today: a wrapped command whose own children outlive the
 /// signal, which is every `mise run` — mise, a subshell, a `cargo`, an `rustc`
 /// per crate.
-fn leaky_child(dir: &Path) -> (PathBuf, PathBuf) {
-    let note = dir.join("grandchild.pid");
+fn leaky_child(dir: &Path) -> (PathBuf, Note, Note) {
+    let note = Note::at(dir.join("grandchild.pid"));
+    let leash = leash(dir);
     let body = format!(
-        "sleep 300 &\nprintf '%s' \"$!\" > {note}\nwait\n",
-        note = note.display()
+        "exec 3<&0\nread _ < {leash} &\nprintf '%s' \"$!\" 1<>{note}\nwait\n",
+        leash = leash.shown(),
+        note = note.shown()
     );
-    (script(dir, &body), note)
+    (script(dir, &body), note, leash)
 }
 
 #[test]
@@ -199,10 +253,10 @@ fn an_owned_tree_dies_whole_when_batten_is_signalled() {
     // Batten's pid ALONE, no member of the tree is left alive, asserted by pid.
     let dir = repo("pgroup-owned", true);
     let home = scratch("pgroup-owned-home");
-    let (child, note) = leaky_child(&dir);
+    let (child, note, _leash) = leaky_child(&dir);
 
-    let mut batten = spawn_exec(&dir, &home, &child, &[]);
-    let grandchild: i32 = await_file(&note).parse().expect("a pid");
+    let (mut batten, life) = spawn_exec_held(&dir, &home, &child, &[]);
+    let grandchild: i32 = note.read().parse().expect("a pid");
     signal(batten.id(), "TERM");
 
     let status = batten.wait().expect("batten exits");
@@ -221,10 +275,11 @@ fn an_owned_tree_dies_whole_when_batten_is_signalled() {
         None,
         "a signalled process has no exit code — that is the whole difference"
     );
-    assert!(
-        await_death(grandchild),
-        "the grandchild at {grandchild} outlived the supervisor that dispatched it"
-    );
+    // THE TREE DIES WHOLE: the pipe every member holds reaches EOF. A grandchild
+    // that outlived its supervisor holds it open and hangs the case, which the
+    // judge's cut files as the timeout it is.
+    assert!(grandchild > 0, "the grandchild said its pid");
+    await_tree_gone(life);
 }
 
 #[test]
@@ -235,10 +290,15 @@ fn an_unowned_tree_survives_because_the_opt_in_is_off() {
     // passed the case above while measuring nothing at all.
     let dir = repo("pgroup-default", false);
     let home = scratch("pgroup-default-home");
-    let (child, note) = leaky_child(&dir);
+    let (child, note, _leash) = leaky_child(&dir);
 
     let mut batten = spawn_exec(&dir, &home, &child, &[]);
-    let grandchild: i32 = await_file(&note).parse().expect("a pid");
+    let grandchild: i32 = note.read().parse().expect("a pid");
+    // SIGNALLED IN ITS WAIT, NEVER BEFORE IT (CLOUD-2936). With the opt-in off
+    // Batten installs no forwarder, so the TERM ends it wherever it stands, and
+    // the grandchild's word races Batten's own steps between the spawn and the
+    // wait: one recording died past `GroupRecord::write`, the next before it.
+    await_in_wait(batten.id());
     signal(batten.id(), "TERM");
     let _ = batten.wait().expect("batten exits");
 
@@ -246,8 +306,8 @@ fn an_unowned_tree_survives_because_the_opt_in_is_off() {
         alive(grandchild),
         "with the opt-in off the topology must be unchanged, orphan and all"
     );
-    // Left running otherwise, and a `sleep 300` in `target/` outliving the suite
-    // is the same untidiness this issue is about.
+    // Left running otherwise until the case's leash lets go, and a held process
+    // outliving its case is the same untidiness this issue is about.
     signal(u32::try_from(grandchild).expect("a positive pid"), "KILL");
 }
 
@@ -258,10 +318,10 @@ fn an_interrupt_is_reported_as_the_interrupt_batten_received() {
     // single case cannot tell those apart.
     let dir = repo("pgroup-interrupt", true);
     let home = scratch("pgroup-interrupt-home");
-    let (child, note) = leaky_child(&dir);
+    let (child, note, _leash) = leaky_child(&dir);
 
-    let mut batten = spawn_exec(&dir, &home, &child, &[]);
-    let grandchild: i32 = await_file(&note).parse().expect("a pid");
+    let (mut batten, life) = spawn_exec_held(&dir, &home, &child, &[]);
+    let grandchild: i32 = note.read().parse().expect("a pid");
     signal(batten.id(), "INT");
 
     // Was `code() == Some(128 + 2)`; see the TERM case for why it moved. Kept as
@@ -272,7 +332,9 @@ fn an_interrupt_is_reported_as_the_interrupt_batten_received() {
         Some(2),
         "an INT to Batten kills Batten with INT, whatever the child fell to"
     );
-    assert!(await_death(grandchild), "the tree still dies whole");
+    // The tree still dies whole: its pipe reaches EOF.
+    assert!(grandchild > 0, "the grandchild said its pid");
+    await_tree_gone(life);
 }
 
 #[test]
@@ -290,62 +352,56 @@ fn a_second_signal_escalates_instead_of_being_swallowed() {
     // way and this case would measure nothing.
     //
     // AND SO DOES THE GRANDCHILD, which this case once missed. A trapped TERM
-    // ends the child's `wait` early, and a `sleep` that dies on the forwarded
+    // ends the child's `wait` early, and a grandchild that dies on the forwarded
     // TERM leaves nothing to wait for: the script ran off its end, the group
     // emptied on its own, and a teardown timed against the grace passed with no
     // escalation at all. Reading the recorded reason is what exposed it
-    // (CLOUD-2059). The grandchild inherits an IGNORED TERM through `exec`, and
-    // the child waits until killed, so only an escalation ends the group early.
+    // (CLOUD-2059). The grandchild is a subshell IGNORING TERM, held on the
+    // case's leash, and the child waits until killed, so only an escalation ends
+    // the group early.
     let dir = repo("pgroup-second", true);
     let home = scratch("pgroup-second-home");
-    let note = dir.join("grandchild.pid");
+    let note = Note::at(dir.join("grandchild.pid"));
+    let leash = leash(&dir);
     // The trap RECORDS rather than just ignoring, so the first signal's arrival
     // at the group is observable. That is what lets the second signal be timed
     // against a real terminal state instead of a guessed delay.
-    let trapped = dir.join("trapped");
+    let trapped = Note::at(dir.join("trapped"));
     let child = script(
         &dir,
         &format!(
-            "trap ': > {trapped}' TERM\n(trap '' TERM; exec sleep 300) &\nprintf '%s' \"$!\" > {note}\nwhile :; do wait; done\n",
-            trapped = trapped.display(),
-            note = note.display()
+            "exec 3<&0\ntrap 'echo trapped 1<>{trapped}' TERM\n(trap '' TERM; read _ < {leash}) &\nprintf '%s' \"$!\" 1<>{note}\nwhile :; do wait; done\n",
+            trapped = trapped.shown(),
+            leash = leash.shown(),
+            note = note.shown()
         ),
     );
 
+    let (life, held) = std::io::pipe().expect("a pipe for the tree to hold");
     let batten = exec_command(&dir, &home, &child, &[])
+        .stdin(held)
         .stderr(Stdio::piped())
         .spawn()
         .expect("spawn batten exec");
-    let grandchild: i32 = await_file(&note).parse().expect("a pid");
+    let grandchild: i32 = note.read().parse().expect("a pid");
 
     signal(batten.id(), "TERM");
     // The second signal has to land INSIDE the grace window the first opened, or
     // this measures the ordinary escalation. Waiting for the trap marker is what
     // establishes that: it appears only once the forwarder has taken the first
-    // signal and delivered it to the group, so the window is provably open. A
-    // fixed delay here would be a timer standing in for that condition.
-    let deadline = Instant::now() + PATIENCE;
-    while Instant::now() < deadline && !trapped.exists() {
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "the interval of a poll whose exit condition is the child's TERM trap having \
-                      fired, bounded by `PATIENCE` — past that the assertion below reports what it \
-                      saw rather than waiting longer (CLOUD-1177)"
-        )]
-        std::thread::sleep(Duration::from_millis(10));
-    }
-    assert!(
-        trapped.exists(),
-        "the first signal never reached the group, so there is no grace window \
-         for a second one to land in"
+    // signal and delivered it to the group, so the window is provably open. The
+    // read blocks on the trap's write — the event, never a timer.
+    assert_eq!(
+        trapped.read(),
+        "trapped",
+        "the first signal reached the group, so the grace window is open"
     );
     signal(batten.id(), "TERM");
 
-    let output = batten.wait_with_output().expect("batten exits");
-    assert!(
-        await_death(grandchild),
-        "the tree must still die whole on the escalation"
-    );
+    let output = batten.streamed_wait().expect("batten exits");
+    // The tree still dies whole on the escalation: its pipe reaches EOF.
+    assert!(grandchild > 0, "the grandchild said its pid");
+    await_tree_gone(life);
     // THE REASON IS RECORDED, SO THE CASE READS IT (CLOUD-2059). A second signal
     // that escalates does so at once and says `second-signal`; a swallowed one
     // queues in a stream nobody reads until `GROUP_GRACE` runs out, and the
@@ -369,48 +425,52 @@ fn a_signal_in_the_spawn_window_leaves_no_orphan() {
     // nothing: the acceptance says so in as many words. Each iteration signals
     // at a different offset, so the sweep walks across the window rather than
     // sampling one point in it.
-    /// How many offsets the sweep walks, and the bound the delay below comes
-    /// from: the loop is finite and each pass is one sample, so the delay
-    /// exhausts by count rather than by waiting for anything.
-    const SWEEP: u64 = 12;
-    /// The step between offsets, so the sweep spans `SWEEP * STEP` of window.
-    const STEP: Duration = Duration::from_micros(200);
+    //
+    // THE OFFSET IS A COUNT, NEVER A CLOCK (CLOUD-2789): the window has no
+    // observable state to wait on, so the sweep varies how much work this
+    // thread does between the spawn and the signal, in spin hints, and reads
+    // no time at all. It is the variable swept, not a wait for anything.
+    /// How many offsets the sweep walks.
+    const SWEEP: u32 = 12;
+    /// The spin hints between offsets.
+    const STEP: u32 = 20_000;
 
     let home = scratch("pgroup-window-home");
-    let mut orphans = Vec::new();
-    for attempt in 0_u64..SWEEP {
+    for attempt in 0..SWEEP {
         let dir = repo(&format!("pgroup-window-{attempt}"), true);
-        let (child, note) = leaky_child(&dir);
-        let mut batten = spawn_exec(&dir, &home, &child, &[]);
+        let (child, _note, _leash) = leaky_child(&dir);
+        let (mut batten, life) = spawn_exec_held(&dir, &home, &child, &[]);
 
         // Walk the offset across the spawn/install window rather than guessing
         // one value for it.
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "not a wait: the offset IS the variable this case sweeps, because the window \
-                      it aims at is bounded by the spawn itself and has no observable state to \
-                      poll on — `SWEEP` is the count that exhausts it and `STEP` the interval \
-                      (CLOUD-1177)"
-        )]
-        std::thread::sleep(STEP * u32::try_from(attempt).unwrap_or(u32::MAX));
+        for _ in 0..STEP * attempt {
+            std::hint::spin_loop();
+        }
         signal(batten.id(), "TERM");
         let _ = batten.wait().expect("batten exits");
 
         // The grandchild may not exist at all — the signal can land before the
         // child got that far, which is a clean outcome rather than a miss. What
-        // must never happen is one that exists and outlives Batten.
-        if let Ok(text) = fs::read_to_string(&note)
-            && let Ok(pid) = text.trim().parse::<i32>()
-            && !await_death(pid)
-        {
-            orphans.push(pid);
-            signal(u32::try_from(pid).expect("a positive pid"), "KILL");
-        }
+        // must never happen is one that exists and outlives Batten: it holds
+        // the tree's pipe open, so this read never reaches EOF and the case
+        // hangs, which the judge's cut files as the timeout it is. The leash
+        // ends that orphan with the case.
+        await_tree_gone(life);
     }
-    assert!(
-        orphans.is_empty(),
-        "a signal in the spawn/install window orphaned the group: {orphans:?}"
-    );
+
+    // AND ONCE PAST THE WINDOW, ON AN EVENT (CLOUD-2936): the grandchild's note
+    // is written only once Batten has spawned the tree and installed its
+    // forwarder, so this attempt runs the whole path every swept attempt runs a
+    // prefix of. Without it, how far the furthest attempt got was the
+    // scheduler's draw, and one reach recording ran Batten's config load and
+    // the next did not, with no code changed.
+    let dir = repo("pgroup-window-past", true);
+    let (child, note, _leash) = leaky_child(&dir);
+    let (mut batten, life) = spawn_exec_held(&dir, &home, &child, &[]);
+    let _grandchild = note.read();
+    signal(batten.id(), "TERM");
+    let _ = batten.wait().expect("batten exits");
+    await_tree_gone(life);
 }
 
 #[test]
@@ -488,29 +548,23 @@ fn the_capture_is_sealed_before_the_re_raise() {
     // "the bytes are through" observable — without it the signal below would be
     // timed by a guess, and a guess that fired early would measure a race rather
     // than the teardown ordering this case is about.
-    let spoken = dir.join("spoken");
+    let spoken = Note::at(dir.join("spoken"));
+    let leash = leash(&dir);
     let child = script_named(
         &dir,
         "child.sh",
         &format!(
-            "printf '%s\\n' '{said}'\n: > {spoken}\nsleep 300\n",
-            spoken = spoken.display()
+            "printf '%s\\n' '{said}'\necho spoken 1<>{spoken}\nread _ < {leash}\n",
+            spoken = spoken.shown(),
+            leash = leash.shown()
         ),
     );
     let mut batten = spawn_exec(&dir, &home, &child, &[]);
-    let deadline = Instant::now() + PATIENCE;
-    while Instant::now() < deadline && !spoken.exists() {
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "the interval of a poll whose exit condition is the child having written its \
-                      line, bounded by `PATIENCE` — past that the assertion below reports what it \
-                      saw rather than waiting longer (CLOUD-1177)"
-        )]
-        std::thread::sleep(Duration::from_millis(10));
-    }
-    assert!(
-        spoken.exists(),
-        "the child never spoke, so there are no bytes for the seal to be about"
+    // The read blocks on the marker's write — the event, never a timer.
+    assert_eq!(
+        spoken.read(),
+        "spoken",
+        "the child spoke, so there are bytes for the seal to be about"
     );
     signal(batten.id(), "TERM");
     let _ = batten.wait().expect("batten exits");
@@ -586,7 +640,8 @@ fn topology(dir: &Path, home: &Path, env: &[(&str, &str)]) -> (String, String, S
     let (child, note) = reporting_child(dir);
     let mut batten = spawn_exec(dir, home, &child, env);
     let _ = batten.wait().expect("batten exits");
-    let seen = await_file(&note);
+    // Read once the engine has exited, which is after its child wrote this.
+    let seen = fs::read_to_string(&note).expect("the child wrote its topology");
     let mut fields = seen.split_whitespace();
     (
         fields.next().expect("a pid").to_owned(),
@@ -683,7 +738,8 @@ fn a_session_leader_declines_even_with_the_opt_in_on() {
     let status = command.status().expect("run batten under setsid");
     assert!(status.success(), "the wrapped child itself succeeds");
 
-    let seen = await_file(&note);
+    // `--wait` returned, so the child has exited and written this.
+    let seen = fs::read_to_string(&note).expect("the child wrote its topology");
     let mut fields = seen.split_whitespace();
     let own = fields.next().expect("a pid");
     let group = fields.next().expect("a pgid");
@@ -710,31 +766,36 @@ fn a_clean_run_leaves_no_group_record_and_a_killed_one_does() {
     );
 
     let killed_home = scratch("pgroup-record-killed");
-    let (leaky, note) = leaky_child(&dir);
+    // THE NOTE IMPLIES THE PRECONDITION, by construction (CLOUD-2789). The
+    // child would otherwise write its note concurrently with Batten's own drain
+    // and spool setup, ahead of `GroupRecord::write` — and a `SIGKILL` landing
+    // in that window leaves ZERO notes and fails a case that is about what
+    // survives a kill, not about who won a race (measured: green in isolation,
+    // red under a full `verify`). So the child spins on builtins until the
+    // record exists and only then says its grandchild's pid: the wait is on the
+    // record's arrival, never on a clock, and what is asserted below — that
+    // exactly one note survives an uncatchable kill and holds a pgid — is
+    // unchanged.
+    let note = Note::at(dir.join("grandchild.pid"));
+    let leash = leash(&dir);
+    let records = killed_home
+        .join("data")
+        .join("*")
+        .join("*")
+        .join("exec")
+        .join("group.*");
+    let leaky = script_named(
+        &dir,
+        "leaky-after-record.sh",
+        &format!(
+            "exec 3<&0\nread _ < {leash} &\ng=$!\nuntil set -- {records}; [ -e \"$1\" ]; do :; done\nprintf '%s' \"$g\" 1<>{note}\nwait\n",
+            leash = leash.shown(),
+            records = records.display(),
+            note = note.shown()
+        ),
+    );
     let mut batten = spawn_exec(&dir, &killed_home, &leaky, &[]);
-    let grandchild: i32 = await_file(&note).parse().expect("a pid");
-
-    // WAIT FOR THE PRECONDITION, rather than assuming the child's note implies
-    // it. The child writes that note concurrently with Batten's own drain and
-    // spool setup, so `await_file` above can return before `GroupRecord::write`
-    // has run — and a `SIGKILL` landing in that window leaves ZERO notes and
-    // fails a case that is about what survives a kill, not about who won a race.
-    // Measured: green in isolation, red under a full `verify` where the machine
-    // is loaded.
-    //
-    // Retrying the SETUP, never the measurement (`rules/rust.md`,
-    // CLOUD-448): what is asserted below — that exactly one note survives an
-    // uncatchable kill and holds a pgid — is unchanged.
-    let deadline = Instant::now() + PATIENCE;
-    while Instant::now() < deadline && group_records(&killed_home).is_empty() {
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "the interval of a poll whose exit condition is `GroupRecord::write` having \
-                      landed a note, bounded by `PATIENCE` — past that the assertion below reports \
-                      what it saw rather than waiting longer (CLOUD-1177)"
-        )]
-        std::thread::sleep(Duration::from_millis(20));
-    }
+    let grandchild: i32 = note.read().parse().expect("a pid");
     assert!(
         !group_records(&killed_home).is_empty(),
         "Batten never recorded the group it owns, so there is nothing for the \
@@ -792,12 +853,16 @@ fn a_surviving_grandchild_cannot_hang_exec() {
     // not fail — it never returns.
     let dir = repo("pgroup-drain", false);
     let home = scratch("pgroup-drain-home");
-    let note = dir.join("holder.pid");
+    // The holder blocks on the case's leash — no clock keeps it alive — and so
+    // holds both pipes until the case kills it or ends.
+    let note = Note::at(dir.join("holder.pid"));
+    let leash = leash(&dir);
     let child = script(
         &dir,
         &format!(
-            "sleep 300 &\nprintf '%s' \"$!\" > {note}\n",
-            note = note.display()
+            "read _ < {leash} &\nprintf '%s' \"$!\" 1<>{note}\n",
+            leash = leash.shown(),
+            note = note.shown()
         ),
     );
 
@@ -810,12 +875,12 @@ fn a_surviving_grandchild_cannot_hang_exec() {
         .state_home(&home)
         .spawn()
         .expect("spawn batten exec");
-    let holder: i32 = await_file(&note).parse().expect("a pid");
+    let holder: i32 = note.read().parse().expect("a pid");
 
     // Returning at all is the first half: without the drain deadline this never
-    // does, because the grandchild holds both pipes for its 300s.
+    // does, because the grandchild holds both pipes for as long as it lives.
     let output = batten
-        .wait_with_output()
+        .streamed_wait()
         .expect("batten exits rather than hanging");
     signal(u32::try_from(holder).expect("a positive pid"), "KILL");
 
@@ -824,7 +889,7 @@ fn a_surviving_grandchild_cannot_hang_exec() {
         "the wrapped command itself exited 0"
     );
     // ONE BUDGET, NOT TWO (CLOUD-1288), read from what the drain REPORTS rather
-    // than from a clock (CLOUD-2059). `sleep 300 &` inherits both pipes, so both
+    // than from a clock (CLOUD-2059). The held grandchild inherits both pipes, so both
     // are leaked: stdout waits out what is left of the one budget, and stderr is
     // then left exactly nothing — it reports `0ns`. Collected with a fresh full
     // `PIPE_DRAIN_TIMEOUT` each, as the defect did, stderr would report the
@@ -839,6 +904,58 @@ fn a_surviving_grandchild_cannot_hang_exec() {
         "the two pipe drains share ONE deadline budget, so the second is left \
          nothing by the first: {said}"
     );
+}
+
+/// An owned tree ends WITH its child on the clean path too (CLOUD-2789): a
+/// child that exits 0 leaving a grandchild on its stdout is followed by its
+/// group, so the drain reaches EOF on the grandchild's death and the
+/// grandchild does not outlive the `exec` that dispatched it.
+///
+/// Fails by: the clean path reaping the direct child only, as the
+/// interrupted paths alone used to signal the group — the drain then waits out
+/// its budget on the held pipe and reports it, and the grandchild lives on.
+#[test]
+fn an_owned_tree_ends_with_its_child_on_a_clean_exit() {
+    let dir = repo("pgroup-clean-exit", true);
+    let home = scratch("pgroup-clean-exit-home");
+    // The grandchild blocks on the case's leash, not a clock, and holds the
+    // tree's pipe, whose EOF is the event this case waits on (CLOUD-2789).
+    let note = Note::at(dir.join("holder.pid"));
+    let leash = leash(&dir);
+    let child = script(
+        &dir,
+        &format!(
+            "exec 3<&0\nread _ < {leash} &\nprintf '%s' \"$!\" 1<>{note}\n",
+            leash = leash.shown(),
+            note = note.shown()
+        ),
+    );
+
+    let (life, held) = std::io::pipe().expect("a pipe for the tree to hold");
+    let output = exec_command(&dir, &home, &child, &[])
+        .stdin(held)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn batten exec")
+        .streamed_wait()
+        .expect("batten exits");
+    let holder: i32 = note.read().parse().expect("a pid");
+
+    let said = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "the wrapped command exited 0: {said}"
+    );
+    assert!(
+        !said.contains("did not reach EOF"),
+        "the grandchild was ended with its group, so both pipes closed: {said}"
+    );
+    // The grandchild at `holder` ends with its owned group: the tree's pipe
+    // reaches EOF. One that outlived the clean exit holds it open and hangs the
+    // case, which the judge's cut files as the timeout it is.
+    assert!(holder > 0, "the grandchild said its pid");
+    await_tree_gone(life);
 }
 
 /// A group whose leader and registrant are both gone, with a member that began
@@ -856,10 +973,16 @@ fn a_group_its_leader_and_registrant_left_is_an_orphan() {
     use std::os::unix::process::CommandExt as _;
 
     let dir = scratch("pgroup-orphaned");
-    let note = dir.join("member.pid");
+    let note = Note::at(dir.join("member.pid"));
+    let leash = leash(&dir);
+    // The member blocks on the case's leash, so no clock keeps it alive.
     let mut leader = Command::new("sh")
-        .args(["-c", "sleep 600 & printf '%s' \"$!\" > \"$MEMBER_PID\""])
-        .env("MEMBER_PID", &note)
+        .args([
+            "-c",
+            "read _ < \"$LEASH\" & printf '%s' \"$!\" 1<>\"$MEMBER_PID\"",
+        ])
+        .env("MEMBER_PID", &note.path)
+        .env("LEASH", &leash.path)
         .process_group(0)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -868,7 +991,7 @@ fn a_group_its_leader_and_registrant_left_is_an_orphan() {
         .expect("a leader to leave its group");
     let group = leader.id().to_string();
     leader.wait().expect("the leader exits");
-    let member: i32 = await_file(&note).parse().expect("the member's pid");
+    let member: i32 = note.read().parse().expect("the member's pid");
     // A stamp every live member predates, fixed rather than read off the clock:
     // 2100-01-01, so no assertion here is about the time it ran.
     let stamped = 4_102_444_800;
@@ -881,4 +1004,48 @@ fn a_group_its_leader_and_registrant_left_is_an_orphan() {
         "only a /proc reader proves an orphan"
     );
     assert!(!predated, "no member began before second 0");
+}
+
+/// A lap that takes the land singleton ends a running reach seed's whole
+/// process group, frees its lock and leaves it owed, so the lap's gates never
+/// queue behind a reach run and the seed starts over once the lap ends
+/// (CLOUD-2842).
+///
+/// Fails by: the seed left running, its lock left held, or nothing owed.
+#[test]
+#[expect(
+    clippy::disallowed_types,
+    reason = "stays, and test-only: ending a seed's group is a property of a process this one is not, so only a real spawn can stand in for it"
+)]
+fn a_lap_taking_the_land_singleton_ends_a_running_reach_seed() {
+    use std::os::unix::process::CommandExt as _;
+
+    let repo = common::scratch_repo("pgroup-seed-preempt");
+    let _ = common::scratch_state_root();
+    let mut seed = Command::new("cat")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .process_group(0)
+        .spawn()
+        .expect("spawn a stand-in seed");
+    let lock = repo
+        .join(".git")
+        .join("batten-singleton")
+        .join(batten::mutate::resume::SEED_TASK);
+    common::write(&lock, "pid", &format!("{}\n", seed.id()));
+    assert!(
+        batten::mutate::resume::preempt(&repo),
+        "a live seed is ended"
+    );
+    let status = seed.wait().expect("the seed is reaped");
+    assert!(
+        status.signal().is_some(),
+        "ended by a signal, not by its input: {status}"
+    );
+    assert!(!lock.exists(), "its lock is freed");
+    let owed = batten::state::repo_state_dir(&repo)
+        .expect("the state dir")
+        .join("test-run")
+        .join("seed-pending");
+    assert!(owed.is_file(), "it is owed to the lap's end");
 }

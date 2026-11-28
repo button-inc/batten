@@ -19,7 +19,7 @@
 //! # Why a marker rather than re-deriving the claim
 //!
 //! The gate cannot check the claims themselves — they are arbitrary properties of
-//! the tree, and a scanner that tried to evaluate English would be the model
+//! the tree, and a scanner that tried to evaluate English would be the gated-model
 //! verdict non-negotiable rule 3 refuses. What it CAN decide is whether a claim
 //! names something runnable, which is the same discipline `config.rs` already
 //! applies to a `[[recorder]]` naming an undeclared program: the claim must point
@@ -83,27 +83,11 @@ fn marker() -> String {
     format!("{}-{}:", "verified", "by")
 }
 
-/// Every `.rs` under the engine's source root.
+/// Every `.rs` under EVERY workspace crate's `src/`: the engine, which since
+/// the split (CLOUD-2789) is not `crates/batten/src` alone. A claim in a module
+/// cut into `batten-base` is still a claim in the engine.
 fn engine_sources() -> Vec<PathBuf> {
-    let root = common::at_root("crates/batten/src");
-    let mut found = Vec::new();
-    walk(&root, &mut found);
-    found.sort();
-    found
-}
-
-fn walk(dir: &Path, found: &mut Vec<PathBuf>) {
-    let Ok(entries) = fs::read_dir(dir) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            walk(&path, found);
-        } else if path.extension().is_some_and(|ext| ext == "rs") {
-            found.push(path);
-        }
-    }
+    common::engine_sources()
 }
 
 /// Every comment block in `text` carrying a claim phrase and no marker, as

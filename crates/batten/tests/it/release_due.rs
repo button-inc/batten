@@ -53,7 +53,8 @@ const LATEST: &str = "release-due-latest";
 /// `since.seconds`, and a fixture carrying its own copy would test a window
 /// nobody ships.
 fn committed_queries() -> String {
-    let text = std::fs::read_to_string(at_root("batten.toml")).expect("the authority");
+    let text = std::fs::read_to_string(common::committed_config_file("release_due"))
+        .expect("the authority");
     let parsed: toml::Value = toml::from_str(&text).expect("batten.toml parses");
     let rows: Vec<toml::Value> = parsed["forge"]["query"]
         .as_array()
@@ -114,7 +115,7 @@ fn ago(seconds: u64) -> String {
         .duration_since(std::time::UNIX_EPOCH)
         .expect("the clock reads")
         .as_secs();
-    batten::receipt::rfc3339_utc(now - seconds)
+    batten::clock::rfc3339_utc(now - seconds)
 }
 
 /// A fixture forge answering the two endpoints BY ENDPOINT, never by call order:
@@ -166,7 +167,7 @@ fn against(dir: &Path, forge: &Path, args: &[&str]) -> Output {
         .env("GH_REPO", REPO)
         .env("BATTEN_REST_FIXTURE", forge)
         .current_dir(dir)
-        .output()
+        .streamed_output()
         .expect("the compiled binary runs")
 }
 

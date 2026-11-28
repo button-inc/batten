@@ -41,77 +41,20 @@
 //!   surface that is down is a defect in the surface, not in the redirect, and
 //!   a second sanctioned writer would have hidden it permanently.
 //!
-//! The glob matcher is [`crate::rules::glob_match`] — one glob semantics for the
+//! The glob matcher is [`crate::selector::glob_match`] — one glob semantics for the
 //! whole engine, never a second implementation.
 
-use anyhow::Result;
-use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
-
-use crate::error::UsageError;
-use crate::rules::glob_match;
-
-/// One declared path class and the mutation sanctioned for it.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct Redirect {
-    /// The path class this redirect speaks for, in the engine's one glob
-    /// dialect.
-    ///
-    /// Deliberately independent of `protected`: this table answers "what should
-    /// they run instead", never "is this guarded". A glob here matching a path
-    /// no `protected` entry covers simply never comes up, which is the harmless
-    /// direction — the alternative, deriving protection from a redirect, is the
-    /// set-collapsing CLOUD-37 exists to prevent.
-    pub glob: String,
-    /// The sanctioned mutation for that class — the "run this instead" a deny
-    /// carries.
-    pub mutation: String,
-    /// The sanctioned READ for that class, and the whole of the read-side gate
-    /// (CLOUD-1258).
-    ///
-    /// # Why a read is gated at all
-    ///
-    /// `no-tool-substitution` is `kind = "pipeline"` and decides over shell
-    /// argv, so a structured-tool call is invisible to it; `protected` crossed
-    /// with `[[verb]]` enumerates MUTATIONS, and CLOUD-442's port states "reads
-    /// stay allowed". So a generic file read of a memory was gated by nothing,
-    /// measured 2026-08-31 with the Serena server healthy and `read_memory`
-    /// loadable. That is not a style preference: a path read couples the caller
-    /// to the tree layout, and CLOUD-868 proposes moving that tree — `read_memory`
-    /// survives the move and a hardcoded path does not, so every flat-path read
-    /// is an unmigrated call site against it.
-    ///
-    /// # OPTIONAL, AND THE ABSENCE IS THE "SESSION DOES NOT OFFER IT" ARM
-    ///
-    /// The row demands that the gate allow where the tool is not available,
-    /// because a redirect naming a tool the session does not carry is CLOUD-998's
-    /// defect one layer over. The boundary cannot see whether an MCP server is
-    /// healthy — that is not a fact any mediated payload carries — so the
-    /// question is answered where it IS decidable: the consumer declares the
-    /// read remedy, and a consumer without the tool declares none and is refused
-    /// nothing. The remedy is therefore a string its own author wrote, which is
-    /// the strongest available guarantee that it names something reachable.
-    ///
-    /// A row with no `read` key gates nothing on the read side and keeps its
-    /// mutation half exactly as before.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub read: Option<String>,
-    /// The MCP server whose tool `read` names (CLOUD-2229).
-    ///
-    /// Declared, the read is refused only where some `[[mcp.source]]` resolves
-    /// this server, which is the question `batten mcp call` answers before it
-    /// dispatches. Measured on #1132: in a cloud session no source resolved
-    /// `serena`, so the refusal named a route the session could not take and
-    /// every memory read was refused outright. Absent, `read` refuses as before.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub read_server: Option<String>,
-}
+#[cfg(test)]
+use crate::config_check::redirect::invocation;
+#[cfg(test)]
+use crate::config_check::redirect::validate;
+#[cfg(test)]
+use crate::config_check::redirect::validate_remedies;
+use crate::config_model::Redirect;
+use crate::selector::glob_match;
 
 /// The table with every `read` dropped whose `read_server` `resolves` says no
 /// source can reach (CLOUD-2229): a refusal must name a route that can be taken.
-//MUTANT-SUITE crates/batten/src/redirect.rs
-//MUTANT unreachable-route-still-refused|s@^                .is_some_and(\x7cserver\x7c !resolves(server))$@                .is_some_and(\x7c_\x7c false)@|a_memory_read_is_admitted_where_no_source_resolves_its_server
 #[must_use]
 pub fn offered(table: &[Redirect], resolves: impl Fn(&str) -> bool) -> Vec<Redirect> {
     table
@@ -128,58 +71,6 @@ pub fn offered(table: &[Redirect], resolves: impl Fn(&str) -> bool) -> Vec<Redir
             row
         })
         .collect()
-}
-
-/// Reject a table that would make a refusal dishonest or silent.
-///
-/// # Errors
-///
-/// Returns a [`UsageError`] (→ exit `1`) for an empty `glob`, an empty
-/// `mutation`, or a duplicated `glob`. The last is the load-bearing one: two
-/// rows for one path class are two answers to one question, and silently taking
-/// the first is how a corrected remedy gets lost behind a stale row — the same
-/// refusal [`crate::verbs::validate`] gives a verb declared twice.
-///
-/// An empty `mutation` is refused rather than treated as absent, because it
-/// would render a fix clause that is present and says nothing, which reads worse
-/// than the explicit "none declared" a row's absence already produces.
-pub fn validate(table: &[Redirect]) -> Result<()> {
-    for (index, entry) in table.iter().enumerate() {
-        if entry.glob.trim().is_empty() {
-            return Err(UsageError::raise(
-                "redirect: `glob` must not be empty".to_owned(),
-            ));
-        }
-        if entry.mutation.trim().is_empty() {
-            return Err(UsageError::raise(format!(
-                "redirect {}: `mutation` must not be empty — a redirect that names nothing is a \
-                 fix clause that says nothing",
-                entry.glob
-            )));
-        }
-        // Same refusal as `mutation`'s, for the same reason: a declared `read`
-        // that says nothing renders a fix clause that says nothing, which reads
-        // worse than the row simply not declaring one. Absent and empty are
-        // different statements and the engine keeps them different.
-        if entry
-            .read
-            .as_ref()
-            .is_some_and(|read| read.trim().is_empty())
-        {
-            return Err(UsageError::raise(format!(
-                "redirect {}: `read` is declared and empty — omit the key to gate no read, or \
-                 name the tool that answers",
-                entry.glob
-            )));
-        }
-        if table[..index].iter().any(|prior| prior.glob == entry.glob) {
-            return Err(UsageError::raise(format!(
-                "redirect {}: declared twice; a path class has one sanctioned mutation",
-                entry.glob
-            )));
-        }
-    }
-    Ok(())
 }
 
 /// The mutation declared for `path`, if any row claims it.
@@ -215,135 +106,12 @@ pub fn resolve_read<'table>(table: &'table [Redirect], path: &str) -> Option<&'t
         .and_then(|entry| entry.read.as_deref())
 }
 
-/// The words of the `batten` invocation a remedy names, or `None` for a remedy
-/// that names none (CLOUD-1189).
-///
-/// # An invocation is a CODE SPAN, and that bound is the whole of what makes
-/// this decidable
-///
-/// A remedy is a sentence, and a sentence does not say where its command stops.
-/// The first version of this collected every following token that LOOKED like a
-/// subcommand word, which reads `run `batten capture show <handle>` instead` as
-/// a four-word invocation ending in `instead` — and then reports `instead` as an
-/// undeclared rule id. That is a finding invented out of English, and it is the
-/// false positive that gets a gate switched off.
-///
-/// A backtick-delimited span has an author-written end, so inside it every word
-/// IS part of the command and the rule-id arm below can be exact rather than a
-/// guess. `verify` over this repository's own table is what the bound is sized
-/// against.
-///
-/// **What it deliberately under-denies, stated rather than discovered:** a
-/// remedy naming a command in bare prose. That is the sanctioned direction here
-/// — the alternative is not a stricter gate but a wrong one, and this repository
-/// writes every remedy's command as a code span.
-fn invocation(text: &str) -> Option<Vec<String>> {
-    for span in text.split('`').skip(1).step_by(2) {
-        let mut words = span.split_whitespace();
-        if words.next() != Some("batten") {
-            continue;
-        }
-        let taken: Vec<String> = words.map(str::to_owned).collect();
-        if !taken.is_empty() {
-            return Some(taken);
-        }
-    }
-    None
-}
-
-/// `--json` — a flag, judged by neither authority.
-///
-/// Which flags a verb takes is `SURFACE`'s own declaration and `clap`'s to
-/// enforce at the call; resolving one here would be a third reading of it.
-fn is_flag(word: &str) -> bool {
-    word.starts_with('-')
-}
-
-/// `<handle>` — an operand the author wrote as a hole to fill in.
-///
-/// Judged by neither authority: what a verb's operands may be is a per-verb
-/// arity question, and this row reads the command surface and the rule table
-/// rather than a third one.
-fn is_placeholder(word: &str) -> bool {
-    word.starts_with('<') && word.ends_with('>') && word.len() > 2
-}
-
-/// Refuse a remedy naming a `batten` command that resolves to nothing
-/// (CLOUD-1189).
-///
-/// # Why this exists
-///
-/// A deny naming a command that does not exist is worse than a deny naming
-/// none: it sends the reader to a shell error instead of a remedy, and it looks
-/// authoritative doing it. `redirect` strings are free-form prose and nothing
-/// resolved the command they name against anything, so a renamed verb turned
-/// every remedy naming it into a lie, silently.
-///
-/// # Both object shapes, because a gate that knew one would report the other
-///
-/// `batten show config` resolves against [`crate::surface::SURFACE`];
-/// `batten check <rule-id>` resolves its prefix against `SURFACE` and its
-/// remaining word against the declared `[[rule]]` table. A checker knowing only
-/// the first would report every rule-scoped remedy as broken, which is the false
-/// positive that gets a gate switched off.
-///
-/// # What it deliberately does not decide
-///
-/// A remedy naming a **non-batten** command (`mise run …`, `git …`) — that is
-/// the operator's PATH, and resolving it needs a second authority over what is
-/// installed, which is `policy/verdict-routes-resolve.rego`'s `mise run` arm and
-/// not this one. Whether the remedy is *good* advice, which is judgement and
-/// rule 3 forbids gating it. And an operand written as a `<placeholder>`.
-///
-/// # Errors
-///
-/// Returns a [`UsageError`] (→ exit `1`) naming the remedy's own key and the
-/// unresolvable words. **Pointer-only** (rule 4): the key and the command, never
-/// the remedy prose that carries it.
-pub fn validate_remedies<'a>(
-    remedies: impl IntoIterator<Item = (String, &'a str)>,
-    rules: &[String],
-) -> Result<()> {
-    for (key, text) in remedies {
-        let Some(words) = invocation(text) else {
-            continue;
-        };
-        let mut matched = 0;
-        for take in (1..=words.len()).rev() {
-            let candidate = words[..take].join(" ");
-            if crate::surface::SURFACE
-                .iter()
-                .any(|decl| decl.path == candidate)
-            {
-                matched = take;
-                break;
-            }
-        }
-        if matched == 0 {
-            return Err(UsageError::raise(format!(
-                "{key}: the remedy names `batten {}`, which is not a declared command — correct \
-                 the remedy, or declare the command on the surface",
-                words.join(" ")
-            )));
-        }
-        for word in &words[matched..] {
-            if is_flag(word) || is_placeholder(word) || rules.iter().any(|id| id == word) {
-                continue;
-            }
-            return Err(UsageError::raise(format!(
-                "{key}: the remedy names `batten {}` and then `{word}`, which is neither a \
-                 declared rule id nor a <placeholder> — correct the remedy, or declare the rule",
-                words[..matched].join(" ")
-            )));
-        }
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+    #[cfg(test)]
+    use crate::error::UsageError;
 
     fn row(glob: &str, mutation: &str) -> Redirect {
         Redirect {

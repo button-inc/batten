@@ -15,14 +15,16 @@
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+use batten::preset::ManifestExt as _;
+use batten::preset::PresetModuleExt as _;
 use std::fs;
 use std::path::PathBuf;
 
 use crate::common;
 
+use batten::config_model::Rule;
 use batten::facts::Look;
 use batten::policy;
-use batten::rules::Rule;
 
 /// The provider a preset's modules read at `scope`, spelled as a row's own
 /// `provider` value — or `None` where they read none (CLOUD-1625).
@@ -32,12 +34,12 @@ use batten::rules::Rule;
 /// manifest is what keeps these cases honest as presets change: a provider added
 /// to a module later is covered here without editing a test, where a literal
 /// would have to be found and updated.
-fn provider_at(preset: &str, scope: batten::rules::RuleScope) -> Option<&'static str> {
+fn provider_at(preset: &str, scope: batten::preset_catalog::RuleScope) -> Option<&'static str> {
     // `None` for a preset that does not ship, rather than a panic: one case here
     // names an unknown preset ON PURPOSE and asserts the LOADER refuses it. A
     // helper that failed first would move that refusal into the harness and stop
     // the case testing the mechanism it was written for.
-    batten::preset::find(preset)?
+    batten::preset_catalog::find(preset)?
         .providers_at(scope)
         .into_iter()
         .find(|reads| *reads != "no provider")
@@ -50,7 +52,7 @@ fn preset_row(id: &str, preset: &str) -> Rule {
         "kind": "policy",
         "scope": "mediated_call",
         "preset": preset,
-        "provider": provider_at(preset, batten::rules::RuleScope::MediatedCall),
+        "provider": provider_at(preset, batten::preset_catalog::RuleScope::MediatedCall),
         "severity": "deny",
     }))
     .expect("a preset row the loader accepts")
@@ -107,6 +109,20 @@ fn call(command: &str) -> String {
         "a fixture whose first word is not plainly the program needs the real \
          projection: use tests/preset_segments.rs"
     );
+    // The projected subcommand (CLOUD-2354), by the same fixture-guard rule: the
+    // first argument is it, and a fixture with an option before it is refused
+    // rather than parsed, because the engine's option table is the one parser.
+    let tabled = matches!(program, "git" | "gh");
+    let first = words.get(1).copied();
+    assert!(
+        !tabled || first.is_none_or(|word| !word.starts_with('-')),
+        "a fixture with a global option needs the real projection: use tests/preset_segments.rs"
+    );
+    let (subcommand, global_options) = if tabled {
+        (serde_json::json!(first), serde_json::json!([]))
+    } else {
+        (serde_json::Value::Null, serde_json::Value::Null)
+    };
     serde_json::json!({"call": {
         "command": command,
         "segments": [{"words": words, "raw": command, "terminator": null}],
@@ -115,6 +131,8 @@ fn call(command: &str) -> String {
             "name": program,
             "arguments": &words[1..],
             "mediated": false,
+            "subcommand": subcommand,
+            "global-options": global_options,
         }],
         "operation": "run",
         "event": "pre_tool",
@@ -136,28 +154,38 @@ fn scratch(name: &str) -> PathBuf {
 /// lives in whichever consumer enables the bundle — and a preset absent from this
 /// table is one nobody stated a surface for, which is precisely the state that
 /// lets a wrong-surface key hide.
-const PRESET_SCOPES: &[(&str, bool)] = &[
-    ("commit-hygiene", false),
-    ("trunk-based", false),
-    ("linear-history", false),
-    ("red-head", false),
-    ("git", false),
-    ("shell-hygiene", true),
-    ("pinned-toolchain", false),
-    ("mise", false),
-    ("ci-hygiene", true),
-    ("landing-loop", true),
-    ("claude-code-cloud", false),
-    ("claude-code-plan", false),
-    ("ci-signal", true),
-    ("supply-chain", true),
-    ("tracker-hygiene", true),
-    ("release-hygiene", true),
-    ("engine-hygiene", true),
-    ("check-verdict", true),
+///
+/// Each entry lists every surface the preset is enabled at, `true` for the tree:
+/// `shell-hygiene` decides over both (CLOUD-2335), its tree arms at `verify` and
+/// its write arm on the mediated call, and each row compiles only its own.
+const PRESET_SCOPES: &[(&str, &[bool])] = &[
+    ("commit-hygiene", &[false]),
+    ("trunk-based", &[false]),
+    ("lease-asserted", &[false]),
+    ("linear-history", &[false]),
+    ("rust", &[true]),
+    ("rust-quality", &[true]),
+    ("red-head", &[false]),
+    ("git", &[false]),
+    ("shell-hygiene", &[true, false]),
+    ("pinned-toolchain", &[false]),
+    ("mise", &[false]),
+    ("ci-hygiene", &[true]),
+    ("landing-loop", &[true]),
+    ("claude-code-cloud", &[false]),
+    ("claude-code-plan", &[false]),
+    ("claude-code-dispatch", &[false]),
+    ("claude-code-state", &[false]),
+    ("ci-signal", &[true]),
+    ("supply-chain", &[true]),
+    ("tracker-hygiene", &[true]),
+    ("release-hygiene", &[true]),
+    ("engine-hygiene", &[true]),
+    ("rego-hygiene", &[true]),
+    ("check-verdict", &[true]),
 ];
 
-/// A row enabling `name` at the scope it is really enabled with.
+/// A row enabling `name` at each scope it is really enabled with.
 ///
 /// Every table-wide loop below goes through this rather than through
 /// [`preset_row`], and that is the whole of CLOUD-1279's test half. Fabricating
@@ -166,18 +194,23 @@ const PRESET_SCOPES: &[(&str, bool)] = &[
 /// `check_tree_paths_are_emittable`, so a tree module reading a key the engine
 /// never emits passed every tier it had. The loops still cover the table; they
 /// just stop inventing the surface while doing it.
-fn row_at_real_scope(id: &str, name: &str) -> Rule {
-    let (_, is_tree) = PRESET_SCOPES
+fn rows_at_real_scopes(id: &str, name: &str) -> Vec<Rule> {
+    let (_, surfaces) = PRESET_SCOPES
         .iter()
         .find(|(preset, _)| *preset == name)
         .unwrap_or_else(|| {
             panic!("the preset `{name}` ships and PRESET_SCOPES does not say which surface it decides over")
         });
-    if *is_tree {
-        tree_preset_row(id, name)
-    } else {
-        preset_row(id, name)
-    }
+    surfaces
+        .iter()
+        .map(|is_tree| {
+            if *is_tree {
+                tree_preset_row(id, name)
+            } else {
+                preset_row(id, name)
+            }
+        })
+        .collect()
 }
 
 /// (a) A preset predicate denies on a violating call and is green on a clean
@@ -433,17 +466,19 @@ fn a_preset_id_colliding_with_an_in_repo_id_is_refused_at_load() {
 #[test]
 fn every_advertised_preset_name_actually_loads() {
     let root = scratch("names");
-    let names = policy::preset_names();
+    let names = batten::config_model::preset_names();
     assert!(!names.is_empty(), "the binary ships at least one preset");
     for name in names {
-        policy::load(
-            &root,
-            &[row_at_real_scope("row", name)],
-            policy::Vocabulary::EMPTY,
-            policy::ModuleChecks::Run,
-            None,
-        )
-        .unwrap_or_else(|err| panic!("the advertised preset `{name}` does not load: {err}"));
+        for row in rows_at_real_scopes("row", name) {
+            policy::load(
+                &root,
+                &[row],
+                policy::Vocabulary::EMPTY,
+                policy::ModuleChecks::Run,
+                None,
+            )
+            .unwrap_or_else(|err| panic!("the advertised preset `{name}` does not load: {err}"));
+        }
     }
 }
 
@@ -526,20 +561,22 @@ fn presets_are_inside_the_rule_one_glob() {
 #[test]
 fn every_shipped_preset_publishes_its_ids() {
     let root = scratch("published");
-    for name in policy::preset_names() {
-        let bundles = policy::load(
-            &root,
-            &[row_at_real_scope("row", name)],
-            policy::Vocabulary::EMPTY,
-            policy::ModuleChecks::Run,
-            None,
-        )
-        .expect("loads");
-        assert!(
-            !bundles[0].declared().is_empty(),
-            "the preset `{name}` publishes no rule id, so nothing it denies could \
-             be waived or attributed"
-        );
+    for name in batten::config_model::preset_names() {
+        for row in rows_at_real_scopes("row", name) {
+            let bundles = policy::load(
+                &root,
+                &[row],
+                policy::Vocabulary::EMPTY,
+                policy::ModuleChecks::Run,
+                None,
+            )
+            .expect("loads");
+            assert!(
+                !bundles[0].declared().is_empty(),
+                "the preset `{name}` publishes no rule id, so nothing it denies could \
+                 be waived or attributed"
+            );
+        }
     }
 }
 
@@ -559,10 +596,17 @@ fn every_shipped_preset_publishes_its_ids() {
 #[test]
 fn every_shipped_preset_passes_its_own_suite() {
     let root = scratch("suites");
-    for name in policy::preset_names() {
+    for (name, row) in batten::config_model::preset_names()
+        .iter()
+        .flat_map(|name| {
+            rows_at_real_scopes("row", name)
+                .into_iter()
+                .map(move |row| (name, row))
+        })
+    {
         let bundles = policy::load(
             &root,
-            &[row_at_real_scope("row", name)],
+            &[row],
             policy::Vocabulary::EMPTY,
             policy::ModuleChecks::Run,
             None,
@@ -580,7 +624,7 @@ fn every_shipped_preset_passes_its_own_suite() {
         // states it per scope directly, and `mise run policy-test` over the
         // committed `batten.toml` decides it for the rows this repository
         // actually enables.
-        let Look::Is(suite) = policy::test(&bundles[0], "{}", false).expect("the suite runs")
+        let Look::Is(suite) = policy::test(&bundles[0], "{}", false, None).expect("the suite runs")
         else {
             panic!("the preset `{name}` has a suite that could not run at all");
         };
@@ -619,7 +663,7 @@ fn tree_preset_row(id: &str, preset: &str) -> Rule {
         "kind": "policy",
         "scope": "tree",
         "preset": preset,
-        "provider": provider_at(preset, batten::rules::RuleScope::Tree),
+        "provider": provider_at(preset, batten::preset_catalog::RuleScope::Tree),
         "severity": "deny",
     }))
     .expect("a tree preset row the loader accepts")
@@ -901,23 +945,27 @@ fn the_check_verdict_preset_decides_for_a_consumer_that_is_not_this_one() {
 /// (CLOUD-1269, CLOUD-1279) Every preset loads at the scope it is enabled with,
 /// and the tree-scoped ones therefore reach the guard at all.
 ///
-/// The loops above now go through [`row_at_real_scope`] too, so this is the arm
+/// The loops above now go through [`rows_at_real_scopes`] too, so this is the arm
 /// that states the property directly rather than relying on them: a preset whose
 /// modules read a key its own surface does not emit fails to load, on either
 /// surface. Before CLOUD-1279 the mediated arm did not exist and every loop
 /// fabricated `mediated_call`, so neither half could fire.
 #[test]
 fn every_preset_loads_at_the_scope_it_is_enabled_with() {
-    for name in policy::preset_names() {
+    for name in batten::config_model::preset_names() {
         let root = scratch(&format!("real-scope-{name}"));
-        policy::load(
-            &root,
-            &[row_at_real_scope("row", name)],
-            policy::Vocabulary::EMPTY,
-            policy::ModuleChecks::Run,
-            None,
-        )
-        .unwrap_or_else(|err| panic!("the preset `{name}` does not load at its own scope: {err}"));
+        for row in rows_at_real_scopes("row", name) {
+            policy::load(
+                &root,
+                &[row],
+                policy::Vocabulary::EMPTY,
+                policy::ModuleChecks::Run,
+                None,
+            )
+            .unwrap_or_else(|err| {
+                panic!("the preset `{name}` does not load at its own scope: {err}")
+            });
+        }
     }
 }
 
@@ -1404,9 +1452,9 @@ const PLAN_MODE_EDIT: &str = r#"{"call":{"event":"pre-tool","permission-mode":"p
 /// `except` the same two rows collide, which is what makes the case discriminate.
 #[test]
 fn an_excepted_module_lets_a_local_copy_load_without_collision() {
-    let manifest = batten::preset::find("claude-code-cloud").expect("the preset ships");
+    let manifest = batten::preset_catalog::find("claude-code-cloud").expect("the preset ships");
     let dispatch = manifest
-        .module("dispatch-is-preapproved")
+        .module("subagent-is-preapproved")
         .expect("the module ships");
     assert_eq!(
         manifest.closure(dispatch).len(),
@@ -1417,8 +1465,9 @@ fn an_excepted_module_lets_a_local_copy_load_without_collision() {
     // The header an eject writes, which is what lets the copy keep the preset's
     // own inline patterns.
     let copied = format!(
-        "# batten-ejected: claude-code-cloud/dispatch-is-preapproved version {}\n{}",
-        manifest.version, dispatch.source
+        "# batten-ejected: claude-code-cloud/subagent-is-preapproved version {}\n{}",
+        manifest.version,
+        dispatch.text()
     );
     fs::write(root.join("dispatch.rego"), &copied).expect("write the copy");
     let copy: Rule = serde_json::from_value(serde_json::json!({
@@ -1445,7 +1494,7 @@ fn an_excepted_module_lets_a_local_copy_load_without_collision() {
 
     let bundles = policy::load(
         &root,
-        &[cloud_row(&["dispatch-is-preapproved"]), copy.clone()],
+        &[cloud_row(&["subagent-is-preapproved"]), copy.clone()],
         policy::Vocabulary::EMPTY,
         policy::ModuleChecks::Run,
         None,
@@ -1461,7 +1510,7 @@ fn an_excepted_module_lets_a_local_copy_load_without_collision() {
     .expect("extend the copy");
     let added = policy::load(
         &root,
-        &[cloud_row(&["dispatch-is-preapproved"]), copy],
+        &[cloud_row(&["subagent-is-preapproved"]), copy],
         policy::Vocabulary::EMPTY,
         policy::ModuleChecks::Run,
         None,
@@ -1628,33 +1677,155 @@ fn ejecting_plan_mode_refuses_writes_carries_its_call_closure() {
     assert!(!again.status.success(), "a copy already exists");
 }
 
-/// A copy recorded at an older preset version than this binary ships is a
-/// `warn` naming the file; at the shipped version it is silent.
-#[test]
-fn an_ejected_module_behind_the_manifest_version_is_reported() {
-    let dir = ejected("eject-drift");
-    let current = common::run(&dir, &["check"]);
-    let said = format!("{}{}", common::stdout(&current), common::stderr(&current));
-    assert!(!said.contains("module pin stale"), "fresh copies: {said}");
+/// The `red-head` preset as the one rule of a config.
+const RED_HEAD_CONFIG: &str = r#"version = 1
 
-    let path = "policy/claude-code-cloud/unwatch-is-preapproved.rego";
-    let shipped = batten::preset::find("claude-code-cloud")
-        .expect("the preset ships")
-        .version;
+[[rule]]
+id = "red"
+kind = "policy"
+scope = "mediated_call"
+preset = "red-head"
+severity = "deny"
+"#;
+
+/// `module` (`<preset>/<module>`), ejected into a fresh repository under
+/// `config`.
+fn ejected_module(name: &str, config: &str, module: &str) -> PathBuf {
+    let dir = common::scratch_repo(name);
+    common::write(&dir, "batten.toml", config);
+    let outcome = common::run(&dir, &["preset", "eject", module]);
+    assert!(
+        outcome.status.success(),
+        "{}{}",
+        common::stdout(&outcome),
+        common::stderr(&outcome)
+    );
+    dir
+}
+
+/// Rewrite the copy at `path`'s recorded preset version from `shipped` to `to`.
+fn rewind(dir: &std::path::Path, path: &str, shipped: &semver::Version, to: &semver::Version) {
     let text = fs::read_to_string(dir.join(path)).expect("the copy");
     let behind = text.replacen(
         &format!("version {shipped}\n"),
-        &format!("version {}\n", shipped - 1),
+        &format!("version {to}\n"),
         1,
     );
     assert_ne!(behind, text, "the premise: the header carried the version");
     fs::write(dir.join(path), behind).expect("rewind the copy");
+}
 
-    let stale = common::run(&dir, &["check"]);
-    let said = format!("{}{}", common::stdout(&stale), common::stderr(&stale));
+/// `batten check` in `dir`: whether it passed, and everything it said.
+fn checked(dir: &std::path::Path) -> (bool, String) {
+    let out = common::run(dir, &["check"]);
+    (
+        out.status.success(),
+        format!("{}{}", common::stdout(&out), common::stderr(&out)),
+    )
+}
+
+/// A copy recorded at an older version IN THE SAME MAJOR as this binary ships
+/// is reported, naming the file, and only advised: the shipped preset admits
+/// more or rewords, so the copy is stricter or equal (CLOUD-2822). At the
+/// shipped version it is silent.
+///
+/// THE PREMISE IS `red-head`, not `claude-code-cloud`: a preset at `X.0.0` has
+/// no older version in its own major, and `claude-code-cloud` went to `1.0.0`,
+/// so this case needs a preset whose shipped version has a minor or a patch to
+/// step back over. The major arm is `an_ejected_module_a_major_behind_is_refused`.
+#[test]
+fn an_ejected_module_behind_the_manifest_version_is_reported() {
+    let path = "policy/red-head/no-push-over-unread-red.rego";
+    let dir = ejected_module(
+        "eject-drift",
+        RED_HEAD_CONFIG,
+        "red-head/no-push-over-unread-red",
+    );
+    // The eject removed the `red` row its only module left compiling nothing,
+    // so the copy loads and decides: a refused config would read as silence.
+    let (fresh, said) = checked(&dir);
+    assert!(fresh, "the ejected config loads: {said}");
+    assert!(!said.contains("module pin stale"), "a fresh copy: {said}");
+
+    let shipped = batten::preset_catalog::find("red-head")
+        .expect("the preset ships")
+        .version
+        .clone();
+    let older = if shipped.patch > 0 {
+        semver::Version::new(shipped.major, shipped.minor, 0)
+    } else {
+        semver::Version::new(shipped.major, 0, 0)
+    };
+    assert!(
+        older < shipped && older.major == shipped.major,
+        "the premise: {shipped} has an older version in its own major"
+    );
+    rewind(&dir, path, &shipped, &older);
+
+    let (passed, said) = checked(&dir);
     assert!(
         said.contains("module pin stale") && said.contains(path),
         "names the class and the copy: {said}"
     );
-    assert!(stale.status.success(), "a warning, never a refusal: {said}");
+    assert!(passed, "a warning, never a refusal: {said}");
+}
+
+/// A copy a MAJOR behind is refused, naming the file: the shipped preset now
+/// refuses something the copy admits, so the copy is a gate the binary no
+/// longer agrees with (CLOUD-2822).
+#[test]
+fn an_ejected_module_a_major_behind_is_refused() {
+    let dir = ejected("eject-drift-major");
+    let path = "policy/claude-code-cloud/unwatch-is-preapproved.rego";
+    let shipped = batten::preset_catalog::find("claude-code-cloud")
+        .expect("the preset ships")
+        .version
+        .clone();
+    assert!(
+        shipped.major >= 1,
+        "the premise: {shipped} has a major to fall behind"
+    );
+    rewind(
+        &dir,
+        path,
+        &shipped,
+        &semver::Version::new(shipped.major - 1, 0, 0),
+    );
+
+    let (passed, said) = checked(&dir);
+    assert!(
+        said.contains("batten deny module pin stale") && said.contains(path),
+        "refuses, naming the class and the copy: {said}"
+    );
+    assert!(!passed, "a refusal: {said}");
+}
+
+/// CLOUD-2354: no vendored preset carries its own copy of git's option table.
+/// The engine projects `subcommand` and `global-options` once; a rule HEAD for
+/// one of the three deleted parsers is a fifth copy drifting from the rest. A
+/// comment naming one is not a parser, so the scan reads heads, not substrings.
+#[test]
+fn no_preset_parses_gits_global_options() {
+    let head =
+        regex::Regex::new(r"(?m)^(subcommand|value_of_global|some_word_before_is_not_global)\(")
+            .unwrap();
+    let mut pending = vec![PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/policy/presets")];
+    let mut modules = 0;
+    while let Some(dir) = pending.pop() {
+        for entry in fs::read_dir(&dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                pending.push(path);
+            } else if path.extension().is_some_and(|ext| ext == "rego") {
+                modules += 1;
+                let text = fs::read_to_string(&path).unwrap();
+                assert!(
+                    !head.is_match(&text),
+                    "{} parses git's global options itself",
+                    path.display()
+                );
+            }
+        }
+    }
+    assert!(modules > 0, "the walk found no preset module");
 }

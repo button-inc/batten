@@ -9,6 +9,7 @@
 //! the match is asserted here, over the real pattern and the real template.
 
 use crate::common::at_root;
+use batten::capture::Streamed as _;
 
 /// The template `renovate.json5` hands Renovate, filled as Renovate fills it.
 fn templated(command: &str, dep: &str, old: &str, new: &str) -> String {
@@ -167,7 +168,7 @@ fn the_carry_script_passes_its_own_suite() {
             ".github/renovate/fuzz-lock-carry.test.mjs",
         ])
         .current_dir(at_root(""))
-        .output()
+        .streamed_output()
         .expect("run node");
     assert!(
         output.status.success(),

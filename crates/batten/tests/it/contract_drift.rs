@@ -17,6 +17,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
+use batten::capture::StreamedChild as _;
 
 use std::path::Path;
 use std::process::{Output, Stdio};
@@ -41,6 +42,14 @@ fn fixture(name: &str) -> std::path::PathBuf {
     std::fs::write(dir.join(".claude/settings.json"), "{\"hooks\":{}}\n").unwrap();
     std::fs::write(dir.join("mise-tasks/a-gate"), "#!/usr/bin/env bash\ntrue\n").unwrap();
     common::git_in(&dir, &["init", "-q"]);
+    // Batten is registered on every host's whole surface, as `init` leaves a
+    // consumer, so the doctor check behind session start has nothing to owe.
+    let wired = common::batten()
+        .current_dir(&dir)
+        .args(["wiring", "register", "--all"])
+        .streamed_output()
+        .expect("the binary runs");
+    assert_eq!(wired.status.code(), Some(0), "{}", common::stderr(&wired));
     common::git_in(&dir, &["add", "-A"]);
     common::git_in(&dir, &["commit", "-qm", "seed"]);
     dir
@@ -58,7 +67,13 @@ fn drift(dir: &Path, session: &str) -> Output {
 /// is how the engine's own hatch is reached. Defaulted away above so the twelve
 /// call sites that care about neither still read as one statement.
 fn drift_on(dir: &Path, session: &str, event: &str, env: &[(&str, &str)]) -> Output {
-    let payload = format!(r#"{{"hook_event_name":"{event}","session_id":"{session}","cwd":"/w"}}"#);
+    // THE FIXTURE'S OWN SESSION (CLOUD-2840): every case in one process shares
+    // the suite's state root, so `s1` in two fixtures was one session's record
+    // and a case read another's seed. Qualified by the fixture, a case's
+    // sessions are its own under `cargo test` as under nextest.
+    let fixture = dir.file_name().unwrap_or_default().to_string_lossy();
+    let payload =
+        format!(r#"{{"hook_event_name":"{event}","session_id":"{session}@{fixture}","cwd":"/w"}}"#);
     let mut command = batten();
     command
         .current_dir(dir)
@@ -77,7 +92,7 @@ fn drift_on(dir: &Path, session: &str, event: &str, env: &[(&str, &str)]) -> Out
             .write_all(payload.as_bytes())
             .unwrap();
     }
-    let output = child.wait_with_output().unwrap();
+    let output = child.streamed_wait().unwrap();
     assert_eq!(
         output.status.code(),
         Some(0),
@@ -164,9 +179,11 @@ fn a_seed_at_a_later_event_reports_the_unmediated_start() {
 #[test]
 fn a_session_seeded_at_session_start_is_silent_and_stays_silent() {
     let dir = fixture("contract-seeded-at-start");
+    // THE SEEDING EVENT CARRIES THE DISPATCH NOTICE AND NOTHING ELSE
+    // (CLOUD-2840, admitted by the owner): no contract-drift notice rides it.
     assert_eq!(
         drift_on(&dir, "s1", "SessionStart", &[]).pipe_notice(),
-        None,
+        Some(batten::session_setup::instruction(true)),
         "the seeding event is the one the silence argument is about"
     );
     assert_eq!(
@@ -479,10 +496,13 @@ impl PipeNotice for Output {
 fn each_wiring_names_the_event_it_was_called_on() {
     for event in ["SessionStart", "PostToolBatch"] {
         let dir = fixture(&format!("contract-event-{event}"));
+        // One session per fixture: a session keeps its home (CLOUD-2672), so a
+        // second repository under the same id would be judged by the first.
+        let session = format!("s-{event}");
         // Seed, so the second call is the one with something to say.
-        drift_on(&dir, "s-1", event, &[]);
+        drift_on(&dir, &session, event, &[]);
         std::fs::write(dir.join("AGENTS.md"), "# the contract\nmoved\n").unwrap();
-        let output = drift_on(&dir, "s-1", event, &[]);
+        let output = drift_on(&dir, &session, event, &[]);
 
         let raw = common::stdout(&output);
         let document: serde_json::Value =

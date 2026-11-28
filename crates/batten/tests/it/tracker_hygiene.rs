@@ -279,6 +279,22 @@ fn landing_then_releasing_clears_the_same_issue() {
     assert_eq!(code, Some(0), "{text}");
 }
 
+/// A pre-release the glob matches shipped nothing (CLOUD-2906): a Done row
+/// whose commit only `v1.1.0-rc.1` reaches is unreleased, and the release
+/// itself clears it.
+#[test]
+fn a_row_shipped_only_under_a_pre_release_tag_is_not_released() {
+    let dir = done_repo("pre-release");
+    land(&dir, "feat: work\n\nRefs: CLOUD-499");
+    release(&dir, "v1.1.0-rc.1");
+    let (code, text) = gate(&dir, "done", &DONE, &done_board("CLOUD-499"));
+    assert_eq!(code, Some(2), "{text}");
+    assert!(text.contains("CLOUD-499"), "{text}");
+    release(&dir, "v1.1.0");
+    let (code, text) = gate(&dir, "done", &DONE, &done_board("CLOUD-499"));
+    assert_eq!(code, Some(0), "{text}");
+}
+
 #[test]
 fn one_released_ref_is_enough_even_with_a_later_unreleased_one() {
     let dir = done_repo("most-released");
@@ -1177,7 +1193,7 @@ fn the_committed_gates_record_then_check_the_one_row() {
         ("deferral-check", "deferral"),
         ("closing-key-check", "closing-key"),
     ] {
-        let block = common::task_block(task).unwrap_or_else(|| panic!("[tasks.{task}]"));
+        let block = common::task_block_template(task).unwrap_or_else(|| panic!("[tasks.{task}]"));
         let argv = common::task_value(&block, "run");
         assert!(
             argv.contains(&format!("record derive {family}")),

@@ -1,0 +1,16 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH batten-step-exists 1  batten 
+.SH NAME
+batten\-step\-exists \- Print the presence lines a step\*(Aqs probed pathspecs select, the step cache\*(Aqs answer to the tool line
+.SH SYNOPSIS
+\fBbatten step exists\fR [\fB\-h\fR|\fB\-\-help\fR] <\fIspecs\fR> 
+.SH DESCRIPTION
+Print the presence lines a step\*(Aqs probed pathspecs select, the step cache\*(Aqs answer to the tool line
+.SH OPTIONS
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+<\fIspecs\fR>
+The pathspecs, after `\-\-`: an `exists <path>` line per index path they select, `exists none` where none

@@ -15,6 +15,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
+use batten::capture::Streamed as _;
 
 use std::cell::Cell;
 use std::fs;
@@ -60,7 +61,7 @@ impl Repo {
     /// fails loudly instead of quietly answering about the real batten
     /// checkout — which lives above this directory.
     fn git(&self, args: &[&str]) -> String {
-        let output = self.raw(args).output().expect("run git");
+        let output = self.raw(args).streamed_output().expect("run git");
         assert!(
             output.status.success(),
             "git {args:?} failed in {}: {}",
@@ -743,7 +744,7 @@ verb = "clobber"
 effect = "write"
 "#;
 
-fn tables() -> batten::config::Config {
+fn tables() -> batten::config_model::Config {
     batten::config::parse(TABLES, "fixture batten.toml").expect("fixture config parses")
 }
 
@@ -1094,13 +1095,11 @@ fn the_crate_bakes_in_no_consumer_vocabulary() {
         .chain(config.verbs.iter().map(|verb| verb.verb.clone()))
         .collect();
 
-    let src = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src");
+    // EVERY CRATE'S `src/`, RECURSIVELY (CLOUD-2833): since the split the
+    // library is not `crates/batten/src` alone, and a module one directory
+    // down was never read.
     let mut scanned = 0;
-    for entry in fs::read_dir(&src).expect("read src/") {
-        let path = entry.expect("read dir entry").path();
-        if path.extension().and_then(|ext| ext.to_str()) != Some("rs") {
-            continue;
-        }
+    for path in common::engine_sources() {
         scanned += 1;
         let source = fs::read_to_string(&path).expect("read source");
         for token in &vocabulary {
@@ -1239,10 +1238,11 @@ fn no_session_scoped_field_enters_a_code_log_or_scope_identity() {
     // the same defect one target further on — it never ran on Windows, because
     // cargo stopped at the `--lib` failure before reaching the integration
     // tests.
-    let source =
-        fs::read_to_string(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/identity.rs"))
-            .expect("read identity.rs")
-            .replace("\r\n", "\n");
+    let source = fs::read_to_string(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../batten-facts/src/identity.rs"),
+    )
+    .expect("read identity.rs")
+    .replace("\r\n", "\n");
     for name in [
         "pub fn code_fingerprint",
         "pub fn log_fingerprint",
@@ -1340,25 +1340,6 @@ fn line_of(source: &str, at: usize) -> usize {
     source[..at].lines().count().max(1)
 }
 
-/// Every `*.rs` under `dir`, recursively, in a stable order — a gate's failure
-/// message must not depend on `read_dir`'s filesystem-defined ordering.
-fn rust_sources(dir: &Path) -> Vec<PathBuf> {
-    let mut sources = Vec::new();
-    let mut stack = vec![dir.to_path_buf()];
-    while let Some(next) = stack.pop() {
-        for entry in fs::read_dir(&next).expect("read a source directory") {
-            let path = entry.expect("read dir entry").path();
-            if path.is_dir() {
-                stack.push(path);
-            } else if path.extension().and_then(|ext| ext.to_str()) == Some("rs") {
-                sources.push(path);
-            }
-        }
-    }
-    sources.sort();
-    sources
-}
-
 /// The audit's own fixtures: one well-formed shape and the two failing ones that
 /// really shipped. `__DROP__` stands in for the needle so these are invisible to
 /// the scan over the real tree.
@@ -1417,28 +1398,27 @@ fn every_permission_drop_asserts_its_own_premise() {
     }
 
     // (b) The real sites.
-    let crate_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    // Every workspace crate's `src/` and `tests/` (CLOUD-2789): the split cut
+    // engine code out of `crates/batten`, and a drop there is still a drop.
     let mut files = 0;
     let mut sites = 0;
-    for dir in ["src", "tests"] {
-        for path in rust_sources(&crate_dir.join(dir)) {
-            let source = fs::read_to_string(&path).expect("read source");
-            files += 1;
-            let mut from = 0;
-            while let Some(rel) = source[from..].find(&needle) {
-                let at = from + rel;
-                sites += 1;
-                let (body, drop_at) = enclosing_fn(&source, at);
-                let verdict = premise_asserted(body, drop_at);
-                assert!(
-                    verdict.is_ok(),
-                    "{}:{}: {} (CLOUD-249)",
-                    path.display(),
-                    line_of(&source, at),
-                    verdict.unwrap_err()
-                );
-                from = at + needle.len();
-            }
+    for path in common::rust_sources() {
+        let source = fs::read_to_string(&path).expect("read source");
+        files += 1;
+        let mut from = 0;
+        while let Some(rel) = source[from..].find(&needle) {
+            let at = from + rel;
+            sites += 1;
+            let (body, drop_at) = enclosing_fn(&source, at);
+            let verdict = premise_asserted(body, drop_at);
+            assert!(
+                verdict.is_ok(),
+                "{}:{}: {} (CLOUD-249)",
+                path.display(),
+                line_of(&source, at),
+                verdict.unwrap_err()
+            );
+            from = at + needle.len();
         }
     }
     assert!(files > 0, "the audit must actually have read the crate");
@@ -1477,9 +1457,8 @@ fn no_suite_sets_the_state_dir_variables_itself() {
     // fail to notice a suite that isolates nothing at all. That second case is
     // exactly what the `windows` job is a required check for.
     let needle = xdg_needle();
-    let crate_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let mut offenders = Vec::new();
-    for path in rust_sources(&crate_dir.join("tests")) {
+    for path in common::test_sources() {
         // `common/` is where the one authority lives, so it is the one place the
         // variable is named — the carve-out IS the rule.
         if path.ends_with("common/mod.rs") {
@@ -1681,9 +1660,8 @@ fn every_path_override_is_composed_with_join_paths() {
     }
 
     // (b) The real sites.
-    let crate_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let mut sites = 0;
-    for path in rust_sources(&crate_dir.join("tests")) {
+    for path in common::test_sources() {
         let source = fs::read_to_string(&path).expect("read source");
         let mut from = 0;
         while let Some(rel) = source[from..].find(&needle) {
@@ -1739,12 +1717,11 @@ fn every_path_valued_toml_key_uses_a_literal_string() {
     // failed nine cases. Whether a value is a path is a judgement; which key it
     // sits under is a fact. Keys whose values are never paths are left alone
     // rather than swept in, so the rule stays about the thing that bites.
-    let crate_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     // Collected rather than panicked on at the first hit: this class arrives in
     // batches — nine cases in one suite, four in another — and a gate that names
     // one offender per run turns one fix into one CI round trip each.
     let mut offenders = Vec::new();
-    for path in rust_sources(&crate_dir.join("tests")) {
+    for path in common::test_sources() {
         let source = fs::read_to_string(&path).expect("read source");
         for key in PATH_VALUED_KEYS {
             let needle = basic_string_interpolation(key);
@@ -1834,10 +1811,9 @@ fn a_nested_change_is_recognised_when_it_lands_on_a_moved_base() {
 /// complete, empty directories survive it (`objects/info`, `objects/pack`,
 /// `refs/heads`, `refs/tags`, `branches` are all empty in a fresh init and a
 /// files-only copy would drop them silently), the template is not stale, and the
-/// hooks samples plus `description` and `info/exclude` are carried — the last
-/// mattering because the engine reads `.git/info/exclude` as git's
-/// lowest-precedence repository source, so a fixture missing it is a different
-/// input to the code under test.
+/// hooks samples plus `description` and `info/exclude` are carried, so the
+/// copy is what `git` itself, which reads `info/exclude`, would find. The engine
+/// reads none (CLOUD-2904).
 // needs-real-fixture: CLOUD-1419 this case's whole subject is whether the copy
 // equals the fork, so one arm has to BE a real `git init`. Declaring it is the
 // admission `policy/fixture-forks.rego` reserves for a case whose assertion is
@@ -2091,6 +2067,40 @@ fn a_directory_is_a_template_only_when_it_carries_a_repositorys_own_files() {
 // directly: a repository, with the identity the template bakes into its config.
 // A fallback that forked `init` alone would pass `is_template` and still hand
 // every fixture an unset identity, so the identity is asserted, not assumed.
+// A COPY DATES THE TEMPLATE AS IN USE (#1276). The disk collector keeps a
+// `target/tmp` entry only if it was written since the earliest live test
+// process started, and the template is otherwise written once and read ever
+// after: lap 9's collector removed it under a live sweep. So the template is
+// first dated far in the past, then one copy has to bring its newest write
+// forward. A sibling's copy in between only moves it further forward, so the
+// shared state this touches cannot flip the verdict.
+#[test]
+fn a_fixture_copy_marks_the_shared_template_in_use() {
+    // A host where no template can be established forks `git init` per fixture
+    // and shares nothing a collector could remove, so the case fails there
+    // rather than passing having asserted nothing.
+    let template = common::git_init_template().expect("this host establishes the shared template");
+    let old = std::time::UNIX_EPOCH + std::time::Duration::from_hours(24);
+    fs::OpenOptions::new()
+        .write(true)
+        .open(template.join("HEAD"))
+        .and_then(|head| head.set_modified(old))
+        .expect("date the template's HEAD in the past");
+    let dir = common::scratch("template-in-use").join("repo");
+    fs::create_dir_all(&dir).expect("create the fixture directory");
+
+    common::init_repo(&dir);
+
+    let after = fs::metadata(template.join("HEAD"))
+        .and_then(|meta| meta.modified())
+        .expect("read the template's HEAD mtime");
+    assert!(
+        after > old,
+        "a copy has to date the shared template as written now, or the disk \
+         collector removes it under a live suite"
+    );
+}
+
 #[test]
 fn the_route_taken_when_no_template_exists_builds_the_repository_the_template_would_have() {
     let dir = common::scratch("template-fallback").join("repo");
@@ -2114,5 +2124,51 @@ fn the_route_taken_when_no_template_exists_builds_the_repository_the_template_wo
         common::git_in(&dir, &["config", "user.name"]),
         "t",
         "both halves of the identity, for the same reason"
+    );
+}
+
+/// CLOUD-2789: the source census every shape gate sweeps reads EVERY workspace
+/// member, held to the member list read independently of it. Before the split
+/// `found.len() > 40` stood in for this, and a census narrowed back to
+/// `crates/batten` alone still passes that count — so the case also builds the
+/// narrowed census and requires the coverage check to name the crates it drops.
+#[test]
+fn every_workspace_crate_is_in_the_source_census() {
+    let members = common::workspace_members();
+    assert!(
+        members.len() > 1,
+        "the workspace has {} member(s), too few to be the split",
+        members.len()
+    );
+    let census = common::rust_sources();
+    for dir in ["src", "tests"] {
+        assert_eq!(
+            common::census_gaps(&members, &census, dir),
+            Vec::<PathBuf>::new(),
+            "the source census misses a member's `{dir}/`"
+        );
+    }
+    assert_eq!(
+        common::census_gaps(&members, &common::engine_sources(), "src"),
+        Vec::<PathBuf>::new()
+    );
+    assert_eq!(
+        common::census_gaps(&members, &common::test_sources(), "tests"),
+        Vec::<PathBuf>::new()
+    );
+    // The narrowing this replaces the count for: `crates/batten` alone.
+    let batten_only: Vec<PathBuf> = members
+        .iter()
+        .filter(|member| member.ends_with("batten"))
+        .cloned()
+        .collect();
+    let narrowed = common::sources_of(&batten_only);
+    assert!(
+        narrowed.len() > 40,
+        "the narrowed census passes the old count"
+    );
+    assert!(
+        !common::census_gaps(&members, &narrowed, "src").is_empty(),
+        "a census of crates/batten alone is not refused"
     );
 }

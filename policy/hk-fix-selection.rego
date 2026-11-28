@@ -115,7 +115,7 @@ violation contains {
 	],
 } if {
 	governed
-	rules_lines := input.tree.lines["rules/toolchain.md"]
+	rules_lines = input.tree.lines["rules/toolchain.md"]
 	every line in rules_lines {
 		not contains(line, "`fmt` remains the formatters-only subset")
 	}
@@ -207,7 +207,7 @@ test_a_config_and_prose_that_agree_are_clean if {
 # two decide whether what it says still matches. Both authorities are asserted,
 # so either one going is a finding.
 test_a_task_description_that_names_the_gate_is_refused if {
-	sound := sound_input(sound_config)
+	sound = sound_input(sound_config)
 	found := violation with input as {"tree": {
 		"documents": {"mise.toml": {"tasks": {
 			"fmt": {"description": "Run the whole hk gate over the tree"},
@@ -222,7 +222,7 @@ test_a_task_description_that_names_the_gate_is_refused if {
 }
 
 test_a_rules_file_that_dropped_the_clause_is_refused if {
-	sound := sound_input(sound_config)
+	sound = sound_input(sound_config)
 	found := violation with input as {"tree": {
 		"documents": sound.tree.documents,
 		"lines": {

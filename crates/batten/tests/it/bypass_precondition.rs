@@ -11,6 +11,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::common;
+use batten::capture::StreamedChild as _;
 
 use std::path::PathBuf;
 
@@ -27,7 +28,9 @@ const BARE: &str = "trunk push forced";
 const BARE_CALL: &str = "git push --force origin main";
 
 fn root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
+    // THE COMMITTED TREE IN A REPOSITORY OF ITS OWN (CLOUD-2904), never the
+    // checkout, whose HEAD, refs and receipts are not what these cases are about.
+    common::committed_repo().to_path_buf()
 }
 
 fn payload(command: &str) -> String {
@@ -63,7 +66,7 @@ fn adjudicate(command: &str, hatch: bool) -> (Option<i32>, String) {
     if let Some(stdin) = child.stdin.as_mut() {
         let _ = stdin.write_all(payload(command).as_bytes());
     }
-    let out = child.wait_with_output().expect("await batten");
+    let out = child.streamed_wait().expect("await batten");
     (
         out.status.code(),
         String::from_utf8_lossy(&out.stderr).into_owned(),

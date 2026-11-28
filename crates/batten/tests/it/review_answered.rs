@@ -162,7 +162,8 @@ impl Declared {
 }
 
 fn declared() -> Declared {
-    let text = fs::read_to_string(at_root("batten.toml")).expect("read the committed config");
+    let text = fs::read_to_string(common::committed_config_file("review_answered"))
+        .expect("read the committed config");
     let mut rows: std::collections::BTreeMap<String, std::collections::BTreeMap<String, String>> =
         std::collections::BTreeMap::new();
     for block in text.split("[[fact]]").skip(1) {
@@ -388,7 +389,7 @@ fn record_shell(dir: &Path, command: &str, stdout: &str) {
 fn post(dir: &Path, tool: &str, input: &serde_json::Value, response: &serde_json::Value) {
     let payload = serde_json::json!({
         "hook_event_name": "PostToolUse",
-        "session_id": "sess-review",
+        "session_id": common::session_id("sess-review"),
         "cwd": "/repo",
         "tool_name": tool,
         "tool_input": input,

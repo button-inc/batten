@@ -515,7 +515,10 @@ fn output_is_pointer_only() {
 #[test]
 fn the_committed_workflows_and_manifest_agree() {
     // The two self-consumption cases the retiring suite kept, in one run.
-    let output = common::run(&common::at_root(""), &["check", "--rule", "tool pin wrong"]);
+    let output = common::run(
+        common::committed_repo(),
+        &["check", "--rule", "tool pin wrong"],
+    );
     assert_eq!(
         output.status.code(),
         Some(0),
@@ -706,9 +709,10 @@ fn rule_checks() -> &'static [(String, Facts)] {
     }
     READING.with(|reading| reading.set(true));
     CHECKS.get_or_init(|| {
-        let config: toml::Value =
-            toml::from_str(&std::fs::read_to_string(common::at_root("batten.toml")).unwrap())
-                .unwrap();
+        let config: toml::Value = toml::from_str(
+            &std::fs::read_to_string(common::committed_config_file("ci_tools")).unwrap(),
+        )
+        .unwrap();
         config
             .get("rule")
             .and_then(toml::Value::as_array)
@@ -834,7 +838,6 @@ const SHELL_VALUED: &[&str] = &["-o", "-O", "+o", "+O", "--rcfile", "--init-file
 /// Every word is tried as a program, so a suite run that is another program's
 /// operand (`ci step -- mise run coverage`) is read too: over-reading only
 /// over-requires.
-//MUTANT suite-via-hk-unseen|s@^            "hk" => @            "hk-unread" => @|every_suite_job_installs_the_pinned_tools_its_cases_require
 fn command_facts(words: &[String], stdin: &[String]) -> (bool, Vec<String>) {
     let mut direct = false;
     let mut tasks = Vec::new();
@@ -1106,7 +1109,6 @@ fn tool_name(key: &str) -> String {
 /// segment. Outside the resolver itself, a call whose first argument is not a
 /// literal, or a `"which"` literal (a `mise which` of a case's own), is refused:
 /// either is a requirement this census cannot read.
-//MUTANT require-call-unread|s@^        required.extend(found.tools);$@@|every_suite_job_installs_the_pinned_tools_its_cases_require
 fn required_tools() -> (BTreeSet<String>, Vec<(String, PathBuf)>) {
     let mut required = BTreeSet::new();
     let mut spawned = Vec::new();
@@ -1145,7 +1147,6 @@ fn required_tools() -> (BTreeSet<String>, Vec<(String, PathBuf)>) {
 
 /// The required tools a job's steps do not install. A mise-action step with no
 /// `install_args` installs every `[tools]` entry, unless it says `install: false`.
-//MUTANT install-all-unread|s@^                && step\["with"\]\["install"\]\.as_bool() != Some(false)$@                \&\& true@|a_job_installs_what_its_mise_steps_say
 fn job_missing(steps: &[yaml_rust2::Yaml], required: &BTreeSet<String>) -> Vec<String> {
     let installing: Vec<&yaml_rust2::Yaml> = steps
         .iter()
@@ -1389,8 +1390,6 @@ fn a_suite_step_is_a_suite_task_or_a_suite_command() {
         "mise run -j 4 ci ::: lint",
         "batten --config-from origin/main mutate sweep",
         "mise run {% if env.X %}lint{% else %}ci{% endif %}",
-        // `enforce` runs the rules' checks, among them a filtered nextest run.
-        "mise run batten -- enforce",
         "mise run --output prefix ci",
         "mise watch ci",
     ] {
@@ -1413,6 +1412,9 @@ fn a_suite_step_is_a_suite_task_or_a_suite_command() {
         "mise exec -- cargo llvm-cov report --summary-only",
         "./install.sh",
         "sh target/distrib/batten-installer.sh",
+        // `enforce` runs the rules' checks, and none is a test run since
+        // `test:config-deprecations` asks the verb instead of nextest (#1276).
+        "mise run batten -- enforce",
     ] {
         assert!(!runs_suite(run, &suite), "{run}");
     }

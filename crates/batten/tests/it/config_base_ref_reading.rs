@@ -191,7 +191,7 @@ fn the_layers_above_the_authority_keep_their_own_class_under_a_base_ref_reading(
         .current_dir(&repo)
         .args(["config", "show", "--json", "--config-from", "origin/main"])
         .env("BATTEN_STRICTNESS", "strict");
-    let output = command.output().expect("batten runs");
+    let output = command.streamed_output().expect("batten runs");
     assert_eq!(output.status.code(), Some(0), "{}", common::stderr(&output));
     let document: BTreeMap<String, Value> =
         serde_json::from_slice(&output.stdout).expect("one JSON object");

@@ -1,0 +1,62 @@
+[package]
+name = "batten-base"
+description = "The modules beneath Batten's module cycle: the exit contract, the clock, the HTTP client and forge readers, and the codemod substrate."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+
+# THE SECOND CUT PHASE 2 OF CLOUD-2789 MEASURED. Once `lib.rs` and `land` stopped
+# reaching down for six helpers and the disk low-water mark, `batten modules
+# cycle` put 98 modules in the one strongly connected component and these forty
+# in a dependency-closed set strictly below it. No edge leads back into
+# `batten`, so this compiles, lints and cross-checks without it. `batten`
+# re-exports each module under its old name, so `crate::exit::…` resolves
+# unchanged there.
+
+[dependencies]
+anyhow.workspace = true
+batten-facts = { path = "../batten-facts", version = "=0.0.222" }
+batten-fsio = { path = "../batten-fsio", version = "=0.0.222" }
+# The HTTP client (`fetch`, CLOUD-745). Declared here, on the crate that names
+# them, because `macos-link-check` walks ACTIVATED edges from the workspace
+# members.
+http-body-util.workspace = true
+hyper.workspace = true
+hyper-rustls.workspace = true
+hyper-util.workspace = true
+rustls.workspace = true
+rustls-graviola.workspace = true
+rustls-pki-types.workspace = true
+tokio.workspace = true
+tower-service.workspace = true
+webpki-roots.workspace = true
+imara-diff.workspace = true
+# `codemod`'s Rust backend (CLOUD-1580) and `module_graph`'s reader of it.
+ra_ap_syntax.workspace = true
+regex.workspace = true
+regex-syntax.workspace = true
+schemars.workspace = true
+semver.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+syn.workspace = true
+toml.workspace = true
+# `config_edit`'s TOML backend (CLOUD-1575).
+toml_edit.workspace = true
+
+[features]
+# The forge fixtures `rest` and `fetch` stand up for a case (`rest::with_fixture`,
+# `rest::routed`, `fetch::stand_in`): `batten` enables it from its
+# dev-dependencies only, so no shipped build carries it.
+seam = []
+
+[target.'cfg(unix)'.dependencies]
+rustix.workspace = true
+
+[lints]
+workspace = true

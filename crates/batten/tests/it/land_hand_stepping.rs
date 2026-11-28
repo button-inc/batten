@@ -46,14 +46,14 @@
 //! the row refuses, and a `shape` row declares no `[[verdict]]` class, so there
 //! is no override route either.
 //!
-//! **But `warn` does not soften that, it deletes it.** A `warn` shape row is
-//! SILENT on the mediated surface, not advisory: `hook::blocks` is false,
-//! `adjudicate` returns `Decision::Allow`, and the decision document is EMPTY —
-//! no verdict, no row id, nothing reaching the agent at the call. So the trade
-//! was a refusal that is wrong on one path for a row that decides nothing on
-//! every path. `the_row_is_live_at_default_strictness` is the arm pinning which
-//! of the two this file is testing, and it is here because the config comment
-//! this file pairs with once claimed `warn` still reached the agent.
+//! **When it was tried, `warn` did not soften that, it deleted it.** A `warn`
+//! shape row was SILENT on the mediated surface: `hook::blocks` was false, so
+//! every call gate skipped the row and nothing reached anyone. CLOUD-2707 split
+//! the grade: `advise` is spoken on the call and `record` is a trial written to
+//! the findings store, and `hook::gate_nonblocking` runs the same gates over
+//! both. Neither stops the race this row exists for, which is why the row
+//! stays `deny`. `the_row_is_live_at_default_strictness` is the arm pinning
+//! which of the two this file is testing.
 //!
 //! The conflict cost is real and is a NAMED LIMIT rather than one this branch
 //! pays: on a conflict the stop is a human's, which `AGENTS.md` already
@@ -77,7 +77,9 @@ const ROW: &str = "patch run loose";
 
 /// The repository root, whose committed `batten.toml` is the policy under test.
 fn root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
+    // THE COMMITTED TREE IN A REPOSITORY OF ITS OWN (CLOUD-2904), never the
+    // checkout, whose HEAD, refs and receipts are not what these cases are about.
+    crate::common::committed_repo().to_path_buf()
 }
 
 /// A Claude Code `PreToolUse` envelope carrying a shell command.
@@ -378,6 +380,4 @@ reaches `mcp_dispatch.rs`'s. `test name undefined` is satisfied and the sweep ha
 is not; naming that here keeps the declaration from reading as coverage it does
 not have.
 
-#MUTANT fresh-rebase-allowed|s@"git rebase --continue"@"git rebase origin/main"@|continuing_a_conflicted_rebase_is_left_alone
-#MUTANT reason-claims-warn|s@--resolve <path>`: merge each conflicted path in@is left unstated in@|the_refusal_names_the_route_out_of_a_conflict
 */

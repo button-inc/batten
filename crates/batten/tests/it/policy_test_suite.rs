@@ -35,9 +35,9 @@
 use std::fs;
 use std::path::Path;
 
+use batten::config_model::Rule;
 use batten::facts::Look;
 use batten::policy::{self, Suite};
-use batten::rules::Rule;
 
 use crate::common;
 
@@ -59,7 +59,7 @@ use common::{Fixture, run, stdout};
 /// alternative is naming a `Vec` at every load site. A test binary is a
 /// short-lived process and the table is tens of entries.
 fn fixtures(root: &Path) -> batten::policy::Vocabulary<'static> {
-    let table: &'static [batten::verdict::DeclaredVerdict] =
+    let table: &'static [batten::config_model::DeclaredVerdict] =
         Box::leak(common::verdicts_in(root).into_boxed_slice());
     batten::policy::Vocabulary {
         patterns: &[],
@@ -106,7 +106,7 @@ fn suite_with_scope(source: &str, mediated: bool) -> Suite {
         &serde_json::json!({}),
     )
     .expect("the fixture compiles");
-    match policy::test(&bundle, "{}", mediated).expect("the suite runs") {
+    match policy::test(&bundle, "{}", mediated, None).expect("the suite runs") {
         Look::Is(suite) => suite,
         Look::IsNot | Look::CouldNotLook => panic!("the suite did not run"),
     }
@@ -584,6 +584,37 @@ documents = ["present.json"]
         )
         .file("present.json", r#"{"ok": true}"#)
         .file("probe.rego", CORRECT_TREE)
+        .build();
+    let output = run(&dir, &["policy", "test"]);
+    assert_eq!(output.status.code(), Some(0), "{}", stdout(&output));
+}
+
+#[test]
+fn a_policy_only_config_still_walks_the_tree_its_sources_select() {
+    // The walk is skipped only when NO row is a policy row. A config whose every
+    // row is one must still walk: a `sources` glob selects over the walked list,
+    // so an unwalked tree hands the suite no documents. The module's own test
+    // reads the input this verb built rather than one it supplies.
+    let dir = Fixture::new("policy-test-walks-for-sources")
+        .config(
+            r#"version = 1
+
+[[rule]]
+id = "probe"
+kind = "policy"
+scope = "tree"
+module = "probe.rego"
+severity = "deny"
+sources = ["*.json"]
+"#,
+        )
+        .file("present.json", r#"{"ok": true}"#)
+        .file(
+            "probe.rego",
+            &format!(
+                "{CORRECT_TREE}\ntest_the_walk_selected_the_document if {{\n\tinput.tree.documents[\"present.json\"]\n}}\n"
+            ),
+        )
         .build();
     let output = run(&dir, &["policy", "test"]);
     assert_eq!(output.status.code(), Some(0), "{}", stdout(&output));
