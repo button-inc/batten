@@ -13827,7 +13827,7 @@ pub fn dependency_index(
 /// does), every manifest is in the build key (`resume::build_digest`), and a
 /// gate's `cfg` is in its owner's digest, so it decides the same in the build
 /// that recorded and the build that runs. Read as unknown regardless, five
-/// `seam` and `preset-overlay` gates left 161 of 300 sampled sealed cases of
+/// `seam` and overlay-preset gates left 161 of 300 sampled sealed cases of
 /// lap 26's store unselectable.
 fn read_gates_and_includes(
     index: &mut DependencyIndex,
@@ -14832,7 +14832,7 @@ mod tests {
     /// `builds_as_swept`), every manifest is in its build key, and a gated
     /// function's `cfg` is in its own digest, so the gate decides the same in
     /// both builds. Measured on lap 26's store: 161 of 300 sampled sealed
-    /// cases were unselectable on five `seam`/`preset-overlay` gates.
+    /// cases were unselectable on five `seam`/overlay-preset gates.
     ///
     /// Fails by: a gated function left unknown under a sweep that chose no
     /// feature, or its gate's edit leaving the key standing.
