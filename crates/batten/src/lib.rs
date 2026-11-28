@@ -34979,6 +34979,45 @@ mod tests {
     /// suite's own directory, the case answered whatever branch the clone
     /// running it sat on, and was red in one whose upstream the remote had
     /// pruned (CLOUD-2937 holds that refusal).
+    /// This branch's own commits are those past the trunk, each with its
+    /// patch identity (CLOUD-2957).
+    ///
+    /// Fails by: `own_commits` answering nothing, which makes a copy of this
+    /// branch's own commit on a stacked or rebased pull request read as a rival.
+    #[test]
+    fn own_commits_are_the_commits_past_the_trunk() {
+        let root = crate::scratch::scratch("own-commits");
+        crate::testing::contain_state(&root.join("state"));
+        let repo = root.join("repo");
+        crate::gitwrite::init_on_main(&repo).expect("init");
+        std::fs::write(repo.join("a.txt"), "one").expect("write");
+        crate::gitwrite::commit_paths(&repo, &[String::from("a.txt")], "seed").expect("commit");
+        let trunk = git::head_commit(&repo).expect("head");
+        let dot_git = repo.join(".git");
+        std::fs::create_dir_all(dot_git.join("refs/remotes/origin")).expect("remote refs");
+        std::fs::write(
+            dot_git.join("refs/remotes/origin/main"),
+            format!("{trunk}\n"),
+        )
+        .expect("trunk ref");
+        std::fs::write(
+            dot_git.join("refs/remotes/origin/HEAD"),
+            "ref: refs/remotes/origin/main\n",
+        )
+        .expect("remote head");
+        let config = std::fs::read_to_string(dot_git.join("config")).expect("config");
+        std::fs::write(
+            dot_git.join("config"),
+            format!("{config}[remote \"origin\"]\n\turl = .\n"),
+        )
+        .expect("remote");
+        std::fs::write(repo.join("a.txt"), "two").expect("write");
+        crate::gitwrite::commit_paths(&repo, &[String::from("a.txt")], "mine").expect("commit");
+        let ours = super::own_commits(&repo);
+        assert_eq!(ours.shas.len(), 1, "only the commit past the trunk is ours");
+        assert_eq!(ours.identities.len(), 1, "and it carries its identity");
+    }
+
     #[test]
     fn a_checkout_has_its_at_risk_half_read() {
         let root = crate::scratch::scratch("at-risk-read");
