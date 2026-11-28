@@ -12177,6 +12177,7 @@ gates = [
   "evaluator-closure",
   "evaluator-io-probe",
   "agent-spawn",
+  "dispatch-tier",
   "macos-link",
   "ntia",
   "release-tracking",
