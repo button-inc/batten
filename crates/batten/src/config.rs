@@ -6439,6 +6439,37 @@ mod tests {
     }
 }
 
+/// The fields of a `[[step]]` row that only schedule it, in no part of the
+/// config a step key reads (CLOUD-2960).
+pub(crate) const STEP_SCHEDULING: [&str; 4] = ["journal", "group", "depends_on", "run"];
+
+/// The config `text` with what `step::config_table` leaves out removed IN PLACE:
+/// the `engine` pin, each `[[step]]` row's scheduling fields, and a row that
+/// declares nothing else. The view a case reads the config through, so it reads
+/// what the key does (CLOUD-2960). Edited rather than re-serialized, so every
+/// table keeps its layout: a case that reads the file section by section finds
+/// each section where the file wrote it, nested inline tables included.
+#[must_use]
+pub fn config_view(text: &str) -> Option<String> {
+    let mut doc: toml_edit::DocumentMut = text.parse().ok()?;
+    doc.remove("engine");
+    if let Some(rows) = doc
+        .get_mut("step")
+        .and_then(toml_edit::Item::as_array_of_tables_mut)
+    {
+        for row in rows.iter_mut() {
+            for field in STEP_SCHEDULING {
+                row.remove(field);
+            }
+        }
+        rows.retain(|row| row.iter().any(|(key, _)| key != "id"));
+        if rows.is_empty() {
+            doc.remove("step");
+        }
+    }
+    Some(doc.to_string())
+}
+
 /// This repository's committed config as a step key sees it (CLOUD-2960), for
 /// the crate's own unit tests: the twin of the integration suite's
 /// `common::committed_config`, so no case reads bytes its step does not key.
@@ -6448,7 +6479,7 @@ pub(crate) fn committed_config_view() -> String {
     // THE ONE READ OF THE CHECKOUT CONFIG in the crate's sources (CLOUD-2960).
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../batten.toml");
     let text = std::fs::read_to_string(path).unwrap_or_default();
-    crate::step::config_view(&text).unwrap_or_default()
+    config_view(&text).unwrap_or_default()
 }
 
 /// THE VIEW LOADS (CLOUD-2960): every case reading the committed config reads

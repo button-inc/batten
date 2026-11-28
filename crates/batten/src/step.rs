@@ -483,7 +483,7 @@ fn record_said(root: &Path, families: &[String]) -> Option<String> {
 pub const CONFIG: [&str; 3] = ["batten", "step", "config"];
 
 /// The fields of a `[[step]]` row that only schedule it, in no part.
-const SCHEDULING: [&str; 4] = ["journal", "group", "depends_on", "run"];
+const SCHEDULING: [&str; 4] = crate::config::STEP_SCHEDULING;
 
 /// The parts a `step config` line's words after [`CONFIG`] name: none for
 /// every part, or every word after a leading `--`. `None` for any other shape
@@ -522,31 +522,11 @@ pub fn config_table(text: &str) -> Option<toml::Table> {
     Some(table)
 }
 
-/// The config `text` with what [`config_table`] leaves out removed IN PLACE:
-/// the `engine` pin, each `[[step]]` row's scheduling fields, and a row that
-/// declares nothing else. The view a case reads the config through, so it reads
-/// what the key does (CLOUD-2960). Edited rather than re-serialized, so every
-/// table keeps its layout: a case that reads the file section by section finds
-/// each section where the file wrote it, nested inline tables included.
+/// The config `text` as a case reads it: [`crate::config::config_view`], the
+/// pin and the scheduling removed in place (CLOUD-2960).
 #[must_use]
 pub fn config_view(text: &str) -> Option<String> {
-    let mut doc: toml_edit::DocumentMut = text.parse().ok()?;
-    doc.remove("engine");
-    if let Some(rows) = doc
-        .get_mut("step")
-        .and_then(toml_edit::Item::as_array_of_tables_mut)
-    {
-        for row in rows.iter_mut() {
-            for field in SCHEDULING {
-                row.remove(field);
-            }
-        }
-        rows.retain(|row| row.iter().any(|(key, _)| key != "id"));
-        if rows.is_empty() {
-            doc.remove("step");
-        }
-    }
-    Some(doc.to_string())
+    crate::config::config_view(text)
 }
 
 /// One value in a canonical spelling: every table's keys sorted, whatever
