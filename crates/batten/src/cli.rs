@@ -737,6 +737,12 @@ pub enum StepCommand {
         /// The pathspecs whose index paths are printed, never their bytes.
         specs: Vec<String>,
     },
+    /// Print the digests of the config parts a step reads (CLOUD-2960): how
+    /// the config reaches a key, declared as a `tools` entry.
+    Config {
+        /// The parts, by top-level name; empty for every part.
+        parts: Vec<String>,
+    },
     /// Run groups' rows as graphs, one group after another (CLOUD-2785).
     Graph {
         /// The groups, in order, each `NAME` or `NAME=N` (CLOUD-2789).
@@ -3771,6 +3777,12 @@ fn step_of(matches: &ArgMatches) -> Option<StepCommand> {
                 .get_many::<String>("specs")?
                 .cloned()
                 .collect::<Vec<_>>(),
+        }),
+        ("config", matches) => Some(StepCommand::Config {
+            parts: matches
+                .get_many::<String>("parts")
+                .map(|values| values.cloned().collect())
+                .unwrap_or_default(),
         }),
         ("base", matches) => Some(StepCommand::Base {
             reference: matches.get_one::<String>("ref").cloned()?,

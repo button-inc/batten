@@ -126,6 +126,7 @@ use std::path::Path;
 use anyhow::Result;
 use sha2::Digest as _;
 
+use crate::config_model::CONFIG_FILE;
 use crate::exit::ExitCode;
 use crate::resolve::Overrides;
 use crate::step_table::Step;
@@ -368,11 +369,23 @@ fn material(
         // THE INDEX IS WHAT THE KEY HASHES, so the worktree must agree with it
         // over the set: a receipt over index bytes the run never saw is the one
         // thing this cache may not mint.
-        let clean = fact.diverged.is_empty() && fact.untracked.is_empty();
+        //
+        // THE CONFIG IS NEVER AN INPUT (CLOUD-2960): it reaches a key only
+        // through a `batten step config` line, as the parts a row reads, so
+        // its own state here neither keys nor refuses one.
+        let clean = !fact
+            .diverged
+            .iter()
+            .chain(&fact.untracked)
+            .any(|path| path != CONFIG_FILE);
         if !clean {
             return None;
         }
-        for entry in &fact.entries {
+        for entry in fact
+            .entries
+            .iter()
+            .filter(|entry| entry.path != CONFIG_FILE)
+        {
             entries.insert(
                 (entry.path.clone(), entry.stage),
                 format!(
@@ -456,6 +469,157 @@ fn record_said(root: &Path, families: &[String]) -> Option<String> {
         })
         .collect();
     Some(lines.join("\n"))
+}
+
+/// The tool line a row reads the config through (CLOUD-2960): `batten step
+/// config [-- <part>...]`, answered in-process as one `config <part> <digest>`
+/// line per part of the config's view ([`config_view`]), every part where none
+/// is named. The config file is never an `inputs` entry, so this line is the
+/// only way it reaches a key: a comment, the `engine` pin or a row's
+/// scheduling moves none, and an edit to one part moves only the rows that
+/// declare it.
+///
+/// A TOOL LINE, NOT A FIELD, for [`EXISTS`]'s reason.
+pub const CONFIG: [&str; 3] = ["batten", "step", "config"];
+
+/// The fields of a `[[step]]` row that only schedule it, in no part.
+const SCHEDULING: [&str; 4] = ["journal", "group", "depends_on", "run"];
+
+/// The parts a `step config` line's words after [`CONFIG`] name: none for
+/// every part, or every word after a leading `--`. `None` for any other shape
+/// or an empty name, which keys nothing.
+fn config_ask(words: &[String]) -> Option<&[String]> {
+    let Some((first, parts)) = words.split_first() else {
+        return Some(words);
+    };
+    (first == "--" && parts.iter().all(|part| !part.is_empty())).then_some(parts)
+}
+
+/// The config `text` as the key sees it (CLOUD-2960): parsed, without the
+/// `engine` pin, without each `[[step]]` row's scheduling fields
+/// ([`SCHEDULING`]), and without a row that declares nothing else. `None`
+/// where `text` is not TOML.
+#[must_use]
+pub fn config_table(text: &str) -> Option<toml::Table> {
+    let mut table: toml::Table = toml::from_str(text).ok()?;
+    table.remove("engine");
+    if let Some(toml::Value::Array(rows)) = table.get_mut("step") {
+        for row in rows.iter_mut() {
+            if let Some(row) = row.as_table_mut() {
+                for field in SCHEDULING {
+                    row.remove(field);
+                }
+            }
+        }
+        rows.retain(|row| {
+            row.as_table()
+                .is_none_or(|row| row.keys().any(|key| key != "id"))
+        });
+        if rows.is_empty() {
+            table.remove("step");
+        }
+    }
+    Some(table)
+}
+
+/// [`config_table`] written back as TOML: the view a case reads the config
+/// through, so it reads what the key does (CLOUD-2960).
+#[must_use]
+pub fn config_view(text: &str) -> Option<String> {
+    toml::to_string(&config_table(text)?).ok()
+}
+
+/// One value in a canonical spelling: every table's keys sorted, whatever
+/// order the file or the map wrote them in.
+fn canonical(value: &toml::Value) -> String {
+    match value {
+        toml::Value::Table(table) => {
+            let mut keys: Vec<&String> = table.keys().collect();
+            keys.sort();
+            let body: Vec<String> = keys
+                .into_iter()
+                .map(|key| format!("{}:{}", quoted(key), canonical(&table[key.as_str()])))
+                .collect();
+            format!("{{{}}}", body.join(","))
+        }
+        toml::Value::Array(items) => {
+            let body: Vec<String> = items.iter().map(canonical).collect();
+            format!("[{}]", body.join(","))
+        }
+        toml::Value::String(text) => quoted(text),
+        other => other.to_string(),
+    }
+}
+
+/// One `config "<part>" <digest>` line per part of `text`'s view, sorted, or
+/// `config "<part>" none` for a named part it does not carry: every part
+/// where `parts` is empty. `None` where `text` is not TOML. The digest of
+/// part 2 that a caller outside the step cache keys with (CLOUD-2959).
+#[must_use]
+pub fn config_digest(text: &str, parts: &[String]) -> Option<String> {
+    let table = config_table(text)?;
+    let mut names: Vec<String> = if parts.is_empty() {
+        table.keys().cloned().collect()
+    } else {
+        parts.to_vec()
+    };
+    names.sort();
+    names.dedup();
+    let lines: Vec<String> = names
+        .iter()
+        .map(|name| match table.get(name) {
+            Some(value) => format!("config {} {}", quoted(name), key_of(&canonical(value))),
+            None => format!("config {} none", quoted(name)),
+        })
+        .collect();
+    if lines.is_empty() {
+        return Some(String::from("config none"));
+    }
+    Some(lines.join("\n"))
+}
+
+/// [`config_digest`] over the config committed at `root`. The worktree must
+/// agree with the index over the file, as for `inputs`; `None` otherwise, or
+/// where the file is absent or unreadable.
+fn config_said(root: &Path, parts: &[String]) -> Option<String> {
+    let facts = crate::git::index_facts(root, &[String::from(CONFIG_FILE)]).ok()?;
+    let fact = facts.values().next()?;
+    if !(fact.diverged.is_empty() && fact.untracked.is_empty()) || fact.entries.is_empty() {
+        return None;
+    }
+    let text = std::fs::read_to_string(root.join(CONFIG_FILE)).ok()?;
+    config_digest(&text, parts)
+}
+
+/// `step config` (CLOUD-2960): print the part digests `parts` name, every part
+/// where none, the step cache's answer to the tool line; exit 0. 1 for an
+/// empty part name, 3 where the config is unread or disagrees with the index.
+///
+/// # Errors
+///
+/// `out` or `err` cannot be written.
+pub fn run_config(parts: &[String], out: &mut dyn Write, err: &mut dyn Write) -> Result<ExitCode> {
+    if parts.iter().any(String::is_empty) {
+        writeln!(err, "step config: a part name may not be empty")?;
+        return Ok(ExitCode::Usage);
+    }
+    let Some(lines) = config_said(Path::new("."), parts) else {
+        writeln!(
+            err,
+            "step config: the config is not committed, not TOML, or the worktree disagrees with \
+             the index over it"
+        )?;
+        return Ok(ExitCode::Internal);
+    };
+    writeln!(out, "{lines}")?;
+    Ok(ExitCode::Success)
+}
+
+/// Whether `row` reads the config through a [`CONFIG`] line.
+fn reads_config(row: &Step) -> bool {
+    row.tools()
+        .iter()
+        .any(|tool| after(tool, &CONFIG).is_some())
 }
 
 /// Whether `row` declares its misses untraced ([`UNTRACED`]).
@@ -570,6 +734,9 @@ fn tool_said(root: &Path, tool: &[String]) -> Option<(i32, String)> {
     }
     if let Some(words) = after(tool, &RECORD) {
         return answered(record_ask(words).and_then(|families| record_said(root, families)));
+    }
+    if let Some(words) = after(tool, &CONFIG) {
+        return answered(config_ask(words).and_then(|parts| config_said(root, parts)));
     }
     if let Some(words) = after(tool, &crate::mutate::resume::ENV) {
         return answered(
@@ -2363,6 +2530,7 @@ fn lint_trace(step: &str, file: &Path) -> Linted {
         root: &root,
         inputs: row.inputs(),
         exists: &exists_specs(&row),
+        config: reads_config(&row),
     };
     lint_accessed(&declaration, &accessed, file, &mut ignored)
 }
@@ -2373,6 +2541,8 @@ struct Declaration<'a> {
     root: &'a Path,
     inputs: &'a [String],
     exists: &'a [String],
+    /// Whether the row reads the config through a [`CONFIG`] line.
+    config: bool,
 }
 
 /// What `accessed`, a whole trace's reads and writes, says about
@@ -2408,6 +2578,7 @@ fn lint_accessed(
         root,
         declaration.inputs,
         declaration.exists,
+        declaration.config,
         accessed,
         ignored,
     );
@@ -2509,11 +2680,17 @@ fn env_lines(
 /// ancestor of one, is declared for an [`Access::Probe`] and undeclared for any
 /// access that reads bytes, since the key holds its presence and not its bytes.
 ///
+/// THE CONFIG FILE IS DECLARED BY A [`CONFIG`] LINE ALONE (CLOUD-2960): it is
+/// never key material through `inputs`, so a read of its bytes is declared
+/// when `config` holds and undeclared when it does not, whatever `inputs`
+/// selects. A probe of it is judged as any path's.
+///
 /// [`Access::Probe`]: crate::mutate::trace::Access::Probe
 fn undeclared(
     root: &Path,
     inputs: &[String],
     exists: &[String],
+    config: bool,
     touched: &[(std::path::PathBuf, crate::mutate::trace::Access)],
     ignored: &mut dyn FnMut(&str) -> bool,
 ) -> Vec<String> {
@@ -2531,9 +2708,14 @@ fn undeclared(
         if relative.is_empty() || relative == ".git" || relative.starts_with(".git/") {
             continue;
         }
-        if selects(inputs, &relative)
-            || (*access == crate::mutate::trace::Access::Probe && selects(exists, &relative))
-        {
+        let probe = *access == crate::mutate::trace::Access::Probe;
+        if relative == CONFIG_FILE && !probe {
+            if !config {
+                out.insert(relative);
+            }
+            continue;
+        }
+        if selects(inputs, &relative) || (probe && selects(exists, &relative)) {
             continue;
         }
         out.insert(relative);
@@ -3024,6 +3206,7 @@ mod tests {
             root,
             inputs: &[String::from("src/a.rs")],
             exists: &[],
+            config: false,
         };
         lint_accessed(&declaration, accessed, file, &mut |_| false)
     }
@@ -3378,7 +3561,7 @@ mod tests {
             asked.push(path.to_owned());
             path == "target"
         };
-        let found = super::undeclared(root, &inputs, &[], &touched, &mut ignored);
+        let found = super::undeclared(root, &inputs, &[], false, &touched, &mut ignored);
         assert_eq!(found, vec!["b".to_owned(), "c/missing".to_owned()]);
         assert!(
             !asked.iter().any(|path| path == "target/debug/t"),
@@ -3413,7 +3596,7 @@ mod tests {
         ]
         .map(str::to_owned)
         .to_vec();
-        let found = super::undeclared(root, &inputs, &exists, &touched, &mut |_| false);
+        let found = super::undeclared(root, &inputs, &exists, false, &touched, &mut |_| false);
         assert_eq!(
             found,
             ["other/build.rs", "sib/README.md", "sib/src/main.rs"].map(str::to_owned)
@@ -3441,7 +3624,7 @@ mod tests {
         let root = Path::new("/repo");
         let accessed = crate::mutate::trace::accesses(trace, Some(root)).expect("a whole trace");
         let inputs = vec!["src".to_owned()];
-        let found = super::undeclared(root, &inputs, &[], &accessed, &mut |_| false);
+        let found = super::undeclared(root, &inputs, &[], false, &accessed, &mut |_| false);
         assert_eq!(found, vec!["build.rs".to_owned()]);
     }
 
@@ -3621,6 +3804,7 @@ mod tests {
             std::path::Path::new("/repo"),
             &[".".to_owned()],
             &[],
+            false,
             &touched,
             &mut |_| false,
         );

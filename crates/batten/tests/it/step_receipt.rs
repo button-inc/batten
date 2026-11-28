@@ -1473,6 +1473,10 @@ fn a_rewrite_of_what_a_commit_step_judges_misses_though_the_tree_is_identical() 
         common::write(&repo.dir, "batten.toml", &declared_step_table(step));
         // A `cargo` that answers its version, as the row's tool probe asks.
         common::write(&repo.dir, "bin/cargo", "#!/bin/sh\necho 'cargo 1.0.0'\n");
+        // One of the row's own inputs, tracked: the config is never an input
+        // (CLOUD-2960), so without it the row's set resolves to nothing.
+        common::write(&repo.dir, "Cargo.toml", "[workspace]\n");
+        common::git_in(&repo.dir, &["add", "Cargo.toml"]);
         common::git_in(&repo.dir, &["commit", "-qam", "the row"]);
         common::git_in(
             &repo.dir,
@@ -2150,4 +2154,201 @@ fn a_terminated_step_run_takes_its_body_with_it() {
     );
     assert!(!alive(run.body), "the body went with it");
     await_group_gone(run.body);
+}
+
+/// THE CONFIG REACHES A KEY ONLY THROUGH THE PARTS A ROW READS (CLOUD-2960):
+/// three rows keyed on the whole tree, one declaring no config part, one
+/// declaring `rule` and one every part. Before, the config was the whole
+/// file's index entry under every row's `inputs`, so any edit to it moved all
+/// three.
+const CONFIG_ROWS: &str = r#"version = 1
+
+[[rule]]
+id = "no-fixture-secrets"
+kind = "forbid"
+glob = "**/*.secret"
+pattern = "hunter2"
+severity = "deny"
+
+[[step]]
+id = "cfg-none"
+inputs = ["."]
+tools = [["toolv"]]
+
+[[step]]
+id = "cfg-rule"
+inputs = ["."]
+tools = [["toolv"], ["batten", "step", "config", "--", "rule"]]
+
+[[step]]
+id = "cfg-all"
+inputs = ["."]
+tools = [["toolv"], ["batten", "step", "config"]]
+
+[[step]]
+id = "traced-config"
+inputs = ["input.txt"]
+tools = [["toolv"], ["batten", "step", "config", "--", "rule"]]
+"#;
+
+const CONFIG_STEPS: [&str; 3] = ["cfg-none", "cfg-rule", "cfg-all"];
+
+impl Repo {
+    /// [`Repo::new`] over `config` rather than [`TABLE`], committed.
+    fn with_config(name: &str, config: &str) -> Self {
+        let repo = Self::new(name);
+        repo.commit_config(config);
+        repo
+    }
+
+    /// `config` written as the committed authority, staged and committed.
+    fn commit_config(&self, config: &str) {
+        common::write(&self.dir, "batten.toml", config);
+        common::git_in(&self.dir, &["add", "batten.toml"]);
+        common::git_in(&self.dir, &["commit", "-qm", "config"]);
+    }
+
+    /// Each of [`CONFIG_STEPS`] checked and recorded: each must key, and miss.
+    fn record_config_steps(&self) {
+        for step in CONFIG_STEPS {
+            assert_eq!(
+                self.check(&[step]),
+                "miss",
+                "{step} keys and has no receipt yet"
+            );
+            let recorded = self.record_with(&[step], &[]);
+            assert_eq!(
+                recorded.status.code(),
+                Some(0),
+                "{step} records: {}",
+                common::stderr(&recorded)
+            );
+            assert_eq!(self.check(&[step]), "hit", "{step} hits once recorded");
+        }
+    }
+
+    /// The first word `step check` answers each of [`CONFIG_STEPS`] with.
+    fn config_answers(&self) -> Vec<String> {
+        CONFIG_STEPS
+            .iter()
+            .map(|step| self.check(&[step]))
+            .collect()
+    }
+}
+
+/// Fails by: the config file's own index entry keying a row through `inputs`
+/// (all three miss), or the `engine` pin being part of a `step config` digest
+/// (the every-part row misses).
+#[test]
+fn the_engine_pin_moves_no_step_key() {
+    let repo = Repo::with_config("config-pin", CONFIG_ROWS);
+    repo.record_config_steps();
+    let pinned = CONFIG_ROWS.replacen(
+        "version = 1\n",
+        &format!(
+            "version = 1\nengine = {{ release = \"v{}\" }}\n",
+            env!("CARGO_PKG_VERSION")
+        ),
+        1,
+    );
+    repo.commit_config(&pinned);
+    assert_eq!(repo.config_answers(), ["hit", "hit", "hit"]);
+}
+
+/// Fails by: a row's `journal`, or a row that only schedules, reaching the
+/// `step` part's digest or the file's index entry.
+#[test]
+fn a_steps_scheduling_moves_no_step_key() {
+    let repo = Repo::with_config("config-schedule", CONFIG_ROWS);
+    repo.record_config_steps();
+    let scheduled = format!(
+        "{}\n[[step]]\nid = \"only-schedules\"\ngroup = \"g\"\nrun = [\"bin/ok\"]\ndepends_on = []\n",
+        CONFIG_ROWS.replacen(
+            "id = \"cfg-rule\"\n",
+            "id = \"cfg-rule\"\njournal = \"nextest\"\n",
+            1
+        )
+    );
+    repo.commit_config(&scheduled);
+    assert_eq!(repo.config_answers(), ["hit", "hit", "hit"]);
+}
+
+/// Fails by: the digest reading the file's bytes or its order rather than the
+/// parsed parts.
+#[test]
+fn a_comment_in_the_config_moves_no_step_key() {
+    let repo = Repo::with_config("config-comment", CONFIG_ROWS);
+    repo.record_config_steps();
+    let (head, steps) = CONFIG_ROWS
+        .split_once("\n[[step]]\n")
+        .expect("the fixture has a rule before its steps");
+    let (_, rule) = head
+        .split_once("\n\n")
+        .expect("the rule follows the version");
+    let reordered = format!("# a comment\nversion = 1\n\n[[step]]\n{steps}\n{rule}\n");
+    assert_ne!(reordered, CONFIG_ROWS);
+    repo.commit_config(&reordered);
+    assert_eq!(repo.config_answers(), ["hit", "hit", "hit"]);
+}
+
+/// Fails by: a part reaching a row that does not name it (the no-part row
+/// misses), or a named part not reaching a row that does (the `rule` or the
+/// every-part row hits).
+#[test]
+fn a_rule_edit_moves_only_the_rows_that_declare_rules() {
+    let repo = Repo::with_config("config-rule", CONFIG_ROWS);
+    repo.record_config_steps();
+    repo.commit_config(&CONFIG_ROWS.replacen("pattern = \"hunter2\"", "pattern = \"hunter3\"", 1));
+    assert_eq!(repo.config_answers(), ["hit", "miss", "miss"]);
+}
+
+/// Fails by: a read of the config passing the trace lint on `inputs` alone,
+/// or failing it though the row declares a `step config` line.
+#[test]
+fn a_row_that_reads_the_config_undeclared_fails_its_trace_lint() {
+    let repo = Repo::with_config(
+        "config-trace",
+        &format!(
+            "{CONFIG_ROWS}\n[[step]]\nid = \"traced\"\ninputs = [\"input.txt\", \"batten.toml\"]\ntools = [[\"toolv\"]]\n"
+        ),
+    );
+    repo.script(
+        "readcfg",
+        "#!/bin/sh\ncat input.txt batten.toml >/dev/null\n",
+    );
+    let undeclared = repo.run_step(&["traced"], &["readcfg"], &[]);
+    let declared = repo.run_step(&["traced-config"], &["readcfg"], &[]);
+    if batten::mutate::trace::Host::here().tracer().is_some() {
+        assert_eq!(
+            undeclared.status.code(),
+            Some(2),
+            "{}",
+            common::stderr(&undeclared)
+        );
+        let stderr = common::stderr(&undeclared);
+        let listing = stderr
+            .lines()
+            .find_map(|line| {
+                line.split_once("outside its inputs; read ")
+                    .map(|(_, at)| at)
+            })
+            .unwrap_or_else(|| panic!("the undeclared read is reported: {stderr}"));
+        assert_eq!(
+            std::fs::read_to_string(listing.trim()).unwrap(),
+            "batten.toml\n"
+        );
+    } else {
+        assert_eq!(
+            undeclared.status.code(),
+            Some(0),
+            "{}",
+            common::stderr(&undeclared)
+        );
+    }
+    assert_eq!(
+        declared.status.code(),
+        Some(0),
+        "{}",
+        common::stderr(&declared)
+    );
 }
