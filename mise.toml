@@ -5255,13 +5255,7 @@ env = { BATTEN_BIN = "{{ get_env(name='CARGO_TARGET_DIR', default=config_root ~ 
 # verify-4` and the `gate:*` rows together. Until then tier 2 keeps the graph's
 # fan width with `--jobs 2` and tier 3 its one-at-a-time with `--jobs 1`.
 run = [
-  "{{vars.batten}} receipt clean",
-  "mise run record-verdicts",
-  "mise run evaluator-io-record",
-  "mise run signing-posture-record",
-  "{{vars.batten}} record validate config-validator",
-  "mise run --continue-on-error verify:commit-lint ::: verify:config-lint ::: ci:quick ::: verify:test-replay-structural ::: prose-only-check ::: engine-pin-check ::: zizmor ::: batten check --rule 'test cover never' ::: deny ::: policy-budget ::: policy-test ::: batten-check ::: modules-ratchet:check",
-  "mise run --continue-on-error --jobs 2 semver ::: verify:test-replay ::: ci:checks ::: cross-check ::: darwin-link ::: lint:clippy",
+  "{{vars.batten}} step graph run verify-1 verify-2=2",
   # THE DIST LEG, AS `dist.yml` RUNS IT (CLOUD-2789): `rust.yml` calls that
   # workflow on every pull request, and `ci-parity` now follows the call, so its
   # build, the binary's inventory and the inventory's check run here too. In

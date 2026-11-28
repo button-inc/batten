@@ -11,7 +11,7 @@
 
 # The config schema version. This build supports version 1.
 version = 1
-engine = { release = "v0.0.222" }
+engine = { release = "v0.0.222-dev.pr1276.20261128054722+52134973caec" }
 
 # Minimum Batten version permitted to read this file (semver). Enforced: a binary
 # older than this refuses to run rather than reporting green over rules it does
@@ -19126,9 +19126,9 @@ repair = ["batten", "engine", "install"]
 # while the second runs in a CI job that compiles nothing.
 #
 # THOSE ABSENCES ARE FROM THE KEYED ROWS ONLY (CLOUD-2785). `batten-check` and
-# `zizmor` run as tasks of `verify:gated`'s tier-1 fan, never through a keyed
-# row, so they still never take a receipt, for the reasons above. (Their
-# schedule-only `gate:` rows are withheld until the engine pin reads `group`.)
+# `zizmor` are now `gate:` nodes of the lap's graph at the end of this table:
+# SCHEDULE-ONLY rows, with no `inputs` and no `tools`, so they are ordered and
+# timed and still never take a receipt, for the reasons above.
 [[step]]
 id = "lint:clippy"
 inputs = [
@@ -19424,6 +19424,8 @@ tools = [
     "PATH",
   ],
 ]
+# THE CASE JOURNAL IS THE ROW'S CHOICE (CLOUD-2785), never read off the argv.
+journal = "nextest"
 
 # THE TRACED LANE (CLOUD-2789), UNTRACED BY DECLARATION. Its cases take the
 # traced branch only where nothing traces them, so a miss here runs bare
@@ -20626,6 +20628,161 @@ tools = [
     ".",
   ],
 ]
+
+# THE LAP'S FIRST TWO TIERS, AS A GRAPH (CLOUD-2785). `verify:gated` runs
+# `step graph run verify-1 verify-2=2`, verify-2 two at a time; these rows
+# are their nodes. Each is SCHEDULE-ONLY (no `inputs`, no `tools`): it always
+# runs and keys nothing itself, because the task it starts runs its own keyed
+# `step run` where one exists (`deny`, `policy-test`, `semver`, ...), whose row
+# above is untouched, so no receipt moves. The ids carry `gate:` so a node never
+# shares an id with the keyed row its task runs.
+#
+# verify-1: the clean-tree check, the three record writes and the validator in
+# their old order, then every tier-1 gate after them, each independent of the
+# others, so one failure skips nothing beside it.
+[[step]]
+id = "gate:tree-clean"
+group = "verify-1"
+run = ["mise", "run", "tree-clean"]
+
+[[step]]
+id = "gate:record-verdicts"
+group = "verify-1"
+run = ["mise", "run", "record-verdicts"]
+depends_on = ["gate:tree-clean"]
+
+[[step]]
+id = "gate:evaluator-io-record"
+group = "verify-1"
+run = ["mise", "run", "evaluator-io-record"]
+depends_on = ["gate:record-verdicts"]
+
+[[step]]
+id = "gate:signing-posture-record"
+group = "verify-1"
+run = ["mise", "run", "signing-posture-record"]
+depends_on = ["gate:evaluator-io-record"]
+
+[[step]]
+id = "gate:config-validator"
+group = "verify-1"
+run = ["mise", "run", "batten", "record", "validate", "config-validator"]
+depends_on = ["gate:signing-posture-record"]
+
+[[step]]
+id = "gate:commit-lint"
+group = "verify-1"
+run = ["mise", "run", "verify:commit-lint"]
+depends_on = ["gate:config-validator"]
+
+[[step]]
+id = "gate:config-lint"
+group = "verify-1"
+run = ["mise", "run", "verify:config-lint"]
+depends_on = ["gate:config-validator"]
+
+# EVERY hk STEP NOT TAGGED `slow`, in seconds, at the front of the lap
+# (CLOUD-2789): they ran only inside `ci` in the third tier, so a formatter or a
+# drift check that fails in seconds was reported an hour in.
+[[step]]
+id = "gate:hk-quick"
+group = "verify-1"
+run = ["mise", "run", "ci:quick"]
+depends_on = ["gate:config-validator"]
+
+[[step]]
+id = "gate:test-replay-structural"
+group = "verify-1"
+run = ["mise", "run", "verify:test-replay-structural"]
+depends_on = ["gate:config-validator"]
+
+[[step]]
+id = "gate:prose-only-check"
+group = "verify-1"
+run = ["mise", "run", "prose-only-check"]
+depends_on = ["gate:config-validator"]
+
+[[step]]
+id = "gate:engine-pin-check"
+group = "verify-1"
+run = ["mise", "run", "engine-pin-check"]
+depends_on = ["gate:config-validator"]
+
+[[step]]
+id = "gate:zizmor"
+group = "verify-1"
+run = ["mise", "run", "zizmor"]
+depends_on = ["gate:config-validator"]
+
+[[step]]
+id = "gate:test-cover-never"
+group = "verify-1"
+run = ["mise", "run", "batten", "check", "--rule", "test cover never"]
+depends_on = ["gate:config-validator"]
+
+[[step]]
+id = "gate:deny"
+group = "verify-1"
+run = ["mise", "run", "deny"]
+depends_on = ["gate:config-validator"]
+
+[[step]]
+id = "gate:policy-budget"
+group = "verify-1"
+run = ["mise", "run", "policy-budget"]
+depends_on = ["gate:config-validator"]
+
+[[step]]
+id = "gate:policy-test"
+group = "verify-1"
+run = ["mise", "run", "policy-test"]
+depends_on = ["gate:config-validator"]
+
+[[step]]
+id = "gate:batten-check"
+group = "verify-1"
+run = ["mise", "run", "batten-check"]
+depends_on = ["gate:config-validator"]
+
+[[step]]
+id = "gate:modules-ratchet"
+group = "verify-1"
+run = ["mise", "run", "modules-ratchet:check"]
+depends_on = ["gate:config-validator"]
+
+# verify-2: the five builds, independent of one another, bounded by the
+# call's `--jobs`.
+[[step]]
+id = "gate:semver"
+group = "verify-2"
+run = ["mise", "run", "semver"]
+
+[[step]]
+id = "gate:test-replay"
+group = "verify-2"
+run = ["mise", "run", "verify:test-replay"]
+
+# hk's minutes-long checks before the third tier's suite (CLOUD-2789); see
+# `[tasks."ci:checks"]`.
+[[step]]
+id = "gate:hk-checks"
+group = "verify-2"
+run = ["mise", "run", "ci:checks"]
+
+[[step]]
+id = "gate:cross-check"
+group = "verify-2"
+run = ["mise", "run", "cross-check"]
+
+[[step]]
+id = "gate:darwin-link"
+group = "verify-2"
+run = ["mise", "run", "darwin-link"]
+
+[[step]]
+id = "gate:clippy"
+group = "verify-2"
+run = ["mise", "run", "lint:clippy"]
 
 # EVERY FILESYSTEM READ GOES THROUGH `crate::fsio` (CLOUD-2692, CLOUD-2384). The
 # fsio codemod moved 374 direct `std::fs` reads in `crates/batten/src` onto the

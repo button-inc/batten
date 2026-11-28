@@ -652,6 +652,8 @@ pub(crate) struct GroupRow {
     pub task: Option<String>,
     /// The rows it waits for.
     pub depends_on: Vec<String>,
+    /// Its `run` argv.
+    pub run: Vec<String>,
 }
 
 /// Every `[[step]]` row in `group`, in the order the committed `batten.toml`
@@ -688,6 +690,7 @@ pub(crate) fn group_rows(group: &str) -> Vec<GroupRow> {
                 task: (run.len() > 2 && run[0] == "mise" && run[1] == "run")
                     .then(|| run[2].clone()),
                 depends_on: words(row.get("depends_on")),
+                run: run.clone(),
             }
         })
         .collect()
