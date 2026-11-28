@@ -4885,6 +4885,26 @@ pub fn commit_identity(repo: &gix::Repository, id: &gix::ObjectId) -> Option<Str
     crate::patch::identity(&mut changes)
 }
 
+/// Each commit's patch identity, in input order, or `None` for one that changes
+/// nothing, is not a full hex id, or is not in this clone's object store.
+///
+/// [`commit_identity`] over a list, opening the repository once. Total, for the
+/// reason that function swallows a read failure: the caller asks whether a
+/// commit is one it already carries, and an identity it cannot compute must
+/// answer "not ours" rather than be matched against anything.
+#[must_use]
+pub fn commit_identities(dir: &Path, commits: &[String]) -> Vec<Option<String>> {
+    let repo = open(dir).ok();
+    commits
+        .iter()
+        .map(|commit| {
+            let repo = repo.as_ref()?;
+            let id = gix::ObjectId::from_hex(commit.as_bytes()).ok()?;
+            commit_identity(repo, &id)
+        })
+        .collect()
+}
+
 /// The patch identities present on `range`, as a set.
 ///
 /// [`patch_id_index`] without the commit it came from: the replay asks only

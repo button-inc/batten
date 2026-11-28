@@ -8370,43 +8370,49 @@ fn run_claim_bot(
 /// is NOT could-not-look is a listing that came back whole and carries no entry
 /// for this head: that is a branch with no open pull request, which has nothing
 /// to race.
-/// The commits the declared trunk already holds below `HEAD`, which a rival's
-/// log must not count as its own: none when no trunk is declared or the range
-/// cannot be read.
-fn trunk_commits(repo: &Path) -> std::collections::BTreeSet<String> {
-    worktree::declared_trunk(repo)
-        .ok()
+/// This branch's own commits since the declared trunk, by id and by patch
+/// identity: a rival's commit that is one of them claims nothing. Empty when
+/// no trunk is declared or the range cannot be read.
+///
+/// Computed once per run, never once per competitor commit.
+fn own_commits(repo: &Path) -> race::Ours {
+    let Some(trunk) = worktree::declared_trunk(repo).ok().flatten() else {
+        return race::Ours::default();
+    };
+    let shas: Vec<String> =
+        git::commits_in_range(repo, &trunk.tracking, "HEAD").unwrap_or_default();
+    let identities = git::commit_identities(repo, &shas)
+        .into_iter()
         .flatten()
-        .and_then(|trunk| git::commits_in_range(repo, &trunk.tracking, "HEAD").ok())
-        .unwrap_or_default()
-        .into_iter()
-        .collect()
+        .collect();
+    race::Ours {
+        shas: shas.into_iter().collect(),
+        identities,
+    }
 }
 
-/// A pull request's own commit messages, the ones `shared` does not hold, one
-/// per line; `None` when the forge does not answer.
-fn pull_log(
-    slug: &str,
-    number: &str,
-    shared: &std::collections::BTreeSet<String>,
-) -> Option<String> {
-    bot::forge::commits(slug, number)
-        .ok()
-        .map(|listing| unshared_log(listing, shared))
-}
-
-/// The messages of `listing`'s commits that this branch does not also hold,
-/// joined: a stacked pull request's inherited commits are subtracted by SHA.
-fn unshared_log(
-    listing: Vec<(String, String)>,
-    shared: &std::collections::BTreeSet<String>,
-) -> String {
-    listing
-        .into_iter()
-        .filter(|(sha, _)| !shared.contains(sha))
-        .map(|(_, message)| message)
-        .collect::<Vec<_>>()
-        .join("\n")
+/// A pull request's commits as the forge lists them, each with its patch
+/// identity where this clone holds it; `None` when the forge does not answer.
+///
+/// **One page of a hundred, oldest first** (`bot::forge::commits`): a pull
+/// request with more commits than that has the rest unread, so a claim made
+/// only past the hundredth commit is not seen. That is the forge listing's
+/// bound, not this function's, and it is stated rather than papered over.
+fn pull_commits(repo: &Path, slug: &str, number: &str) -> Option<Vec<race::Commit>> {
+    let listing = bot::forge::commits(slug, number).ok()?;
+    let shas: Vec<String> = listing.iter().map(|(sha, _)| sha.clone()).collect();
+    let identities = git::commit_identities(repo, &shas);
+    Some(
+        listing
+            .into_iter()
+            .zip(identities)
+            .map(|((sha, message), identity)| race::Commit {
+                sha,
+                identity,
+                message,
+            })
+            .collect(),
+    )
 }
 
 fn run_claim_race(
@@ -8500,10 +8506,10 @@ fn run_claim_race(
     // on it, "claimed" five of its keys). A competitor's commits that this
     // branch also holds are subtracted BY SHA before its trailers are read,
     // from local history rather than the forge, whose listing is capped.
-    let shared = trunk_commits(repo);
+    let ours = own_commits(repo);
     let race::Filled { pulls, unanswered } =
         race::with_logs(pulls, &mine_number, &mine, &grammar, |number| {
-            pull_log(&slug, number, &shared)
+            pull_commits(repo, &slug, number)
         });
     // JUDGED FIRST, AND THE COULD-NOT-LOOK ARMS ONLY REPLACE THE CLEAN ONE,
     // because returning before `races` throws away refusing information the
@@ -8534,7 +8540,7 @@ fn run_claim_race(
     // the refusal, the listing it already answered would be — and losing a
     // refusal to a 502 is a false green on a gate whose whole subject is two
     // agents on one issue.
-    let races = race::races(&mine, &pulls, Some(&mine_number), &grammar);
+    let races = race::races(&mine, &pulls, Some(&mine_number), &ours, &grammar);
     // AND AN INCOMPLETE FILL ALLOWS, like every could-not-look arm above it.
     // Once `fetch` answers an `Option`, this arm's common cause is a forge that
     // refused one read — a 403, a 502, a timeout — and "a forge this cannot
@@ -8587,9 +8593,14 @@ fn run_claim_race(
         } else {
             ""
         };
+        let carrier = race
+            .commit
+            .as_deref()
+            .map(|sha| format!(" in commit {}", sha.get(..12).unwrap_or(sha)))
+            .unwrap_or_default();
         writeln!(
             err,
-            "claim race: {} is already claimed by open pull request #{} ({}){unconfirmed}",
+            "claim race: {} is already claimed by open pull request #{} ({}){carrier}{unconfirmed}",
             race.key, race.number, race.head_ref
         )?;
     }
@@ -34598,22 +34609,6 @@ mod tests {
         assert_eq!(
             super::install_want(None, None, Some(release)).unwrap(),
             super::Want::Release(String::from("v0.0.1"))
-        );
-    }
-
-    /// Fails by: a stacked pull request's inherited commits read as its own
-    /// claims, or its own commits dropped as though this branch held them.
-    #[test]
-    fn a_rivals_log_keeps_only_the_commits_this_branch_does_not_hold() {
-        let shared = std::collections::BTreeSet::from(["a1".to_owned()]);
-        let listing = vec![
-            ("a1".to_owned(), "inherited Refs: CLOUD-1".to_owned()),
-            ("b2".to_owned(), "own Refs: CLOUD-2".to_owned()),
-            ("c3".to_owned(), "own Refs: CLOUD-3".to_owned()),
-        ];
-        assert_eq!(
-            super::unshared_log(listing, &shared),
-            "own Refs: CLOUD-2\nown Refs: CLOUD-3"
         );
     }
 

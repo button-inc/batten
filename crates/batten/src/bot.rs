@@ -526,9 +526,10 @@ pub mod forge {
                 number: text(&pull["number"]),
                 head_ref: text(&pull["head"]["ref"]),
                 head_sha: text(&pull["head"]["sha"]),
+                base_ref: text(&pull["base"]["ref"]),
                 title: text(&pull["title"]),
                 body: text(&pull["body"]).replace(['\t', '\n'], " "),
-                log: String::new(),
+                commits: Vec::new(),
             })
             .collect())
     }
@@ -599,9 +600,10 @@ pub mod forge {
                     number: at.to_string(),
                     head_ref: String::new(),
                     head_sha: String::new(),
+                    base_ref: String::new(),
                     title: String::new(),
                     body: String::new(),
-                    log: String::new(),
+                    commits: Vec::new(),
                 })
                 .collect()
         }

@@ -101,12 +101,44 @@ pub struct Pull {
     pub head_ref: String,
     /// Its head commit.
     pub head_sha: String,
+    /// The branch it merges into.
+    pub base_ref: String,
     /// Its title — a self-declaration, and source 2.
     pub title: String,
     /// Its body — evidence, and source 1 only through a closing keyword.
     pub body: String,
-    /// Its commit messages, joined — sources 1 and 3.
-    pub log: String,
+    /// Its commits, as the forge lists them — sources 1 and 3.
+    pub commits: Vec<Commit>,
+}
+
+/// One commit of a pull request: who carries a claim, and whether it is a copy.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Commit {
+    /// Its id.
+    pub sha: String,
+    /// Its patch identity (`git::commit_identity`), or `None` where it changes
+    /// nothing or this clone does not hold it.
+    pub identity: Option<String>,
+    /// Its message.
+    pub message: String,
+}
+
+/// The commits this branch carries since its merge base with the trunk, by id
+/// and by patch identity.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Ours {
+    /// Their ids.
+    pub shas: std::collections::BTreeSet<String>,
+    /// Their patch identities.
+    pub identities: std::collections::BTreeSet<String>,
+}
+
+impl Ours {
+    /// Is `commit` one of ours?
+    #[must_use]
+    pub fn holds(&self, commit: &Commit) -> bool {
+        self.shas.contains(&commit.sha)
+    }
 }
 
 /// One refusal: a key this branch claims that another open pull request claims
@@ -119,6 +151,8 @@ pub struct Race {
     pub number: String,
     /// Its head branch, so the reader can find it without a second lookup.
     pub head_ref: String,
+    /// The competitor's commit that carries the claim, where a commit does.
+    pub commit: Option<String>,
 }
 
 /// The three sources a claim may come from, most explicit first.
@@ -539,7 +573,7 @@ pub fn with_logs(
     mine_number: &str,
     claims: &[String],
     keys: &dyn Keys,
-    fetch: impl Fn(&str) -> Option<String> + Sync,
+    fetch: impl Fn(&str) -> Option<Vec<Commit>> + Sync,
 ) -> Filled {
     // FETCH A COMPETITOR WHOSE CHEAP READING IS LOAD-BEARING FOR THIS VERDICT,
     // and whose cheap reading could be WRONG. The predicate below is those two
@@ -678,7 +712,7 @@ pub fn with_logs(
     // is honest when nothing can produce it — dropping a log already fetched
     // reads a competitor as claiming nothing after a successful round trip, and
     // recovering pretends the arm was considered. A channel has no such axis.
-    let (tx, rx) = std::sync::mpsc::channel::<(usize, String)>();
+    let (tx, rx) = std::sync::mpsc::channel::<(usize, Vec<Commit>)>();
     std::thread::scope(|scope| {
         let handles: Vec<_> = (0..FETCH_WIDTH.min(eligible.len()))
             .map(|_| {
@@ -730,10 +764,10 @@ pub fn with_logs(
         .iter()
         .map(|(slot, number)| (*slot, (*number).to_owned()))
         .collect();
-    for (slot, log) in rx {
+    for (slot, commits) in rx {
         unanswered.remove(&slot);
         if let Some(pull) = pulls.get_mut(slot) {
-            pull.log = log;
+            pull.commits = commits;
         }
     }
     Filled {
@@ -758,6 +792,7 @@ pub fn races(
     mine: &[String],
     pulls: &[Pull],
     self_number: Option<&str>,
+    ours: &Ours,
     keys: &dyn Keys,
 ) -> Vec<Race> {
     let mut found = Vec::new();
@@ -765,12 +800,20 @@ pub fn races(
         if Some(pull.number.as_str()) == self_number {
             continue;
         }
-        let theirs = claimed(&pull.head_ref, &pull.title, &pull.log, &pull.body, keys);
+        let log = pull
+            .commits
+            .iter()
+            .filter(|commit| !ours.holds(commit))
+            .map(|commit| commit.message.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        let theirs = claimed(&pull.head_ref, &pull.title, &log, &pull.body, keys);
         for contested in mine.iter().filter(|key| theirs.contains(key)) {
             found.push(Race {
                 key: contested.clone(),
                 number: pull.number.clone(),
                 head_ref: pull.head_ref.clone(),
+                commit: None,
             });
         }
     }
@@ -897,9 +940,10 @@ mod tests {
             number: number.to_owned(),
             head_ref: head_ref.to_owned(),
             head_sha: head_sha.to_owned(),
+            base_ref: "main".to_owned(),
             title: String::new(),
             body: String::new(),
-            log: String::new(),
+            commits: Vec::new(),
         }
     }
 
@@ -948,13 +992,12 @@ mod tests {
         let pulls = vec![Pull {
             title: String::new(),
             body: "Closes PROJ-1170.".to_owned(),
-            log: String::new(),
             ..pull("793", "user/proj-843-campaign", "e97703b2")
         }];
         let me = identify(&pulls, "e97703b2").map(|pull| pull.number.clone());
         assert_eq!(me.as_deref(), Some("793"));
         assert!(
-            races(&mine, &pulls, me.as_deref(), &Fake).is_empty(),
+            races(&mine, &pulls, me.as_deref(), &Ours::default(), &Fake).is_empty(),
             "a branch may not race its own pull request"
         );
     }
@@ -968,10 +1011,9 @@ mod tests {
         let pulls = vec![Pull {
             title: String::new(),
             body: "Closes PROJ-1170.".to_owned(),
-            log: String::new(),
             ..pull("793", "user/proj-843-campaign", "e97703b2")
         }];
-        assert_eq!(races(&mine, &pulls, None, &Fake).len(), 1);
+        assert_eq!(races(&mine, &pulls, None, &Ours::default(), &Fake).len(), 1);
     }
 
     #[test]
@@ -984,7 +1026,7 @@ mod tests {
             },
             pull("793", "mine", "bbbb"),
         ];
-        let races = races(&mine, &pulls, Some("793"), &Fake);
+        let races = races(&mine, &pulls, Some("793"), &Ours::default(), &Fake);
         assert_eq!(races.len(), 1);
         assert_eq!(races[0].key, "PROJ-49");
         assert_eq!(races[0].number, "400");
@@ -998,7 +1040,7 @@ mod tests {
             body: "| PROJ-133 | measured 2026-08-08 |".to_owned(),
             ..pull("306", "user/proj-268-sweep", "aaaa")
         }];
-        assert!(races(&mine, &pulls, Some("793"), &Fake).is_empty());
+        assert!(races(&mine, &pulls, Some("793"), &Ours::default(), &Fake).is_empty());
     }
 
     #[test]
@@ -1120,6 +1162,37 @@ mod tests {
             claimed_from("", "", "Refs: PROJ-1170\n", "", &Fake, Source::All),
             vec![String::from("PROJ-1170")],
             "failing that, the first key of a `Refs:` trailer"
+        );
+    }
+
+    fn commit(sha: &str, identity: Option<&str>, message: &str) -> Commit {
+        Commit {
+            sha: sha.to_owned(),
+            identity: identity.map(str::to_owned),
+            message: message.to_owned(),
+        }
+    }
+
+    /// Fails by: a commit this branch holds by id read as a rival's claim, or a
+    /// rival's own commit dropped as though this branch held it.
+    #[test]
+    fn a_commit_this_branch_holds_by_id_claims_nothing() {
+        let ours = Ours {
+            shas: std::collections::BTreeSet::from(["a1".to_owned()]),
+            ..Ours::default()
+        };
+        let rival = |message: &str| Pull {
+            commits: vec![
+                commit("a1", None, "x\n\nRefs: PROJ-1\n"),
+                commit("b2", None, message),
+            ],
+            ..pull("400", "rival", "bbbb")
+        };
+        let mine = vec!["PROJ-1".to_owned()];
+        assert!(races(&mine, &[rival("y\n\nRefs: PROJ-2\n")], None, &ours, &Fake).is_empty());
+        assert_eq!(
+            races(&mine, &[rival("y\n\nRefs: PROJ-1\n")], None, &ours, &Fake).len(),
+            1
         );
     }
 
