@@ -688,6 +688,11 @@ pub fn read_flight(
             .unwrap_or_default()
             .to_owned();
         let flag = |key: &str| entry.get(key).and_then(serde_json::Value::as_bool) == Some(true);
+        // A dev pre-release is ahead of `main` by construction and has no land
+        // job: whatever its flags, it is never in flight (CLOUD-2954).
+        if tag.starts_with("dev/") {
+            continue;
+        }
         if flag("draft") {
             let created = entry
                 .get("created_at")
@@ -2279,6 +2284,34 @@ mod tests {
             }]
         );
         assert_eq!(flight.land_hold, 9);
+    }
+
+    /// A dev pre-release is ahead of `main` by construction and has no land, so
+    /// the freeze never counts a tag under `dev/` (CLOUD-2954).
+    #[test]
+    fn a_tag_under_dev_is_never_a_release_in_flight() {
+        let read = |listed: &'static str, reference: &'static str| {
+            let get = forge(&[
+                ("releases/latest", r#"{"tag_name":"v1"}"#),
+                ("releases?per_page=30", listed),
+                (reference, r#"{"object":{"sha":"c9","type":"commit"}}"#),
+                ("compare/main...c9", r#"{"status":"ahead"}"#),
+            ]);
+            read_flight("o/r", ("main", &[]), 0, LAND_HOLD_SECS, &get).unwrap()
+        };
+        let dev = read(
+            r#"[{"tag_name":"dev/v9-dev.pr1.1","prerelease":true}]"#,
+            "git/ref/tags/dev/v9-dev.pr1.1",
+        );
+        assert!(dev.pending.is_empty());
+        assert!(dev.drafts.is_empty());
+        assert_eq!(in_flight(&dev), None);
+        let release = read(
+            r#"[{"tag_name":"v9","prerelease":true}]"#,
+            "git/ref/tags/v9",
+        );
+        assert_eq!(release.pending.len(), 1);
+        assert!(in_flight(&release).is_some());
     }
 
     /// A draft is in flight for its first ten minutes, and a failed land holds
