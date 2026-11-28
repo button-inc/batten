@@ -846,3 +846,102 @@ fn a_failed_or_dead_task_is_refused_naming_it() {
         "a task gone without a last word is a crash: {said}"
     );
 }
+
+/// A `PreToolUse` Bash call for session `session`, standing in `cwd`.
+fn session_call(cwd: &Path, session: &str, command: &str) -> String {
+    let payload = serde_json::json!({
+        "hook_event_name": "PreToolUse",
+        "session_id": session,
+        "cwd": cwd,
+        "tool_name": "Bash",
+        "tool_input": {"command": command, "run_in_background": true},
+    })
+    .to_string();
+    let answer = common::stdin_run(
+        &mut common::batten(),
+        cwd,
+        &["adjudicate", "--harness", "claude-code"],
+        &payload,
+    );
+    format!("{}{}", common::stdout(&answer), common::stderr(&answer))
+}
+
+/// SETUP RUNS FROM A DIRECTORY THAT IS NOT A REPOSITORY (CLOUD-2953): a harness
+/// restart moved a held session to the checkout's parent, where the one
+/// command the hold admits failed `not a git repository`.
+///
+/// Fails by: `startup --session` resolving only the working directory, so it
+/// exits non-zero there and records no finished setup.
+#[test]
+fn setup_from_outside_the_checkout_sets_up_the_prepared_one() {
+    let dir = bench("install-gate-setup-outside");
+    let _ = session_start(&dir);
+    let outside = common::scratch_outside_tree("install-gate", "setup-outside");
+    let ran = common::batten()
+        .current_dir(&outside)
+        .args(["startup", "--session"])
+        .output()
+        .expect("setup runs");
+    assert!(
+        ran.status.success(),
+        "setup succeeds from outside the checkout: {}",
+        common::stderr(&ran)
+    );
+    let git_dir = batten::git::git_dir(&dir).expect("the bench has a git dir");
+    let done = std::fs::read_to_string(batten::session_setup::dir_of(&git_dir).join("done"))
+        .unwrap_or_default();
+    assert!(
+        done.contains("\tok\t"),
+        "the checkout's setup finished ok: {done:?}"
+    );
+}
+
+/// A PENDING HOLD FROM OUTSIDE THE CHECKOUT IS CLEARED BY WHAT IT ADMITS
+/// (CLOUD-2953). The session's home is the checkout, so the hold still judges
+/// a call made from its parent, and the move back into it is admitted with the
+/// dispatch behind it.
+///
+/// Fails by: the hold admitting only the bare dispatch, so `cd <checkout> &&`
+/// in front of it is held; or admitting a `cd` elsewhere, or a second command.
+#[test]
+fn a_hold_from_outside_the_checkout_admits_the_move_back_with_the_dispatch() {
+    let dir = bench("install-gate-hold-outside");
+    let session = "cloud-2953-outside";
+    let payload = serde_json::json!({
+        "hook_event_name": "SessionStart",
+        "source": "startup",
+        "session_id": session,
+        "cwd": dir,
+    })
+    .to_string();
+    let _ = common::stdin_run(
+        &mut common::batten(),
+        &dir,
+        &["adjudicate", "--harness", "claude-code"],
+        &payload,
+    );
+    let outside = common::scratch_outside_tree("install-gate", "hold-outside");
+    let root = batten::git::canonical(&dir);
+    let said = session_call(&outside, session, "touch made");
+    assert!(
+        held(&said) && said.contains("session-setup undispatched"),
+        "the hold judges a call from outside the checkout: {said}"
+    );
+    let back = format!("cd {} && batten startup --session", root.display());
+    let said = session_call(&outside, session, &back);
+    assert!(
+        !held(&said),
+        "the move back with the dispatch is admitted: {said}"
+    );
+    for refused in [
+        format!("cd {} && batten startup --session", outside.display()),
+        format!(
+            "cd {} && batten startup --session && touch made",
+            root.display()
+        ),
+        format!("cd {} && touch made", root.display()),
+    ] {
+        let said = session_call(&outside, session, &refused);
+        assert!(held(&said), "`{refused}` is still held: {said}");
+    }
+}

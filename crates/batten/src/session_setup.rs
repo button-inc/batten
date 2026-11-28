@@ -202,6 +202,34 @@ pub fn is_dispatch(command: &str) -> bool {
         && words.eq(wanted)
 }
 
+/// Whether `command` is the dispatch, bare or behind one change of directory
+/// into `root`, the checkout setup is held for: `cd <root> && <dispatch>`.
+///
+/// A HOLD WHOSE ONLY ADMITTED COMMAND CANNOT SUCCEED IS A DEFECT (CLOUD-2953):
+/// a session the harness moved to the checkout's parent was refused the `cd`
+/// that would have put it back, and the bare dispatch alone was all it had.
+/// The directory word is a plain absolute path naming `root` itself, so the
+/// prefix can carry nothing but that move.
+#[must_use]
+pub fn is_dispatch_at(command: &str, root: &Path) -> bool {
+    if is_dispatch(command) {
+        return true;
+    }
+    let Some((head, tail)) = command.split_once("&&") else {
+        return false;
+    };
+    let mut words = head.split_whitespace();
+    let (Some("cd"), Some(dir), None) = (words.next(), words.next(), words.next()) else {
+        return false;
+    };
+    dir.starts_with('/')
+        && dir
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '/' | '.' | '_' | '-' | '+'))
+        && crate::git::canonical(Path::new(dir)) == crate::git::canonical(root)
+        && is_dispatch(tail)
+}
+
 /// Spool the host's `SessionStart` payload for the task and name the session
 /// it is for, in process, and answer whether a dispatch is owed: this session
 /// has no running, finished or failed task.
