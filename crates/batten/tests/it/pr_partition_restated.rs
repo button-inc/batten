@@ -48,8 +48,14 @@ const MODULE: &str = include_str!("../../../../policy/pr-partition-restated.rego
 
 /// The shipped configuration, read so the fixture's copy can be held to it.
 /// The FILE WHOLE, not `common::committed_config` (CLOUD-2960): the case holds
-/// a row's pattern to the bytes as written, escapes included.
-const SHIPPED: &str = include_str!("../../../../batten.toml");
+/// a row's pattern to the bytes as written, escapes included. Read at run
+/// time, so no build of the suite reads the config.
+fn shipped() -> String {
+    std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../batten.toml"),
+    )
+    .expect("this repository's batten.toml is readable")
+}
 
 /// The pattern the shipped registry declares, copied here because a fixture
 /// carries its own `batten.toml` and cannot read the repository's.
@@ -138,7 +144,7 @@ fn the_shipped_row_is_the_one_under_test() {
     // narrowed, and the suite would report coverage of a pattern that no longer
     // ships.
     assert!(
-        SHIPPED.contains(PATTERN),
+        shipped().contains(PATTERN),
         "the fixture's pattern is no longer the shipped `pr-partition-prose` row"
     );
 }
