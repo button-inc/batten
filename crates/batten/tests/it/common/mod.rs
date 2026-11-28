@@ -4057,7 +4057,14 @@ pub fn committed_config() -> String {
 /// own, for a case that loads the config by path (CLOUD-2960).
 #[allow(dead_code, reason = "not every test binary loads the committed config")]
 pub fn committed_config_file(name: &str) -> PathBuf {
-    let dir = scratch(&format!("committed-config-{name}"));
+    // ONE DIRECTORY PER CALL: cases of one module run in parallel, and a name
+    // shared between them lets one case clear the file another is reading.
+    static CALLS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let call = CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let dir = scratch(&format!(
+        "committed-config-{name}-{}-{call}",
+        std::process::id()
+    ));
     let path = dir.join("batten.toml");
     std::fs::write(&path, committed_config()).expect("the committed config view is writable");
     path

@@ -264,7 +264,7 @@ const STEPPED: &str = "version = 1\n\
                        \n[[step]]\n\
                        id = \"enforce-tree\"\n\
                        inputs = [\".\"]\n\
-                       tools = [[\"git\", \"config\", \"--get\", \"batten.knob\"]]\n";
+                       tools = [[\"git\", \"config\", \"--get\", \"batten.knob\"], [\"batten\", \"step\", \"config\"]]\n";
 
 /// `step run enforce-tree -- batten enforce --half tree`, and whether the tree
 /// half's work ran — its warning on stdout is the sentinel.
@@ -346,7 +346,7 @@ fn baselined() -> String {
          \n[[step]]\n\
          id = \"enforce-tree\"\n\
          inputs = [\".\"]\n\
-         tools = [[{exe:?}, \"enforce\", \"--half\", \"tree\", \"--inputs-digest\"]]\n",
+         tools = [[{exe:?}, \"enforce\", \"--half\", \"tree\", \"--inputs-digest\"], [\"batten\", \"step\", \"config\"]]\n",
         exe = env!("CARGO_BIN_EXE_batten")
     )
 }
