@@ -133,11 +133,18 @@ fn digest_one(digest: &mut blake3::Hasher, path: &str, bytes: &[u8]) {
 fn checkout_files(root: &Path) -> Result<Vec<String>> {
     let mut paths: BTreeSet<String> = crate::git::tracked_paths(root)?.into_iter().collect();
     paths.extend(crate::git::changed_paths(root)?);
+    // A LINK OUT OF THE CHECKOUT IS NOT ITS TREE (CLOUD-2959): a harness's
+    // live transcript linked in moved every snapshot, so no digest was ever
+    // recalled. A link landing inside the checkout is still followed.
+    let home = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
     for entry in crate::git::walker(root)
         .standard_filters(false)
         .follow_links(true)
-        .filter_entry(|entry| {
-            entry.depth() != 1 || !matches!(entry.file_name().to_str(), Some("target" | ".git"))
+        .filter_entry(move |entry| {
+            (entry.depth() != 1 || !matches!(entry.file_name().to_str(), Some("target" | ".git")))
+                && (!entry.path_is_symlink()
+                    || std::fs::canonicalize(entry.path())
+                        .is_ok_and(|real| real.starts_with(&home)))
         })
         .build()
         .flatten()
@@ -449,6 +456,33 @@ mod tests {
             "fn s() {}\n",
             "a file under a symlinked directory"
         );
+    }
+
+    /// A link out of the checkout is no part of its tree: on CLOUD-2959 a
+    /// harness linked `.claude/.transcript.jsonl` to its live transcript, so
+    /// every snapshot differed and no digest memo was ever recalled.
+    ///
+    /// Fails by: following every link, wherever it lands.
+    #[cfg(unix)]
+    #[test]
+    fn a_link_out_of_the_checkout_is_not_snapshotted() {
+        let dir = crate::scratch::scratch("cover-pristine-outside");
+        let repo = dir.join("repo");
+        let outside = dir.join("outside");
+        std::fs::create_dir_all(repo.join("src")).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(repo.join("src/a.rs"), "fn a() {}\n").unwrap();
+        std::fs::write(outside.join("live.jsonl"), "{}\n").unwrap();
+        std::fs::write(outside.join("o.rs"), "fn o() {}\n").unwrap();
+        crate::gitwrite::commit_paths(&repo, &[String::from("src/a.rs")], "fixture").unwrap();
+        std::os::unix::fs::symlink(outside.join("live.jsonl"), repo.join("transcript.jsonl"))
+            .unwrap();
+        std::os::unix::fs::symlink(&outside, repo.join("tasks")).unwrap();
+        let dest = dir.join("pristine");
+        pristine(&repo, &dest).unwrap();
+        assert!(dest.join("src/a.rs").is_file(), "the checkout's own file");
+        assert!(!dest.join("transcript.jsonl").exists(), "a file linked out");
+        assert!(!dest.join("tasks").exists(), "a directory linked out");
     }
 
     #[test]
