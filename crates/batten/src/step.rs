@@ -3429,9 +3429,11 @@ mod tests {
                 crate::tools::digest(step.as_bytes())
             ))
         };
+        // A RUNNER WRITES ITS TRACE AFTER TAKING ITS LOCK: taking it removes
+        // every trace an earlier run of that step left (CLOUD-2955).
+        let held = step_lock_at(&dir, "running").expect("the live runner locks");
         std::fs::write(trace("running"), "live").unwrap();
         std::fs::write(trace("killed"), "orphaned").unwrap();
-        let held = step_lock_at(&dir, "running").expect("the live runner locks");
         assert_eq!(sweep_orphaned_traces(&dir), (1, 8));
         assert!(trace("running").exists(), "a held step's trace stays");
         assert!(!trace("killed").exists(), "an unheld one is gone");
