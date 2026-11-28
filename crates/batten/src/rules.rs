@@ -1389,9 +1389,7 @@ impl RuleExt for Rule {
         if self.scope == RuleScope::MediatedCall || !self.requires_path.is_empty() {
             return Half::Live;
         }
-        let facts_tree = self
-            .census_facts()
-            .all(|fact| fact.subject() == Subject::Tree);
+        let facts_tree = self.census_facts().all(keyable_in_tree_half);
         let tree = match self.kind {
             RuleKind::Forbid | RuleKind::Document | RuleKind::Secrets | RuleKind::Reference => {
                 facts_tree
@@ -1409,7 +1407,7 @@ impl RuleExt for Rule {
                         crate::policy::Reads::Known(keys) => keys.iter().all(|key| {
                             key == TREE_MISSING_KEY
                                 || crate::facts::Fact::from_tree_key(key)
-                                    .is_some_and(|fact| fact.subject() == Subject::Tree)
+                                    .is_some_and(keyable_in_tree_half)
                         }),
                         crate::policy::Reads::Opaque => false,
                     })
@@ -2252,6 +2250,36 @@ pub fn partition_half(
 /// bar `missing`, is nulled too — unknown is live. A document that will not
 /// parse is returned unchanged, since the engine refuses it as before.
 #[must_use]
+/// Whether the tree half may read `fact`: a tree fact, or out-of-tree state
+/// whose exact bytes [`crate::step::tree_inputs_digest`] folds into the half's
+/// key, so a receipt over it is a hit only on identical state (CLOUD-2329).
+/// The recorder stores are the second kind: [`recorded_for_digest`] digests
+/// precisely what [`recorded_stores`] hands the run.
+pub(crate) fn keyable_in_tree_half(fact: crate::facts::Fact) -> bool {
+    fact.subject() == crate::facts::Subject::Tree
+        || matches!(
+            fact,
+            crate::facts::Fact::Records | crate::facts::Fact::RecordsBlocked
+        )
+}
+
+/// The recorder stores a run at `root` reads, as one canonical string for the
+/// tree half's inputs digest. Without a loadable config the engine's own
+/// verb-written stores are still read, as [`recorded_stores`] reads them
+/// whatever the consumer declared.
+pub(crate) fn recorded_for_digest(root: &Path) -> Option<String> {
+    let config = crate::config::load(&root.join(crate::config_model::CONFIG_FILE)).ok();
+    let (records, blocked) = match &config {
+        Some(config) => recorded_stores(
+            root,
+            &config.recorders,
+            crate::policy::Vocabulary::from(config),
+        ),
+        None => recorded_stores(root, &[], crate::policy::Vocabulary::EMPTY),
+    };
+    serde_json::to_string(&(records, blocked)).ok()
+}
+
 pub fn null_live_keys(document: &str) -> String {
     let Ok(mut value) = serde_json::from_str::<serde_json::Value>(document) else {
         return document.to_owned();
@@ -2262,8 +2290,7 @@ pub fn null_live_keys(document: &str) -> String {
     {
         for (key, slot) in tree.iter_mut() {
             let tree_fact = key == TREE_MISSING_KEY
-                || crate::facts::Fact::from_tree_key(key)
-                    .is_some_and(|fact| fact.subject() == crate::facts::Subject::Tree);
+                || crate::facts::Fact::from_tree_key(key).is_some_and(keyable_in_tree_half);
             if !tree_fact {
                 *slot = serde_json::Value::Null;
             }
@@ -2470,7 +2497,7 @@ fn run(
     // liveness depend on a table it has nothing to do with.
     // `record_key`, not `current_branch`: the key the producers wrote under, which
     // on a detached HEAD (every CI checkout) is the commit rather than nothing.
-    let (records, records_blocked) = recorded_stores(root, recorders, vocabulary, tree_half);
+    let (records, records_blocked) = recorded_stores(root, recorders, vocabulary);
 
     // The union the engine DECIDES against, built once for the run (CLOUD-1220).
     // `registry_for` is the one authority on it, and a vendored class replaces a
@@ -3064,16 +3091,15 @@ fn recorder_records(
 /// blocked rows (CLOUD-1126) — both read UNCONDITIONALLY for `VERB_WRITTEN`'s
 /// reason, since the engine owns both the writer and the reader, so there is no
 /// declaration a consumer could forget and nothing to make the read conditional
-/// on. Neither is read by the tree half (step 13a): both are live state no tree
-/// key covers.
+/// on. The tree half reads both too: their exact contents are folded into its
+/// inputs digest by [`recorded_for_digest`] (CLOUD-2329).
 fn recorded_stores(
     root: &Path,
     recorders: &[crate::config_model::RecorderDeclared],
     vocabulary: crate::policy::Vocabulary<'_>,
-    tree_half: bool,
 ) -> (BTreeMap<String, Vec<String>>, BTreeMap<String, String>) {
     match (crate::git::git_dir(root), crate::git::record_key(root)) {
-        (Ok(git_dir), Ok(branch)) if !tree_half => (
+        (Ok(git_dir), Ok(branch)) => (
             recorder_records(
                 &git_dir,
                 &branch,
@@ -18420,8 +18446,12 @@ mod half_tests {
         };
         let tree = bundle("\tinput.tree.documents.x != null\n\tinput.tree.missing != null");
         assert_eq!(policy.half(Some(&tree), KEYED), Half::Tree);
+        // `records` is out-of-tree state with a digest: the tree half's inputs
+        // digest folds in exactly the records a run reads (CLOUD-2329).
         let records = bundle("\tinput.tree.records.x != null");
-        assert_eq!(policy.half(Some(&records), KEYED), Half::Live);
+        assert_eq!(policy.half(Some(&records), KEYED), Half::Tree);
+        let forge = bundle("\tinput.tree.forge.x != null");
+        assert_eq!(policy.half(Some(&forge), KEYED), Half::Live);
         let aliased = bundle("\tt := input.tree\n\tt.documents != null");
         assert_eq!(policy.half(Some(&aliased), KEYED), Half::Live);
     }
@@ -18443,7 +18473,8 @@ mod half_tests {
         assert_eq!(tree["documents"], serde_json::json!({"a": 1}));
         assert_eq!(tree["staged"], serde_json::json!({"b": 2}));
         assert_eq!(tree["missing"], serde_json::json!({"c": "unparsed"}));
-        for live in ["records", "git-head", "forge", "unheard-of"] {
+        assert_eq!(tree["records"], serde_json::json!({"runs": ["row\tx"]}));
+        for live in ["git-head", "forge", "unheard-of"] {
             assert!(tree[live].is_null(), "{live} is nulled");
         }
     }
