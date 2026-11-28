@@ -6691,10 +6691,9 @@ fn dropped_because(
 ) -> &'static str {
     let exit = crate::fsio::read_to_string(dir.join(DONE)).ok();
     match (exit, held) {
-        (None, _) | (_, (_, _, None)) => "unsealed",
+        (None, _) | (_, (_, _, None)) | (Some(_), (false, None, Some(_))) => "unsealed",
         (Some(_), (_, Some(_), Some(_))) => "function-gone",
         (Some(_), (true, None, Some(_))) => "no-provenance",
-        (Some(_), (false, None, Some(_))) => "unsealed",
     }
 }
 
@@ -6703,6 +6702,10 @@ fn dropped_because(
 /// # Errors
 ///
 /// As [`carry_forward`].
+#[expect(
+    clippy::too_many_lines,
+    reason = "one pass over the store that decides carry, drop and resume per record, with the reasons beside each (CLOUD-2959)"
+)]
 fn carry_counted(
     base: &std::path::Path,
     inputs: &str,
@@ -7450,6 +7453,10 @@ fn empty_scratch_parent(target: &std::path::Path) -> std::io::Result<()> {
 /// # Errors
 ///
 /// A case failed unmutated, or the run could not be made.
+#[expect(
+    clippy::too_many_lines,
+    reason = "the reach stage's one sequence: key, carry, record, seal (CLOUD-2959)"
+)]
 pub fn record_reach(
     work: &std::path::Path,
     target: &std::path::Path,
@@ -13409,6 +13416,10 @@ type Reached = (
 /// # Errors
 ///
 /// The reach run fails, or its record cannot be read or sealed.
+#[expect(
+    clippy::too_many_lines,
+    reason = "one read of a sealed record's reach, every field beside its check (CLOUD-2959)"
+)]
 fn reached(
     (work, target, state): (&std::path::Path, &std::path::Path, &std::path::Path),
     root: &std::path::Path,

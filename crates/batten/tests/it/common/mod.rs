@@ -4047,7 +4047,7 @@ pub(crate) fn link_file(target: impl AsRef<Path>, link: impl AsRef<Path>) {
     dead_code,
     reason = "not every test binary stages the committed config"
 )]
-pub fn committed_config() -> String {
+pub(crate) fn committed_config() -> String {
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../batten.toml");
     let text = std::fs::read_to_string(&path).expect("this repository's batten.toml is readable");
     batten::step::config_view(&text).expect("this repository's batten.toml parses")
@@ -4056,7 +4056,7 @@ pub fn committed_config() -> String {
 /// [`committed_config`] written as `batten.toml` in a scratch directory of its
 /// own, for a case that loads the config by path (CLOUD-2960).
 #[allow(dead_code, reason = "not every test binary loads the committed config")]
-pub fn committed_config_file(name: &str) -> PathBuf {
+pub(crate) fn committed_config_file(name: &str) -> PathBuf {
     // ONE DIRECTORY PER CALL: cases of one module run in parallel, and a name
     // shared between them lets one case clear the file another is reading.
     static CALLS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);

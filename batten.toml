@@ -11906,6 +11906,8 @@ fast_forward_branches = ["renovate/", "sbom-actions/", "release-plz-"]
 scope = ["**", "!crates/*/tests/**"]
 gates = [
   ".config/nextest.toml",
+  ".github/workflows/dev-prerelease.yml",
+  ".github/workflows/dist.yml",
   "action.yml",
   "connector-not-granted",
   "agentic-experiment-record",

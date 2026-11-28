@@ -1454,6 +1454,7 @@ pub fn pull_mutate(remote: &str, repo: &Path, name: &str, mutate: &Path) -> Resu
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
 

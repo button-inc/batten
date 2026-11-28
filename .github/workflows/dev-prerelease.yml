@@ -6,7 +6,7 @@ name: dev-prerelease
 #MUTANT dev-prerelease-cancels-started|s@^  cancel-in-progress: false$@  cancel-in-progress: true@|a_second_dispatch_never_cancels_a_started_dev_publish
 #MUTANT dev-prerelease-on-push|s@^  workflow_dispatch:$@  pull_request:@|the_dev_publish_runs_only_when_dispatched
 #MUTANT dev-prerelease-unnumbered|s@^          BATTEN_BUILD_PR: ${{ inputs.pr }}$@          BATTEN_BUILD_PR: ""@|a_dispatched_build_carries_the_pull_requests_number
-#MUTANT dev-prerelease-unflag-widened|s@ | select(.tagName | startswith("dev/"))@@|a_dev_release_already_flagged_is_unflagged_before_the_publish
+#MUTANT dev-prerelease-unflag-widened|s@startswith("dev/")@startswith("")@|a_dev_release_already_flagged_is_unflagged_before_the_publish
 
 # workflow-shell: CLOUD-2903 naming the archive by the build's own identity and
 # publishing it are two bodies no verb owns yet; each reads `batten --version`
