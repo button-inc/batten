@@ -1532,6 +1532,10 @@ usage = '''
 flag "--shards <n>" default="1" help="run a miss as this many partitions of one archive"
 '''
 run = "{{vars.batten}} step run test:cargo --shards {{usage.shards}} -- cargo nextest run --workspace"
+# THE SUITE WRITES NOTHING INTO THE CHECKOUT (CLOUD-2961): insta's default leaves
+# a `.snap.new` beside a drifted snapshot, which moves the run key every case's
+# pass is kept under, so the next run re-ran all 12,016. A drift still fails.
+env = { INSTA_UPDATE = "no" }
 
 # --- the four tiers `hk` reaches by name (CLOUD-1164) ---------------------------
 #
@@ -1604,7 +1608,7 @@ run = [
   "{{vars.batten}} step run test:traced -- cargo nextest run -p batten --no-tests=fail --test it ci_tools:: land:: mutate:: mutate_schema:: prune_watch:: receipt_publish:: step_cover:: step_journal:: step_receipt::",
   "{{vars.batten}} step run test:traced:lib -- cargo nextest run -p batten --no-tests=fail --lib mutate::trace::tests::",
 ]
-env = { BATTEN_TEST_SCRATCH_LANE = "narrow", BATTEN_TEST_TRACED_REQUIRED = "1", NEXTEST_PROFILE = "narrow" }
+env = { BATTEN_TEST_SCRATCH_LANE = "narrow", BATTEN_TEST_TRACED_REQUIRED = "1", INSTA_UPDATE = "no", NEXTEST_PROFILE = "narrow" }
 
 [tasks."test:reference-coverage"]
 description = "Gate: the rendered CLI reference and the command spec name exactly the same flags, in both directions (CLOUD-171)"

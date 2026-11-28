@@ -1298,13 +1298,13 @@ pub fn run_step(
         let _ = crate::mutate::resume::promote(root);
     }
     let elapsed = started.elapsed();
+    // EVERY JOURNALED RUN SEEDS ITS PASSED CASES (CLOUD-2842, CLOUD-2961); the
+    // verdict is `ran`'s, save that a run whose own key moved under it fails.
+    let settled = journaled
+        .as_ref()
+        .and_then(|(_, root)| crate::mutate::resume::settle(step, root, err));
+    let ran = settled.map_or(ran, Ok);
     let passed = matches!(ran, Ok(ExitCode::Success));
-    // A PASSING RUN SEEDS THE NEXT HEAD'S SELECTION (CLOUD-2842): where the
-    // selection held fewer cases than passed, the reach phase records them,
-    // detached and only while no lap runs. An economy: the verdict is `ran`'s.
-    if passed && let Some((_, root)) = &journaled {
-        let _ = crate::mutate::resume::seed(root);
-    }
     if !passed {
         let run = Ran {
             root: journaled.as_ref().map(|(_, root)| root.as_path()),

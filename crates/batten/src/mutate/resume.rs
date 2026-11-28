@@ -107,11 +107,117 @@ pub fn journaled(root: &Path, command: &[String]) -> Result<Vec<String>> {
     clear_report(root);
     // THE SELECTION IS AN ECONOMY: a store that cannot be read or a digest
     // that cannot be taken leaves every case on the build key, never a skip.
-    let held = select(root, &state, &resources, command).ok();
-    // WHAT THE SELECTION HELD, for the seed to weigh against what passed
-    // ([`seed`]); a selection that could not be made held nothing.
-    let _ = crate::durable::replace(state.join(HELD), held.unwrap_or(0).to_string());
+    // WHAT IT HELD is its [`EXPECT`], which the seed weighs against what passed.
+    let _ = select(root, &state, &resources, command);
+    // THE KEY'S INPUTS AS THE RUN FOUND THEM, so its end can name what moved
+    // them under it ([`moved_since_start`], CLOUD-2961).
+    crate::durable::replace(state.join(START), id_lines(&resources))?;
     wrap(root, &state, &inputs, command)
+}
+
+/// Under the run state: each path's content id as the run started
+/// ([`id_lines`]), read back at its end by [`moved_since_start`].
+const START: &str = "start";
+
+/// Under the run state: one empty file per case this run reported from a
+/// pass without running it, named by its [`case_key`].
+const HIT: &str = "hit";
+
+/// Under the run state: one empty file per case this run ran, by [`case_key`].
+const SPAWNED: &str = "spawned";
+
+/// `ids` as one `path\tid` line each.
+fn id_lines(ids: &std::collections::BTreeMap<String, String>) -> String {
+    ids.iter().fold(String::new(), |mut out, (path, id)| {
+        let _ = writeln!(out, "{path}\t{id}");
+        out
+    })
+}
+
+/// Every path whose content id differs between `start` ([`id_lines`]) and
+/// `now`: written, added or removed.
+fn moved(start: &str, now: &std::collections::BTreeMap<String, String>) -> Vec<String> {
+    let before: std::collections::BTreeMap<&str, &str> = start
+        .lines()
+        .filter_map(|line| line.split_once('\t'))
+        .collect();
+    let mut paths: std::collections::BTreeSet<&str> = before.keys().copied().collect();
+    paths.extend(now.keys().map(String::as_str));
+    paths
+        .into_iter()
+        .filter(|path| before.get(path).copied() != now.get(*path).map(String::as_str))
+        .map(str::to_owned)
+        .collect()
+}
+
+/// The paths of the checkout at `root` whose content moved while its journaled
+/// run ran, from the ids [`journaled`] noted at its start. A SUITE THAT WRITES
+/// INTO ITS OWN INPUTS moves the key its passes were kept under, so every next
+/// run re-runs them all: the step fails on it rather than caching around it
+/// (CLOUD-2961). Empty where no start was noted.
+///
+/// # Errors
+///
+/// The checkout cannot be read.
+pub fn moved_since_start(root: &Path) -> Result<Vec<String>> {
+    let state = crate::state::repo_state_dir(root)?.join("test-run");
+    let Ok(start) = crate::fsio::read_to_string(state.join(START)) else {
+        return Ok(Vec::new());
+    };
+    Ok(moved(&start, &schema::resource_ids(root)?))
+}
+
+/// How many cases the journaled run in the checkout at `root` held from a pass
+/// and how many it ran.
+#[must_use]
+pub fn closing(root: &Path) -> (usize, usize) {
+    let Ok(state) = crate::state::repo_state_dir(root).map(|dir| dir.join("test-run")) else {
+        return (0, 0);
+    };
+    counts(&state)
+}
+
+/// [`closing`] over the run state `state`.
+fn counts(state: &Path) -> (usize, usize) {
+    let count = |dir: &str| std::fs::read_dir(state.join(dir)).map_or(0, Iterator::count);
+    (count(HIT), count(SPAWNED))
+}
+
+/// A journaled run of `step` in the checkout at `root` ended: seed the cases
+/// it passed ([`seed`]), say `step`'s closing line ([`closing_line`]) on
+/// `err`, and answer a violation where the run's key moved under it
+/// ([`key_moved`]). `None` leaves the step's exit to its cases.
+pub fn settle(step: &str, root: &Path, err: &mut dyn std::io::Write) -> Option<crate::ExitCode> {
+    let _ = seed(root);
+    let (held, ran) = closing(root);
+    let _ = std::io::Write::write_fmt(err, format_args!("{}\n", closing_line(step, held, ran)));
+    key_moved(step, &moved_since_start(root).unwrap_or_default(), err)
+}
+
+/// Where `moved` ([`moved_since_start`]) names any path, say each on `err`
+/// under `step` and answer the step's exit: a violation, whatever its cases
+/// did. `None` where the key held.
+pub fn key_moved(
+    step: &str,
+    moved: &[String],
+    err: &mut dyn std::io::Write,
+) -> Option<crate::ExitCode> {
+    if moved.is_empty() {
+        return None;
+    }
+    for path in moved {
+        let _ = std::io::Write::write_fmt(
+            err,
+            format_args!("{step} run key moved under the run by {path}\n"),
+        );
+    }
+    Some(crate::ExitCode::Violation)
+}
+
+/// The step's closing line: `<step> held <held> ran <ran>`.
+#[must_use]
+pub fn closing_line(step: &str, held: usize, ran: usize) -> String {
+    format!("{step} held {held} ran {ran}")
 }
 
 /// `command` under the journaling run-wrapper: each case's pass kept in the
@@ -262,6 +368,8 @@ fn select(
     let _ = std::fs::remove_dir_all(&expect);
     let _ = std::fs::remove_dir_all(state.join(PENDING));
     let _ = std::fs::remove_dir_all(state.join(RAN));
+    let _ = std::fs::remove_dir_all(state.join(HIT));
+    let _ = std::fs::remove_dir_all(state.join(SPAWNED));
     let _ = std::fs::remove_file(state.join(RUN_ENV));
     std::fs::create_dir_all(&expect)?;
     std::fs::create_dir_all(state.join(PENDING))?;
@@ -919,9 +1027,6 @@ pub fn promote_pending(state: &Path, stood: bool) -> Result<usize> {
     Ok(promoted)
 }
 
-/// Under the run state: how many cases this run's selection held ([`select`]).
-const HELD: &str = "held";
-
 /// Under the run state: a reach seed is owed and waits for the lap that holds
 /// the land singleton to end ([`lap_ended`]).
 const SEED_PENDING: &str = "seed-pending";
@@ -971,28 +1076,39 @@ pub fn seed(root: &Path) -> Seeded {
     let Ok(state) = crate::state::repo_state_dir(root).map(|dir| dir.join("test-run")) else {
         return Seeded::Covered;
     };
-    let held = crate::fsio::read_to_string(state.join(HELD))
-        .ok()
-        .and_then(|held| held.trim().parse::<usize>().ok())
-        .unwrap_or(0);
-    let passed = report_path(root)
-        .and_then(|report| crate::fsio::read_to_string(report).ok())
-        .and_then(|xml| passed_cases(&xml))
-        .unwrap_or(0);
-    if covered(held, passed) {
+    if owed(&state).is_empty() {
         return Seeded::Covered;
     }
     request_seed(root)
 }
 
-/// Whether a selection that held `held` cases covered a run that passed
-/// `passed`: a selection holding every passed case leaves nothing to seed.
+/// The cases a seed owes the run state `state`: each the run passed (a [`RAN`]
+/// note, written only on a pass) that its selection did not hold ([`EXPECT`]).
+/// A FAILING CASE IS NEVER OWED (CLOUD-2961): it left no note, so a red run
+/// seeds every case that passed in it and nothing else, and the failing one
+/// runs again.
+fn owed(state: &Path) -> std::collections::BTreeSet<String> {
+    let names = |dir: &str| -> std::collections::BTreeSet<String> {
+        std::fs::read_dir(state.join(dir))
+            .into_iter()
+            .flatten()
+            .filter_map(|entry| entry.ok()?.file_name().into_string().ok())
+            .collect()
+    };
+    let held = names(EXPECT);
+    names(RAN)
+        .into_iter()
+        .filter(|case| !covered(&held, case))
+        .collect()
+}
+
+/// Whether the selection `held` holds the passed case `case`.
 ///
 /// APART FROM [`seed`] so a case can reach it: every case the reach recorder
 /// runs carries the recorder's environment, so [`seed`] answers `Nested` there
 /// before this question is asked (CLOUD-2789).
-const fn covered(held: usize, passed: usize) -> bool {
-    held >= passed
+fn covered(held: &std::collections::BTreeSet<String>, case: &str) -> bool {
+    held.contains(case)
 }
 
 /// Whether a `CI` value names a CI run: present and not empty. Apart from
@@ -1090,24 +1206,6 @@ pub fn preempt(root: &Path) -> bool {
         let _ = crate::durable::replace(state.join(SEED_PENDING), "");
     }
     ended
-}
-
-/// How many cases a nextest `JUnit` report names as passed: no `<failure>`,
-/// `<error>` or `<skipped>` child. `None` when it is not XML.
-fn passed_cases(xml: &str) -> Option<usize> {
-    let doc = roxmltree::Document::parse(xml).ok()?;
-    Some(
-        doc.descendants()
-            .filter(|node| node.has_tag_name("testcase"))
-            .filter(|case| {
-                !case.children().any(|child| {
-                    child.has_tag_name("failure")
-                        || child.has_tag_name("error")
-                        || child.has_tag_name("skipped")
-                })
-            })
-            .count(),
-    )
 }
 
 /// Remove every journal under `state` but `keep`.
@@ -1302,7 +1400,17 @@ fn case(args: &[String]) -> Result<u8> {
     let target = case_target(program, &std::env::current_dir()?)?;
     let marker = journal.join(case_key(Key::Target(&target), test));
     let state = journal.parent().and_then(Path::parent);
+    let tally = |dir: &str| {
+        if let Some(state) = state {
+            let _ = std::fs::create_dir_all(state.join(dir));
+            let _ = crate::durable::replace(
+                state.join(dir).join(case_key(Key::Target(&target), test)),
+                "",
+            );
+        }
+    };
     if marker.is_file() {
+        tally(HIT);
         if let Some(state) = state {
             note_ran(state, program, test);
         }
@@ -1312,6 +1420,7 @@ fn case(args: &[String]) -> Result<u8> {
     if let (Some(state), Some(key)) = (state, dependency.as_deref()) {
         let pass = state.join(PASS).join(key);
         if pass.is_file() {
+            tally(HIT);
             // RENEWED ON EVERY HIT, so a pass still in use outlives the
             // collection of passes nothing reads.
             let _ = std::fs::File::options()
@@ -1321,6 +1430,7 @@ fn case(args: &[String]) -> Result<u8> {
             return Ok(0);
         }
     }
+    tally(SPAWNED);
     let code = spawn_case(program, rest)?;
     if code == 0 {
         crate::durable::replace(&marker, "")?;
@@ -1537,47 +1647,88 @@ mod tests {
         assert!(!ci_named(None));
     }
 
-    /// Fails by: a selection that held fewer cases than passed read as
-    /// covering the run, so the seed the next head needs is never spawned, or
-    /// one that held them all spawning a seed for nothing (CLOUD-2789).
+    /// Fails by: a red run owing no seed (the seed gated on the step passing),
+    /// a failing case owed a seed or keyed a pass, a case the selection held
+    /// owed again, or a passed case left out (CLOUD-2961).
     #[test]
-    fn a_selection_covers_a_run_only_when_it_held_every_passed_case() {
-        assert!(covered(3, 3));
-        assert!(covered(4, 3));
-        assert!(!covered(2, 3));
-        assert!(covered(0, 0));
+    fn the_seed_runs_for_the_passed_cases_of_a_red_run() {
+        let state = crate::scratch::scratch("test-run-red-seed");
+        std::fs::create_dir_all(state.join(RAN)).unwrap();
+        std::fs::create_dir_all(state.join(EXPECT)).unwrap();
+        // N = 4: `a`, `b` and `h` passed, `f` failed and left no note; the
+        // selection held `h` only.
+        for name in ["a", "b", "h"] {
+            std::fs::write(
+                state.join(RAN).join(expect_name(name, "bin")),
+                format!("tree-1\n--exact\x1f{name}"),
+            )
+            .unwrap();
+        }
+        std::fs::write(state.join(EXPECT).join(expect_name("h", "bin")), "dep-h").unwrap();
+        let want: std::collections::BTreeSet<String> =
+            ["a", "b"].map(|name| expect_name(name, "bin")).into();
+        assert_eq!(owed(&state), want);
+        let sealed: std::collections::BTreeMap<(String, String), String> = ["a", "b", "h", "f"]
+            .into_iter()
+            .map(|name| ((name.to_owned(), "bin".to_owned()), format!("dep-{name}")))
+            .collect();
+        assert_eq!(key_ran_passes(&state, "tree-1", &sealed).unwrap(), 3);
+        let failing = vec![String::new(), "--exact".to_owned(), "f".to_owned()];
+        assert!(
+            !state
+                .join(PASS)
+                .join(case_key(Key::Dep("dep-f"), &failing))
+                .exists(),
+            "the failing case has no record"
+        );
     }
 
-    /// Fails by: a case carrying a `failure`, an `error` or a `skipped` child
-    /// counted as passed, which reads one run's journal as more done than it
-    /// is (CLOUD-2789).
+    /// Fails by: a path written, added or removed under a run not named, an
+    /// unmoved path named, or a moved key leaving the step's exit to its cases
+    /// (CLOUD-2961).
     #[test]
-    fn a_failed_errored_or_skipped_case_is_not_passed() {
-        let xml = "<testsuites><testsuite>\
-            <testcase name=\"ok\"/>\
-            <testcase name=\"failed\"><failure/></testcase>\
-            <testcase name=\"errored\"><error/></testcase>\
-            <testcase name=\"skipped\"><skipped/></testcase>\
-            </testsuite></testsuites>";
-        assert_eq!(passed_cases(xml), Some(1));
-        assert_eq!(passed_cases("<unclosed"), None);
+    fn a_run_whose_key_moved_names_the_paths_and_fails() {
+        let ids = |pairs: &[(&str, &str)]| -> std::collections::BTreeMap<String, String> {
+            pairs
+                .iter()
+                .map(|(path, id)| ((*path).to_owned(), (*id).to_owned()))
+                .collect()
+        };
+        let start = id_lines(&ids(&[("a.rs", "1"), ("gone.txt", "1"), ("same.txt", "1")]));
+        let paths = moved(
+            &start,
+            &ids(&[("a.rs", "2"), ("same.txt", "1"), ("x.snap.new", "1")]),
+        );
+        assert_eq!(paths, ["a.rs", "gone.txt", "x.snap.new"]);
+        let mut err = Vec::new();
+        assert_eq!(
+            key_moved("test:cargo", &paths, &mut err),
+            Some(crate::ExitCode::Violation)
+        );
+        let said = String::from_utf8(err).unwrap();
+        assert!(
+            said.contains("x.snap.new") && said.contains("gone.txt"),
+            "{said}"
+        );
+        assert_eq!(key_moved("test:cargo", &[], &mut Vec::new()), None);
     }
 
-    /// Fails by: a failed, erred or skipped case counted as passed (any `||`
-    /// in `passed_cases` read as `&&`), a report counted as a constant, or a
-    /// report that is not XML answered with a count.
+    /// Fails by: the closing line missing, a count read from the wrong
+    /// directory, or the two counts swapped (CLOUD-2961).
     #[test]
-    fn only_a_case_with_no_failure_error_or_skip_is_passed() {
-        let report = "<testsuites><testsuite name=\"s\">\
-            <testcase name=\"a\"/>\
-            <testcase name=\"b\"><system-out>x</system-out></testcase>\
-            <testcase name=\"c\"><failure/></testcase>\
-            <testcase name=\"d\"><error/></testcase>\
-            <testcase name=\"e\"><skipped/></testcase>\
-            </testsuite></testsuites>";
-        assert_eq!(passed_cases(report), Some(2));
-        assert_eq!(passed_cases("<testsuites/>"), Some(0));
-        assert_eq!(passed_cases("not xml"), None);
+    fn the_closing_line_counts_held_and_ran() {
+        let state = crate::scratch::scratch("test-run-closing");
+        for (dir, n) in [(HIT, 3), (SPAWNED, 2)] {
+            std::fs::create_dir_all(state.join(dir)).unwrap();
+            for i in 0..n {
+                std::fs::write(state.join(dir).join(i.to_string()), "").unwrap();
+            }
+        }
+        let (held, ran) = counts(&state);
+        assert_eq!(
+            closing_line("test:cargo", held, ran),
+            "test:cargo held 3 ran 2"
+        );
     }
 
     /// Fails by: a named profile read as `default`, so a journaled run looks
