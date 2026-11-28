@@ -231,6 +231,49 @@ fn a_job_that_runs_on_a_draft_is_refused_and_named() {
     );
 }
 
+/// A workflow whose own text declares its spend (`CI_SPEND_AUTHORISED`) runs
+/// on drafts and finishes its runs: rules 1 and 2 hold everywhere else
+/// (CLOUD-2903, the owner's ruling that any pull request cuts a pre-release).
+fn authorised(reason: &str) -> String {
+    SOUND
+        .replace(
+            "    if: ${{ github.event.pull_request.draft == false }}\n",
+            "",
+        )
+        .replace("cancel-in-progress: true", "cancel-in-progress: false")
+        .replace(
+            "concurrency:",
+            &format!("env:\n  CI_SPEND_AUTHORISED: \"{reason}\"\nconcurrency:"),
+        )
+}
+
+#[test]
+fn a_workflow_that_declares_its_spend_runs_on_drafts_and_finishes() {
+    let root = tree(
+        "spend-declared",
+        &authorised("publishes each head's own build"),
+    );
+    let found = findings(&root);
+    assert!(
+        found.is_empty(),
+        "a declared spend is authorised: {found:?}"
+    );
+}
+
+#[test]
+fn a_blank_spend_declaration_authorises_nothing() {
+    let root = tree("spend-blank", &authorised("  "));
+    let found = findings(&root);
+    assert!(
+        found
+            .iter()
+            .filter(|(path, _)| path == ".github/workflows/ci.yml")
+            .count()
+            >= 2,
+        "a blank reason leaves both rules standing: {found:?}"
+    );
+}
+
 /// `ci.yml`'s `final`, reduced: a fan-in that only reads its dependencies'
 /// results and exits, under `always()` and deliberately not draft-gated
 /// (CLOUD-2317).

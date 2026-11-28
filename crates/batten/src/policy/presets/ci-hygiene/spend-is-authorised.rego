@@ -1,5 +1,7 @@
 #MUTANT-SUITE crates/batten/tests/it/ci_hygiene.rs
 #MUTANT draft-gate-unread|s@^\tnot job_is_draft_gated(path, name)$@\tfalse@|a_job_that_runs_on_a_draft_is_refused_and_named
+#MUTANT spend-authorisation-unread|s@^spend_authorised(path) if {$@spend_authorised(path) if {\n\tfalse@|a_workflow_that_declares_its_spend_runs_on_drafts_and_finishes
+#MUTANT spend-authorisation-blank-honoured|s@^\ttrim_space(reason) != ""$@\ttrue@|a_blank_spend_declaration_authorises_nothing
 #MUTANT aggregator-exempt-dropped|s@^\tnot aggregator(path, name)$@\ttrue@|a_pure_aggregator_under_always_is_not_a_spend
 #MUTANT aggregator-action-unread|s@^\tnot step.uses$@\ttrue@|an_aggregator_that_checks_out_is_still_refused
 # CI spends nothing the author could have spent for free (CLOUD-1161).
@@ -97,6 +99,23 @@ triggers(path) := t if {
 
 on_pull_request(path) if _ = triggers(path).pull_request
 
+# --- 0. a workflow that declares its spend ------------------------------------
+#
+# SOME WORKFLOWS SPEND ON PURPOSE ON EVERY PUSH, drafts included, and must not
+# yield to a newer push: one that publishes a build of each head for the head
+# itself to consume needs that build while the pull request is still a draft,
+# and a branch pushed faster than the build takes would never get one if each
+# push cancelled the run before it. Rules 1 and 2 are wrong for exactly that
+# workflow, and the exception is the WORKFLOW's to declare, in its own text,
+# with its reason: a workflow-level `env: CI_SPEND_AUTHORISED: "<why>"`. A
+# blank value authorises nothing. Read per workflow, never by name, so the
+# preset names no consumer's file.
+spend_authorised(path) if {
+	reason := workflow[path].env.CI_SPEND_AUTHORISED
+	is_string(reason)
+	trim_space(reason) != ""
+}
+
 # --- 1. no job runs on a draft ------------------------------------------------
 
 # The guard, wherever the job carries it. Read at the JOB level and at each STEP,
@@ -122,6 +141,7 @@ violation contains {
 	some name, _ in workflow[path].jobs
 	not job_is_draft_gated(path, name)
 	not aggregator(path, name)
+	not spend_authorised(path)
 }
 
 # A PURE AGGREGATOR SPENDS NOTHING, so it is not this rule's business (#1276).
@@ -171,6 +191,7 @@ violation contains {
 	some path, _ in workflow
 	on_pull_request(path)
 	not supersedes_itself(path)
+	not spend_authorised(path)
 }
 
 # --- 3. every workflow declares a concurrency group ---------------------------
