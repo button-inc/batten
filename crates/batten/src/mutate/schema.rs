@@ -7602,7 +7602,7 @@ pub fn record_reach(
     if let Some(line) = stable_line(super::stable::judge(&base, &after)?) {
         crate::mutate::progress!(out, "{line}")?;
     }
-    stage_took(out, "reach stable", at)?;
+    stage_took(out, "reach compare", at)?;
     reach.tree = inputs;
     let whole = ran_whole(passed, &reported, &red);
     Ok((reach, passed && red.is_empty(), whole))

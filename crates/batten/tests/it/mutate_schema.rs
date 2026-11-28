@@ -440,8 +440,10 @@ fn a_red_baseline_case_poisons_only_the_mutants_it_reaches() {
     assert!(!said.contains("\tkill\n"), "the green kill stands: {said}");
     let (code, again, err) = sweep();
     assert_eq!(code, Some(2), "{again}\n{err}");
+    // A RED RUN IS SEALED (CLOUD-2959): the second sweep runs no case, the red
+    // one included, and its record still names the red.
+    assert!(!again.contains("reach runs"), "{again}\n{err}");
     for line in [
-        "reach carried 3 case(s)",
         "baseline-red\tfix tests::red\t",
         "unjudged (baseline-red: fix tests::red)\tpoisoned\n",
         "{\"caught\": 1, \"missed\": 1, \"unjudged\": 2}",
@@ -1579,7 +1581,7 @@ fn a_reach_killed_again_and_again_converges() {
 
 /// Fails by: reach record saying one time for the whole stage, so a lap that
 /// spends 1,655 s re-running 30 cases cannot say which phase spent it
-/// (CLOUD-2959): carry, listing, suite, collect and the stable judge each
+/// (CLOUD-2959): carry, listing, suite, collect and the stability compare each
 /// say their own seconds.
 #[test]
 fn reach_record_prints_a_line_per_phase() {
@@ -1593,7 +1595,7 @@ fn reach_record_prints_a_line_per_phase() {
         .streamed_output()
         .expect("run batten");
     let said = common::stdout(&output);
-    for phase in ["carry", "listing", "suite", "collect", "stable"] {
+    for phase in ["carry", "listing", "suite", "collect", "compare"] {
         let line = format!("mutate schema: stage reach {phase} took ");
         assert!(said.contains(&line), "{line:?} in {said}");
     }
