@@ -1786,3 +1786,368 @@ fn the_traced_lane_runs_every_module_that_reaches_a_tracer() {
         Some("1")
     );
 }
+
+// ---- a killed run is ended by the next start (CLOUD-2955) -------------------
+//
+// Each case drives `step run` over a body that loops: it appends its pid and a
+// counter to a marker file and to a FIFO the case reads, so "two lines in" is a
+// pipe read, never a clock. The FIFO's read end is held for the case's life, so
+// the body never dies of SIGPIPE on its own; the guard kills what is left.
+// Linux only: liveness is read off `/proc`, where a zombie is not alive.
+
+/// The looping body: its pid and a counter to `$MARK` and to `$TICK`.
+const LOOP: &str = "#!/bin/sh\nexec 3>\"$TICK\"\ni=0\nwhile :; do\n  i=$((i+1))\n  echo \"$$ $i\" >>\"$MARK\"\n  echo \"$$ $i\" >&3\n  sleep 0.1\ndone\n";
+
+/// One looping run under way: the `step run` child, the FIFO's read end, the
+/// marker, and the body's pid, which leads its group where the body has one.
+struct Looping {
+    child: std::process::Child,
+    ticks: std::io::BufReader<std::fs::File>,
+    mark: PathBuf,
+    tick: PathBuf,
+    body: u32,
+}
+
+impl Drop for Looping {
+    fn drop(&mut self) {
+        // Whatever the case left: the body, its group, the `step run`.
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+        for pid in group_members(self.body)
+            .into_iter()
+            .chain(std::iter::once(self.body))
+        {
+            if let Some(pid) = rustix::process::Pid::from_raw(i32::try_from(pid).unwrap_or(0)) {
+                let _ = rustix::process::kill_process(pid, rustix::process::Signal::KILL);
+            }
+        }
+        let _ = std::fs::remove_file(&self.tick);
+    }
+}
+
+impl Looping {
+    /// The next line the body wrote to the FIFO.
+    fn tick(&mut self) -> String {
+        use std::io::BufRead as _;
+        let mut line = String::new();
+        self.ticks.read_line(&mut line).expect("read a tick");
+        assert!(!line.is_empty(), "the body ended before its tick");
+        line
+    }
+
+    fn signal(&self, signal: rustix::process::Signal) {
+        let pid =
+            rustix::process::Pid::from_raw(i32::try_from(self.child.id()).unwrap()).expect("a pid");
+        rustix::process::kill_process(pid, signal).expect("signal `step run`");
+    }
+}
+
+impl Repo {
+    /// `step run <step> -- loop`, its body two ticks in.
+    fn looping(&self, step: &str, name: &str) -> Looping {
+        self.script("loop", LOOP);
+        let mark = self.dir.with_extension(format!("{name}.mark"));
+        let tick = self.dir.with_extension(format!("{name}.tick"));
+        let _ = std::fs::remove_file(&mark);
+        let _ = std::fs::remove_file(&tick);
+        mkfifo(&tick);
+        let child = self
+            .step_command(&[step], &["loop"], &self.loop_env(&mark, &tick))
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("spawn `step run`");
+        // Opening the read end waits for the body to open the write end.
+        let ticks = std::io::BufReader::new(std::fs::File::open(&tick).expect("open the FIFO"));
+        let mut run = Looping {
+            child,
+            ticks,
+            mark,
+            tick,
+            body: 0,
+        };
+        let first = run.tick();
+        run.body = first
+            .split_whitespace()
+            .next()
+            .and_then(|pid| pid.parse().ok())
+            .expect("the body's pid");
+        let _ = run.tick();
+        run
+    }
+
+    fn loop_env(&self, mark: &Path, tick: &Path) -> Vec<(String, String)> {
+        vec![
+            ("MARK".to_owned(), mark.to_string_lossy().into_owned()),
+            ("TICK".to_owned(), tick.to_string_lossy().into_owned()),
+        ]
+    }
+
+    /// `step run <step> -- <command>` as a command not yet run, set up as
+    /// [`Repo::batten`] sets it up.
+    fn step_command(
+        &self,
+        step: &[&str],
+        command: &[&str],
+        env: &[(String, String)],
+    ) -> common::Batten {
+        let inherited = std::env::var_os("PATH").unwrap_or_default();
+        let path = std::env::join_paths(
+            std::iter::once(self.dir.join("bin")).chain(std::env::split_paths(&inherited)),
+        )
+        .expect("a joinable PATH");
+        let mut invocation = common::batten();
+        invocation
+            .args(["step", "run"])
+            .args(step)
+            .arg("--")
+            .args(command)
+            .current_dir(&self.dir)
+            .env("PATH", path)
+            .env_remove("CI")
+            .env_remove("BATTEN_STEP_RECEIPT_BYPASS")
+            .env_remove("BATTEN_TASK_PID");
+        for (name, value) in env {
+            invocation.env(name, value);
+        }
+        invocation
+    }
+
+    /// `step run <step> -- sh -c <script>` to its end, `$MARK` set.
+    fn run_script(&self, step: &str, script: &str, env: &[(String, String)]) -> Output {
+        self.step_command(&[step], &["sh", "-c", script], env)
+            .streamed_output()
+            .expect("run `step run`")
+    }
+
+    /// The step trace files under the git dir, listings aside.
+    fn traces(&self) -> Vec<String> {
+        let mut found: Vec<String> = std::fs::read_dir(self.path(".git"))
+            .unwrap()
+            .filter_map(|entry| entry.unwrap().file_name().into_string().ok())
+            .filter(|name| name.starts_with("batten-step-trace-") && name.ends_with(".trace"))
+            .collect();
+        found.sort();
+        found
+    }
+}
+
+fn mkfifo(path: &Path) {
+    use batten::capture::Streamed as _;
+    #[expect(
+        clippy::disallowed_types,
+        reason = "stays, test-only: a FIFO is made by `mkfifo`, and no door in `common` makes one"
+    )]
+    let made = std::process::Command::new("mkfifo")
+        .arg(path)
+        .streamed_output()
+        .expect("mkfifo runs");
+    assert!(made.status.success(), "{}", common::stderr(&made));
+}
+
+/// `/proc/<pid>/stat`'s state and process group, or `None` for no process.
+fn stat(pid: u32) -> Option<(char, u32)> {
+    let body = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    // The command name is parenthesised and may hold spaces: read after it.
+    let rest = &body[body.rfind(')')? + 1..];
+    let mut fields = rest.split_whitespace();
+    let state = fields.next()?.chars().next()?;
+    let _ppid = fields.next()?;
+    let group = fields.next()?.parse().ok()?;
+    Some((state, group))
+}
+
+/// Whether `pid` is a process that has not exited: a zombie has.
+fn alive(pid: u32) -> bool {
+    stat(pid).is_some_and(|(state, _)| state != 'Z')
+}
+
+/// Every live process whose group is `group`.
+fn group_members(group: u32) -> Vec<u32> {
+    std::fs::read_dir("/proc")
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|entry| entry.file_name().to_str()?.parse::<u32>().ok())
+        .filter(|pid| stat(*pid).is_some_and(|(state, of)| of == group && state != 'Z'))
+        .collect()
+}
+
+/// Wait, on each member's exit and never a clock, until `group` has no live
+/// process. A group that never empties hangs the case, and the suite's cut
+/// reports that as the failure it is.
+fn await_group_gone(group: u32) {
+    loop {
+        let members = group_members(group);
+        if members.is_empty() {
+            return;
+        }
+        for pid in members {
+            let Some(pid) = rustix::process::Pid::from_raw(i32::try_from(pid).unwrap()) else {
+                continue;
+            };
+            let Ok(fd) = rustix::process::pidfd_open(pid, rustix::process::PidfdFlags::empty())
+            else {
+                continue;
+            };
+            let mut fds = [rustix::event::PollFd::new(
+                &fd,
+                rustix::event::PollFlags::IN,
+            )];
+            while rustix::event::poll(&mut fds, None).is_err() {}
+        }
+    }
+}
+
+/// Fails by: a killed run's body still alive once the next run of its step
+/// has started and ended, or the old body writing after the new one.
+#[test]
+fn a_killed_step_run_leaves_no_body_alive_once_the_next_one_starts() {
+    if !cfg!(target_os = "linux") {
+        return;
+    }
+    let repo = Repo::new("killed-run");
+    let mut first = repo.looping("mystep", "killed");
+    first.signal(rustix::process::Signal::KILL);
+    let _ = first.child.wait();
+    assert!(
+        alive(first.body),
+        "the defect's precondition: the body outlives a killed `step run`"
+    );
+    let env = repo.loop_env(&first.mark, &first.tick);
+    let out = repo.run_script("mystep", "echo \"$$ second\" >>\"$MARK\"", &env);
+    assert_eq!(out.status.code(), Some(0), "{}", common::stderr(&out));
+    assert!(
+        !alive(first.body),
+        "the next start ended the last run's body"
+    );
+    assert!(
+        group_members(first.body).is_empty(),
+        "and every process of its group"
+    );
+    let marks = read(&first.mark);
+    assert!(
+        marks
+            .lines()
+            .last()
+            .is_some_and(|line| line.ends_with(" second")),
+        "nothing was written after the second body's line: {marks}"
+    );
+    assert_eq!(repo.receipts().len(), 1, "exactly one receipt");
+}
+
+/// Fails by: a second run of a step whose first runner was killed starting
+/// its body while the first's body still runs.
+#[test]
+fn two_runs_of_one_step_never_overlap() {
+    if !cfg!(target_os = "linux") {
+        return;
+    }
+    let repo = Repo::new("overlap");
+    let mut first = repo.looping("mystep", "overlap");
+    let mut env = repo.loop_env(&first.mark, &first.tick);
+    let seen = repo.dir.with_extension("overlap.seen");
+    let _ = std::fs::remove_file(&seen);
+    env.push(("SEEN".to_owned(), seen.to_string_lossy().into_owned()));
+    env.push(("FIRST".to_owned(), first.body.to_string()));
+    // The second's body says whether the first's body is alive as it starts.
+    let script = "s=$(sed 's/.*) //' /proc/$FIRST/stat 2>/dev/null | cut -d' ' -f1); \
+                  if [ -n \"$s\" ] && [ \"$s\" != Z ]; then echo overlap; else echo alone; fi >\"$SEEN\"";
+    let second = repo
+        .step_command(&["mystep"], &["sh", "-c", script], &env)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("spawn the second `step run`");
+    first.signal(rustix::process::Signal::KILL);
+    let _ = first.child.wait();
+    let mut second = second;
+    let status = second.wait().expect("the second `step run` ends");
+    assert!(status.success(), "{status:?}");
+    assert_eq!(
+        read(&seen).trim(),
+        "alone",
+        "the second body ran only once the first's group was gone"
+    );
+    assert!(group_members(first.body).is_empty());
+}
+
+/// Fails by: two runs sharing one trace path, a dead run's trace left behind,
+/// or the tracer outliving its killed tracee.
+#[test]
+fn a_trace_is_one_runs_and_a_dead_runs_trace_is_removed() {
+    if !cfg!(target_os = "linux") {
+        return;
+    }
+    let repo = Repo::new("trace-per-run");
+    let traced = batten::mutate::trace::Host::here().tracer().is_some();
+    let mut first = repo.looping("traced", "traced");
+    first.signal(rustix::process::Signal::KILL);
+    let _ = first.child.wait();
+    let left = repo.traces();
+    let mut env = repo.loop_env(&first.mark, &first.tick);
+    let seen = repo.dir.with_extension("traced.seen");
+    let _ = std::fs::remove_file(&seen);
+    env.push(("SEEN".to_owned(), seen.to_string_lossy().into_owned()));
+    let script = "for f in .git/batten-step-trace-*.trace; do [ -e \"$f\" ] || continue; \
+                  echo \"== $f\"; cat \"$f\"; done >\"$SEEN\"";
+    let out = repo.run_script("traced", script, &env);
+    assert!(
+        repo.traces().is_empty(),
+        "no trace outlives its run: {:?}",
+        repo.traces()
+    );
+    if traced {
+        assert_eq!(
+            left.len(),
+            1,
+            "a killed traced run leaves its trace: {left:?}"
+        );
+        let body = read(&seen);
+        let headers: Vec<&str> = body
+            .lines()
+            .filter(|line| line.starts_with("== "))
+            .collect();
+        assert_eq!(headers.len(), 1, "the run saw one trace, its own: {body}");
+        assert!(
+            !headers[0].ends_with(&left[0]),
+            "the next run traced to a different path: {body}"
+        );
+        let first_pid = format!("{} ", first.body);
+        assert!(
+            !body.lines().any(|line| line.starts_with(&first_pid)),
+            "the run's trace holds no line of the first body: {body}"
+        );
+        let tracer_left = std::fs::read_dir("/proc")
+            .unwrap()
+            .flatten()
+            .filter_map(|entry| entry.file_name().to_str()?.parse::<u32>().ok())
+            .filter(|pid| alive(*pid))
+            .any(|pid| {
+                std::fs::read(format!("/proc/{pid}/cmdline"))
+                    .is_ok_and(|cmd| String::from_utf8_lossy(&cmd).contains(&left[0]))
+            });
+        assert!(!tracer_left, "the first run's tracer ended with its tracee");
+    } else {
+        assert!(left.is_empty(), "untraced, a run writes no trace: {left:?}");
+        assert_eq!(out.status.code(), Some(0), "{}", common::stderr(&out));
+    }
+}
+
+/// Fails by: a terminated `step run` leaving its body running, or exiting 0.
+#[test]
+fn a_terminated_step_run_takes_its_body_with_it() {
+    if !cfg!(target_os = "linux") {
+        return;
+    }
+    let repo = Repo::new("terminated");
+    let mut run = repo.looping("mystep", "terminated");
+    run.signal(rustix::process::Signal::TERM);
+    let status = run.child.wait().expect("`step run` ends");
+    assert!(
+        !status.success(),
+        "a terminated `step run` is not a pass: {status:?}"
+    );
+    assert!(!alive(run.body), "the body went with it");
+    await_group_gone(run.body);
+}
