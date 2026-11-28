@@ -13132,6 +13132,27 @@ fn build_keys(
     ))
 }
 
+/// The build key every case digest is taken under, and each of its inputs
+/// (CLOUD-2959): two runs over one tree that key differently re-record every
+/// case, and this line says which input moved.
+fn build_line(
+    root: &std::path::Path,
+    resources: &std::collections::BTreeMap<String, String>,
+    format: &Format,
+    build: &str,
+) -> String {
+    let short = |text: &str| text.get(..12).unwrap_or(text).to_owned();
+    let compiler = super::resume::compiler_version(root).unwrap_or_default();
+    let manifests = super::resume::build_digest_with(root, resources, b"");
+    format!(
+        "mutate schema: reach keyed under build {} (manifests {}, compiler {}, format {})",
+        short(build),
+        short(&manifests),
+        short(&crate::tools::digest(&compiler)),
+        format.key()
+    )
+}
+
 /// Each case digest of `digests` taken under `build` ([`sweep_build`]) and
 /// its package's unprobed fold ([`super::resume::unprobed_folds`]): a case of
 /// a package no fold names takes every unprobed package.
@@ -13254,6 +13275,7 @@ fn reached(
     };
     let packages: BTreeSet<&str> = mutants.iter().map(|m| m.package.as_str()).collect();
     let (build, unprobed) = build_keys(root, ids.0, format)?;
+    crate::mutate::progress!(out, "{}", build_line(root, ids.0, format, &build))?;
     let derived = Derived::at(state, &build);
     derived.drop_other_versions();
     let memo = DigestMemo::default();
