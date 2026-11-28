@@ -1929,6 +1929,10 @@ pub(crate) fn kill_group(pgid: u32) {
     let _ = pgid;
 }
 
+/// The variable a `land` exports its own pid in, so every step under its gate
+/// ends with it even where a task runner between them survives (CLOUD-2955).
+pub(crate) const LAP_PID: &str = "BATTEN_LAP_PID";
+
 /// END WITH THE LAP'S STARTER (CLOUD-2955): once any process this one runs
 /// under exits, every process this one started is sent SIGKILL and this one
 /// exits 3.
@@ -1957,12 +1961,27 @@ pub(crate) fn end_with_starter() {
         if rustix::process::set_child_subreaper(Some(me)).is_err() {
             return;
         }
-        let watched: Vec<rustix::fd::OwnedFd> = ancestors(me)
+        let open = |pid| rustix::process::pidfd_open(pid, rustix::process::PidfdFlags::empty());
+        let mut watched: Vec<rustix::fd::OwnedFd> = ancestors(me)
             .into_iter()
-            .filter_map(|pid| {
-                rustix::process::pidfd_open(pid, rustix::process::PidfdFlags::empty()).ok()
-            })
+            .filter_map(|pid| open(pid).ok())
             .collect();
+        // THE LAP'S OWNER, when a `land` exported one: watched like an
+        // ancestor, and already gone means this process was started by an
+        // orphaned fan after the lap died, so it ends before doing anything.
+        if let Some(owner) = std::env::var(LAP_PID)
+            .ok()
+            .and_then(|raw| raw.trim().parse::<i32>().ok())
+            .and_then(rustix::process::Pid::from_raw)
+        {
+            match open(owner) {
+                Ok(fd) => watched.push(fd),
+                Err(rustix::io::Errno::SRCH) => {
+                    std::process::exit(crate::ExitCode::Internal.code())
+                }
+                Err(_) => {}
+            }
+        }
         if watched.is_empty() {
             return;
         }

@@ -15963,6 +15963,14 @@ fn run_land_verify_seen(
     // THE GATE'S STEPS ANNOUNCE UNDER THIS TASK (CLOUD-2369): `step::announce`
     // reads `$BATTEN_TASK_PID`, which nothing set, so a verify's steps never
     // moved the registry the stall arm reads.
+    // THE LAP'S OWNER, WATCHED BY EVERY STEP UNDER IT (CLOUD-2955): mise leads
+    // a group per task, so a SIGKILLed `land` leaves its `verify` fan alive,
+    // and with `--continue-on-error` that fan starts the next stage after
+    // `land` is gone. A step started under a dead owner ends at once.
+    published.push((
+        crate::exec::LAP_PID.to_owned(),
+        std::process::id().to_string(),
+    ));
     let stall = verify_stall(root, registered);
     if let Some(stall) = &stall {
         published.push((step::TASK_PID.to_owned(), stall.pid.to_string()));

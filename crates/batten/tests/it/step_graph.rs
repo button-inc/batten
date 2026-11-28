@@ -694,3 +694,47 @@ fn a_step_run_whose_starter_is_killed_leaves_no_live_child() {
         "nothing the killed body started is alive"
     );
 }
+
+/// Fails by: a stage started by an orphaned fan after its `land` died running
+/// its body — the `dist:lap` that `--continue-on-error` launched once the
+/// killed lap was gone (CLOUD-2955, loop k's second kill).
+#[test]
+fn a_step_run_whose_lap_owner_is_gone_starts_nothing() {
+    if !cfg!(target_os = "linux") {
+        return;
+    }
+    let graph = Graph::new("owner-gone", STAGE);
+    common::write(&graph.dir, "bin/hold", HOLD);
+    common::write(&graph.dir, "input.txt", "one\n");
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(
+            graph.dir.join("bin/hold"),
+            std::fs::Permissions::from_mode(0o755),
+        )
+        .expect("chmod");
+    }
+    common::git_in(&graph.dir, &["add", "input.txt"]);
+    common::git_in(&graph.dir, &["commit", "-qm", "input"]);
+    let mut gone = std::process::Command::new("true").spawn().expect("spawn");
+    let owner = gone.id();
+    gone.wait().expect("reap the owner");
+    let out = common::batten()
+        .args(["step", "run", "hold", "--", "bin/hold"])
+        .current_dir(&graph.dir)
+        .env("GRAPH_LOG", &graph.log)
+        .env("TICK", "/dev/null")
+        .env("HOLD_TICKS", "1")
+        .env("BATTEN_LAP_PID", owner.to_string())
+        .env_remove("CI")
+        .env_remove("BATTEN_TASK_PID")
+        .env_remove("BATTEN_STEP_RECEIPT_BYPASS")
+        .streamed_output()
+        .expect("run the step");
+    let events = graph.events();
+    assert!(
+        !events.iter().any(|event| event.starts_with("start hold")),
+        "the body ran under a lap that had ended: {events:?}"
+    );
+    assert_eq!(out.status.code(), Some(3), "{}", common::stderr(&out));
+}
