@@ -19434,7 +19434,7 @@ journal = "nextest"
 # `strace` and nextest they run under. Two rows, one per argv of `test:traced`.
 [[step]]
 id = "test:traced"
-inputs = ["."]
+inputs = ["crates", "Cargo.toml", "Cargo.lock"]
 tools = [
   ["batten", "step", "config"],
   ["batten", "step", "untraced"],
@@ -19485,7 +19485,7 @@ tools = [
 
 [[step]]
 id = "test:traced:lib"
-inputs = ["."]
+inputs = ["crates", "Cargo.toml", "Cargo.lock"]
 tools = [
   ["batten", "step", "config"],
   ["batten", "step", "untraced"],
