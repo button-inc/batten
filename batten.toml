@@ -19543,7 +19543,9 @@ tools = [
 # writes the store under `.git`, which no tree input declares; the line keys it.
 [[step]]
 id = "evaluator-io-record"
-inputs = ["."]
+# TRACED (CLOUD-2784, strace of the command: the row is untraced to the lint):
+# `crates/`, `Cargo.toml`, `Cargo.lock`; `batten.toml` is the config line's.
+inputs = ["crates", "Cargo.toml", "Cargo.lock"]
 tools = [
   ["batten", "step", "config"],
   ["batten", "step", "untraced"],
@@ -20352,12 +20354,27 @@ tools = [["zizmor", "--version"]]
 # rather than hitting.
 [[step]]
 id = "semver"
-# KEEPS `.` (CLOUD-2835): `cargo semver-checks` builds the baseline from a copy
-# of the whole tree. Once cargo's traces read whole, a held lap's lint counted
-# 481 reads outside the four entries this row used to declare.
-inputs = ["."]
+# TRACED (CLOUD-2784): the bytes read are `crates/` and the workspace's
+# manifests, locks and ignore files; the rest of the 481 reads the old `.` was
+# kept for are the baseline copy's walk probing every directory for ignore
+# files, which the `step exists` line keys by presence, never by bytes.
+inputs = [
+  "crates",
+  "Cargo.toml",
+  "Cargo.lock",
+  "fuzz/Cargo.toml",
+  "tools/batten-profile/Cargo.toml",
+  "tools/batten-semantic/Cargo.toml",
+  "mise.toml",
+  "mise.lock",
+  "mise.agent.toml",
+  "mise.agent.lock",
+  ".gitignore",
+  ".ignore",
+]
 tools = [
   ["batten", "step", "config"],
+  ["batten", "step", "exists", "--", "."],
   ["cargo", "semver-checks", "--version"],
   ["rustc", "--version"],
   ["batten", "step", "base", "--ref", "origin/main", "--", "crates", "Cargo.toml", "Cargo.lock"],
