@@ -1385,7 +1385,6 @@ impl RuleExt for Rule {
     }
 
     fn half(&self, bundle: Option<&crate::policy::Bundle>, keyed_bases: &[String]) -> Half {
-        use crate::facts::Subject;
         if self.scope == RuleScope::MediatedCall || !self.requires_path.is_empty() {
             return Half::Live;
         }
