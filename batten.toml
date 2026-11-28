@@ -19687,7 +19687,7 @@ id = "policy-test"
 # top-level entries (the bundles' documents and line sources span the tree).
 # Keyed on six, a receipt answered for edits the suite never judged.
 inputs = ["."]
-tools = [["batten", "step", "config", "--", "rule", "pattern"], ["rustc", "--version"], ["cargo", "--version"]]
+tools = [["batten", "step", "config"], ["rustc", "--version"], ["cargo", "--version"]]
 
 [[step]]
 id = "perf-gate"
@@ -19697,7 +19697,7 @@ id = "perf-gate"
 # checkout). Keyed on seven, a receipt answered for trees the gate never read.
 inputs = ["."]
 tools = [
-  ["batten", "step", "config", "--", "perf", "pattern", "rule"],
+  ["batten", "step", "config"],
   [
     "rustc",
     "--version",
