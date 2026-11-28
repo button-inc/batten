@@ -16033,6 +16033,54 @@ mod tests {
         assert_eq!((carried, reasons), (3, Reasons::new()));
     }
 
+    /// Fails by: a run over an unchanged context taking every case digest
+    /// again (CLOUD-2959: ~11,700 a lap on an unchanged tip), or one kept
+    /// under another context or engine, or for other inputs, answering.
+    #[test]
+    fn an_unchanged_context_takes_no_case_digest_again() {
+        type Due = std::collections::BTreeMap<Case, BTreeSet<usize>>;
+        let file = crate::scratch::scratch("schema-digest-memo").join(DIGEST_MEMO);
+        let case = (String::from("a"), String::from("bin"));
+        let executed: Due = [(case.clone(), [1].into())].into();
+        let read = std::collections::BTreeMap::new();
+        let taken = |due: &Due| {
+            due.keys()
+                .map(|case| (case.clone(), String::from("d")))
+                .collect::<std::collections::BTreeMap<Case, String>>()
+        };
+        let asked = |memo: &DigestMemo, executed: &Due| {
+            let mut asked = 0;
+            memo.take(executed, &read, |due| {
+                asked = due.len();
+                taken(due)
+            });
+            asked
+        };
+        let key = memo_key("context", "engine");
+        let first = DigestMemo::loaded(&file, &key);
+        assert_eq!(asked(&first, &executed), 1);
+        first.save(&file).unwrap();
+        let again = DigestMemo::loaded(&file, &key);
+        assert_eq!(
+            asked(&again, &executed),
+            0,
+            "an unchanged context takes none"
+        );
+        assert_eq!(again.take(&executed, &read, taken)[&case], "d");
+        assert!(again.recalled.get());
+        for other in [memo_key("moved", "engine"), memo_key("context", "rebuilt")] {
+            let fresh = DigestMemo::loaded(&file, &other);
+            assert_eq!(asked(&fresh, &executed), 1, "another key takes it afresh");
+            assert!(!fresh.recalled.get());
+        }
+        let grown: Due = [(case, [1, 2].into())].into();
+        assert_eq!(
+            asked(&DigestMemo::loaded(&file, &key), &grown),
+            1,
+            "a case that ran more is taken afresh"
+        );
+    }
+
     /// A sealed red record over a tree on which nothing it read moved: its
     /// case, besides one green and one never recorded.
     fn red_store(base: &std::path::Path) -> BTreeSet<Case> {
