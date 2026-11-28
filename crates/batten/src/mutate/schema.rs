@@ -5317,7 +5317,7 @@ fn control_red(
     // THE CONTROL IS NEVER CUT (CLOUD-2911): a slow case passing with no
     // mutant active is the baseline, and a cut would file it red.
     let (found, times) = control_batches(
-        batches(&cases),
+        control_runs(&cases),
         &mut |open, fail_fast| judge_run(judging, NULL_MUTANT, mutant, open, fail_fast),
         &mut |times| journal_or_say(judging.store, &control_lines(judging, times), out),
     )?;
@@ -6225,6 +6225,27 @@ fn batches(phase: &BTreeSet<Case>) -> Vec<BTreeSet<Case>> {
         }
     }
     runs
+}
+
+/// The most cases one control run holds (CLOUD-2904 loop k): nextest writes
+/// its report only when a run ends, so a kill keeps none of the run in
+/// flight, and this bounds what a kill can cost.
+const CONTROL_CASES: usize = 64;
+
+/// `phase` cut into control runs: [`batches`]'s runs, each cut again to at
+/// most [`CONTROL_CASES`] cases, so [`control_batches`] journals every
+/// finished run and a killed control repeats at most one.
+fn control_runs(phase: &BTreeSet<Case>) -> Vec<BTreeSet<Case>> {
+    batches(phase)
+        .into_iter()
+        .flat_map(|run| {
+            let cases: Vec<Case> = run.into_iter().collect();
+            cases
+                .chunks(CONTROL_CASES)
+                .map(|chunk| chunk.iter().cloned().collect::<BTreeSet<Case>>())
+                .collect::<Vec<_>>()
+        })
+        .collect()
 }
 
 /// A handed-back mutant's nextest filterset and the cases its run covers.
@@ -18320,6 +18341,28 @@ mod tests {
         );
         assert!(batches(&BTreeSet::new()).is_empty());
         assert_eq!(batches(&[case("one")].into()).len(), 1);
+    }
+
+    /// Fails by: a control run as wide as a filterset (CLOUD-2904 loop k).
+    /// nextest writes its report when the run ends, so a kill keeps nothing
+    /// of the run in flight: at ~1,200 cases a batch, a lap killed eight
+    /// minutes into control kept 4 of 3,007 and ran 3,003 again.
+    #[test]
+    fn a_control_run_holds_a_bounded_number_of_cases() {
+        let phase: BTreeSet<Case> = (0..1_000).map(|n| case(&format!("c{n:04}"))).collect();
+        let runs = control_runs(&phase);
+        assert!(
+            runs.iter()
+                .all(|run| !run.is_empty() && run.len() <= CONTROL_CASES),
+            "every control run is bounded: {:?}",
+            runs.iter().map(BTreeSet::len).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            runs.into_iter().flatten().collect::<BTreeSet<Case>>(),
+            phase,
+            "every case once"
+        );
+        assert!(control_runs(&BTreeSet::new()).is_empty());
     }
 
     /// Fails by: a filter past one argument's cap handed to the spawn (lap 25's
