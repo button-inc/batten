@@ -6450,3 +6450,18 @@ pub(crate) fn committed_config_view() -> String {
     let text = std::fs::read_to_string(path).unwrap_or_default();
     crate::step::config_view(&text).unwrap_or_default()
 }
+
+/// THE VIEW LOADS (CLOUD-2960): every case reading the committed config reads
+/// it through [`committed_config_view`], so a view the engine cannot load fails
+/// every one of them for a reason that is not theirs.
+///
+/// Fails by: the view's TOML losing or misplacing a value the loader requires.
+#[cfg(test)]
+#[test]
+fn the_view_of_the_committed_config_loads() {
+    let view = committed_config_view();
+    assert!(!view.is_empty(), "the committed config has a view");
+    if let Err(why) = parse_ungated(&view, "view") {
+        panic!("the view does not load: {why:#}");
+    }
+}

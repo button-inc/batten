@@ -522,11 +522,31 @@ pub fn config_table(text: &str) -> Option<toml::Table> {
     Some(table)
 }
 
-/// [`config_table`] written back as TOML: the view a case reads the config
-/// through, so it reads what the key does (CLOUD-2960).
+/// The config `text` with what [`config_table`] leaves out removed IN PLACE:
+/// the `engine` pin, each `[[step]]` row's scheduling fields, and a row that
+/// declares nothing else. The view a case reads the config through, so it reads
+/// what the key does (CLOUD-2960). Edited rather than re-serialized, so every
+/// table keeps its layout: a case that reads the file section by section finds
+/// each section where the file wrote it, nested inline tables included.
 #[must_use]
 pub fn config_view(text: &str) -> Option<String> {
-    toml::to_string(&config_table(text)?).ok()
+    let mut doc: toml_edit::DocumentMut = text.parse().ok()?;
+    doc.remove("engine");
+    if let Some(rows) = doc
+        .get_mut("step")
+        .and_then(toml_edit::Item::as_array_of_tables_mut)
+    {
+        for row in rows.iter_mut() {
+            for field in SCHEDULING {
+                row.remove(field);
+            }
+        }
+        rows.retain(|row| row.iter().any(|(key, _)| key != "id"));
+        if rows.is_empty() {
+            doc.remove("step");
+        }
+    }
+    Some(doc.to_string())
 }
 
 /// One value in a canonical spelling: every table's keys sorted, whatever

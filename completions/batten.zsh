@@ -9080,6 +9080,36 @@ trace\:"Add everything"))' \
 '*::specs -- The pathspecs, after `--`\: an `exists <path>` line per index path they select, `exists none` where none:_default' \
 && ret=0
 ;;
+(config)
+_arguments "${_arguments_options[@]}" : \
+'--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
+standard\:"The default\: a finding is a violation"
+strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/<trunk>) instead of the working tree]:config_from:_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]:config_in:_default' \
+'--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
+quiet\:"Suppress ordinary progress; keep warnings"
+normal\:"The default"
+verbose\:"Explain what is being checked"
+debug\:"Add resolution detail"
+trace\:"Add everything"))' \
+'--fail-on-warning[Promote a warn-severity finding to a violation (an override may only turn this on)]' \
+'*--silent[Say nothing but a verdict or a usage error]' \
+'*-q[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*--quiet[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*-v[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--verbose[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--debug[Add resolution detail]' \
+'*--trace[Add everything]' \
+'--no-color[Never colour stderr, whatever it is attached to]' \
+'--no-input[Never prompt; treat the run as unattended]' \
+'-y[Confirm a destructive operation that would otherwise refuse]' \
+'--yes[Confirm a destructive operation that would otherwise refuse]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+'*::parts -- The config parts, after `--`\: a `config <part> <digest>` line each, every part where none:_default' \
+&& ret=0
+;;
 (help)
 _arguments "${_arguments_options[@]}" : \
 ":: :_batten__subcmd__step__subcmd__help_commands" \
@@ -9137,6 +9167,10 @@ _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
 (exists)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(config)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
@@ -11652,6 +11686,10 @@ _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
 (exists)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(config)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
@@ -14348,6 +14386,7 @@ _batten__subcmd__help__subcmd__step_commands() {
 'base:Print one \`base <path> <id>\` line per path, read at the merge base of HEAD and a ref' \
 'env:Print the sorted \`env\` lines a declared environment keys, the step cache'\''s answer to the tool line' \
 'exists:Print the presence lines a step'\''s probed pathspecs select, the step cache'\''s answer to the tool line' \
+'config:Print the digests of the config parts a step reads, the step cache'\''s answer to the tool line' \
     )
     _describe -t commands 'batten help step commands' commands "$@"
 }
@@ -14360,6 +14399,11 @@ _batten__subcmd__help__subcmd__step__subcmd__base_commands() {
 _batten__subcmd__help__subcmd__step__subcmd__check_commands() {
     local commands; commands=()
     _describe -t commands 'batten help step check commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__help__subcmd__step__subcmd__config_commands] )) ||
+_batten__subcmd__help__subcmd__step__subcmd__config_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten help step config commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__help__subcmd__step__subcmd__cover_commands] )) ||
 _batten__subcmd__help__subcmd__step__subcmd__cover_commands() {
@@ -16441,6 +16485,7 @@ _batten__subcmd__step_commands() {
 'base:Print one \`base <path> <id>\` line per path, read at the merge base of HEAD and a ref' \
 'env:Print the sorted \`env\` lines a declared environment keys, the step cache'\''s answer to the tool line' \
 'exists:Print the presence lines a step'\''s probed pathspecs select, the step cache'\''s answer to the tool line' \
+'config:Print the digests of the config parts a step reads, the step cache'\''s answer to the tool line' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'batten step commands' commands "$@"
@@ -16454,6 +16499,11 @@ _batten__subcmd__step__subcmd__base_commands() {
 _batten__subcmd__step__subcmd__check_commands() {
     local commands; commands=()
     _describe -t commands 'batten step check commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__step__subcmd__config_commands] )) ||
+_batten__subcmd__step__subcmd__config_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten step config commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__step__subcmd__cover_commands] )) ||
 _batten__subcmd__step__subcmd__cover_commands() {
@@ -16512,6 +16562,7 @@ _batten__subcmd__step__subcmd__help_commands() {
 'base:Print one \`base <path> <id>\` line per path, read at the merge base of HEAD and a ref' \
 'env:Print the sorted \`env\` lines a declared environment keys, the step cache'\''s answer to the tool line' \
 'exists:Print the presence lines a step'\''s probed pathspecs select, the step cache'\''s answer to the tool line' \
+'config:Print the digests of the config parts a step reads, the step cache'\''s answer to the tool line' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'batten step help commands' commands "$@"
@@ -16525,6 +16576,11 @@ _batten__subcmd__step__subcmd__help__subcmd__base_commands() {
 _batten__subcmd__step__subcmd__help__subcmd__check_commands() {
     local commands; commands=()
     _describe -t commands 'batten step help check commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__step__subcmd__help__subcmd__config_commands] )) ||
+_batten__subcmd__step__subcmd__help__subcmd__config_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten step help config commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__step__subcmd__help__subcmd__cover_commands] )) ||
 _batten__subcmd__step__subcmd__help__subcmd__cover_commands() {
