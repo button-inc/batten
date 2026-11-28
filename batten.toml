@@ -19743,7 +19743,16 @@ tools = [
 id = "commit-check"
 # `.cargo` for `cross-check`'s reason (CLOUD-2835): cargo probes
 # `.cargo/config{,.toml}` on every run, and the whole-trace read refused both.
-inputs = ["batten.toml", "crates", "Cargo.toml", "Cargo.lock", ".cargo"]
+# The schema: the receipt's policy digest renders the config through it
+# (CLOUD-2962), and the trace read it undeclared.
+inputs = [
+  "batten.toml",
+  "crates",
+  "Cargo.toml",
+  "Cargo.lock",
+  ".cargo",
+  "schema/batten.schema.json",
+]
 tools = [
   ["batten", "step", "config"],
   ["rustc", "--version"],
