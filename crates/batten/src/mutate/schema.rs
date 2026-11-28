@@ -4216,22 +4216,18 @@ fn blamed(
 /// # Errors
 ///
 /// The run failed and its report names no failed case.
-fn baseline_red(
-    passed: bool,
-    junit: Option<&str>,
-    recorded: &BTreeSet<Case>,
-) -> anyhow::Result<Red> {
+fn baseline_red(passed: bool, junit: Option<&str>, recorded: Red) -> anyhow::Result<Red> {
     if passed {
         return Ok(Red::new());
     }
-    let red: Red = junit.and_then(junit_failures).unwrap_or_default();
+    // THIS RUN'S REPORT, THEN EVERY RED RECORD (CLOUD-2959): a carried red case
+    // did not run, so only its record names it, with the line it stored.
+    let mut red: Red = junit.and_then(junit_failures).unwrap_or_default();
+    for (case, line) in recorded {
+        red.entry(case).or_insert(line);
+    }
     if red.is_empty() {
-        let named = if recorded.is_empty() {
-            String::from("no case record names one either")
-        } else {
-            let cases: Vec<String> = recorded.iter().map(case_label).collect();
-            format!("the case records name {}", cases.join(", "))
-        };
+        let named = String::from("no case record names one either");
         anyhow::bail!(
             "the unmutated suite failed on the schema build and its report names no failed \
              case ({named}), so no verdict would mean anything; every case that passed is \
@@ -4843,15 +4839,15 @@ fn listed_cases(
     Some(cases)
 }
 
-/// Every case a record under `base` holds finished passing
-/// ([`finished_passing`]): what the recorder would skip.
+/// Every case a record under `base` holds finished, red or green
+/// ([`finished`]): what the recorder would skip.
 fn finished_cases(base: &std::path::Path) -> BTreeSet<Case> {
     std::fs::read_dir(base)
         .into_iter()
         .flatten()
         .flatten()
         .map(|entry| entry.path())
-        .filter(|dir| finished_passing(dir))
+        .filter(|dir| finished(dir))
         .filter_map(|dir| kept_case(&dir))
         .collect()
 }
@@ -6347,7 +6343,10 @@ fn record_into(
     let binary = super::cover::binary_id(program, &std::env::current_dir()?);
     let key = blake3::hash(test.join("\u{1f}").as_bytes()).to_hex()[..16].to_owned();
     let dir = base.join(key);
-    if finished_passing(&dir) {
+    // A RED RECORD IS SKIPPED LIKE A PASS (CLOUD-2959): one left standing was
+    // carried by its unchanged dependency digest, and its verdict is the
+    // record's ([`red_records`]), never a second run of the same red case.
+    if finished(&dir) {
         // MARKED, so the near-zero this skip reports is never sealed as the
         // case's time ([`measured_seconds`]).
         crate::durable::replace(dir.join(SKIPPED), "")?;
@@ -6448,6 +6447,55 @@ const SKIPPED: &str = "skipped";
 /// resumed run keeps.
 fn finished_passing(dir: &std::path::Path) -> bool {
     crate::fsio::read_to_string(dir.join(DONE)).is_ok_and(|code| code == "0")
+}
+
+/// Whether the case recorded at `dir` finished, passing or not: a red record
+/// is a record like any other (CLOUD-2959), carried by the same rule.
+fn finished(dir: &std::path::Path) -> bool {
+    crate::fsio::read_to_string(dir.join(DONE)).is_ok()
+}
+
+/// The file a red record holds its failure line in, from the run that
+/// recorded it, so a carried red case is named without running it again.
+const FAILURE: &str = "failure";
+
+/// Every red record under `base` ([`failed_records`]) with its stored failure
+/// line ([`FAILURE`]), or a line saying none was stored.
+fn red_records(base: &std::path::Path) -> Red {
+    std::fs::read_dir(base)
+        .into_iter()
+        .flatten()
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|dir| finished(dir) && !finished_passing(dir))
+        .filter_map(|dir| {
+            let line = crate::fsio::read_to_string(dir.join(FAILURE))
+                .unwrap_or_else(|_| String::from("red as recorded; no failure line stored"));
+            kept_case(&dir).map(|case| (case, line))
+        })
+        .collect()
+}
+
+/// Store each failure line of `red` in its case's red record under `base`
+/// ([`FAILURE`]), so the record names it when it is carried.
+///
+/// # Errors
+///
+/// A line cannot be written.
+fn store_failures(base: &std::path::Path, red: &Red) -> anyhow::Result<()> {
+    if red.is_empty() {
+        return Ok(());
+    }
+    for entry in std::fs::read_dir(base)? {
+        let dir = entry?.path();
+        let Some(line) = kept_case(&dir).and_then(|case| red.get(&case).cloned()) else {
+            continue;
+        };
+        if finished(&dir) && !finished_passing(&dir) {
+            crate::durable::replace(dir.join(FAILURE), line)?;
+        }
+    }
+    Ok(())
 }
 
 /// The file naming the schema tree a reach directory is being recorded over.
@@ -6639,13 +6687,11 @@ pub type Reasons = std::collections::BTreeMap<&'static str, usize>;
 /// whether a [`DEPENDS`] file exists, the record it parsed to and its case.
 fn dropped_because(
     dir: &std::path::Path,
-    passing: bool,
     held: (bool, Option<Carried>, Option<Case>),
 ) -> &'static str {
     let exit = crate::fsio::read_to_string(dir.join(DONE)).ok();
     match (exit, held) {
         (None, _) | (_, (_, _, None)) => "unsealed",
-        (Some(_), _) if !passing => "did-not-pass",
         (Some(_), (_, Some(_), Some(_))) => "function-gone",
         (Some(_), (true, None, Some(_))) => "no-provenance",
         (Some(_), (false, None, Some(_))) => "unsealed",
@@ -6721,7 +6767,10 @@ fn carry_counted(
                 let (name, binary) = head.split_once('\t').unwrap_or((head.as_str(), ""));
                 (name.to_owned(), binary.to_owned())
             });
-        match (finished_passing(&dir), record, case) {
+        // A RED RECORD IS A CANDIDATE LIKE A PASS (CLOUD-2959): carried while
+        // its dependency digest holds, so the same red verdict is not paid for
+        // again on every lap. Deleted here, it was always due.
+        match (finished(&dir), record, case) {
             // A RECORD TRUSTED BUT NOT CARRIED IS A WITNESS (CLOUD-2904): every
             // function it ran is here by digest, so if its dependency digest
             // holds too its case is recorded again over identical inputs.
@@ -6732,8 +6781,8 @@ fn carry_counted(
                 candidates.push((dir, case, record, carried));
             }
             (true, None, Some(_)) if same_tree => resumed += 1,
-            (passing, record, case) => {
-                let reason = dropped_because(&dir, passing, (depends.is_some(), record, case));
+            (_, record, case) => {
+                let reason = dropped_because(&dir, (depends.is_some(), record, case));
                 *reasons.entry(reason).or_default() += 1;
                 let _ = std::fs::remove_dir_all(&dir);
             }
@@ -6785,8 +6834,15 @@ fn carry_counted(
     }
     // THE SELECTION DIGEST IS AN ECONOMY: one that cannot be taken leaves the
     // record to the suite's build key, and never fails the carry.
+    // NEVER A SELECTION DIGEST FOR A RED RECORD: `test:cargo` reads one as a
+    // pass under that digest.
     if let Some(over) = over {
-        let _ = retest_carried(base, &kept, over);
+        let green: Vec<_> = kept
+            .iter()
+            .filter(|(dir, _, _)| finished_passing(dir))
+            .cloned()
+            .collect();
+        let _ = retest_carried(base, &green, over);
     }
     crate::durable::replace(base.join(TREE), inputs)?;
     Ok((kept.len(), resumed, reasons))
@@ -6983,6 +7039,7 @@ fn collect_dirs(
                     || f == UNTRACED
                     || f == OVER
                     || f == SKIPPED
+                    || f == FAILURE
             }) {
                 continue;
             }
@@ -7146,7 +7203,13 @@ fn seal_dir(
     for file in std::fs::read_dir(dir)? {
         let path = file?.path();
         let own = path.file_name().is_some_and(|f| {
-            f == "case" || f == DONE || f == READ || f == DEPENDS || f == OVER || f == TESTED
+            f == "case"
+                || f == DONE
+                || f == READ
+                || f == DEPENDS
+                || f == OVER
+                || f == TESTED
+                || f == FAILURE
         });
         if !own {
             let _ = std::fs::remove_file(&path);
@@ -7395,16 +7458,20 @@ pub fn record_reach(
     (identity, recompute, over): (&Identity<'_>, &Recompute<'_>, Option<Over<'_>>),
     (root, rendered): (&std::path::Path, &BTreeSet<String>),
     out: &mut dyn std::io::Write,
-) -> anyhow::Result<(Reach, bool)> {
+) -> anyhow::Result<(Reach, bool, bool)> {
     let base = state.join("reach");
+    let at = std::time::Instant::now();
     // A RESTART OVER THE SAME TREE resumes from the record a finished run
-    // sealed instead of re-running the suite (640 s on #1276).
+    // sealed instead of re-running the suite (640 s on #1276). A red run is
+    // sealed too (CLOUD-2959), so whether it passed is read from its records,
+    // never assumed.
     let inputs = tree_digest(work)?;
     if sealed_over(&base, &inputs) {
         let mut reach = collect_reach(&base, identity)?;
         reach.tree = inputs;
         reach.resumed = true;
-        return Ok((reach, true));
+        let passed = failed_records(&base).is_empty();
+        return Ok((reach, passed, true));
     }
     let (carried, resumed, reasons) = carried_unless_ci(
         &base,
@@ -7414,6 +7481,9 @@ pub fn record_reach(
     )?;
     write_listed(&base, identity)?;
     crate::mutate::progress!(out, "{}", carry_line(carried, resumed, &reasons))?;
+    // EACH PHASE TIMED (CLOUD-2959): a stage that took 1,655 s to run 30 cases
+    // said nothing of where the time went.
+    let at = stage_took(out, "reach carry", at)?;
     let config = state.join("nextest.toml");
     // A PRIVATE COPY of this binary is the recorder: the suite runs for minutes,
     // and the checkout's own `target/debug/batten` is relinked by any build in
@@ -7445,6 +7515,7 @@ pub fn record_reach(
         "{}",
         reach_starts_line(listed.as_ref(), filter.as_deref(), &finished_cases(&base))
     )?;
+    let at = stage_took(out, "reach listing", at)?;
     if let Some(filter) = filter {
         text = text.replacen(
             "[profile.batten-cover]\n",
@@ -7506,19 +7577,43 @@ pub fn record_reach(
         }
         passed = suite()?;
     }
+    let at = stage_took(out, "reach suite", at)?;
     // THE FINISHED SUITE'S FIXTURES GO: nothing reads them once it has exited,
     // and on #1276 they held 3.7 GB of the tree's target while the judging ran.
     let _ = std::fs::remove_dir_all(target.join("tmp"));
+    // EACH RED CASE'S LINE IS STORED IN ITS RECORD (CLOUD-2959), so a carry
+    // names it without running it again.
+    let reported = crate::fsio::read_to_string(
+        state
+            .join("nextest")
+            .join("batten-cover")
+            .join(super::cover::JUNIT),
+    )
+    .ok()
+    .and_then(|xml| junit_failures(&xml))
+    .unwrap_or_default();
+    store_failures(&base, &reported)?;
     let mut reach = collect_reach(&base, identity)?;
+    let red = failed_records(&base);
+    let at = stage_took(out, "reach collect", at)?;
     // EVERY CASE RECORDED TWICE OVER IDENTICAL INPUTS RAN THE SAME FUNCTIONS,
     // or the sweep refuses ([`super::stable`]). A red case has its own verdict.
-    let red = failed_records(&base);
     let after = super::stable::passing(&reach.executed, identity.probes, &red);
     if let Some(line) = stable_line(super::stable::judge(&base, &after)?) {
         crate::mutate::progress!(out, "{line}")?;
     }
+    stage_took(out, "reach stable", at)?;
     reach.tree = inputs;
-    Ok((reach, passed))
+    let whole = ran_whole(passed, &reported, &red);
+    Ok((reach, passed && red.is_empty(), whole))
+}
+
+/// Whether a reach run is sealed whole: it `passed`, or every case its report
+/// names `reported` red is a red record (CLOUD-2959), so what it found is kept
+/// and a resume reads it back. A failure the report names no record for, or a
+/// failed run whose report names nothing (a build or runner fault), is not.
+fn ran_whole(passed: bool, reported: &Red, red: &BTreeSet<Case>) -> bool {
+    passed || (!reported.is_empty() && reported.keys().all(|case| red.contains(case)))
 }
 
 /// What [`record_reach`] says of `compared` cases recorded twice over
@@ -13315,7 +13410,7 @@ fn reached(
         })?,
     )?;
     let at = stage_took(out, "reach context", started)?;
-    let (reach, passed) = record_reach(
+    let (reach, passed, whole) = record_reach(
         work,
         target,
         state,
@@ -13338,7 +13433,7 @@ fn reached(
         &digests,
         identity,
         &seconds,
-        passed,
+        whole,
     )?;
     let at = stage_took(out, "reach seal", at)?;
     // THE SELECTION DIGEST IS AN ECONOMY: one that cannot be taken leaves each
@@ -13357,8 +13452,11 @@ fn reached(
     // 12,452 mutants with no verdict). Each is a finding, and poisons only the
     // mutants it reaches; a run that could not say which case failed still
     // refuses.
-    let red = baseline_red(
-        passed,
+    // A RESUMED RUN RAN NO SUITE, so the report on disk is an earlier run's:
+    // its red comes from the records alone.
+    let junit = if reach.resumed {
+        None
+    } else {
         crate::fsio::read_to_string(
             state
                 .join("nextest")
@@ -13366,9 +13464,8 @@ fn reached(
                 .join(super::cover::JUNIT),
         )
         .ok()
-        .as_deref(),
-        &failed_records(&base),
-    )?;
+    };
+    let red = baseline_red(passed, junit.as_deref(), red_records(&base))?;
     reached_said(&reach, (schema.probes.len(), started), &derived, out)?;
     Ok((reach, digests, seconds, red))
 }
@@ -15537,11 +15634,11 @@ mod tests {
     }
 
     /// An unsealed record resumes only over the tree it was recorded on: one
-    /// that finished passing is kept and counted, one that failed or never
-    /// finished is cleared; over another tree every unsealed record goes.
+    /// that finished, green or red (CLOUD-2959), is kept and counted, one that
+    /// never finished is cleared; over another tree every unsealed record goes.
     ///
     /// Fails by: an unsealed record kept over another tree (its ids are
-    /// another rendering's), a failed or torn case kept, or a finished one not.
+    /// another rendering's), a torn case kept, or a finished one not.
     #[test]
     fn an_unsealed_reach_record_resumes_only_over_its_own_tree() {
         let base = crate::scratch::scratch("schema-reach-resume");
@@ -15555,13 +15652,10 @@ mod tests {
         };
         assert_eq!(
             carry_forward(&base, "tree-1", &no_identity(), (&none, None), true).unwrap(),
-            (0, 1)
+            (0, 2)
         );
-        assert!(base.join("a").exists());
-        assert!(
-            !base.join("b").exists() && !base.join("c").exists(),
-            "run again"
-        );
+        assert!(base.join("a").exists() && base.join("b").exists());
+        assert!(!base.join("c").exists(), "run again");
         assert_eq!(
             carry_forward(&base, "tree-2", &no_identity(), (&none, None), true).unwrap(),
             (0, 0)
@@ -15743,10 +15837,13 @@ mod tests {
         };
         let (carried, resumed, reasons) =
             carry_counted(&base, "tree-2", &identity, (&same, None), true).unwrap();
-        assert_eq!((carried, resumed), (1, 0));
+        assert_eq!(
+            (carried, resumed),
+            (2, 0),
+            "kept, and red with its digest unchanged"
+        );
         let expected: Reasons = [
             ("no-provenance", 1),
-            ("did-not-pass", 1),
             ("unsealed", 1),
             ("function-gone", 1),
             ("dependency-changed", 1),
@@ -15858,6 +15955,158 @@ mod tests {
         )
         .unwrap();
         assert_eq!((carried, reasons), (3, Reasons::new()));
+    }
+
+    /// A sealed red record over a tree on which nothing it read moved: its
+    /// case, besides one green and one never recorded.
+    fn red_store(base: &std::path::Path) -> BTreeSet<Case> {
+        sealed_store(base, &[("green", "fa")], FIXTURE_FROM);
+        record(
+            base,
+            "red",
+            "red",
+            Some("101"),
+            &[
+                (DEPENDS, &format!("Dsame\nFfa\nT1\n{FIXTURE_FROM}")),
+                (FAILURE, "stored line"),
+            ],
+        );
+        ["green", "red", "new"]
+            .map(|name| (String::from(name), String::from("bin")))
+            .into()
+    }
+
+    /// Fails by: a red record deleted before the run, or not counted finished,
+    /// so the same red case runs again on every lap; or the red map not naming
+    /// it with the line its record stored (CLOUD-2959).
+    #[test]
+    fn an_unchanged_tree_does_not_rerun_a_red_case() {
+        let base = crate::scratch::scratch("schema-carry-red-unchanged");
+        let listed = red_store(&base);
+        let probes = [String::from("fa")];
+        let (carried, _, reasons) = carry_counted(
+            &base,
+            "tree-1",
+            &no_identity_over(&probes),
+            (&unmoved, None),
+            true,
+        )
+        .unwrap();
+        assert_eq!((carried, reasons), (2, Reasons::new()));
+        let red = (String::from("red"), String::from("bin"));
+        assert!(
+            finished_cases(&base).contains(&red),
+            "the red case is not due"
+        );
+        assert_eq!(
+            run_filter(&listed, &finished_cases(&base), false).as_deref(),
+            Some("(binary_id(=bin) & test(=new))"),
+            "only the case no record holds runs"
+        );
+        assert_eq!(
+            baseline_red(false, None, red_records(&base)).unwrap(),
+            [(red, String::from("stored line"))].into()
+        );
+    }
+
+    /// Fails by: a red record carried after a function it reached changed, so
+    /// a case the edit may have fixed is still read red (CLOUD-2959).
+    #[test]
+    fn a_red_record_whose_dependency_changed_runs_again() {
+        let base = crate::scratch::scratch("schema-carry-red-moved");
+        let listed = red_store(&base);
+        let probes = [String::from("fa")];
+        let moved = |executed: &std::collections::BTreeMap<Case, BTreeSet<usize>>,
+                     _: &std::collections::BTreeMap<Case, BTreeSet<String>>| {
+            executed
+                .keys()
+                .map(|case| {
+                    let digest = if case.0 == "red" { "moved" } else { "same" };
+                    (case.clone(), String::from(digest))
+                })
+                .collect()
+        };
+        let (carried, _, reasons) = carry_counted(
+            &base,
+            "tree-2",
+            &no_identity_over(&probes),
+            (&moved, None),
+            true,
+        )
+        .unwrap();
+        assert_eq!((carried, reasons), (1, [("dependency-changed", 1)].into()));
+        let red = (String::from("red"), String::from("bin"));
+        assert!(!finished_cases(&base).contains(&red), "the red case is due");
+        assert!(
+            run_filter(&listed, &finished_cases(&base), false)
+                .is_none_or(|filter| filter.contains("test(=red)")),
+            "it runs again"
+        );
+    }
+
+    /// Fails by: a run whose only failures are red records left unsealed, so
+    /// its archive is never published and the next sweep cannot resume it; or
+    /// a resume over it read as passed (CLOUD-2959); or a failure no record
+    /// holds sealed as whole.
+    #[test]
+    fn a_red_run_is_sealed_and_resumes_red() {
+        let state = crate::scratch::scratch("schema-red-sealed");
+        let work = state.join("work");
+        std::fs::create_dir_all(&work).unwrap();
+        std::fs::write(work.join("lib.rs"), "pub fn a() {}\n").unwrap();
+        let base = state.join("reach");
+        red_store(&base);
+        let red = (String::from("red"), String::from("bin"));
+        let reported: Red = [(red.clone(), String::from("panicked"))].into();
+        let records = failed_records(&base);
+        assert!(
+            ran_whole(false, &reported, &records),
+            "every failure is a record"
+        );
+        assert!(
+            !ran_whole(false, &Red::new(), &records),
+            "a failed run its report names nothing of"
+        );
+        let stray: Red = [((String::from("stray"), String::from("bin")), String::new())].into();
+        assert!(
+            !ran_whole(false, &stray, &records),
+            "a failure no record holds"
+        );
+        let probes = [String::from("fa")];
+        let identity = no_identity_over(&probes);
+        let mut reach = collect_reach(&base, &identity).unwrap();
+        reach.tree = tree_digest(&work).unwrap();
+        let digests = [("green", "same"), ("red", "same")]
+            .map(|(name, digest)| {
+                (
+                    (String::from(name), String::from("bin")),
+                    String::from(digest),
+                )
+            })
+            .into();
+        seal_reach(
+            &base,
+            &reach,
+            &digests,
+            &identity,
+            &std::collections::BTreeMap::new(),
+            ran_whole(false, &reported, &records),
+        )
+        .unwrap();
+        assert!(base.join(SEALED).is_file(), "a red run is sealed");
+        let mut said = Vec::new();
+        let (resumed, passed, whole) = record_reach(
+            &work,
+            &state.join("target"),
+            &state,
+            &BTreeSet::new(),
+            (&identity, &unmoved, None),
+            (&work, &BTreeSet::new()),
+            &mut said,
+        )
+        .unwrap();
+        assert!(resumed.resumed && whole, "resumed from the seal");
+        assert!(!passed, "a resume over a red run is red");
     }
 
     /// Fails by: a one-function edit sending back a record that never ran the
@@ -18222,8 +18471,7 @@ mod tests {
     #[test]
     fn a_failed_baseline_names_its_red_cases_and_a_blind_one_refuses() {
         let pair = |name: &str, binary: &str| (String::from(name), String::from(binary));
-        let red =
-            baseline_red(false, Some(JUNIT_FIXTURE), &BTreeSet::new()).expect("two red cases");
+        let red = baseline_red(false, Some(JUNIT_FIXTURE), Red::new()).expect("two red cases");
         assert_eq!(
             red.keys().cloned().collect::<Vec<_>>(),
             [pair("m::b", "batten::it"), pair("m::slow", "batten::it")]
@@ -18231,35 +18479,40 @@ mod tests {
         assert_eq!(red[&pair("m::b", "batten::it")], "panicked");
         assert_eq!(red[&pair("m::slow", "batten::it")], "test timeout");
         assert!(
-            baseline_red(true, None, &BTreeSet::new())
+            baseline_red(true, None, Red::new())
                 .expect("passed")
                 .is_empty()
         );
-        assert!(
-            baseline_red(false, None, &BTreeSet::new()).is_err(),
-            "no report"
-        );
-        assert!(baseline_red(false, Some("not xml"), &BTreeSet::new()).is_err());
+        assert!(baseline_red(false, None, Red::new()).is_err(), "no report");
+        assert!(baseline_red(false, Some("not xml"), Red::new()).is_err());
         let green = "<testsuites><testsuite><testcase name=\"a\" classname=\"b\"/>\
                      </testsuite></testsuites>";
         assert!(
-            baseline_red(false, Some(green), &BTreeSet::new()).is_err(),
+            baseline_red(false, Some(green), Red::new()).is_err(),
             "no case failed"
         );
-        // THE REFUSAL NAMES EACH CASE ITS OWN RECORD SAYS FAILED (U4), so a
-        // blind run still points at what to fix.
-        let recorded: BTreeSet<Case> = [pair("m::x", "batten::it"), pair("y", "fix")].into();
+        // A BLIND RUN'S RED IS ITS RECORDS' (CLOUD-2959): each case its own
+        // record says failed is named with the line the record stored.
+        let recorded: Red = [
+            (pair("m::x", "batten::it"), String::from("stored x")),
+            (pair("y", "fix"), String::from("stored y")),
+        ]
+        .into();
+        assert_eq!(
+            baseline_red(false, None, recorded.clone()).expect("the records name them"),
+            recorded
+        );
+        let mut both = recorded;
+        both.insert(pair("m::b", "batten::it"), String::from("stale"));
+        assert_eq!(
+            baseline_red(false, Some(JUNIT_FIXTURE), both).expect("red")
+                [&pair("m::b", "batten::it")],
+            "panicked",
+            "this run's line over a stored one"
+        );
         let why = format!(
             "{:#}",
-            baseline_red(false, None, &recorded).expect_err("blind")
-        );
-        assert!(
-            why.contains("batten::it m::x") && why.contains("fix y"),
-            "{why}"
-        );
-        let why = format!(
-            "{:#}",
-            baseline_red(false, None, &BTreeSet::new()).expect_err("blind")
+            baseline_red(false, None, Red::new()).expect_err("blind")
         );
         assert!(why.contains("no case record names one either"), "{why}");
         let panicked = "<testsuites><testsuite><testcase name=\"r\" classname=\"fix\">\
@@ -18268,7 +18521,7 @@ mod tests {
                         note: run with `RUST_BACKTRACE=1`</system-err></testcase>\
                         </testsuite></testsuites>";
         assert_eq!(
-            baseline_red(false, Some(panicked), &BTreeSet::new()).expect("red")[&pair("r", "fix")],
+            baseline_red(false, Some(panicked), Red::new()).expect("red")[&pair("r", "fix")],
             "red first",
             "the panic message is the failure line"
         );
