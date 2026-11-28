@@ -3985,6 +3985,9 @@ description = "Consumer #1: evaluate the committed batten.toml with batten's own
 # `enforce --half tree --inputs-digest`, the engine's digest of the out-of-tree
 # state the half still reads — the store baseline and admissions above all. A hit
 # skips the half. `enforce --half live` then judges every other row, and the
+# SAME `--keyed-base`: a row is tree or live by the bases it is keyed on, so a
+# live half without them re-judged every ratchet and base-delta row the tree
+# half had already answered (CLOUD-2329). The
 # ledger, budgets, transcript, judges and sinks, unreceipted, every time. Each
 # half applies the baseline entries of its own rows. Under `CI` the step cache is
 # off, so CI judges both halves in full.
@@ -3996,7 +3999,7 @@ description = "Consumer #1: evaluate the committed batten.toml with batten's own
 run = [
   "{{vars.batten}} provision apply",
   "{{vars.batten}} step run enforce-tree -- {{vars.batten}} enforce --half tree --keyed-base origin/main",
-  "{{vars.batten}} enforce --half live",
+  "{{vars.batten}} enforce --half live --keyed-base origin/main",
 ]
 
 [tasks.policy-budget]
