@@ -219,8 +219,10 @@ select = ["id", "conclusion"]
 #[test]
 fn a_record_flip_reaches_the_live_half_and_never_the_receipted_one() {
     // THE UNSOUNDNESS THE SPLIT EXISTS TO CLOSE: a record flipping to a deny
-    // value with no tracked change. The tree half's receipt cannot see it, so
-    // the row reading it must not be the tree half's.
+    // value with no tracked change. CHANGED WITH a1397f5ab (CLOUD-2329): the
+    // tree half now keys the recorder stores it reads, so its receipt DOES see
+    // the flip and both halves deny; what stays pinned is that the live half
+    // reaches it.
     let dir = repo(
         "records",
         RECORDS,
@@ -242,7 +244,7 @@ fn a_record_flip_reaches_the_live_half_and_never_the_receipted_one() {
     let tree = batten(&dir, &["enforce", "--half", "tree"]);
     assert_eq!(
         code(&tree),
-        Some(0),
+        Some(2),
         "the receipted half: {}",
         stdout(&tree)
     );

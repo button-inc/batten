@@ -1664,7 +1664,9 @@ mod tests {
         let expected: Vec<(crate::config_model::Harness, &str)> = if done.authoritative {
             vec![(
                 crate::config_model::Harness::ClaudeCode,
-                ".claude/settings.json",
+                crate::config_model::Harness::ClaudeCode
+                    .user_surface()
+                    .expect("claude-code has a user surface"),
             )]
         } else {
             Vec::new()
@@ -1682,7 +1684,9 @@ mod tests {
         let path = hook::user_config_path(
             crate::config_model::Harness::ClaudeCode,
             &home,
-            ".claude/settings.json",
+            crate::config_model::Harness::ClaudeCode
+                .user_surface()
+                .expect("claude-code has a user surface"),
         );
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, "{\"permissions\": {}}\n").unwrap();

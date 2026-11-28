@@ -36,7 +36,22 @@ fn fixture(name: &str, rows: &str) -> std::path::PathBuf {
     write(&dir, "batten.toml", &format!("version = 1\n\n{rows}"));
     write(&dir, "a.txt", "x\n");
     git_in(&dir, &["init", "-q", "-b", "main", "."]);
+    registered(&dir);
     dir
+}
+
+/// Register batten on `dir`'s committed surfaces and commit them, so the
+/// built-in `harness-registration` step (CLOUD-2953) passes and the row under
+/// test is the only thing that moves.
+fn registered(dir: &Path) {
+    let out = batten()
+        .current_dir(dir)
+        .args(["wiring", "register", "--all"])
+        .streamed_output()
+        .expect("the binary runs");
+    assert_eq!(out.status.code(), Some(0), "wiring register: {out:?}");
+    git_in(dir, &["add", "-A"]);
+    git_in(dir, &["commit", "-q", "-m", "registered"]);
 }
 
 fn startup(dir: &Path, args: &[&str]) -> Output {
@@ -62,7 +77,10 @@ fn a_provisioned_container_reports_every_row_and_exits_zero() {
     // EVERY row, not only the failing ones, and deliberately unlike `provision
     // status`: a reader running this is asking whether the container is right,
     // and silence cannot distinguish a row that passed from one never declared.
-    assert_eq!(stdout(&out), "clean ok\nstartup: 1 row(s), 0 failed\n");
+    assert_eq!(
+        stdout(&out),
+        "harness-registration ok\nclean ok\nstartup: 2 row(s), 0 failed\n"
+    );
 }
 
 #[test]
@@ -75,7 +93,7 @@ fn a_row_with_no_repair_reports_the_class_a_reader_can_act_on() {
     assert_eq!(out.status.code(), Some(1));
     assert_eq!(
         stdout(&out),
-        "bare failed not-provisioned\nstartup: 1 row(s), 1 failed\n"
+        "harness-registration ok\nbare failed not-provisioned\nstartup: 2 row(s), 1 failed\n"
     );
 }
 
@@ -108,7 +126,7 @@ fn repair_fixes_and_says_so_while_the_bare_verb_changes_nothing() {
     assert_eq!(out_code(&repaired), 0);
     assert_eq!(
         stdout(&repaired),
-        "makes-it ok repaired\nstartup: 1 row(s), 0 failed\n",
+        "harness-registration ok repaired\nmakes-it ok repaired\nstartup: 2 row(s), 0 failed\n",
         "a reader who ran --repair should see which rows it moved"
     );
     assert!(target.exists());
@@ -117,7 +135,10 @@ fn repair_fixes_and_says_so_while_the_bare_verb_changes_nothing() {
     // repair that runs every time is a repair whose check is wrong, and the two
     // renderings are what let a reader tell those apart.
     let again = startup(&dir, &["--repair"]);
-    assert_eq!(stdout(&again), "makes-it ok\nstartup: 1 row(s), 0 failed\n");
+    assert_eq!(
+        stdout(&again),
+        "harness-registration ok\nmakes-it ok\nstartup: 2 row(s), 0 failed\n"
+    );
 }
 
 /// The commit gate as a declared precondition, end to end (CLOUD-1398).
@@ -146,6 +167,7 @@ fn a_clone_with_no_commit_hooks_fails_the_row_and_repair_installs_them() {
     let dir = scratch("startup-commit-gate");
     write(&dir, "batten.toml", "version = 1\n\n");
     common::init_repo(&dir);
+    registered(&dir);
 
     // The hooks the repair will point git at. Written before the row, so the
     // repair is a redirection and never a creation — it is `session:git-hooks`'s
@@ -186,7 +208,7 @@ fn a_clone_with_no_commit_hooks_fails_the_row_and_repair_installs_them() {
     assert_eq!(out_code(&bare), 1);
     assert_eq!(
         stdout(&bare),
-        "commit-gate-installed failed not-provisioned\nstartup: 1 row(s), 1 failed\n",
+        "harness-registration ok\ncommit-gate-installed failed not-provisioned\nstartup: 2 row(s), 1 failed\n",
         "a clone whose commit path does not run the gate must say so"
     );
 
@@ -194,13 +216,13 @@ fn a_clone_with_no_commit_hooks_fails_the_row_and_repair_installs_them() {
     assert_eq!(out_code(&repaired), 0);
     assert_eq!(
         stdout(&repaired),
-        "commit-gate-installed ok repaired\nstartup: 1 row(s), 0 failed\n"
+        "harness-registration ok\ncommit-gate-installed ok repaired\nstartup: 2 row(s), 0 failed\n"
     );
 
     let again = startup(&dir, &["--repair"]);
     assert_eq!(
         stdout(&again),
-        "commit-gate-installed ok\nstartup: 1 row(s), 0 failed\n",
+        "harness-registration ok\ncommit-gate-installed ok\nstartup: 2 row(s), 0 failed\n",
         "a repair that runs every time is a repair whose check is wrong"
     );
 }
@@ -428,7 +450,10 @@ fn a_repository_with_no_rows_reports_the_count_rather_than_nothing() {
     let dir = fixture("startup-none", "");
     let out = startup(&dir, &[]);
     assert_eq!(out.status.code(), Some(0));
-    assert_eq!(stdout(&out), "startup: 0 row(s), 0 failed\n");
+    assert_eq!(
+        stdout(&out),
+        "harness-registration ok\nstartup: 1 row(s), 0 failed\n"
+    );
 }
 
 #[test]
@@ -440,13 +465,14 @@ fn the_data_channel_carries_every_row_with_its_verdict() {
     let out = startup(&dir, &["-J"]);
     let rows: serde_json::Value = serde_json::from_str(&stdout(&out)).expect("one JSON document");
     let rows = rows.as_array().expect("an array of outcomes");
-    assert_eq!(rows.len(), 2);
-    assert_eq!(rows[0]["id"], "good");
-    assert_eq!(rows[0]["ok"], true);
+    assert_eq!(rows.len(), 3);
+    assert_eq!(rows[0]["id"], "harness-registration");
+    assert_eq!(rows[1]["id"], "good");
+    assert_eq!(rows[1]["ok"], true);
     // Omitted rather than nulled on a pass — a key whose only value is null is
     // a field every reader has to learn to ignore.
-    assert!(rows[0].get("reason").is_none(), "{:?}", rows[0]);
-    assert_eq!(rows[1]["reason"], "not-provisioned");
+    assert!(rows[1].get("reason").is_none(), "{:?}", rows[1]);
+    assert_eq!(rows[2]["reason"], "not-provisioned");
 }
 
 /// A ROW THAT COULD NEVER DECIDE IS REFUSED AT LOAD, not once per session.

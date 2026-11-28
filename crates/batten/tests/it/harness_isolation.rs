@@ -182,7 +182,7 @@ fn every_spawn_scrubs_the_host_session_the_engine_reads() {
         .filter(|name| !NEVER_READ.contains(&name.as_str()))
         .collect();
     assert!(
-        named.contains("CLAUDE_PID"),
+        named.contains("CLAUDE_CODE_REMOTE"),
         "the census read no engine source naming the session: {named:?}"
     );
     let command = common::batten();

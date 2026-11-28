@@ -139,7 +139,7 @@ fn the_engine_status_is_the_chains_last_entry_so_it_passes_through_unchanged() {
     let entries = batten_check_entries();
     assert_eq!(
         entries.last().map(String::as_str),
-        Some("cargo run --quiet -p batten -- enforce --half live"),
+        Some("cargo run --quiet -p batten -- enforce --half live --keyed-base origin/main"),
         "`enforce` must be the last entry, bare, so its code is the task's: {entries:?}"
     );
     let body = batten_check_body();
