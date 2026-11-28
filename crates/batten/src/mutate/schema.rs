@@ -13291,9 +13291,70 @@ type DigestInputs = (BTreeSet<usize>, Option<BTreeSet<String>>);
 #[derive(Default)]
 struct DigestMemo {
     held: std::cell::RefCell<std::collections::BTreeMap<Case, (DigestInputs, String)>>,
+    /// The key it was loaded under and is saved under ([`memo_key`]).
+    key: String,
+    /// Whether any digest it answered was one an earlier run took.
+    recalled: std::cell::Cell<bool>,
 }
 
+/// The file a sweep's [`DigestMemo`] is kept in between runs.
+const DIGEST_MEMO: &str = "reach-digests.json";
+
+/// The key a [`DigestMemo`] is kept under: the sweep's whole seal `context`
+/// (tree snapshot, resources, schema, build, format) and the `engine` taking
+/// the digests. Any change to either takes every digest afresh.
+fn memo_key(context: &str, engine: &str) -> String {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(context.as_bytes());
+    hasher.update(b"\x1f");
+    hasher.update(engine.as_bytes());
+    hasher.finalize().to_hex().to_string()
+}
+
+/// One kept [`DigestMemo`] entry: the case, what its digest was taken over,
+/// and the digest.
+type MemoEntry = (Case, DigestInputs, String);
+
 impl DigestMemo {
+    /// The memo kept at `file` when it was kept under `key`, else an empty
+    /// one under `key`. An unreadable file is an empty memo: it costs time,
+    /// never a wrong digest.
+    fn loaded(file: &std::path::Path, key: &str) -> Self {
+        let memo = Self {
+            key: key.to_owned(),
+            ..Self::default()
+        };
+        let kept: Option<(String, Vec<MemoEntry>)> = crate::fsio::read_to_string(file)
+            .ok()
+            .and_then(|text| serde_json::from_str(&text).ok());
+        if let Some((held_key, entries)) = kept
+            && held_key == key
+        {
+            *memo.held.borrow_mut() = entries
+                .into_iter()
+                .map(|(case, inputs, digest)| (case, (inputs, digest)))
+                .collect();
+            memo.recalled.set(true);
+        }
+        memo
+    }
+
+    /// Keep this memo at `file` under its key for the next run.
+    ///
+    /// # Errors
+    ///
+    /// The file cannot be written.
+    fn save(&self, file: &std::path::Path) -> anyhow::Result<()> {
+        let entries: Vec<MemoEntry> = self
+            .held
+            .borrow()
+            .iter()
+            .map(|(case, (inputs, digest))| (case.clone(), inputs.clone(), digest.clone()))
+            .collect();
+        crate::durable::replace(file, serde_json::to_string(&(&self.key, entries))?)?;
+        Ok(())
+    }
+
     /// Each case of `executed` keyed by `compute`, which is asked only for
     /// the cases whose inputs this memo holds no digest for.
     fn take(
@@ -13373,7 +13434,32 @@ fn reached(
     crate::mutate::progress!(out, "{}", build_line(root, ids.0, format, &build))?;
     let derived = Derived::at(state, &build);
     derived.drop_other_versions();
-    let memo = DigestMemo::default();
+    let context = serde_json::to_string(&SealContext {
+        root: root.to_path_buf(),
+        dirs: dirs.clone(),
+        compiled: schema.compiled.clone(),
+        probes: schema.probes.clone(),
+        names: schema.names.clone(),
+        items: schema.items.clone(),
+        mentions: schema.mentions.clone(),
+        resources: ids.0.clone(),
+        untraced: ids.1.to_owned(),
+        sites: site_keys.to_vec(),
+        mutant_fns: schema.mutant_fns.clone(),
+        file_fns: in_file.clone(),
+        unplaced: out_of_fns.clone(),
+        classic: classic.clone(),
+        format: Some(format.clone()),
+        build: Some(build.clone()),
+        unprobed: unprobed.clone(),
+        snapshot: Some(tree_digest(root)?),
+    })?;
+    // THE MEMO OUTLIVES THE RUN (CLOUD-2959): every case digest is a function
+    // of this context, the engine and the case's own ran and read sets, so an
+    // unchanged tip takes none of them again, where the carry used to
+    // recompute every candidate's on every lap.
+    let memo_file = state.join(DIGEST_MEMO);
+    let memo = DigestMemo::loaded(&memo_file, &memo_key(&context, engine_id()));
     let recompute =
         |executed: &std::collections::BTreeMap<Case, BTreeSet<usize>>,
          read: &std::collections::BTreeMap<Case, BTreeSet<String>>| {
@@ -13386,29 +13472,7 @@ fn reached(
         };
     let base = state.join("reach");
     std::fs::create_dir_all(&base)?;
-    crate::durable::replace(
-        base.join(CONTEXT),
-        serde_json::to_string(&SealContext {
-            root: root.to_path_buf(),
-            dirs: dirs.clone(),
-            compiled: schema.compiled.clone(),
-            probes: schema.probes.clone(),
-            names: schema.names.clone(),
-            items: schema.items.clone(),
-            mentions: schema.mentions.clone(),
-            resources: ids.0.clone(),
-            untraced: ids.1.to_owned(),
-            sites: site_keys.to_vec(),
-            mutant_fns: schema.mutant_fns.clone(),
-            file_fns: in_file.clone(),
-            unplaced: out_of_fns.clone(),
-            classic: classic.clone(),
-            format: Some(format.clone()),
-            build: Some(build.clone()),
-            unprobed: unprobed.clone(),
-            snapshot: Some(tree_digest(root)?),
-        })?,
-    )?;
+    crate::durable::replace(base.join(CONTEXT), &context)?;
     let at = stage_took(out, "reach context", started)?;
     let (reach, passed, whole) = record_reach(
         work,
@@ -13425,6 +13489,8 @@ fn reached(
     }
     let at = stage_took(out, "reach record", at)?;
     let digests = recompute(&recorded, &reach.read);
+    // AN ECONOMY: a memo not kept costs the next run time, never a verdict.
+    let _ = memo.save(&memo_file);
     let at = stage_took(out, "reach digests", at)?;
     let seconds = sweep_seconds(state, &reach)?;
     seal_reach(
@@ -13466,7 +13532,8 @@ fn reached(
         .ok()
     };
     let red = baseline_red(passed, junit.as_deref(), red_records(&base))?;
-    reached_said(&reach, (schema.probes.len(), started), &derived, out)?;
+    let bounded = (!memo.recalled.get()).then_some(&derived);
+    reached_said(&reach, (schema.probes.len(), started), bounded, out)?;
     Ok((reach, digests, seconds, red))
 }
 
@@ -13480,7 +13547,7 @@ fn reached(
 fn reached_said(
     reach: &Reach,
     (probes, started): (usize, std::time::Instant),
-    derived: &Derived,
+    derived: Option<&Derived>,
     out: &mut dyn std::io::Write,
 ) -> std::io::Result<()> {
     crate::mutate::progress!(
@@ -13490,6 +13557,15 @@ fn reached_said(
         started.elapsed().as_secs()
     )?;
     crate::mutate::progress!(out, "{}", untraced_line(&reach.untraced))?;
+    // NOT BOUNDED OVER RECALLED DIGESTS (CLOUD-2959): a digest an earlier run
+    // took read no artifact here, so bounding the store to what this run read
+    // would remove every one the next edited lap needs.
+    let Some(derived) = derived else {
+        return crate::mutate::progress!(
+            out,
+            "mutate schema: derived store kept as it stood, its digests recalled"
+        );
+    };
     // EVERY CASE'S DIGEST IS TAKEN, so every artifact the current build reads
     // has been read or kept by now.
     let (kept, removed) = derived.retain_touched();
@@ -16680,14 +16756,16 @@ mod tests {
         );
     }
 
-    /// A case recorded passing is not run again; one recorded failing is.
-    /// The program does not exist, so running it is an error and skipping it
-    /// is not: the outcome says which happened.
+    /// A case recorded finished, passing or red, is not run again; one that
+    /// never finished is. A red record left standing was carried by its
+    /// unchanged digest, and its verdict is the record's (CLOUD-2959). The
+    /// program does not exist, so running it is an error and skipping it is
+    /// not: the outcome says which happened.
     ///
-    /// Fails by: a finished case run again (the whole suite re-run on every
-    /// restart), or a failed one skipped (a baseline failure hidden).
+    /// Fails by: a finished case run again (the whole suite, or every red
+    /// case, re-run on every lap), or an unfinished one skipped.
     #[test]
-    fn a_finished_case_is_skipped_and_a_failed_one_runs_again() {
+    fn a_finished_case_is_skipped_and_an_unfinished_one_runs_again() {
         let base = crate::scratch::scratch("schema-reach-skip");
         let test = [
             String::from("/nonexistent/batten-reach-case"),
@@ -16702,7 +16780,11 @@ mod tests {
             base.join(&key).join(SKIPPED).is_file(),
             "a skip is marked, so its run's time is never sealed"
         );
+        std::fs::remove_file(base.join(&key).join(SKIPPED)).unwrap();
         std::fs::write(base.join(&key).join(DONE), "101").unwrap();
+        assert_eq!(record_into(&base, &test, None).unwrap(), 0, "red, skipped");
+        std::fs::remove_file(base.join(&key).join(SKIPPED)).unwrap();
+        std::fs::remove_file(base.join(&key).join(DONE)).unwrap();
         // Run again either way the host runs it: untraced, the missing
         // program is a spawn error; under a tracer, the tracer's own failing
         // exit. Only the skip answers a clean 0.
@@ -22356,7 +22438,7 @@ mod tests {
         reached_said(
             &Reach::default(),
             (3, std::time::Instant::now()),
-            &derived,
+            Some(&derived),
             &mut said,
         )
         .unwrap();
@@ -22405,14 +22487,14 @@ mod tests {
     }
 
     /// The finished cases are exactly the records a recorder would skip: each
-    /// one done passing, by the case it names; a record unfinished, failed or
-    /// naming no case is none.
+    /// one done, passing or red (CLOUD-2959), by the case it names; a record
+    /// unfinished or naming no case is none.
     ///
     /// Fails by: a case answered that no record holds (the sweep at b878238b4
     /// found an added default case survived), which a relaunch's count of
     /// finished cases would then overstate.
     #[test]
-    fn the_finished_cases_are_the_records_done_passing() {
+    fn the_finished_cases_are_the_records_done() {
         let base = crate::scratch::scratch("schema-finished-cases");
         let record = |dir: &str, case: Option<&str>, done: Option<&str>| {
             let at = base.join(dir);
@@ -22430,7 +22512,10 @@ mod tests {
         record("4", None, Some("0"));
         assert_eq!(
             finished_cases(&base),
-            BTreeSet::from([(String::from("a::passed"), String::from("fix::it"))])
+            BTreeSet::from([
+                (String::from("a::failed"), String::from("fix::it")),
+                (String::from("a::passed"), String::from("fix::it")),
+            ])
         );
     }
 
