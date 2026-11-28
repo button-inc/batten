@@ -1,0 +1,35 @@
+name: unflag-dev-prerelease
+
+# ONE-SHOT (CLOUD-2954): this file rides a throwaway draft pull request that
+# never merges. It runs the unflag step from `dev-prerelease.yml` at 2691a3c8
+# once, so the released engine's freeze (`release_state::read_flight`) stops
+# reading a flagged dev pre-release as a release whose land is owed. Unflagging
+# is the one edit an immutable release still takes; nothing is deleted, no tag
+# moves, no asset is touched. Idempotent: none flagged, it does nothing.
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+
+permissions: {}
+
+jobs:
+  unflag:
+    if: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 2 # budget: p95=21s x3 measured=2026-11-24
+    permissions:
+      contents: write
+    steps:
+      - name: Unflag every published dev pre-release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          gh release list --exclude-drafts --limit 1000 --json tagName,isPrerelease \
+            --jq '.[] | select(.isPrerelease) | select(.tagName | startswith("dev/")) | .tagName' |
+            while IFS= read -r tag; do
+              gh release edit "$tag" --prerelease=false --latest=false
+            done
