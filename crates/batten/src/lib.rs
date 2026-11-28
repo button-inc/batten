@@ -6116,6 +6116,16 @@ struct ClaimAsk<'a> {
     /// Where the authority the receipt's base is read from lives
     /// (`--config-in` / `--config-from`, CLOUD-2532).
     overrides: &'a Overrides,
+    /// The directory whose authority declares the trunk: the linked
+    /// worktree's own when the call is made in one, never the main
+    /// checkout's that `repo` names (CLOUD-2532).
+    authority: &'a Path,
+}
+
+/// The authority the call is made under: the working directory's linked
+/// worktree when it carries a `batten.toml`, else the repository root.
+fn board_authority() -> PathBuf {
+    config::anchor_at(Path::new("."))
 }
 
 /// The repository root, or the working directory where there is none.
@@ -7938,8 +7948,8 @@ fn refuse_claim_bot(err: &mut dyn Write, text: &str) -> Result<ExitCode> {
 /// judged the claim by another branch's `batten.toml` — refusing it outright
 /// when that file would not load, and ignoring `--config-in` because the read
 /// took no overrides.
-fn claim_base(repo: &Path, verb: &str, overrides: &Overrides) -> Result<String> {
-    let authority = config::authority_root(repo)?;
+fn claim_base(repo: &Path, here: &Path, verb: &str, overrides: &Overrides) -> Result<String> {
+    let authority = config::authority_root(here)?;
     let Some(trunk) = worktree::committed_trunk(&authority, overrides)? else {
         return Err(UsageError::raise(format!(
             "{verb}: {} — no receipt minted",
@@ -8291,7 +8301,7 @@ fn run_claim_bot(
         pr: number,
     };
     let receipts = git::git_dir(repo)?.join("batten-receipts");
-    let base = claim_base(repo, "claim bot", overrides)?;
+    let base = claim_base(repo, repo, "claim bot", overrides)?;
     bot::mint(
         &receipts,
         &branch,
@@ -8909,6 +8919,7 @@ fn run_claim(
                     issue: issue.as_deref(),
                     json,
                     overrides,
+                    authority: &board_authority(),
                 },
                 mode,
                 out,
@@ -9306,6 +9317,7 @@ fn run_claim_check(
         issue,
         json,
         overrides,
+        authority,
     } = *ask;
     let receipts = git::git_dir(repo).ok().map(|dir| dir.join(RECEIPT_DIR));
     if adopt {
@@ -9380,7 +9392,7 @@ fn run_claim_check(
     // stands and only the side effect is skipped: a caller inspecting the board
     // from anywhere still deserves the answer.
     if let (Some(receipts), Ok(Some(branch))) = (receipts.as_deref(), git::current_branch(repo)) {
-        let base = claim_base(repo, "claim check", overrides)?;
+        let base = claim_base(repo, authority, "claim check", overrides)?;
         claim::mint(
             receipts,
             &branch,
