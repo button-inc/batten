@@ -85,10 +85,13 @@ const FOREIGN: &str =
 
 // --- part 1: a hosted container is disposable without being told -------------
 
+/// One container case: name, environment-manager directory, env, writes.
+type ContainerCase<'a> = (&'a str, bool, &'a [(&'a str, &'a str)], bool);
+
 #[test]
 fn a_cloud_container_is_disposable_without_the_variable_and_the_variable_overrides() {
     let repair = ["startup", "--repair"];
-    let cases: &[(&str, bool, &[(&str, &str)], bool)] = &[
+    let cases: &[ContainerCase<'_>] = &[
         // (name, environment-manager directory, env, writes)
         ("remote", false, &[("CLAUDE_CODE_REMOTE", "true")], true),
         ("manager", true, &[], true),
