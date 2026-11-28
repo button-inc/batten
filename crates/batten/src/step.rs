@@ -2780,13 +2780,15 @@ pub(crate) fn evict(entries: &[(String, String)], cap: usize) -> Vec<String> {
 /// once every `depends_on` exited 0, at most `jobs` at once (or the group's own
 /// `NAME=N`).
 ///
-/// THE GROUPS ARE TIERS: A LATER ONE STARTS ONLY ONCE EVERY EARLIER ONE PASSED
-/// (CLOUD-2853; owner ruling, `.batten/asked.jsonl:223`: the most expensive
-/// stage runs only once every cheap stage has passed). After a group ends red,
-/// every row of every later group is recorded as skipped and never spawned.
-/// WITHIN a group a failure skips only the rows naming it in `depends_on`, so a
-/// tier reports every red it holds (CLOUD-2789), and every red row, a skipped
-/// later row included, is listed once more at the end.
+/// THE GROUPS ARE TIERS, RUN IN ORDER, AND A RED ONE STOPS NOTHING BY ITSELF
+/// (CLOUD-2904): a later group starts once every earlier one has ENDED, and a
+/// failure skips only the rows naming it in `depends_on`, in its own group or
+/// a later one. Twenty-one laps of #1276 each surfaced one red because a red
+/// first tier skipped every later one, so the suite never ran in a lap; an
+/// order is not an input, and only a declared edge is. A dependency on a row
+/// that never ran in this lap (its group not named, or named later) skips the
+/// row too. Every red row, a skipped one with the red row it waited on, is
+/// listed once more at the end.
 ///
 /// A CHILD PROCESS PER NODE, never `run_step` on a thread: `check`, `record`
 /// and `declared` read the working directory, `announce` pushes one phase per
@@ -2851,20 +2853,11 @@ pub fn run_graph(groups: &[String], jobs: Option<&str>, err: &mut dyn Write) -> 
         phases.push((group, rows, bound));
     }
     let mut done: BTreeMap<String, i32> = BTreeMap::new();
+    let mut because: BTreeMap<String, String> = BTreeMap::new();
     let mut worst = 0_i32;
-    let mut red: Option<&str> = None;
     for (group, rows, bound) in &phases {
-        // A LATER GROUP STARTS ONLY ONCE EVERY EARLIER ONE PASSED (CLOUD-2853,
-        // owner ruling `.batten/asked.jsonl:223`). Its rows are recorded as
-        // skipped and never spawned, so the red list below still names them.
-        if let Some(earlier) = red {
-            for row in rows {
-                done.insert(row.id.clone(), SKIPPED);
-            }
-            writeln!(err, "step graph: {group} skipped ({earlier} red)")?;
-            continue;
-        }
         let outcome = graph_phase(group, rows, *bound, &mut done, err);
+        because.extend(outcome.because.clone());
         for line in &outcome.lines {
             writeln!(err, "step graph: {line}")?;
         }
@@ -2875,9 +2868,6 @@ pub fn run_graph(groups: &[String], jobs: Option<&str>, err: &mut dyn Write) -> 
             bound.map_or_else(|| String::from("unbounded"), |jobs| jobs.to_string())
         )?;
         worst = worst.max(outcome.worst);
-        if outcome.worst != 0 {
-            red = Some(group);
-        }
     }
     // THE LAP'S ONE LIST OF REDS (CLOUD-2789): every row that ran and failed, in
     // run order, after every group has finished — the pointer each needs is its
@@ -2886,7 +2876,10 @@ pub fn run_graph(groups: &[String], jobs: Option<&str>, err: &mut dyn Write) -> 
         for row in rows {
             if let Some(code) = done.get(&row.id).filter(|code| **code != 0) {
                 let how = if *code == SKIPPED {
-                    String::from("skipped")
+                    format!(
+                        "skipped {}",
+                        because.get(&row.id).map_or("", String::as_str)
+                    )
                 } else {
                     format!("ran {code}")
                 };
@@ -2973,6 +2966,10 @@ fn verdict_line(group: &str, id: &str, code: i32, seconds: f64, log: Option<&str
 /// at once, and the worst code.
 struct Scheduled {
     lines: Vec<String>,
+    /// Each skipped row's `(<dependency> red|not run)`, as decided when it
+    /// was skipped (CLOUD-2904): by the closing list a later group may have
+    /// run the dependency.
+    because: BTreeMap<String, String>,
     peak: usize,
     worst: i32,
 }
@@ -2996,6 +2993,7 @@ fn schedule(
     // the suite instead of failing a case.
     let mut waiting: Vec<(usize, &Step)> = rows.iter().copied().enumerate().collect();
     let mut lines = Vec::new();
+    let mut because = BTreeMap::new();
     let mut running: std::collections::BTreeSet<usize> = std::collections::BTreeSet::new();
     let mut peak = 0_usize;
     let mut worst = 0_i32;
@@ -3005,18 +3003,25 @@ fn schedule(
         loop {
             // A ROW WHOSE DEPENDENCY FAILED NEVER STARTS, and neither does any
             // row waiting on it: repeat until no skip uncovers another.
-            while let Some((at, dependency)) =
+            // A dependency outside this group that no earlier group recorded
+            // never will (CLOUD-2904): waiting on it would leave the row
+            // unrecorded, so it is skipped as not run.
+            while let Some((at, dependency, how)) =
                 waiting.iter().enumerate().find_map(|(at, (_, row))| {
-                    row.depends_on
-                        .iter()
-                        .find(|dependency| {
-                            done.get(dependency.as_str()).is_some_and(|code| *code != 0)
-                        })
-                        .map(|dependency| (at, dependency.clone()))
+                    row.depends_on.iter().find_map(|dependency| {
+                        match done.get(dependency.as_str()) {
+                            Some(0) => None,
+                            Some(_) => Some((at, dependency.clone(), "failed")),
+                            None if rows.iter().any(|other| other.id == *dependency) => None,
+                            None => Some((at, dependency.clone(), "not run")),
+                        }
+                    })
                 })
             {
                 let (_, row) = waiting.remove(at);
-                lines.push(format!("{} skipped ({dependency} failed)", row.id));
+                lines.push(format!("{} skipped ({dependency} {how})", row.id));
+                let reason = if how == "failed" { "red" } else { how };
+                because.insert(row.id.clone(), format!("({dependency} {reason})"));
                 done.insert(row.id.clone(), SKIPPED);
             }
             while running.len() < bound {
@@ -3051,7 +3056,12 @@ fn schedule(
             done.insert(id.to_owned(), code);
         }
     });
-    Scheduled { lines, peak, worst }
+    Scheduled {
+        lines,
+        because,
+        peak,
+        worst,
+    }
 }
 
 /// The run time a receipt recorded: the `<n>ms` field of its first line, or

@@ -930,30 +930,40 @@ fn every_step_a_task_names_is_declared_and_the_retired_task_is_gone() {
         );
     }
     assert!(!named.is_empty(), "the scan must find the call sites");
-    // TIERS 1 AND 2 ARE ONE `step graph run` (CLOUD-2785); tiers 3 and 4 are
-    // `verify:gated`'s run entries after it, in order (CLOUD-2789).
+    // TIERS 1 AND 2 ARE ONE `step graph run` (CLOUD-2785), the first node of
+    // `verify:gated`'s one fan; tiers 3 and 4 are its later nodes, in order
+    // (CLOUD-2904).
     assert!(
         ["verify-1", "verify-2"]
             .iter()
             .all(|tier| groups.iter().any(|group| group == tier)),
         "the lap runs the first two tiers as graph groups: {groups:?}"
     );
+    let tiers_task =
+        common::task_block_template("verify:tiers").expect("`[tasks.\"verify:tiers\"]` exists");
+    assert!(
+        tiers_task.contains("step graph run verify-1 verify-2=2"),
+        "{tiers_task}"
+    );
     let gated =
         common::task_block_template("verify:gated").expect("`[tasks.\"verify:gated\"]` exists");
-    let entry = |needle: &str| {
-        let found: Vec<usize> = gated
-            .lines()
-            .enumerate()
-            .filter(|(_, line)| line.trim_start().starts_with('"') && line.contains(needle))
-            .map(|(index, _)| index)
-            .collect();
-        assert_eq!(found.len(), 1, "one run entry carries {needle}: {gated}");
-        found[0]
+    let fan: Vec<&str> = gated
+        .lines()
+        .filter(|line| {
+            line.trim_start()
+                .starts_with("\"mise run --continue-on-error --jobs 1 ")
+        })
+        .collect();
+    assert_eq!(fan.len(), 1, "one ordered fan: {gated}");
+    let at = |needle: &str| {
+        fan[0]
+            .find(needle)
+            .unwrap_or_else(|| panic!("the fan runs {needle}: {}", fan[0]))
     };
     let tiers = [
-        entry("step graph run verify-1 verify-2=2"),
-        entry("--continue-on-error --jobs 1 test:traced ::: verify:ci-suite"),
-        entry("\"mise run perf-gate\""),
+        at("verify:tiers"),
+        at("test:traced ::: verify:ci-suite"),
+        at("::: perf-gate"),
     ];
     assert!(
         tiers.windows(2).all(|pair| pair[0] < pair[1]),

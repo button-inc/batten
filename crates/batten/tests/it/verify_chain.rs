@@ -101,6 +101,42 @@ fn steps(name: &str) -> Vec<String> {
     }
 }
 
+/// `verify:gated`'s steps in the order they run (CLOUD-2904): its one
+/// `--continue-on-error` fan is expanded, a `verify:` node into its own run
+/// steps (the graph call, the dist leg, `step cover`) and any other node into
+/// `mise run <task>`, then the entries after the fan.
+fn lap() -> Vec<String> {
+    steps("verify:gated")
+        .into_iter()
+        .flat_map(|step| {
+            if !step.starts_with("mise run --continue-on-error") {
+                return vec![step];
+            }
+            members(&step)
+                .into_iter()
+                .flat_map(|node| match node.as_str() {
+                    "verify:tiers" | "verify:dist" | "verify:cover" => steps(&node),
+                    _ => vec![format!("mise run {node}")],
+                })
+                .collect()
+        })
+        .collect()
+}
+
+/// THE LAP IS ONE FAN THAT STOPS AT NO RED (CLOUD-2904): every node runs
+/// whatever an earlier one decided, in order (`--jobs 1`), and only the
+/// receipt, which attests every node, follows it as its own entry.
+#[test]
+fn the_lap_is_one_ordered_fan_and_the_receipt_follows_it() {
+    let gated = steps("verify:gated");
+    assert_eq!(gated.len(), 2, "{gated:?}");
+    assert!(
+        gated[0].starts_with("mise run --continue-on-error --jobs 1 "),
+        "{gated:?}"
+    );
+    assert!(gated[1].ends_with(" receipt record verify"), "{gated:?}");
+}
+
 /// The position of the one step that `contains` the needle.
 fn step_at(all: &[String], needle: &str) -> usize {
     let found: Vec<usize> = all
@@ -149,7 +185,7 @@ fn the_verify_sequence_was_found_at_all() {
     let verify = steps("verify");
     // Toolchain, claim, linearity, gate set: the four the order case reads.
     assert!(verify.len() >= 4, "{verify:?}");
-    let gated = steps("verify:gated");
+    let gated = lap();
     assert!(
         gated
             .iter()
@@ -167,6 +203,9 @@ fn every_step_is_argv() {
     for name in [
         "verify",
         "verify:gated",
+        "verify:tiers",
+        "verify:dist",
+        "verify:cover",
         "verify:commit-lint",
         "verify:config-lint",
         "target-prune",
@@ -327,10 +366,10 @@ fn members(step: &str) -> Vec<String> {
 /// THE TIERS ARE GRAPH GROUPS SINCE CLOUD-2785, AND ONE CALL'S GROUPS SINCE
 /// CLOUD-2789: `batten step graph run <group>...` runs its groups in order, so
 /// a task's tier is the position of the group holding a row running it. A red
-/// group skips every later group (CLOUD-2853, `.batten/asked.jsonl:223`).
+/// group skips only the rows that depend on its reds (CLOUD-2904).
 #[test]
 fn verify_gated_runs_its_gates_in_tiers_cheapest_first() {
-    let gated = steps("verify:gated");
+    let gated = lap();
     let graphs: Vec<&String> = gated
         .iter()
         .filter(|step| !common::graph_groups(step).is_empty())
@@ -389,8 +428,12 @@ fn verify_gated_runs_its_gates_in_tiers_cheapest_first() {
         .position(|step| step.contains("verify:ci-suite"))
         .unwrap_or_else(|| panic!("verify:gated runs the suite: {gated:?}"));
     assert!(graph < suite, "the graph, then the suite: {gated:?}");
+    let tier: Vec<&str> = gated[suite - 1..suite + 3]
+        .iter()
+        .map(|step| step.trim_start_matches("mise run "))
+        .collect();
     assert_eq!(
-        members(&gated[suite]),
+        tier,
         [
             "test:traced",
             "verify:ci-suite",
@@ -495,7 +538,7 @@ fn each_hk_step_runs_in_exactly_one_place_per_lap() {
             "`{skipped}` is skipped but names no `hk check` step, so it skips nothing"
         );
     }
-    let gated = steps("verify:gated");
+    let gated = lap();
     let elsewhere: Vec<String> = gated
         .iter()
         .filter(|step| step.starts_with("mise run "))
@@ -702,7 +745,7 @@ fn the_claim_step_asks_every_kind_by_branch() {
 /// commit (CLOUD-277).
 #[test]
 fn the_receipt_is_the_last_step() {
-    let gated = steps("verify:gated");
+    let gated = lap();
     let receipt = step_at(&gated, "receipt record verify");
     assert_eq!(receipt, gated.len() - 1, "{gated:?}");
     // THE FIRST STEP IS A GRAPH WHOSE ONE ROOT IS `tree-clean` (CLOUD-2785):
@@ -740,7 +783,7 @@ fn the_receipt_is_the_last_step() {
 /// so it still starts alone.
 #[test]
 fn the_perf_gate_runs_alone_and_last_before_the_receipt() {
-    let gated = steps("verify:gated");
+    let gated = lap();
     let graph = step_at(&gated, "step graph run");
     let perf = step_at(&gated, "mise run perf-gate");
     let cover = step_at(&gated, "step cover");
@@ -930,7 +973,7 @@ fn every_hk_step_runs_the_named_engine() {
 #[test]
 fn the_gate_set_runs_the_engine_it_built_first() {
     assert_eq!(depends_of("verify:gated"), ["tree-clean"]);
-    let first = common::graph_groups(&steps("verify:gated")[0])
+    let first = common::graph_groups(&lap()[0])
         .first()
         .map(|group| common::group_rows(group))
         .unwrap_or_default();

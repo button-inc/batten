@@ -5237,11 +5237,21 @@ env = { BATTEN_BIN = "{{ get_env(name='CARGO_TARGET_DIR', default=config_root ~ 
 # on for 41 minutes over a head they had already refused. So the cheap tier
 # still reports first, and a tier starts only once every tier before it passed.
 #
-# A RED TIER STOPS EVERY LATER ONE (CLOUD-2853; owner ruling,
-# `.batten/asked.jsonl:223`: the most expensive stage runs only once every cheap
-# stage has passed). Each tier is ONE `mise run --continue-on-error` fan, so a
-# tier reports every red it holds in one pass (CLOUD-2789), and the `run` array
-# stops at the first failing entry, so no later tier starts over a red one.
+# A RED TIER STOPS NO INDEPENDENT LATER STEP (CLOUD-2904, reversing the stop
+# CLOUD-2853 added). Twenty-one laps of #1276 each surfaced one red: a red
+# tier-1 gate skipped tiers 2 and 3, so the suite never ran in a lap and every
+# fix bought one more lap to find the next red. The tiers still START in order,
+# cheapest first, but the order is not an input: no tier-2 or tier-3 step reads
+# a file a tier-1 step writes (the `ci-suite` carve skips steps an earlier tier
+# runs, which is a schedule, not an input). So the lap is ONE ordered
+# `--continue-on-error --jobs 1` fan: every entry runs, each ends with its own
+# receipt, mise names each red entry at the end beside the graph's own red
+# list, and the lap exits non-zero exactly when any entry is red, as before.
+# THE REAL EDGES stay edges: the dist leg's three steps each read the last
+# one's output, so they are one entry (`verify:dist`) that stops at its first
+# red; and `receipt record verify` attests every entry, so it follows the fan
+# and never runs over a red. Inside the graph, a `depends_on` naming another
+# group's row is the edge that skips a consumer.
 # Every tier-1 gate still waits on the record writes, which run as their own
 # entries ahead of it, in order.
 #   1. seconds: the lap's commits and config, the diff and pin questions, the
@@ -5268,7 +5278,23 @@ env = { BATTEN_BIN = "{{ get_env(name='CARGO_TARGET_DIR', default=config_root ~ 
 # verify-4` and the `gate:*` rows together. Until then tier 2 keeps the graph's
 # fan width with `--jobs 2` and tier 3 its one-at-a-time with `--jobs 1`.
 run = [
-  "{{vars.batten}} step graph run verify-1 verify-2=2",
+  "mise run --continue-on-error --jobs 1 verify:tiers ::: verify:dist ::: test:traced ::: verify:ci-suite ::: verify:mutant-changed ::: verify:ci-slow-needed ::: perf-gate ::: verify:cover",
+  "{{vars.batten}} receipt record verify",
+]
+
+# TIERS 1 AND 2, as the lap fan's first node (CLOUD-2904).
+[tasks."verify:tiers"]
+description = "The step graph's first two tiers — invoked through `verify`'s one fan"
+run = "{{vars.batten}} step graph run verify-1 verify-2=2"
+
+# `step cover` as a fan node, so it reports over a red lap too (CLOUD-2904).
+[tasks."verify:cover"]
+description = "Which declared checks this tree passed — invoked through `verify`'s one fan"
+run = "{{vars.batten}} step cover"
+
+[tasks."verify:dist"]
+description = "The dist leg, each step reading the last one's output — invoked through `verify`'s one fan"
+run = [
   # THE DIST LEG, AS `dist.yml` RUNS IT (CLOUD-2789): `rust.yml` calls that
   # workflow on every pull request, and `ci-parity` now follows the call, so its
   # build, the binary's inventory and the inventory's check run here too. In
@@ -5283,10 +5309,6 @@ run = [
   "mise run dist:lap",
   "mise run sbom-binary target/{{vars.dist_host}}/dist/batten {{vars.dist_host}}",
   "mise run sbom-binary-check",
-  "mise run --continue-on-error --jobs 1 test:traced ::: verify:ci-suite ::: verify:mutant-changed ::: verify:ci-slow-needed",
-  "mise run perf-gate",
-  "{{vars.batten}} step cover",
-  "{{vars.batten}} receipt record verify",
 ]
 
 # THE SUITE TIER'S TWO NODES, as tasks (CLOUD-2789): a `[[step]]` row's argv

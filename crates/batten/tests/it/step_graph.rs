@@ -173,11 +173,12 @@ fn assert_pointer(pointer: &str, line: &str) {
     }
 }
 
-/// A FINISHED STEP'S VERDICT IS WRITTEN WHEN IT FINISHES (CLOUD-2838), and a
-/// red tier stops every later one (CLOUD-2853). Group 1 holds a red and a
-/// green step; group 2's slow step never starts. Fails by: no six-field
-/// verdict line for either group-1 step, or group 2 running after the red.
-/// The timing of the line is the sibling case's to show.
+/// A FINISHED STEP'S VERDICT IS WRITTEN WHEN IT FINISHES (CLOUD-2838), before
+/// the next group starts. Group 1 holds a red and a green step; group 2's slow
+/// step starts only once group 1 has ended, and still runs (CLOUD-2904). Fails
+/// by: no six-field verdict line for either group-1 step, group 2 starting
+/// before group 1 ended, or group 2 not running at all. The timing of the line
+/// is the sibling case's to show.
 #[test]
 fn a_red_step_in_an_earlier_group_is_read_before_a_later_group_ends() {
     let rows = [
@@ -191,7 +192,7 @@ fn a_red_step_in_an_earlier_group_is_read_before_a_later_group_ends() {
     let seen = seen.unwrap_or_else(|| panic!("no red line for a: {lines:#?}"));
     assert!(
         !seen.iter().any(|event| event == "start slow"),
-        "group 2 started after group 1's red: {seen:?}"
+        "group 2 started before group 1 ended: {seen:?}"
     );
     let red = lines
         .iter()
@@ -209,12 +210,9 @@ fn a_red_step_in_an_earlier_group_is_read_before_a_later_group_ends() {
         .unwrap_or_else(|| panic!("no ok line for b: {lines:#?}"));
     assert_eq!(verdict_fields(ok)[..4], ["ok", "t1", "b", "0"], "{ok}");
     assert!(
-        lines
-            .iter()
-            .any(|line| line.starts_with("step graph: t2 skipped")),
-        "group 2 is reported skipped: {lines:#?}"
+        graph.started("slow"),
+        "group 2's independent step ran: {lines:#?}"
     );
-    assert!(!graph.started("slow"), "group 2's step never ran");
 }
 
 /// The same within one group: a fast red sibling is read while a slow sibling
@@ -266,44 +264,99 @@ fn a_held_pipe_never_reaches_the_pointer() {
     assert!(!fields[5].contains("open"), "{line}");
 }
 
-/// A LATER TIER STARTS ONLY ONCE EVERY EARLIER ONE PASSED (CLOUD-2853; owner
-/// ruling, `.batten/asked.jsonl:223`). Fails by: a group after a red one
-/// starting (the CLOUD-2789 shape this reverses), a skipped row missing from
-/// the red list, or the run exiting 0 over a red. `t1` holds a red and a green
-/// row; `t2` and `t3` are green and independent of both, and never start.
+/// A RED TIER STOPS NO INDEPENDENT LATER STEP (CLOUD-2904): 21 laps of #1276
+/// each surfaced one red because a red first tier skipped every later one.
+/// Fails by: a later group skipped over an earlier red (the CLOUD-2853 shape
+/// this reverses), a later step's pass not recorded, a red in a later tier
+/// missing from the closing list, or the run exiting 0 over a red. `t1` holds
+/// a red and a green row; `t2` holds a green row and a red one, and `t3` a
+/// green one, none depending on anything.
 #[test]
-fn a_red_group_stops_every_later_group_and_every_red_is_listed() {
+fn a_red_tier_stops_no_independent_later_step_and_every_red_is_listed() {
     let rows = [
         node_in("t1", "a", 2, &[]),
         node_in("t1", "a-ok", 0, &[]),
         node_in("t2", "b", 0, &[]),
+        node_in("t2", "b-red", 1, &[]),
         node_in("t3", "c", 0, &[]),
     ]
     .concat();
     let graph = Graph::new("tiers", &rows);
     let out = graph.run(&["t1", "t2", "t3"]);
     let stderr = common::stderr(&out);
-    assert_eq!(out.status.code(), Some(2), "{stderr}");
-    for ran in ["a", "a-ok"] {
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "the worst code, as before: {stderr}"
+    );
+    for ran in ["a", "a-ok", "b", "b-red", "c"] {
         assert!(graph.started(ran), "{ran} ran: {stderr}");
     }
-    for held in ["b", "c"] {
-        assert!(!graph.started(held), "{held} never started: {stderr}");
-    }
+    let passes = std::fs::read_dir(graph.dir.join(".git/batten-records/step-passes"))
+        .map(Iterator::count)
+        .unwrap_or_default();
+    assert_eq!(passes, 3, "a-ok, b and c each recorded a pass: {stderr}");
     for red in [
         "step graph: red t1 a ran 2",
-        "step graph: red t2 b skipped",
-        "step graph: red t3 c skipped",
-        "step graph: t2 skipped (t1 red)",
+        "step graph: red t2 b-red ran 1",
     ] {
         assert!(stderr.contains(red), "{red}: {stderr}");
     }
-    assert!(!stderr.contains("red t1 a-ok"), "{stderr}");
+    assert!(
+        !stderr.contains("skipped"),
+        "nothing depended on a red: {stderr}"
+    );
+    let closing: Vec<&str> = stderr
+        .lines()
+        .filter(|line| line.starts_with("step graph: red ") && line.contains(" ran "))
+        .collect();
+    assert_eq!(
+        closing.len(),
+        2,
+        "one closing line per red, every tier: {stderr}"
+    );
+}
+
+/// A STEP DECLARED TO CONSUME A RED STEP'S OUTPUT IS SKIPPED AND NAMED
+/// (CLOUD-2904), across groups: `t2`'s `d` depends on `t1`'s red `a`, `e` on
+/// nothing, and `f` on `t3`'s `g`, a group this lap runs after it. Fails by:
+/// `d` started, `e` held back with it, `f` waiting forever or starting, or the
+/// closing list not naming the red each skip waited on.
+#[test]
+fn a_consumer_of_a_red_step_in_an_earlier_group_is_skipped_and_named() {
+    let rows = [
+        node_in("t1", "a", 2, &[]),
+        node_in("t2", "d", 0, &["a"]),
+        node_in("t2", "e", 0, &[]),
+        node_in("t2", "f", 0, &["g"]),
+        node_in("t3", "g", 0, &[]),
+    ]
+    .concat();
+    let graph = Graph::new("consumer", &rows);
+    let out = graph.run(&["t1", "t2", "t3"]);
+    let stderr = common::stderr(&out);
+    assert_eq!(out.status.code(), Some(2), "{stderr}");
+    assert!(!graph.started("d"), "d consumes a's output: {stderr}");
+    assert!(
+        !graph.started("f"),
+        "g had not run when f's group did: {stderr}"
+    );
+    assert!(graph.started("e"), "e is independent: {stderr}");
+    assert!(graph.started("g"), "g is independent: {stderr}");
+    for line in [
+        "step graph: d skipped (a failed)",
+        "step graph: f skipped (g not run)",
+        "step graph: red t1 a ran 2",
+        "step graph: red t2 d skipped (a red)",
+        "step graph: red t2 f skipped (g not run)",
+    ] {
+        assert!(stderr.contains(line), "{line}: {stderr}");
+    }
 }
 
 /// A TIER STILL REPORTS EVERY RED IT HOLDS (CLOUD-2789, kept by CLOUD-2853).
 /// Fails by: a group stopped at its first red, so `y` or `z` never starts, or
-/// `t2` starting after the red tier; or a row that ran and exited 1 listed as
+/// `t2` held back by the red tier (CLOUD-2904); or a row that ran and exited 1 listed as
 /// skipped (the skip code read `1`, a mutant missed at 34c6e4d1f).
 #[test]
 fn every_red_in_a_tier_is_reported() {
@@ -322,7 +375,10 @@ fn every_red_in_a_tier_is_reported() {
     for ran in ["x", "y", "v", "z"] {
         assert!(graph.started(ran), "{ran} ran: {stderr}");
     }
-    assert!(!graph.started("w"), "w never started: {stderr}");
+    assert!(
+        graph.started("w"),
+        "w is independent of every red: {stderr}"
+    );
     for red in [
         "step graph: red t1 x ran 2",
         "step graph: red t1 y ran 3",

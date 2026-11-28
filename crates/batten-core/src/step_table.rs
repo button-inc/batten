@@ -53,7 +53,8 @@ pub struct Step {
     /// The graph this row is a node of, as `step graph run <group>` names it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub group: Option<String>,
-    /// Rows of the same group that must exit 0 before this one starts.
+    /// Grouped rows, of this group or an earlier one, that must exit 0 before
+    /// this one starts.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub depends_on: Vec<String>,
     /// How the step's verdict is read. One variant on purpose: it is where a
@@ -109,8 +110,8 @@ impl Step {
 /// empty inputs would key a receipt to no file at all; empty tools would let a
 /// receipt outlive the toolchain that earned it; a `:`-magic pathspec would
 /// select nothing; one list without the other is neither a keyed row nor a
-/// schedule-only node; a grouped row with nothing to run, a dependency outside
-/// the group, or a cycle is a graph that cannot be scheduled.
+/// schedule-only node; a grouped row with nothing to run, a dependency on no
+/// grouped row, or a cycle is a graph that cannot be scheduled.
 ///
 /// # Errors
 ///
@@ -194,19 +195,24 @@ fn validate_row(row: &Step) -> Result<()> {
     Ok(())
 }
 
-/// Every dependency names a row of the same group, and no group has a cycle.
+/// Every dependency names a grouped row, and no group has a cycle.
+///
+/// A DEPENDENCY MAY CROSS GROUPS (CLOUD-2904): groups are tiers that run in
+/// order, and a later tier's row may consume what an earlier tier's row
+/// produces. That edge is what skips it when the producer is red; an edge-less
+/// later tier runs whatever an earlier one decided.
 fn validate_graph(rows: &[Step]) -> Result<()> {
     let by_id: std::collections::BTreeMap<&str, &Step> =
         rows.iter().map(|row| (row.id.as_str(), row)).collect();
     for row in rows {
         for dependency in &row.depends_on {
-            let same_group = by_id
+            let grouped = by_id
                 .get(dependency.as_str())
-                .is_some_and(|other| other.group.is_some() && other.group == row.group);
-            if !same_group {
+                .is_some_and(|other| other.group.is_some());
+            if !grouped {
                 return Err(refuse(
                     row,
-                    &format!("depends on `{dependency}`, which is not a row of its group"),
+                    &format!("depends on `{dependency}`, which is not a row of any group"),
                 ));
             }
         }
@@ -425,17 +431,24 @@ mod tests {
     }
 
     #[test]
-    fn a_dependency_outside_the_group_is_refused() {
-        let mut elsewhere = node("b", &[]);
-        elsewhere.group = Some(String::from("h"));
-        let refused = validate(&[node("a", &["b"]), elsewhere])
+    fn a_dependency_on_an_ungrouped_or_missing_row_is_refused() {
+        let mut loose = node("b", &[]);
+        loose.group = None;
+        let refused = validate(&[node("a", &["b"]), loose])
             .unwrap_err()
             .to_string();
-        assert!(refused.contains("not a row of its group"), "{refused}");
+        assert!(refused.contains("not a row of any group"), "{refused}");
         let refused = validate(&[node("a", &["missing"])])
             .unwrap_err()
             .to_string();
-        assert!(refused.contains("not a row of its group"), "{refused}");
+        assert!(refused.contains("not a row of any group"), "{refused}");
+    }
+
+    #[test]
+    fn a_dependency_on_another_groups_row_loads() {
+        let mut earlier = node("b", &[]);
+        earlier.group = Some(String::from("h"));
+        assert!(validate(&[node("a", &["b"]), earlier]).is_ok());
     }
 
     #[test]
