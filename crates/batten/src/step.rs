@@ -2692,6 +2692,15 @@ pub fn tree_inputs_digest(root: &Path) -> Result<String> {
             blocks.as_deref().map(str::as_bytes),
         );
     }
+    // The recorder stores the tree half reads (CLOUD-2329): exactly what the
+    // run is handed, so a moved record re-keys the half.
+    frame(
+        &mut hasher,
+        "records",
+        crate::rules::recorded_for_digest(root)
+            .as_deref()
+            .map(str::as_bytes),
+    );
     frame(
         &mut hasher,
         "secret-key",
@@ -3681,6 +3690,31 @@ mod tests {
             material(&root, &row, &[], None),
             Some(held),
             "a moved local config moves the key"
+        );
+    }
+
+    /// Fails by: a record under the git directory changing with no tracked
+    /// change and the tree half's key holding, which would let a receipt answer
+    /// a `records`-reading rule over lines it never judged (CLOUD-2329).
+    #[test]
+    fn a_moved_record_moves_the_inputs_digest() {
+        let root = crate::scratch::scratch("step-inputs-digest-record");
+        crate::gitwrite::init_on_main(&root).unwrap();
+        std::fs::write(root.join("input"), "x\n").unwrap();
+        crate::gitwrite::commit_paths(&root, &[String::from("input")], "input").unwrap();
+        let before = tree_inputs_digest_in(&root).unwrap();
+        let git_dir = crate::git::git_dir(&root).unwrap();
+        let branch = crate::git::record_key(&root).unwrap();
+        let path = crate::recorder::record_path(&git_dir, "plan", &branch, None);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, "CLOUD-1 planned\n").unwrap();
+        let recorded = tree_inputs_digest_in(&root).unwrap();
+        assert_ne!(before, recorded, "a new record moves the key");
+        std::fs::write(&path, "CLOUD-2 planned\n").unwrap();
+        assert_ne!(
+            recorded,
+            tree_inputs_digest_in(&root).unwrap(),
+            "an edited record moves the key"
         );
     }
 
