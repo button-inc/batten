@@ -17,7 +17,7 @@ use common::{Fixture, run_with_stdin, stderr};
 
 /// This repository's own rows and modules.
 fn repo(name: &str) -> PathBuf {
-    let staged = Fixture::new(name).config(include_str!("../../../../batten.toml"));
+    let staged = Fixture::new(name).config(&common::committed_config());
     let modules = staged.path().join("policy");
     std::fs::create_dir_all(&modules).expect("the fixture's policy directory is creatable");
     let committed = Path::new(env!("CARGO_MANIFEST_DIR"))

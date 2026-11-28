@@ -63,7 +63,7 @@ use common::{Fixture, run_with_stdin, stderr};
 /// reason: a suite asserting a hand-written copy of the row would pass over a
 /// config that says something else.
 fn repo(name: &str) -> PathBuf {
-    let staged = Fixture::new(name).config(include_str!("../../../../batten.toml"));
+    let staged = Fixture::new(name).config(&common::committed_config());
     let modules = staged.path().join("policy");
     std::fs::create_dir_all(&modules).expect("the fixture's policy directory is creatable");
     let committed = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -389,8 +389,8 @@ fn every_committed_host_tool_row_names_a_live_tool() {
         "WebSearch",
         "Write",
     ];
-    let config: toml::Value = toml::from_str(include_str!("../../../../batten.toml"))
-        .expect("the committed config parses");
+    let config: toml::Value =
+        toml::from_str(&common::committed_config()).expect("the committed config parses");
     let rules = config["rule"]
         .as_array()
         .expect("the committed config has rules");

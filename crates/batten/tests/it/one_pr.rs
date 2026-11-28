@@ -37,7 +37,7 @@ fn repo(name: &str) -> PathBuf {
 
 /// [`repo`], with `extra` appended to the committed config.
 fn repo_with(name: &str, extra: &str) -> PathBuf {
-    let config = format!("{}{extra}", include_str!("../../../../batten.toml"));
+    let config = format!("{}{extra}", common::committed_config());
     let staged = Fixture::new(name).config(&config);
     let modules = staged.path().join("policy");
     std::fs::create_dir_all(&modules).expect("the fixture's policy directory is creatable");

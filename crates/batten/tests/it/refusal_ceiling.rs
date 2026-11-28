@@ -313,12 +313,11 @@ fn fixture(name: &str) -> PathBuf {
 }
 
 /// The committed config, as every fixture here stages it.
-const COMMITTED: &str = include_str!("../../../../batten.toml");
 
-/// [`COMMITTED`] plus the retired substitution row (CLOUD-2698): the row this
+/// The committed config ([`common::committed_config`]) plus the retired substitution row (CLOUD-2698): the row this
 /// suite's corpus refuses under.
 fn committed() -> String {
-    format!("{COMMITTED}{}", common::SUBSTITUTION_ROW)
+    format!("{}{}", common::committed_config(), common::SUBSTITUTION_ROW)
 }
 
 /// [`fixture`] for a case that sends a `SessionStart`, with the committed
@@ -725,7 +724,7 @@ fn two_contexts_in_one_clone_each_get_the_full_text() {
 /// no longer proves.
 #[test]
 fn the_session_fixture_carries_no_session_provisioning() {
-    let (startup, handlers) = session_provisioning(COMMITTED);
+    let (startup, handlers) = session_provisioning(&common::committed_config());
     assert!(
         startup > 0,
         "the committed config declares `[[startup]]` rows"

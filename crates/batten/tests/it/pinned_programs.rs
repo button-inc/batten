@@ -41,7 +41,7 @@ use common::{Fixture, run_with_stdin, stderr};
 /// one this repository actually enables.
 fn repo(name: &str) -> PathBuf {
     let staged = Fixture::new(name)
-        .config(include_str!("../../../../batten.toml"))
+        .config(&common::committed_config())
         .file("mise.toml", "[tools]\njq = \"1.7\"\n");
     // The in-repo modules that config registers, copied by ENUMERATION rather
     // than by name — `board_receipts.rs`'s reasoning, and naming them would put a

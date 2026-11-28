@@ -21,7 +21,7 @@ use common::{Fixture, stderr};
 /// `include_str!` contract `spawn_ceilings.rs` uses, so a hand-written copy of a
 /// row cannot pass over a config that says something else.
 fn repo(name: &str) -> PathBuf {
-    let staged = Fixture::new(name).config(include_str!("../../../../batten.toml"));
+    let staged = Fixture::new(name).config(&common::committed_config());
     let modules = staged.path().join("policy");
     std::fs::create_dir_all(&modules).expect("the fixture's policy directory");
     let committed = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../policy");
