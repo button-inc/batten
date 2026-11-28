@@ -1338,6 +1338,48 @@ fn held_mutate(remote: &str, repo: &Path, name: &str) -> Result<Held> {
     held_by(remote, repo, name, admissible_mutate)
 }
 
+/// Merge the reach records `pulled` holds into the local reach directory
+/// `local`, record by record (CLOUD-2959 part 4): a pulled record goes in where
+/// `local` has none of that name, or has one naming no provenance; a local
+/// record that names its provenance is never overwritten. How many went in.
+///
+/// SOUND BECAUSE NOTHING MERGED IS TRUSTED UNREAD: a merged record may have
+/// been sealed over another tree, so a merge that adds one clears `local`'s
+/// `sealed` marker, and the next sweep verifies every record through
+/// `carry_forward` rather than resuming the store whole.
+///
+/// # Errors
+///
+/// A directory cannot be read, or a record cannot be moved into place.
+fn merge_reach(local: &Path, pulled: &Path) -> Result<usize> {
+    std::fs::create_dir_all(local)?;
+    let proven = |dir: &Path| {
+        std::fs::read_to_string(dir.join("depends"))
+            .is_ok_and(|text| text.lines().any(|line| line.starts_with('P')))
+    };
+    let mut merged = 0;
+    for entry in std::fs::read_dir(pulled)? {
+        let from = entry?.path();
+        if !from.is_dir() || !from.join("case").exists() || !proven(&from) {
+            continue;
+        }
+        let Some(name) = from.file_name() else {
+            continue;
+        };
+        let to = local.join(name);
+        if to.exists() && proven(&to) {
+            continue;
+        }
+        let _ = std::fs::remove_dir_all(&to);
+        std::fs::rename(&from, &to)?;
+        merged += 1;
+    }
+    if merged > 0 {
+        let _ = std::fs::remove_file(local.join(SEALED));
+    }
+    Ok(merged)
+}
+
 /// Pull `name`'s mutate state from `remote` into the schema state `mutate`.
 ///
 /// The journal gains every line a chunk holds that it does not: appended, never
@@ -1377,11 +1419,7 @@ pub fn pull_mutate(remote: &str, repo: &Path, name: &str, mutate: &Path) -> Resu
         crate::durable::append(&journal, &fresh)?;
     }
     let dir = mutate.join(REACH_DIR);
-    let empty = std::fs::read_dir(&dir).map_or(true, |mut entries| entries.next().is_none());
-    if !dir.join(SEALED).exists()
-        && empty
-        && let Some((_, sealed, id, n)) = reach_archives(&theirs.set).into_iter().next()
-    {
+    if let Some((_, sealed, id, n)) = reach_archives(&theirs.set).into_iter().next() {
         let mut archive = Vec::new();
         for part in 1..=n {
             if let Some(bytes) = theirs
@@ -1396,9 +1434,16 @@ pub fn pull_mutate(remote: &str, repo: &Path, name: &str, mutate: &Path) -> Resu
             let _ = std::fs::remove_dir_all(&staging);
             std::fs::create_dir_all(&staging)?;
             tar::Archive::new(flate2::read::GzDecoder::new(archive.as_slice())).unpack(&staging)?;
-            let _ = std::fs::remove_dir(&dir);
-            std::fs::rename(&staging, &dir)?;
-            count += 1;
+            let empty =
+                std::fs::read_dir(&dir).map_or(true, |mut entries| entries.next().is_none());
+            if empty && !dir.join(SEALED).exists() {
+                let _ = std::fs::remove_dir(&dir);
+                std::fs::rename(&staging, &dir)?;
+                count += 1;
+            } else {
+                count += merge_reach(&dir, &staging)?;
+                let _ = std::fs::remove_dir_all(&staging);
+            }
         }
     }
     Ok(Moved {
@@ -1411,6 +1456,59 @@ pub fn pull_mutate(remote: &str, repo: &Path, name: &str, mutate: &Path) -> Resu
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// One reach record at `base/name`, proven or not.
+    fn reach_record(base: &Path, name: &str, proven: bool, marker: &str) {
+        let dir = base.join(name);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("case"), format!("{name}\tbin")).unwrap();
+        let from = if proven {
+            "Pfrom seal_dir e t 1@1\n"
+        } else {
+            ""
+        };
+        std::fs::write(dir.join("depends"), format!("D{marker}\nFf\n{from}")).unwrap();
+    }
+
+    /// Fails by: a pulled store left out because the local one is sealed
+    /// (CLOUD-2959 part 4, `receipts.rs` before it: 0 of 11,967 merged), a
+    /// proven local record overwritten, or a merge that leaves the local
+    /// `sealed` marker trusting records it never verified.
+    #[test]
+    fn a_pulled_record_is_merged_into_a_sealed_local_store() {
+        let root = crate::scratch::scratch("receipts-merge-reach");
+        let local = root.join("reach");
+        let pulled = root.join("pulled");
+        reach_record(&local, "mine", true, "local");
+        reach_record(&local, "stale", false, "local");
+        std::fs::write(local.join(SEALED), "tree").unwrap();
+        reach_record(&pulled, "mine", true, "theirs");
+        reach_record(&pulled, "stale", true, "theirs");
+        reach_record(&pulled, "new", true, "theirs");
+        reach_record(&pulled, "anon", false, "theirs");
+        assert_eq!(merge_reach(&local, &pulled).unwrap(), 2, "stale and new");
+        let read = |name: &str| std::fs::read_to_string(local.join(name).join("depends")).unwrap();
+        assert!(
+            read("mine").starts_with("Dlocal"),
+            "a proven local record stands"
+        );
+        assert!(
+            read("stale").starts_with("Dtheirs"),
+            "a proven pull replaces an unproven one"
+        );
+        assert!(
+            read("new").starts_with("Dtheirs"),
+            "a record only they held comes in"
+        );
+        assert!(
+            !local.join("anon").exists(),
+            "an unproven pull is never merged"
+        );
+        assert!(
+            !local.join(SEALED).exists(),
+            "what came in is verified before use"
+        );
+    }
 
     #[test]
     fn unset_is_off_before_any_origin_is_read() {
