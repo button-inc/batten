@@ -19377,6 +19377,7 @@ id = "test:cargo"
 # or whose task sets an `env` the argv does not carry still keys the task.
 inputs = ["."]
 tools = [
+  ["batten", "step", "config"],
   ["rustc", "--version"],
   ["cargo", "--version"],
   # THE ENVIRONMENT IT IS KEYED ON (CLOUD-2786), answered in-process: the step
@@ -19433,6 +19434,7 @@ tools = [
 id = "test:traced"
 inputs = ["."]
 tools = [
+  ["batten", "step", "config"],
   ["batten", "step", "untraced"],
   ["rustc", "--version"],
   ["cargo", "--version"],
@@ -19483,6 +19485,7 @@ tools = [
 id = "test:traced:lib"
 inputs = ["."]
 tools = [
+  ["batten", "step", "config"],
   ["batten", "step", "untraced"],
   ["rustc", "--version"],
   ["cargo", "--version"],
@@ -19540,6 +19543,7 @@ tools = [
 id = "evaluator-io-record"
 inputs = ["."]
 tools = [
+  ["batten", "step", "config"],
   ["batten", "step", "untraced"],
   ["batten", "step", "record", "--", "evaluator-io-probe"],
   ["rustc", "--version"],
@@ -19599,6 +19603,7 @@ tools = [
 id = "dist:lap"
 inputs = ["."]
 tools = [
+  ["batten", "step", "config"],
   ["batten", "step", "untraced"],
   ["ls", "target/x86_64-unknown-linux-gnu/dist/batten"],
   ["rustc", "--version"],
@@ -19660,6 +19665,7 @@ id = "enforce-tree"
 # KEEPS `.` (CLOUD-2784): every tree rule globs the whole tracked tree.
 inputs = ["."]
 tools = [
+  ["batten", "step", "config"],
   ["rustc", "--version"],
   ["cargo", "--version"],
   ["git", "merge-base", "HEAD", "origin/main"],
@@ -19679,7 +19685,7 @@ id = "policy-test"
 # top-level entries (the bundles' documents and line sources span the tree).
 # Keyed on six, a receipt answered for edits the suite never judged.
 inputs = ["."]
-tools = [["rustc", "--version"], ["cargo", "--version"]]
+tools = [["batten", "step", "config", "--", "rule", "pattern"], ["rustc", "--version"], ["cargo", "--version"]]
 
 [[step]]
 id = "perf-gate"
@@ -19689,6 +19695,7 @@ id = "perf-gate"
 # checkout). Keyed on seven, a receipt answered for trees the gate never read.
 inputs = ["."]
 tools = [
+  ["batten", "step", "config", "--", "perf", "pattern", "rule"],
   [
     "rustc",
     "--version",
@@ -19736,6 +19743,7 @@ id = "commit-check"
 # `.cargo/config{,.toml}` on every run, and the whole-trace read refused both.
 inputs = ["batten.toml", "crates", "Cargo.toml", "Cargo.lock", ".cargo"]
 tools = [
+  ["batten", "step", "config"],
   ["rustc", "--version"],
   ["cargo", "--version"],
   ["git", "log", "--format=%B", "origin/main..HEAD"],
@@ -19747,6 +19755,7 @@ id = "commit-attribution"
 # `.cargo/config{,.toml}` on every run, and the whole-trace read refused both.
 inputs = ["batten.toml", "crates", "Cargo.toml", "Cargo.lock", ".cargo"]
 tools = [
+  ["batten", "step", "config"],
   ["rustc", "--version"],
   ["cargo", "--version"],
   ["git", "log", "--format=%an%x00%ae%x00%cn%x00%ce%x00%B", "origin/main..HEAD"],
@@ -20337,6 +20346,7 @@ id = "semver"
 # 481 reads outside the four entries this row used to declare.
 inputs = ["."]
 tools = [
+  ["batten", "step", "config"],
   ["cargo", "semver-checks", "--version"],
   ["rustc", "--version"],
   ["batten", "step", "base", "--ref", "origin/main", "--", "crates", "Cargo.toml", "Cargo.lock"],
@@ -20357,6 +20367,7 @@ id = "test-replay"
 # it by case.
 inputs = ["."]
 tools = [
+  ["batten", "step", "config"],
   [
     "rustc",
     "--version",
@@ -20397,6 +20408,7 @@ tools = [
 id = "test-replay-structural"
 inputs = ["crates", "fuzz", ".batten/asked.jsonl", "batten.toml"]
 tools = [
+  ["batten", "step", "config"],
   ["rustc", "--version"],
   [
     "batten",
@@ -20420,7 +20432,7 @@ tools = [
 [[step]]
 id = "modules-ratchet"
 inputs = ["crates", "modules.lock", "batten.toml"]
-tools = [["rustc", "--version"]]
+tools = [["batten", "step", "config"], ["rustc", "--version"]]
 
 # THE THREE NARROW `it` TIERS hk reaches by name (CLOUD-1164). Each runs a filter
 # of the one test binary `test:cargo` runs whole, so each is keyed exactly as
@@ -20449,6 +20461,7 @@ inputs = [
   "libgcc_s.so.1",
 ]
 tools = [
+  ["batten", "step", "config"],
   ["rustc", "--version"],
   ["cargo", "--version"],
   ["mise", "tasks", "info", "test:reference-coverage", "--json"],
@@ -20480,6 +20493,7 @@ inputs = [
   "libgcc_s.so.1",
 ]
 tools = [
+  ["batten", "step", "config"],
   ["rustc", "--version"],
   ["cargo", "--version"],
   ["mise", "tasks", "info", "test:skill-contract", "--json"],
@@ -20509,6 +20523,7 @@ inputs = [
   "libgcc_s.so.1",
 ]
 tools = [
+  ["batten", "step", "config"],
   ["rustc", "--version"],
   ["cargo", "--version"],
   ["mise", "tasks", "info", "test:config-schema", "--json"],
@@ -20525,6 +20540,7 @@ id = "hk-drift"
 # outside the six entries this row used to declare.
 inputs = ["."]
 tools = [
+  ["batten", "step", "config"],
   ["hk", "--version"],
   ["rustc", "--version"],
 ]
@@ -20545,6 +20561,7 @@ tools = [
 id = "ci-suite"
 inputs = ["."]
 tools = [
+  ["batten", "step", "config"],
   ["batten", "step", "env", "--", "HK_SKIP_STEPS"],
   ["rustc", "--version"],
   ["cargo", "--version"],
@@ -20569,6 +20586,7 @@ tools = [
 id = "mutant-changed"
 inputs = ["."]
 tools = [
+  ["batten", "step", "config"],
   [
     "batten",
     "step",
