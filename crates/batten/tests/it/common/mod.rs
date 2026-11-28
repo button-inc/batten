@@ -877,9 +877,14 @@ pub(crate) fn batten_as(program: &Path) -> Batten {
         // that means a host sets it.
         "CLAUDE_CODE_REMOTE",
         "BATTEN_ENVIRONMENT",
-        // NOR THE HOST'S LIVE SESSION (CLOUD-2789): `wiring::live_session_root`
-        // reads the cwd of the process this names, so `doctor`'s `hook-wiring`
-        // judged the host container's session root, and
+        // NOR THE USER'S CLAUDE CODE CONFIG DIRECTORY (CLOUD-2953): it moves
+        // the user-level surface out of the pinned scratch home, so a case that
+        // inherited it would read, and repair, the developer's own settings.
+        "CLAUDE_CONFIG_DIR",
+        // NOR THE HOST'S LIVE SESSION (CLOUD-2789): the retired
+        // `wiring::live_session_root` read the cwd of the process this names
+        // (gone with CLOUD-2953), so `doctor`'s `hook-wiring` judged the host
+        // container's session root, and
         // `doctor::this_repository_is_healthy` and `init`'s read-verb case were
         // red wherever that session's wiring differed from the land's. A case
         // that means a live session sets it.

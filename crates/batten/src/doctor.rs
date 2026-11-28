@@ -1974,9 +1974,8 @@ pub struct WiringFinding {
     /// The stable reason id.
     pub reason: &'static str,
     /// Which surface this is about, as a pointer token and never an absolute
-    /// path (CLOUD-2676): the repo-relative file for a committed finding,
-    /// `session-root:<file>` for the live session's root, `~/<file>` for a
-    /// merged one. `~/`-relative is byte-stable across machines.
+    /// path (CLOUD-2676): the repo-relative file for a committed finding, or
+    /// `~/<file>` for a merged one. `~/`-relative is byte-stable across machines.
     pub file: String,
     /// The one command that repairs this finding, from [`fix_for`].
     pub fix: String,
@@ -2021,24 +2020,6 @@ fn hook_wiring_check(dir: &Path) -> Check {
 
 /// Plain `doctor`'s wiring check name.
 const HOOK_WIRING: &str = "hook-wiring";
-
-/// The surface the live session's root carries its wiring in: Claude Code's
-/// own declared file, read off [`crate::config_model::Harness::wiring`] so the core restates
-/// no consumer path (rule 1). The session root is that host's notion.
-fn session_root_surface() -> &'static str {
-    match crate::config_model::Harness::ClaudeCode
-        .wiring()
-        .map(|wiring| wiring.file)
-    {
-        Some(hook::WiringFile::Key { path, .. } | hook::WiringFile::Whole(path)) => path,
-        None => "",
-    }
-}
-
-/// The surface token the live session's root is reported under.
-fn session_root_file() -> String {
-    format!("session-root:{}", session_root_surface())
-}
 
 /// One harness's wiring diagnosis.
 ///
@@ -2096,10 +2077,6 @@ pub struct HarnessWiring {
     /// reasons. What it adds is the ARITHMETIC, never a verdict: whether a sibling
     /// here is legitimate stays that consumer's judgement.
     pub merged_siblings: usize,
-    /// How many batten registrations the live session's root carries
-    /// (CLOUD-2676): `None` when no live session is rooted above the
-    /// repository, so there is no such surface to judge.
-    pub session_root_registrations: Option<usize>,
     /// How many of this host's merged surfaces were readable.
     ///
     /// Three-valued rather than two: a merged file that is absent is the
@@ -2327,7 +2304,6 @@ fn diagnose_harness(
     dir: &Path,
     harness: crate::config_model::Harness,
     exclusive: bool,
-    session_root: Option<&Path>,
 ) -> Option<HarnessWiring> {
     let wiring = harness.wiring()?;
     let path = match wiring.file {
@@ -2352,25 +2328,15 @@ fn diagnose_harness(
     // counter names, which is the collapse the split counters were added to
     // remove one level down. It would also break `MergedTally::partitions`: the
     // five must sum to `merge_surfaces().len()`, and five zeroes do not.
-    // THE LIVE SESSION'S ROOT (CLOUD-2676): a surface the running session
-    // loads, judged by the committed-surface rules. Claude Code's alone, the one
-    // host `wiring register` writes a session root for.
-    let rooted = session_root
-        .filter(|_| harness == crate::config_model::Harness::ClaudeCode)
-        .map(|root| diagnose_session_root(root, &derived));
     let finish = |findings: &mut Vec<WiringFinding>, merged: Vec<WiringFinding>| {
         for finding in findings.iter_mut() {
             path.clone_into(&mut finding.file);
-        }
-        if let Some((root_findings, _)) = &rooted {
-            findings.extend(root_findings.iter().cloned());
         }
         findings.extend(merged);
         for finding in findings.iter_mut() {
             finding.fix = fix_for(finding.reason, harness);
         }
     };
-    let session_root_registrations = rooted.as_ref().map(|(_, count)| *count);
     let row = |mut findings: Vec<WiringFinding>, registrations, siblings| {
         let merged = diagnose_merged(dir, harness, &command, exclusive);
         finish(&mut findings, merged.findings);
@@ -2380,7 +2346,6 @@ fn diagnose_harness(
             siblings,
             merged: merged.commands,
             merged_siblings: merged.siblings,
-            session_root_registrations,
             merged_surfaces_read: merged.read,
             merged_surfaces_absent: merged.absent,
             merged_surfaces_unreadable: merged.unreadable,
@@ -2529,7 +2494,6 @@ fn diagnose_harness(
         siblings,
         merged: merged.commands,
         merged_siblings: merged.siblings,
-        session_root_registrations,
         merged_surfaces_read: merged.read,
         merged_surfaces_absent: merged.absent,
         merged_surfaces_unreadable: merged.unreadable,
@@ -2726,7 +2690,7 @@ fn merged_under(
     let surfaces = harness.merge_surfaces();
     let mut tally = MergedTally::default();
     for surface in surfaces {
-        let path = home.join(surface);
+        let path = hook::user_config_path(harness, home, surface);
         // THE SAME FILE IS NOT A SECOND AUTHORITY. Several hosts spell their
         // user-level surface and their project-level one identically, differing
         // only in the directory each is resolved against, so a checkout sitting
@@ -2778,6 +2742,19 @@ fn merged_under(
         // "looked and found none" and "could not look" have to stay apart, and a
         // counter incremented one step too early makes them the same number.
         tally.read += 1;
+        // BATTEN'S OWN IDENTICAL REGISTRATION ON THE USER SURFACE IS NOT A SECOND
+        // AUTHORITY (CLOUD-2953): the host runs one handler once however many
+        // files define it, and this is the copy every working directory loads.
+        // Only the byte-identical event map is accepted; any other spelling, or
+        // batten on any other merged surface, is still a finding.
+        if harness.user_surface() == Some(*surface)
+            && harness.wiring().is_some_and(|wiring| {
+                serde_json::Value::Object(events.clone().into_owned())
+                    == wiring::owned_events(wiring, harness, &hook::wiring_command(harness))
+            })
+        {
+            continue;
+        }
         for (event, value) in events.iter() {
             for (_, entry) in entries_under(value, harness.entry_shape()) {
                 tally.commands += 1;
@@ -2810,53 +2787,6 @@ fn merged_under(
     tally
 }
 
-/// The live session root's Claude Code surface, judged as a committed one:
-/// missing is [`FILE_MISSING`], a derived event with no batten entry is
-/// [`EVENT_UNREGISTERED`]. Answers the findings and the batten registrations
-/// it counted under the derived events (CLOUD-2676).
-fn diagnose_session_root(
-    root: &Path,
-    derived: &[(crate::config_model::Event, &'static str)],
-) -> (Vec<WiringFinding>, usize) {
-    let finding = |event: &str, reason| WiringFinding {
-        event: event.to_owned(),
-        reason,
-        file: session_root_file(),
-        fix: String::new(),
-    };
-    let surface = root.join(session_root_surface());
-    let Ok(raw) = crate::fsio::read_to_string(&surface) else {
-        return (vec![finding("", FILE_MISSING)], 0);
-    };
-    let Ok(document) = serde_json::from_str::<serde_json::Value>(&raw) else {
-        return (vec![finding("", FILE_UNREADABLE)], 0);
-    };
-    let Some(events) = crate::config_model::Harness::ClaudeCode
-        .wiring()
-        .and_then(|wiring| committed_events(&document, wiring.file))
-    else {
-        return (vec![finding("", FILE_UNREADABLE)], 0);
-    };
-    let mut findings = Vec::new();
-    let mut registrations = 0;
-    for (_, spelling) in derived {
-        let ours = events.get(*spelling).map_or(0, |value| {
-            entries_under(
-                value,
-                crate::config_model::Harness::ClaudeCode.entry_shape(),
-            )
-            .into_iter()
-            .filter(|(_, entry)| entry.contains("batten"))
-            .count()
-        });
-        if ours == 0 {
-            findings.push(finding(spelling, EVENT_UNREGISTERED));
-        }
-        registrations += ours;
-    }
-    (findings, registrations)
-}
-
 /// Diagnose the hook wiring of every harness the core knows (CLOUD-777).
 ///
 /// **Ranged over [`crate::config_model::Harness::ALL`], never a table.** Which harnesses exist
@@ -2886,16 +2816,9 @@ pub fn diagnose_hooks(dir: &Path) -> WiringReport {
         .and_then(|resolved| resolved.hook.as_ref().map(|hook| hook.exclusive))
         .unwrap_or(false);
     let declared = resolved.and_then(|resolved| resolved.wiring);
-    // Only a LIVE root strictly above the repository (CLOUD-2676): with no
-    // session, nothing loads a candidate root, and a root AT the repository is
-    // the committed file already judged.
-    let repo = crate::git::canonical(dir);
-    let session_root = wiring::live_session_root()
-        .map(|root| crate::git::canonical(&root))
-        .filter(|root| *root != repo && repo.starts_with(root));
     let harnesses: Vec<HarnessWiring> = crate::config_model::Harness::ALL
         .iter()
-        .filter_map(|harness| diagnose_harness(dir, *harness, exclusive, session_root.as_deref()))
+        .filter_map(|harness| diagnose_harness(dir, *harness, exclusive))
         .collect();
     WiringReport {
         version: config::VERSION,
@@ -4454,8 +4377,8 @@ mod tests {
             &serde_json::to_string_pretty(&wiring).unwrap(),
         );
 
-        let permissive = diagnose_harness(&dir, harness, false, None)
-            .expect("claude-code declares a wiring surface");
+        let permissive =
+            diagnose_harness(&dir, harness, false).expect("claude-code declares a wiring surface");
         assert!(
             permissive.ok,
             "undeclared: a sibling stays a count, not a failure — {:?}",
@@ -4463,8 +4386,8 @@ mod tests {
         );
         assert_eq!(permissive.siblings, 1);
 
-        let declared = diagnose_harness(&dir, harness, true, None)
-            .expect("claude-code declares a wiring surface");
+        let declared =
+            diagnose_harness(&dir, harness, true).expect("claude-code declares a wiring surface");
         assert!(!declared.ok, "declared: a sibling is a finding");
         // CONTAINMENT, NOT EQUALITY, and the reason is worth stating rather than
         // working around: `diagnose_harness` reads the MACHINE's `$HOME` for the

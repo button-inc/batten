@@ -2435,8 +2435,9 @@ const CENSUS: &[Verb] = &[
         stdin: Stdin::Nothing,
         disposition: Disposition::PointerOnly,
     },
-    // The session-root registration (CLOUD-2111). Driven with `--check`, which
-    // writes nothing; what it prints is a harness and an event name per line.
+    // The user-level registration (CLOUD-2953). Driven with `--check`, which
+    // writes nothing; what it prints is a harness and a home-relative surface
+    // per line.
     Verb {
         path: "wiring register",
         args: &["--check"],

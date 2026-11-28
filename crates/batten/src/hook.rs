@@ -166,6 +166,21 @@ pub trait HarnessExt: Sized {
     #[must_use]
     fn host_signal(self) -> Option<crate::environment::HostSignal>;
 
+    /// The directory, relative to this harness's user config directory, that
+    /// its hosted setup run writes into: the second form of
+    /// [`Self::host_signal`], read where the variable is not known to be
+    /// exported, as in a setup script (CLOUD-2953). Claude Code's cloud setup
+    /// writes its own output under `environment-manager` (measured 2026-11-27).
+    #[must_use]
+    fn host_marker(self) -> Option<&'static str>;
+
+    /// Which ONE of [`Self::merge_surfaces`] is this harness's user-level
+    /// registration surface, the one every working directory loads, or `None`
+    /// where it has none batten owns (CLOUD-2953). Home-relative, as the merged
+    /// list is; resolve it through [`user_config_path`].
+    #[must_use]
+    fn user_surface(self) -> Option<&'static str>;
+
     /// Whether this host's shell tool can run a call as a background task the
     /// host itself tracks and reports the end of: the one way the session's
     /// setup ([`crate::session_setup::DISPATCH`]) runs without holding the turn
@@ -463,6 +478,28 @@ impl HarnessExt for Harness {
     fn host_signal(self) -> Option<crate::environment::HostSignal> {
         match self {
             Harness::ClaudeCode => Some(("CLAUDE_CODE_REMOTE", "true")),
+            Harness::CodexCli
+            | Harness::CopilotCli
+            | Harness::GeminiCli
+            | Harness::Cursor
+            | Harness::ExitCode => None,
+        }
+    }
+
+    fn host_marker(self) -> Option<&'static str> {
+        match self {
+            Harness::ClaudeCode => Some("environment-manager"),
+            Harness::CodexCli
+            | Harness::CopilotCli
+            | Harness::GeminiCli
+            | Harness::Cursor
+            | Harness::ExitCode => None,
+        }
+    }
+
+    fn user_surface(self) -> Option<&'static str> {
+        match self {
+            Harness::ClaudeCode => Some(".claude/settings.json"),
             Harness::CodexCli
             | Harness::CopilotCli
             | Harness::GeminiCli
@@ -2075,6 +2112,50 @@ const COPILOT_ENTRY: EntryShape = EntryShape::Flat {
 /// literal fallback here: emitting `"hook"` when the declaration is gone would
 /// be the fourth spelling this removes, and it would report healthy.
 pub(crate) fn wiring_command(harness: Harness) -> String {
+    wiring_command_of(harness)
+}
+
+/// The prefix every Claude Code user-level surface carries under the home.
+const CLAUDE_HOME: &str = ".claude/";
+
+/// Where a home-relative merged surface of `harness` lives on this machine
+/// (CLOUD-2953): the ONE resolution `doctor`, `wiring reclaim` and the
+/// registration repair all read, so the file one writes is the file the others
+/// judge.
+///
+/// Claude Code's user config directory is `$CLAUDE_CONFIG_DIR` when it is set,
+/// and `.claude` under the home otherwise; every other harness's layout is the
+/// home's.
+pub(crate) fn user_config_path(harness: Harness, home: &Path, surface: &str) -> PathBuf {
+    let config = std::env::var_os("CLAUDE_CONFIG_DIR").filter(|dir| !dir.is_empty());
+    match (harness, config, surface.strip_prefix(CLAUDE_HOME)) {
+        (Harness::ClaudeCode, Some(config), Some(rest)) => PathBuf::from(config).join(rest),
+        _ => home.join(surface),
+    }
+}
+
+/// Whether this machine is disposable, by [`crate::environment::disposable`]
+/// over every harness's own host statement (CLOUD-2953): the variable, or the
+/// marker directory under its user config directory.
+pub(crate) fn disposable_here(home: Option<&Path>) -> bool {
+    Harness::ALL.iter().any(|harness| {
+        let marker = home.zip(harness.host_marker()).map(|(home, marker)| {
+            user_config_path(*harness, home, &format!("{CLAUDE_HOME}{marker}"))
+        });
+        crate::environment::disposable(harness.host_signal(), marker.as_deref())
+    })
+}
+
+/// The home directory every merged surface is joined to, or `None` where none
+/// resolves.
+pub(crate) fn home_dir() -> Option<PathBuf> {
+    use etcetera::BaseStrategy as _;
+    etcetera::choose_base_strategy()
+        .ok()
+        .map(|strategy| strategy.home_dir().to_path_buf())
+}
+
+fn wiring_command_of(harness: Harness) -> String {
     let argv = crate::surface::mediation_argv().unwrap_or_default();
     let mut parts = vec![crate::surface::BINARY.to_owned()];
     parts.extend(argv);

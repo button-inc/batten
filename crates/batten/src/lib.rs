@@ -3404,11 +3404,17 @@ fn run_startup(
 ) -> Result<ExitCode> {
     let config = resolve::resolve(Path::new("."), overrides)?;
     let here = Path::new(".");
-    let outcomes = if repair {
+    // THE BUILT-IN STEP FIRST, with or without a `batten.toml` (CLOUD-2953).
+    let (registration, warnings) = startup::registration(here, repair);
+    let mut outcomes = vec![registration];
+    outcomes.extend(if repair {
         startup::repair(here, &config.startup)
     } else {
         startup::evaluate(here, &config.startup)
-    };
+    });
+    for warning in &warnings {
+        writeln!(err, "{warning}")?;
+    }
     let failed = outcomes.iter().filter(|outcome| !outcome.ok).count();
 
     if json {
@@ -9841,35 +9847,25 @@ fn run_wiring(
     }
 }
 
-/// Register batten on the session root's project surface when the session is
-/// rooted above this repository (CLOUD-2111).
+/// Register batten at the user level, and with `--all` on every committed
+/// surface (CLOUD-2953).
 ///
-/// **INSIDE A SESSION THE ROOT IS THE HARNESS PROCESS'S CWD; OUTSIDE ONE, IT IS
-/// EVERY ROOT A SESSION COULD HAVE** (CLOUD-2205). Until 2026-10-11 the
-/// no-session arm answered "nothing is owed" and exited clean, and that arm is
-/// exactly the one the container's setup script runs in — the only step that
-/// executes before a session exists. The registration therefore never reached a
-/// fresh container; the `SessionStart` that would have run this row is itself
-/// one of the hooks it registers; and a whole session ran unmediated — raw
-/// tracker reads, bare proxied forge writes, every deny permitted — while this
-/// row read green.
+/// **THE USER LEVEL, BECAUSE THE HARNESS MOVES.** Claude Code loads project
+/// settings from its primary working directory, and that directory left the
+/// checkout mid-turn with no restart (measured 2026-11-27). Project files above
+/// the clone (CLOUD-2205) and the harness process's cwd (CLOUD-2676) both named a
+/// place it had already left, so this writes neither: it is the user-level half
+/// of `startup --repair`'s built-in step, through the same
+/// [`wiring::register_user`].
 ///
-/// So with no session to name the root, every strict ancestor of the repository
-/// is a candidate, stopping short of `$HOME` and everything above it: the
-/// project surface AT `$HOME` is the user-level one, which a session rooted at
-/// the repository also loads, and registering there is the double authority
-/// [`wiring::register`]'s own header refuses. A session rooted at the repository
-/// loads none of these files; one rooted above it, however deep the clone sits,
-/// loads exactly its own root's.
-///
-/// `--check` exits `2` (a violation) when a registration is owed, so a
-/// `[[startup]]` row can decide on it. The repair says when a home that is not declared disposable
-/// refused the write, because a repair that silently wrote nothing is a false
-/// green.
+/// `--check` exits `2` (a violation) when a write is owed, so a `[[startup]]`
+/// row can decide on it. On a machine that is not disposable nothing at the user
+/// level is ever owed or written.
 ///
 /// # Errors
 ///
-/// Whatever [`wiring::register`] could not write.
+/// Whatever [`wiring::register_user`] or [`wiring::register_committed`] could
+/// not write.
 fn run_wiring_register(
     check: bool,
     all: bool,
@@ -9877,9 +9873,6 @@ fn run_wiring_register(
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
     let repo = git::canonical(hook_authority_root());
-    // THE COMMITTED HALF FIRST, AND UNGATED (CLOUD-2676): these are tracked
-    // repository files, so neither the disposable-home gate nor the no-session
-    // return below applies to them.
     let mut owed = false;
     if all {
         for (harness, events) in wiring::register_committed(&repo, check)? {
@@ -9898,75 +9891,26 @@ fn run_wiring_register(
             owed |= !events.is_empty();
         }
     }
-    // One resolution, shared with `doctor` (CLOUD-2676).
-    let roots = match wiring::live_session_root() {
-        Some(root) => vec![root],
-        // Only where the environment says the home is disposable: that is the
-        // container a setup script provisions, and the only place a write would
-        // be allowed anyway. A developer machine or a CI runner outside a
-        // session owes nothing, as before — reporting a registration nobody may
-        // write would turn every `startup` there red over a non-defect.
-        None if crate::environment::disposable() => {
-            candidate_session_roots(&repo, std::env::var_os("HOME").map(PathBuf::from))
-        }
-        None => {
-            output::message(
-                mode,
-                crate::surface_table::Verbosity::Normal,
-                err,
-                "wiring register: no session root resolves, so no registration is owed",
-            )?;
-            if check && owed {
-                return Ok(ExitCode::Violation);
-            }
-            return Ok(ExitCode::Success);
-        }
+    let Some(home) = crate::hook::home_dir() else {
+        return Err(UsageError::raise(
+            "wiring register: no home directory resolves, so there is no user level to register at",
+        ));
     };
-    for root in &roots {
-        let done = wiring::register(root, &repo, check)?;
-        let verb = if done.written { "registered" } else { "owed" };
-        for event in &done.events {
-            output::message(
-                mode,
-                crate::surface_table::Verbosity::Normal,
-                err,
-                &format!(
-                    "wiring register: claude-code:{event} {verb} at {}",
-                    root.display()
-                ),
-            )?;
-        }
-        if !check && !done.authoritative && !done.events.is_empty() {
-            output::message(
-                mode,
-                crate::surface_table::Verbosity::Normal,
-                err,
-                "wiring register: this environment is not declared disposable, so nothing was \
-                 written. Set BATTEN_ENVIRONMENT=disposable where the home directory is \
-                 provisioned per session and may be taken.",
-            )?;
-        }
-        owed |= !done.events.is_empty();
+    let done = wiring::register_user(&home, Some(&repo), check)?;
+    let verb = if done.written { "registered" } else { "owed" };
+    for (harness, surface) in &done.owed {
+        output::message(
+            mode,
+            crate::surface_table::Verbosity::Normal,
+            err,
+            &format!("wiring register: {} ~/{surface} {verb}", harness.as_str()),
+        )?;
     }
+    owed |= !done.owed.is_empty();
     if check && owed {
         return Ok(ExitCode::Violation);
     }
     Ok(ExitCode::Success)
-}
-
-/// Every directory a session could be rooted at above `repo` without loading
-/// the user-level surface: each strict ancestor, nearest first, skipping `home`
-/// and every ancestor of it (CLOUD-2205).
-fn candidate_session_roots(repo: &Path, home: Option<PathBuf>) -> Vec<PathBuf> {
-    let home = home.map(|home| git::canonical(&home));
-    let mut roots = Vec::new();
-    for ancestor in repo.ancestors().skip(1) {
-        if matches!(home.as_deref(), Some(home) if home.starts_with(ancestor)) {
-            continue;
-        }
-        roots.push(ancestor.to_path_buf());
-    }
-    roots
 }
 
 /// Remove every non-batten hook registration from this host's merged surfaces.
@@ -36019,30 +35963,20 @@ mod tests {
         assert!(parse_line("2", 0).is_err());
     }
 
-    /// CLOUD-2205's bound, as a pure function over fabricated paths, so the
-    /// mutation that drops it writes nothing: driven through the binary, the
-    /// unbounded arm would register on every real ancestor of the fixture.
+    /// CLOUD-2953, which retired CLOUD-2205's candidate roots: `wiring
+    /// register` writes the user level and no ancestor of the repository. The
+    /// user-level surface is a typed fact, and it is always one of the surfaces
+    /// the host merges, so `doctor`'s census and the repair read one file.
     #[test]
-    fn candidate_roots_stop_short_of_home_and_everything_above_it() {
-        let repo = Path::new("/h/u/sessions/clones/repo");
-        assert_eq!(
-            candidate_session_roots(repo, Some(PathBuf::from("/h/u"))),
-            vec![
-                PathBuf::from("/h/u/sessions/clones"),
-                PathBuf::from("/h/u/sessions")
-            ],
-            "home itself is the user-level surface, and /h and / contain it"
-        );
-        assert_eq!(
-            candidate_session_roots(repo, Some(PathBuf::from("/root"))),
-            vec![
-                PathBuf::from("/h/u/sessions/clones"),
-                PathBuf::from("/h/u/sessions"),
-                PathBuf::from("/h/u"),
-                PathBuf::from("/h"),
-            ],
-            "a home beside the clones bounds nothing but `/`, which contains it"
-        );
+    fn every_user_surface_is_one_the_host_merges() {
+        let mut owned = 0;
+        for harness in crate::config_model::Harness::ALL {
+            if let Some(surface) = harness.user_surface() {
+                assert!(harness.merge_surfaces().contains(&surface), "{harness:?}");
+                owned += 1;
+            }
+        }
+        assert_eq!(owned, 1, "Claude Code's alone today");
     }
 
     /// RED CI AND A SPENT BUDGET ARE CLASSED FINDINGS (CLOUD-2078), each
