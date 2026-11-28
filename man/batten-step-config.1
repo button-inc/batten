@@ -1,0 +1,16 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH batten-step-config 1  batten 
+.SH NAME
+batten\-step\-config \- Print the digests of the config parts a step reads, the step cache\*(Aqs answer to the tool line
+.SH SYNOPSIS
+\fBbatten step config\fR [\fB\-h\fR|\fB\-\-help\fR] [\fIparts\fR] 
+.SH DESCRIPTION
+Print the digests of the config parts a step reads, the step cache\*(Aqs answer to the tool line
+.SH OPTIONS
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+[\fIparts\fR]
+The config parts, after `\-\-`: a `config <part> <digest>` line each, every part where none
