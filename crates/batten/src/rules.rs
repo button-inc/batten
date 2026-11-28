@@ -1389,25 +1389,28 @@ impl RuleExt for Rule {
         if self.scope == RuleScope::MediatedCall || !self.requires_path.is_empty() {
             return Half::Live;
         }
-        let facts_tree = self.census_facts().all(keyable_in_tree_half);
+        // `base-delta` is the diff against this row's own `base`, so it is keyed
+        // as a ratchet is: by that base's commit, when it is a keyed base
+        // (CLOUD-2329).
+        let base_keyed = self
+            .base
+            .as_ref()
+            .is_some_and(|base| keyed_bases.contains(base));
+        let keyable = |fact: crate::facts::Fact| {
+            keyable_in_tree_half(fact) || (fact == crate::facts::Fact::BaseDelta && base_keyed)
+        };
+        let facts_tree = self.census_facts().all(keyable);
         let tree = match self.kind {
             RuleKind::Forbid | RuleKind::Document | RuleKind::Secrets | RuleKind::Reference => {
                 facts_tree
             }
-            RuleKind::Ratchet => {
-                facts_tree
-                    && self
-                        .base
-                        .as_ref()
-                        .is_some_and(|base| keyed_bases.contains(base))
-            }
+            RuleKind::Ratchet => facts_tree && base_keyed,
             RuleKind::Policy => {
                 facts_tree
                     && bundle.is_some_and(|bundle| match bundle.tree_reads() {
                         crate::policy::Reads::Known(keys) => keys.iter().all(|key| {
                             key == TREE_MISSING_KEY
-                                || crate::facts::Fact::from_tree_key(key)
-                                    .is_some_and(keyable_in_tree_half)
+                                || crate::facts::Fact::from_tree_key(key).is_some_and(keyable)
                         }),
                         crate::policy::Reads::Opaque => false,
                     })
@@ -2289,8 +2292,12 @@ pub fn null_live_keys(document: &str) -> String {
         .and_then(serde_json::Value::as_object_mut)
     {
         for (key, slot) in tree.iter_mut() {
+            // `base-delta` is kept: only rows whose `base` is a keyed base reach
+            // the tree half (`Rule::half`), so the delta here is over one.
             let tree_fact = key == TREE_MISSING_KEY
-                || crate::facts::Fact::from_tree_key(key).is_some_and(keyable_in_tree_half);
+                || crate::facts::Fact::from_tree_key(key).is_some_and(|fact| {
+                    keyable_in_tree_half(fact) || fact == crate::facts::Fact::BaseDelta
+                });
             if !tree_fact {
                 *slot = serde_json::Value::Null;
             }
@@ -18408,6 +18415,19 @@ mod half_tests {
         assert_eq!(ratchet.half(None, &[]), Half::Live);
         assert_eq!(ratchet.half(None, &["origin/other".to_owned()]), Half::Live);
         assert_eq!(ratchet.half(None, &["origin/main".to_owned()]), Half::Tree);
+    }
+
+    #[test]
+    fn a_base_delta_row_is_tree_only_against_a_keyed_base() {
+        // CLOUD-2329: `base-delta` is the diff against the row's own `base`, so
+        // it is keyed exactly as a ratchet is, by the base's commit.
+        let delta = row(
+            RuleKind::Forbid,
+            &serde_json::json!({"base": "origin/main", "delta_sources": ["**"]}),
+        );
+        assert_eq!(delta.half(None, &[]), Half::Live);
+        assert_eq!(delta.half(None, &["origin/other".to_owned()]), Half::Live);
+        assert_eq!(delta.half(None, &["origin/main".to_owned()]), Half::Tree);
     }
 
     #[test]
