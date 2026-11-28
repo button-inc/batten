@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.222](https://github.com/button-inc/batten/compare/v0.0.221...v0.0.222) - 2026-11-28
+
+### Added
+
+- *(policy)* refuse a dispatch off the owner's model and effort
+
+### Fixed
+
+- *(policy)* dispatch-tier admits only the alias opus (CLOUD-2949 rev 2)
+
+### Other
+
+- *(preapprove)* say why the dispatch fixture pins opus and low
+
 ## [0.0.221](https://github.com/button-inc/batten/compare/v0.0.220...v0.0.221) - 2026-11-24
 
 ### Fixed
