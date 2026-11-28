@@ -496,3 +496,174 @@ fn an_unknown_group_or_jobs_value_is_a_usage_error() {
     );
     assert!(!graph.started("a"), "nothing ran");
 }
+
+// ---- a lap whose starter is killed ends with it (CLOUD-2955) ---------------
+//
+// The lap is an inner `step graph run g` under a `sh -c` that an OUTER graph
+// runs, so killing the outer one with SIGKILL leaves the inner graph's parent
+// alive and its grandparent gone: the shape a killed `mise run verify` leaves
+// (CLOUD-2904, "Defect 1"). Group `g` runs `fast`, then `hold`, each through
+// `step run`. `hold`'s body opens a FIFO the case reads, so "the body started"
+// is a pipe read and "the body is gone" is that pipe's end of file, never a
+// clock. Unchecked, the body runs on for ~30 s and then logs `end hold`.
+
+/// `hold`'s body: logs `start hold <pid>`, says so on `$TICK`, checks whether
+/// `$FIRST` names a live process, then runs `$HOLD_TICKS` tenths of a second
+/// (300 when unset) and logs `end hold`.
+const HOLD: &str = "#!/bin/sh\nexec 3>\"$TICK\"\n\
+    if [ -n \"$FIRST\" ] && [ -d /proc/$FIRST ] && ! grep -q '^State:.*Z' /proc/$FIRST/status 2>/dev/null; \
+    then echo overlap >>\"$GRAPH_LOG\"; fi\n\
+    echo \"start hold $$\" >>\"$GRAPH_LOG\"\necho \"$$\" >&3\n\
+    i=0\nwhile [ $i -lt \"${HOLD_TICKS:-300}\" ]; do sleep 0.1; i=$((i+1)); done\n\
+    echo \"end hold\" >>\"$GRAPH_LOG\"\n";
+
+/// The killed-lap table: `fast` and `hold` (after `fast`) in group `g`, each
+/// keyed on `input.txt` and one tool, and run through `step run`; group `outer` runs `g`.
+const LAP: &str = "[[step]]\nid = \"fast\"\ngroup = \"g\"\ninputs = [\"input.txt\"]\ntools = [[\"sh\", \"-c\", \"echo v1\"]]\n\
+    run = [\"sh\", \"-c\", \"exec \\\"$BATTEN_BIN\\\" step run fast -- bin/node fast\"]\n\n\
+    [[step]]\nid = \"hold\"\ngroup = \"g\"\ninputs = [\"input.txt\"]\ntools = [[\"sh\", \"-c\", \"echo v1\"]]\ndepends_on = [\"fast\"]\n\
+    run = [\"sh\", \"-c\", \"exec \\\"$BATTEN_BIN\\\" step run hold -- bin/hold\"]\n\n\
+    [[step]]\nid = \"lap\"\ngroup = \"outer\"\n\
+    run = [\"sh\", \"-c\", \"\\\"$BATTEN_BIN\\\" step graph run g; :\"]\n\n";
+
+/// A lap killed through its starter: the fixture, and the first `hold` body's
+/// pid. Returns once that body's FIFO reached end of file, i.e. once no
+/// process holds its write end, asserting the body never logged its end.
+fn killed_lap(name: &str) -> (Graph, u32) {
+    use std::io::BufRead as _;
+    let graph = Graph::new(name, LAP);
+    common::write(&graph.dir, "bin/hold", HOLD);
+    common::write(&graph.dir, "input.txt", "one\n");
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(
+            graph.dir.join("bin/hold"),
+            std::fs::Permissions::from_mode(0o755),
+        )
+        .expect("chmod");
+    }
+    common::git_in(&graph.dir, &["add", "input.txt"]);
+    common::git_in(&graph.dir, &["commit", "-qm", "input"]);
+    let tick = graph.dir.join("hold.tick");
+    rustix::fs::mkfifoat(
+        rustix::fs::CWD,
+        &tick,
+        rustix::fs::Mode::from_raw_mode(0o600),
+    )
+    .expect("mkfifo");
+    let mut starter = common::batten();
+    starter
+        .args(["step", "graph", "run", "outer"])
+        .current_dir(&graph.dir)
+        .env("GRAPH_LOG", &graph.log)
+        .env("TICK", &tick)
+        .env_remove("CI")
+        .env_remove("BATTEN_TASK_PID")
+        .env_remove("BATTEN_STEP_RECEIPT_BYPASS")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    let mut starter = starter.spawn().expect("spawn the starter");
+    let mut ticks = std::io::BufReader::new(std::fs::File::open(&tick).expect("open the FIFO"));
+    let mut line = String::new();
+    ticks.read_line(&mut line).expect("the body's pid");
+    let body: u32 = line.trim().parse().expect("a pid");
+    starter.kill().expect("SIGKILL the starter");
+    let _ = starter.wait();
+    // End of file: every holder of the write end, the body first, is gone.
+    let mut rest = String::new();
+    let _ = std::io::Read::read_to_string(&mut ticks, &mut rest);
+    assert!(
+        !graph.events().iter().any(|event| event == "end hold"),
+        "the killed lap's body ran on to its end: {:?}",
+        graph.events()
+    );
+    (graph, body)
+}
+
+/// `step graph run g` again in the fixture, `$FIRST` naming the killed body.
+fn second_lap(graph: &Graph, first: u32) -> Output {
+    common::batten()
+        .args(["step", "graph", "run", "g"])
+        .current_dir(&graph.dir)
+        .env("GRAPH_LOG", &graph.log)
+        .env("TICK", "/dev/null")
+        .env("HOLD_TICKS", "1")
+        .env("FIRST", first.to_string())
+        .env_remove("CI")
+        .env_remove("BATTEN_TASK_PID")
+        .env_remove("BATTEN_STEP_RECEIPT_BYPASS")
+        .streamed_output()
+        .expect("run the second lap")
+}
+
+/// Every live process whose parent is `parent`, read off `/proc`.
+fn children_of(parent: u32) -> Vec<u32> {
+    std::fs::read_dir("/proc")
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|entry| entry.file_name().to_str()?.parse::<u32>().ok())
+        .filter(|pid| {
+            std::fs::read_to_string(format!("/proc/{pid}/stat")).is_ok_and(|body| {
+                let rest = body.rfind(')').map_or("", |end| &body[end + 1..]);
+                let mut fields = rest.split_whitespace();
+                let state = fields.next().unwrap_or("Z");
+                state != "Z" && fields.next() == Some(parent.to_string().as_str())
+            })
+        })
+        .collect()
+}
+
+/// Fails by: the killed lap's body running on to its end (the FIFO stays open
+/// until it does), or a child of it left alive once its pipe has closed.
+#[test]
+fn a_lap_whose_starter_is_killed_leaves_no_live_child() {
+    if !cfg!(target_os = "linux") {
+        return;
+    }
+    let (_graph, body) = killed_lap("starter-killed");
+    assert!(
+        children_of(body).is_empty(),
+        "nothing the killed body started is alive"
+    );
+}
+
+/// Fails by: the second lap's `hold` body starting while the killed lap's is
+/// alive (`overlap` in the log), or the killed body running to its end.
+#[test]
+fn a_lap_after_a_killed_one_overlaps_none_of_its_steps() {
+    if !cfg!(target_os = "linux") {
+        return;
+    }
+    let (graph, first) = killed_lap("no-overlap");
+    let out = second_lap(&graph, first);
+    assert_eq!(out.status.code(), Some(0), "{}", common::stderr(&out));
+    let events = graph.events();
+    assert!(!events.iter().any(|event| event == "overlap"), "{events:?}");
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| event.starts_with("start hold"))
+            .count(),
+        2,
+        "the second lap ran its own `hold`: {events:?}"
+    );
+}
+
+/// Fails by: the second lap re-running `fast`, whose receipt the killed lap
+/// recorded before it was killed, or the killed body running to its end.
+#[test]
+fn a_lap_after_a_killed_one_hits_what_the_killed_one_recorded() {
+    if !cfg!(target_os = "linux") {
+        return;
+    }
+    let (graph, first) = killed_lap("receipts-kept");
+    let out = second_lap(&graph, first);
+    assert_eq!(out.status.code(), Some(0), "{}", common::stderr(&out));
+    let events = graph.events();
+    assert_eq!(
+        events.iter().filter(|event| *event == "start fast").count(),
+        1,
+        "`fast` ran once, in the killed lap, and was hit after: {events:?}"
+    );
+}

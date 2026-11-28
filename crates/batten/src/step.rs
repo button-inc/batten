@@ -3023,6 +3023,10 @@ pub fn run_graph(groups: &[String], jobs: Option<&str>, err: &mut dyn Write) -> 
         }
         phases.push((group, rows, bound));
     }
+    // A LAP ENDS WITH ITS STARTER (CLOUD-2955): armed once the table resolved,
+    // before any row runs, so a SIGKILLed `mise run verify` or `land` takes
+    // every node, gate and step under this graph with it.
+    crate::exec::end_with_starter();
     let mut done: BTreeMap<String, i32> = BTreeMap::new();
     let mut because: BTreeMap<String, String> = BTreeMap::new();
     let mut worst = 0_i32;
