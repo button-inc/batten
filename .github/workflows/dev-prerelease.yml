@@ -176,8 +176,8 @@ jobs:
           # this run's asset names is complete and is published here, and a
           # cancelled run never strands the tag as a draft
           # `releases/download/dev/…` 404s on. One missing an asset is refused
-          # by name, never overwritten (`release ship other`: no `--clobber`
-          # outside the release guard).
+          # by name, never overwritten (`release ship other`: no clobbering
+          # upload outside the release guard).
           state=$(gh release view "$tag" --json isDraft --jq '.isDraft' 2>/dev/null || echo absent)
           case "$state" in
             false)
