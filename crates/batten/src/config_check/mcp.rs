@@ -135,42 +135,6 @@ pub fn validate(config: &McpConfig) -> Result<()> {
         }
     }
 
-    let mut methods: Vec<&str> = Vec::new();
-    for row in &config.results {
-        if row.method.trim().is_empty() {
-            return Err(UsageError::raise(
-                "mcp: a `[[mcp.result]]` row needs a non-empty `method`; it is what selects the \
-                 reduction, and an empty one would select nothing while reading as coverage",
-            ));
-        }
-        if methods.contains(&row.method.as_str()) {
-            return Err(UsageError::raise(format!(
-                "mcp: method {:?} carries two `[[mcp.result]]` rows; which reduction applies would \
-                 depend on row order",
-                row.method
-            )));
-        }
-        methods.push(&row.method);
-        // A REDUCTION OVER NO FIELDS IS NOT A NARROWER ANSWER, it is an empty
-        // one — and an empty object handed back where a payload was expected is
-        // the silent-filter failure this whole family is built to avoid. Refused
-        // at load rather than discovered by the caller that got `{}`.
-        if row.fields.is_empty() {
-            return Err(UsageError::raise(format!(
-                "mcp: method {:?} declares no `fields`, so its reduction would be empty — which is \
-                 a dropped payload wearing the costume of a projection. Name the fields the \
-                 caller needs",
-                row.method
-            )));
-        }
-        if let Some(blank) = row.fields.iter().find(|field| field.trim().is_empty()) {
-            return Err(UsageError::raise(format!(
-                "mcp: method {:?} declares an empty field name ({blank:?}); a field that names \
-                 nothing can never be found and reads as a projection that dropped it",
-                row.method
-            )));
-        }
-    }
     Ok(())
 }
 

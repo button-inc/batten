@@ -6,8 +6,8 @@
 //! GRANTS, and its module states in as many words that registration happens in
 //! the launcher — outside every gate here. So a session whose harness registers
 //! the connector anyway keeps the raw tool on the model's surface, and the
-//! `[[mcp.result]]` reduction beside it decides nothing: the two routes return
-//! the same payload and the cheaper-looking one wins.
+//! verb beside it decides nothing: the two routes return the same payload and
+//! the cheaper-looking one wins.
 //!
 //! It won. Measured on the grooming session that dispatched this work: raw
 //! `get_issue` 12.2 MB over 755 calls and raw `save_issue` 7.1 MB over 517 —

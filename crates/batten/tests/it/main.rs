@@ -293,7 +293,6 @@ mod mcp_allow;
 #[cfg(unix)]
 mod mcp_attach;
 mod mcp_dispatch;
-mod mcp_reduce_array;
 mod mcp_spawn;
 mod mcp_timeout_budget;
 mod measure_and_edit_routes;

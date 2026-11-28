@@ -4853,11 +4853,9 @@ fn provisioned_binary(binary: &str, overrides: &Overrides) -> Option<PathBuf> {
 
 /// `batten mcp call` (CLOUD-1260).
 ///
-/// **Three layers, and each is a different answer.** Dispatch resolves the wiring
-/// a declared source names, makes the call the session was going to make anyway,
-/// and stores the response whole. Reduction turns the stored response into what a
-/// `[[mcp.result]]` row declares. What reaches the caller is a pointer, a delta
-/// and that reduction; the payload reaches the store and stops there.
+/// Dispatch resolves the wiring a declared source names, makes the call the
+/// session was going to make anyway, stores the response whole, and prints it
+/// whole (CLOUD-2956): bounding what reaches a context is the hooks' job.
 ///
 /// # Errors
 ///

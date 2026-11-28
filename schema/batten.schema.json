@@ -3132,7 +3132,7 @@
       ]
     },
     "McpConfig": {
-      "description": "The `[mcp]` table: where the wiring lives, and what to return instead of a\npayload.",
+      "description": "The `[mcp]` table: where the wiring lives, and which servers' permission\nrules travel.",
       "type": "object",
       "properties": {
         "permission_aliases": {
@@ -3141,13 +3141,6 @@
           "items": {
             "type": "string",
             "maxLength": 1536
-          }
-        },
-        "result": {
-          "description": "What to return instead of a method's full response.\n\nA method with no row here is dispatched and returned whole.",
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/ResultRow"
           }
         },
         "source": {
@@ -4679,26 +4672,6 @@
         }
       ]
     },
-    "Reduce2": {
-      "description": "How a [`ResultRow`] turns a response into something rule 4 permits.\n\nA closed set rather than an expression language, for\n[`crate::facts::Reduction`]'s reason exactly: every member is bounded by\nconstruction, so no row can declare a reduction that yields the payload back.",
-      "oneOf": [
-        {
-          "description": "The declared fields, with their values passed through as the payload\ncarries them.\n\nThe read-side answer. What bounds it is the DECLARATION — a field nobody\nnamed never leaves the store — so a consumer choosing its own field set is\nchoosing its own cost.",
-          "type": "string",
-          "const": "project"
-        },
-        {
-          "description": "The declared fields, each held to a bounded SCALAR.\n\nThe write-side answer (CLOUD-1122), and it differs from [`Reduce::Project`]\nin KIND rather than in degree: a field whose value runs past [`TOKEN_MAX`],\nor is a container rather than a scalar, is **absent** rather than\ntruncated, because a prefix of somebody's issue body is still their issue\nbody. So this arm structurally cannot echo a body however the row is\nwritten, where `project` leaves that to the declaration.\n\n# Why the bound is length and not [`crate::facts::Reduction::Token`]'s\n\nThat reduction additionally refuses any value carrying whitespace, and it\nis right to: its product reaches the POLICY INPUT, where a module could\nlift a sentence into a `subjects` pointer, so \"is this already a token\"\nis the question worth asking. This arm's product reaches the CALLER, and\nthe thing being kept out is a 15k-character description — which the length\nbound stops on its own.\n\nCopying the whitespace clause across was this row's own near-miss,\nmeasured before it shipped: `save_issue` answers `status = \"In Progress\"`,\nso the arm would have silently dropped the one field CLOUD-1122 names in\nits remedy — `{id, status, handle}` — while every test still passed. A\nbound borrowed from a surface with a different threat model is how a\nreduction quietly stops answering the question it was built for.",
-          "type": "string",
-          "const": "acknowledge"
-        },
-        {
-          "description": "[`Reduce::Project`], applied to EVERY element of an array node.\n\nThe list-side answer (CLOUD-1380). The other two arms do one flat\nfield-pick against the node a row names, so a response whose payload is an\narray of objects is unreducible by either: naming the array as `node` makes\nevery field lookup miss, and leaving `node` at the root keeps the array\nwhole and reduces nothing. Measured before this arm existed, a\n`list_issues` call reported `undeclared` and **emitted 20,366 bytes against\n17,313 stored** — more out than in, because an undeclared result is handed\nback re-serialised rather than reduced.\n\n`node` names the array and the declared `fields` are read from each\nelement, so one row describes both halves and no second field vocabulary\nappears. The projected elements come back under the array's own key, which\nis what lets a consumer read the reduction by the path it reads the\nresponse by.\n\n# Its bound is a different KIND from the other two, stated rather than\nabsorbed\n\n`project` and `acknowledge` are bounded by the DECLARATION alone: a field\nnobody named never leaves the store, so the reduction's size is fixed\nwhatever the payload holds. This arm is bounded per element by the\ndeclaration and **in count by the page the caller asked for** — a function\nof the request rather than of the response. That is weaker than the other\ntwo, and it is the enum's contract met rather than dodged: no row can\ndeclare a reduction that yields the payload back, but a caller asking for a\nthousand rows does get a thousand projected rows.\n\nWhich is why the scalar siblings are carried and containers are not:\n`hasNextPage` and `cursor` are what make the page size a thing the caller\ncontrols, so dropping them would leave paging unanswerable — the reduction\nwould satisfy every size predicate by destroying the one mechanism that\nbounds it. A container sibling is refused for [`Reduce::Acknowledge`]'s\nreason exactly: a shape whose size the caller did not bound.",
-          "type": "string",
-          "const": "each"
-        }
-      ]
-    },
     "Reduction": {
       "description": "How a [`CaptureQuery`] turns a node into something rule 4 permits.\n\nA closed set rather than an open expression language, deliberately: every\nmember is bounded by construction, so no row can declare a reduction that\nyields prose. An `extract` or `matches` arm would reopen exactly that.",
       "oneOf": [
@@ -4737,43 +4710,6 @@
           "type": "string",
           "const": "mise"
         }
-      ]
-    },
-    "ResultRow": {
-      "description": "One `[[mcp.result]]` row: what to hand back instead of a method's response.",
-      "type": "object",
-      "properties": {
-        "embedded": {
-          "description": "Whether the node's scalar text is itself a document to parse.\n\nA server that frames its payload as text carrying JSON is common and is\nnot something the engine may assume: a row says so, and a row that says so\nwrongly gets could-not-look rather than a reduction over the wrong tree.",
-          "type": "boolean"
-        },
-        "fields": {
-          "description": "The fields kept, in the order they are written.\n\nTop-level keys of the payload the row's `node` reaches. A declared field\nthe payload does not carry is ABSENT from the reduction rather than\npresent and null: \"the row does not have this\" and \"the reduction dropped\nit\" are different answers.",
-          "type": "array",
-          "items": {
-            "type": "string",
-            "maxLength": 1536
-          }
-        },
-        "method": {
-          "description": "The method this row reduces. The consumer's vocabulary, matched exactly.",
-          "type": "string",
-          "maxLength": 1536
-        },
-        "node": {
-          "description": "Where the payload sits inside the JSON-RPC result, in [`Node::at`]'s\nspelling. An empty string is the result itself.\n\nDeclared rather than known, because how a server frames a payload is the\nserver's business and this crate holds no opinion about it.",
-          "type": "string",
-          "maxLength": 1536
-        },
-        "reduce": {
-          "description": "What to make of the response.",
-          "$ref": "#/$defs/Reduce2"
-        }
-      },
-      "additionalProperties": false,
-      "required": [
-        "method",
-        "reduce"
       ]
     },
     "Returns": {

@@ -2286,8 +2286,8 @@ pub enum ExecProgress {
 
 // ---- `mcp` (CLOUD-2789: moved from `mcp`, which re-exports it) ----
 
-/// The `[mcp]` table: where the wiring lives, and what to return instead of a
-/// payload.
+/// The `[mcp]` table: where the wiring lives, and which servers' permission
+/// rules travel.
 #[derive(
     Debug, Clone, Default, PartialEq, Eq, serde::Deserialize, serde::Serialize, schemars::JsonSchema,
 )]
@@ -2301,11 +2301,6 @@ pub struct McpConfig {
     /// harness to believe when two are installed.
     #[serde(default, rename = "source", skip_serializing_if = "Vec::is_empty")]
     pub sources: Vec<McpSource>,
-    /// What to return instead of a method's full response.
-    ///
-    /// A method with no row here is dispatched and returned whole.
-    #[serde(default, rename = "result", skip_serializing_if = "Vec::is_empty")]
-    pub results: Vec<ResultRow>,
     /// Server names whose committed permission rules apply under WHATEVER key the
     /// host exposes the server as this session (CLOUD-191, CLOUD-843).
     ///
@@ -2324,40 +2319,6 @@ pub struct McpConfig {
     /// engine inferring it from a selector written for dispatch.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub permission_aliases: Vec<String>,
-}
-
-/// One `[[mcp.result]]` row: what to hand back instead of a method's response.
-#[derive(
-    Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize, schemars::JsonSchema,
-)]
-#[serde(deny_unknown_fields)]
-pub struct ResultRow {
-    /// The method this row reduces. The consumer's vocabulary, matched exactly.
-    pub method: String,
-    /// What to make of the response.
-    pub reduce: Reduce,
-    /// The fields kept, in the order they are written.
-    ///
-    /// Top-level keys of the payload the row's `node` reaches. A declared field
-    /// the payload does not carry is ABSENT from the reduction rather than
-    /// present and null: "the row does not have this" and "the reduction dropped
-    /// it" are different answers.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub fields: Vec<String>,
-    /// Where the payload sits inside the JSON-RPC result, in [`Node::at`]'s
-    /// spelling. An empty string is the result itself.
-    ///
-    /// Declared rather than known, because how a server frames a payload is the
-    /// server's business and this crate holds no opinion about it.
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub node: String,
-    /// Whether the node's scalar text is itself a document to parse.
-    ///
-    /// A server that frames its payload as text carrying JSON is common and is
-    /// not something the engine may assume: a row says so, and a row that says so
-    /// wrongly gets could-not-look rather than a reduction over the wrong tree.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub embedded: bool,
 }
 
 /// One `[[mcp.source]]` row: a file that carries a server's transport, endpoint
@@ -3030,86 +2991,6 @@ pub struct EmbeddedDecl {
     /// (`a.b.c`); the engine walks maps only, so a key under a sequence is a
     /// miss rather than a guess.
     pub key: String,
-}
-
-/// How a [`ResultRow`] turns a response into something rule 4 permits.
-///
-/// A closed set rather than an expression language, for
-/// [`crate::facts::Reduction`]'s reason exactly: every member is bounded by
-/// construction, so no row can declare a reduction that yields the payload back.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize, serde::Serialize, schemars::JsonSchema,
-)]
-#[serde(rename_all = "lowercase")]
-pub enum Reduce {
-    /// The declared fields, with their values passed through as the payload
-    /// carries them.
-    ///
-    /// The read-side answer. What bounds it is the DECLARATION — a field nobody
-    /// named never leaves the store — so a consumer choosing its own field set is
-    /// choosing its own cost.
-    Project,
-    /// The declared fields, each held to a bounded SCALAR.
-    ///
-    /// The write-side answer (CLOUD-1122), and it differs from [`Reduce::Project`]
-    /// in KIND rather than in degree: a field whose value runs past [`TOKEN_MAX`],
-    /// or is a container rather than a scalar, is **absent** rather than
-    /// truncated, because a prefix of somebody's issue body is still their issue
-    /// body. So this arm structurally cannot echo a body however the row is
-    /// written, where `project` leaves that to the declaration.
-    ///
-    /// # Why the bound is length and not [`crate::facts::Reduction::Token`]'s
-    ///
-    /// That reduction additionally refuses any value carrying whitespace, and it
-    /// is right to: its product reaches the POLICY INPUT, where a module could
-    /// lift a sentence into a `subjects` pointer, so "is this already a token"
-    /// is the question worth asking. This arm's product reaches the CALLER, and
-    /// the thing being kept out is a 15k-character description — which the length
-    /// bound stops on its own.
-    ///
-    /// Copying the whitespace clause across was this row's own near-miss,
-    /// measured before it shipped: `save_issue` answers `status = "In Progress"`,
-    /// so the arm would have silently dropped the one field CLOUD-1122 names in
-    /// its remedy — `{id, status, handle}` — while every test still passed. A
-    /// bound borrowed from a surface with a different threat model is how a
-    /// reduction quietly stops answering the question it was built for.
-    Acknowledge,
-    /// [`Reduce::Project`], applied to EVERY element of an array node.
-    ///
-    /// The list-side answer (CLOUD-1380). The other two arms do one flat
-    /// field-pick against the node a row names, so a response whose payload is an
-    /// array of objects is unreducible by either: naming the array as `node` makes
-    /// every field lookup miss, and leaving `node` at the root keeps the array
-    /// whole and reduces nothing. Measured before this arm existed, a
-    /// `list_issues` call reported `undeclared` and **emitted 20,366 bytes against
-    /// 17,313 stored** — more out than in, because an undeclared result is handed
-    /// back re-serialised rather than reduced.
-    ///
-    /// `node` names the array and the declared `fields` are read from each
-    /// element, so one row describes both halves and no second field vocabulary
-    /// appears. The projected elements come back under the array's own key, which
-    /// is what lets a consumer read the reduction by the path it reads the
-    /// response by.
-    ///
-    /// # Its bound is a different KIND from the other two, stated rather than
-    /// absorbed
-    ///
-    /// `project` and `acknowledge` are bounded by the DECLARATION alone: a field
-    /// nobody named never leaves the store, so the reduction's size is fixed
-    /// whatever the payload holds. This arm is bounded per element by the
-    /// declaration and **in count by the page the caller asked for** — a function
-    /// of the request rather than of the response. That is weaker than the other
-    /// two, and it is the enum's contract met rather than dodged: no row can
-    /// declare a reduction that yields the payload back, but a caller asking for a
-    /// thousand rows does get a thousand projected rows.
-    ///
-    /// Which is why the scalar siblings are carried and containers are not:
-    /// `hasNextPage` and `cursor` are what make the page size a thing the caller
-    /// controls, so dropping them would leave paging unanswerable — the reduction
-    /// would satisfy every size predicate by destroying the one mechanism that
-    /// bounds it. A container sibling is refused for [`Reduce::Acknowledge`]'s
-    /// reason exactly: a shape whose size the caller did not bound.
-    Each,
 }
 
 /// A directory the crate can name on its own, for a source whose file does not
