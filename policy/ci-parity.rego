@@ -1821,6 +1821,7 @@ task_cargo contains cmd if {
 	some raw in split(task_run("test:cargo"), "\n")
 	parts := split(trim_space(raw), " step run test:cargo ")
 	count(parts) == 2
+
 	# The step's own options (`--shards N`, 649cc9ce4) sit before `--`; the
 	# statement is everything after it.
 	tail := split(concat("", [" ", parts[1]]), " -- ")
