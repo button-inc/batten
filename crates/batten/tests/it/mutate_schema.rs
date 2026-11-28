@@ -1576,3 +1576,25 @@ fn a_reach_killed_again_and_again_converges() {
         );
     }
 }
+
+/// Fails by: reach record saying one time for the whole stage, so a lap that
+/// spends 1,655 s re-running 30 cases cannot say which phase spent it
+/// (CLOUD-2959): carry, listing, suite, collect and the stable judge each
+/// say their own seconds.
+#[test]
+fn reach_record_prints_a_line_per_phase() {
+    let _ = common::require_bin("nextest", "cargo-nextest");
+    let repo = seeded("mutate-schema-phases");
+    let file = listing("mutate-schema-phases-listing");
+    let output = common::batten()
+        .args(["__mutate-schema", &file, "2"])
+        .current_dir(&repo)
+        .env_remove("CI")
+        .streamed_output()
+        .expect("run batten");
+    let said = common::stdout(&output);
+    for phase in ["carry", "listing", "suite", "collect", "stable"] {
+        let line = format!("mutate schema: stage reach {phase} took ");
+        assert!(said.contains(&line), "{line:?} in {said}");
+    }
+}
