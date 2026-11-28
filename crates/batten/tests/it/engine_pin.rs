@@ -639,7 +639,8 @@ fn a_followed_pin_names_itself_once() {
 /// a verdict (`2`), names the one route to a release, and writes nothing.
 #[test]
 fn require_source_refuses_a_release_pin_and_names_the_install() {
-    let config = format!("version = 1\nengine = {{ release = \"{RELEASE}\" }}\n");
+    let release = this_build();
+    let config = format!("version = 1\nengine = {{ release = \"{release}\" }}\n");
     let dir = repo("engine-pin-require-source-release", &config);
     let output = run(&shared(), &dir, &["engine", "pin", "--require-source"]);
     assert_eq!(output.status.code(), Some(2), "{}", text(&output));
