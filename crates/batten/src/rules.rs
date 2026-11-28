@@ -2256,31 +2256,14 @@ pub fn partition_half(
 /// Whether the tree half may read `fact`: a tree fact, or out-of-tree state
 /// whose exact bytes [`crate::step::tree_inputs_digest`] folds into the half's
 /// key, so a receipt over it is a hit only on identical state (CLOUD-2329).
-/// The recorder stores are the second kind: [`recorded_for_digest`] digests
-/// precisely what [`recorded_stores`] hands the run.
+/// The recorder stores are the second kind: [`crate::recorder::recorded_for_digest`]
+/// digests precisely what [`crate::recorder::recorded_stores`] hands the run.
 pub(crate) fn keyable_in_tree_half(fact: crate::facts::Fact) -> bool {
     fact.subject() == crate::facts::Subject::Tree
         || matches!(
             fact,
             crate::facts::Fact::Records | crate::facts::Fact::RecordsBlocked
         )
-}
-
-/// The recorder stores a run at `root` reads, as one canonical string for the
-/// tree half's inputs digest. Without a loadable config the engine's own
-/// verb-written stores are still read, as [`recorded_stores`] reads them
-/// whatever the consumer declared.
-pub(crate) fn recorded_for_digest(root: &Path) -> Option<String> {
-    let config = crate::config::load(&root.join(crate::config_model::CONFIG_FILE)).ok();
-    let (records, blocked) = match &config {
-        Some(config) => recorded_stores(
-            root,
-            &config.recorders,
-            crate::policy::Vocabulary::from(config),
-        ),
-        None => recorded_stores(root, &[], crate::policy::Vocabulary::EMPTY),
-    };
-    serde_json::to_string(&(records, blocked)).ok()
 }
 
 pub fn null_live_keys(document: &str) -> String {
@@ -2504,7 +2487,8 @@ fn run(
     // liveness depend on a table it has nothing to do with.
     // `record_key`, not `current_branch`: the key the producers wrote under, which
     // on a detached HEAD (every CI checkout) is the commit rather than nothing.
-    let (records, records_blocked) = recorded_stores(root, recorders, vocabulary);
+    let (records, records_blocked) =
+        crate::recorder::recorded_stores(root, recorders, vocabulary.records);
 
     // The union the engine DECIDES against, built once for the run (CLOUD-1220).
     // `registry_for` is the one authority on it, and a vendored class replaces a
@@ -2968,122 +2952,6 @@ fn dedup_scoped(findings: &mut Vec<Finding>) {
     });
 }
 
-/// Read each declared recorder's branch-keyed record, skipping any that is not
-/// there or cannot be read.
-///
-/// A skipped record is ABSENT from the map rather than present and empty, which
-/// is the could-not-look channel this whole model keeps open: the gate reading
-/// this passes on absence, so a fabricated empty list would be a measured
-/// nothing and would silently satisfy a predicate about the record's contents.
-///
-/// Keyed by the RECORD, not by the recorder row. Several rows may write one
-/// file — that many-to-one is the recorder model's own — so reading per row
-/// would open the same file once per row and project the same lines under
-/// several names.
-/// The recorder could-not-look lines this branch accumulated (CLOUD-1126).
-///
-/// **Last write wins per recorder, deliberately.** The store is append-only, so a
-/// row blocked twice appears twice; a reader wants the current answer rather than
-/// a history, and the later line is the one the branch is living with. A recorder
-/// that was blocked and later answered still appears here — this channel records
-/// that a call could not be looked at, not that the row never succeeded, and
-/// collapsing those would make the entry mean something no writer wrote.
-///
-/// A malformed line is skipped rather than judged, matching every other record
-/// reader here: the writer already refused a bad line, so anything unparseable at
-/// read time is a torn store and not an author's claim.
-fn recorder_blocked(git_dir: &std::path::Path, branch: &str) -> BTreeMap<String, String> {
-    let claim = crate::claim::claimed_token(&git_dir.join("batten-receipts"), branch);
-    let path = crate::recorder::blocked_path(git_dir, branch, claim.as_deref());
-    let Ok(text) = crate::fsio::read_to_string(path) else {
-        return BTreeMap::new();
-    };
-    text.lines()
-        .filter_map(|line| {
-            let (recorder, reason) = line.split_once(' ')?;
-            (!recorder.is_empty() && !reason.is_empty())
-                .then(|| (recorder.to_owned(), reason.to_owned()))
-        })
-        .collect()
-}
-
-// THE PROJECTION'S OWN DISCRIMINATION (CLOUD-1810). The first mutation is the
-// defect this row fixed, restored: with the declared names dropped from the
-// chain, a `record named` family reaches no module and its rule reports clean.
-// The second replaces the declaration with a hardcoded name, which is the
-// ambient sweep this table exists to refuse — it passes the present case and
-// only a case asserting that an UNDECLARED family stays unprojected can see it.
-fn recorder_records(
-    git_dir: &std::path::Path,
-    branch: &str,
-    recorders: &[crate::config_model::RecorderDeclared],
-    // The verb-written families this repository declares (CLOUD-1810). A THIRD
-    // source beside the two below rather than an extension of either, because the
-    // three differ in who writes them: a `[[recorder]]` row is filled from a
-    // mediated tool call, `verb_written` names the stores the ENGINE owns both
-    // halves of, and these are filled by a producer calling `record named`.
-    //
-    // Without it a `record named` family was in no source at all, so its key never
-    // reached `input.tree.records`, every rule beneath it was undefined, and the
-    // row reading it reported clean over a record that said otherwise.
-    families: &[crate::config_model::RecordDeclared],
-    verb_written: &[&str],
-) -> BTreeMap<String, Vec<String>> {
-    let mut found: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    // The declared stores first, then the engine's own. Order decides nothing —
-    // the names cannot collide, because a `[[recorder]]` naming a verb-written
-    // record would be a second writer for one store and `config lint` refuses it
-    // — but reading declared config first keeps the consumer's table the one a
-    // reader looks at when a name is ambiguous.
-    let names = recorders
-        .iter()
-        .map(|recorder| recorder.record.as_str())
-        .chain(families.iter().map(|family| family.record.as_str()))
-        .chain(verb_written.iter().copied());
-    // THE SAME PARTITION THE WRITER USED (CLOUD-1300). A branch name outlives the
-    // branch it described, so reading by name alone let this attempt read the
-    // previous one's lines — and the dangerous direction is the silent one, where a
-    // key from a merged PR's record exempts a row the current PR does not close.
-    // Resolved once, for `append_all`'s reason: every record on this run belongs to
-    // one attempt.
-    //
-    // It partitions the VERB-WRITTEN stores too, and that is the merge of these two
-    // changes rather than either one: the engine's own records are keyed by branch
-    // exactly as a declared recorder's are, so leaving them unpartitioned would have
-    // reopened the defect on the half that arrived later.
-    let claim = crate::claim::claimed_token(&git_dir.join("batten-receipts"), branch);
-    for name in names {
-        if found.contains_key(name) {
-            continue;
-        }
-        // THE CLAIM RECEIPT IS NEVER PARTITIONED BY ITS OWN TOKEN, and it cannot
-        // be: `claimed_token` DERIVES the partition from that very file, so
-        // keying it by the answer it produces is circular — the reader looks for
-        // `claim.<branch>.<token>`, finds nothing, and the record vanishes.
-        //
-        // Measured rather than reasoned: `plan-complete`'s anti-vacuity arm went
-        // red when this was missed. That module asks whether the branch pulled a
-        // row before it asks whether the row was planned, so an unreadable claim
-        // record does not merely lose one key — it stops the predicate deciding
-        // at all, which is a gate switched off rather than a finding moved.
-        let partition = if name == "claim" {
-            None
-        } else {
-            claim.as_deref()
-        };
-        let path = crate::recorder::record_path(git_dir, name, branch, partition);
-        // ABSENT STAYS ABSENT, and that is the three-valued read this whole
-        // surface rests on: an unreadable store leaves the key out of the map so
-        // a module sees *does not hold*, where an empty file is a key whose value
-        // is the empty list — "nothing was recorded" rather than "nothing looked".
-        let Ok(text) = crate::fsio::read_to_string(&path) else {
-            continue;
-        };
-        found.insert(name.to_owned(), text.lines().map(str::to_owned).collect());
-    }
-    found
-}
-
 /// Apply one rule to the pre-collected, sorted `files` list.
 ///
 /// Returns `Some(reason)` when the rule **did not evaluate** — which is not the
@@ -3094,32 +2962,6 @@ fn recorder_records(
 /// the provisions and bundles the config carries. Grouped rather than passed
 /// one by one because it is exactly the set `run` hoists above its loop, and
 /// because it grows by a field every time an acquisition row lands.
-/// The record stores a run projects: the recorder and family lines, and the
-/// blocked rows (CLOUD-1126) — both read UNCONDITIONALLY for `VERB_WRITTEN`'s
-/// reason, since the engine owns both the writer and the reader, so there is no
-/// declaration a consumer could forget and nothing to make the read conditional
-/// on. The tree half reads both too: their exact contents are folded into its
-/// inputs digest by [`recorded_for_digest`] (CLOUD-2329).
-fn recorded_stores(
-    root: &Path,
-    recorders: &[crate::config_model::RecorderDeclared],
-    vocabulary: crate::policy::Vocabulary<'_>,
-) -> (BTreeMap<String, Vec<String>>, BTreeMap<String, String>) {
-    match (crate::git::git_dir(root), crate::git::record_key(root)) {
-        (Ok(git_dir), Ok(branch)) => (
-            recorder_records(
-                &git_dir,
-                &branch,
-                recorders,
-                vocabulary.records,
-                crate::config_check::record::VERB_WRITTEN,
-            ),
-            recorder_blocked(&git_dir, &branch),
-        ),
-        _ => (BTreeMap::new(), BTreeMap::new()),
-    }
-}
-
 struct RunInputs<'a> {
     /// Which half of a split `enforce` this run judges (step 13a); under
     /// [`Half::Tree`] the tree document passes through [`null_live_keys`].
@@ -16407,7 +16249,7 @@ unlanded = [\"src/draft.rs\", \"src/generated/**\"]
         fs::create_dir_all(path.parent().expect("a directory")).expect("mkdir");
         fs::write(&path, "one first\nhalf \n alone\nbare\none second\n").expect("write");
         assert_eq!(
-            recorder_blocked(&git_dir, "feature/x"),
+            crate::recorder::recorder_blocked(&git_dir, "feature/x"),
             BTreeMap::from([(String::from("one"), String::from("second"))])
         );
     }
@@ -16426,7 +16268,13 @@ unlanded = [\"src/draft.rs\", \"src/generated/**\"]
         fs::write(receipts.join("plan.b"), "stale\n").expect("unpartitioned");
         fs::write(receipts.join("claim.b.CLOUD-1"), "wrong\n").expect("decoy");
         assert_eq!(
-            recorder_records(&git_dir, "b", &[], &[], &["claim", "plan", "absent"]),
+            crate::recorder::recorder_records(
+                &git_dir,
+                "b",
+                &[],
+                &[],
+                &["claim", "plan", "absent"]
+            ),
             BTreeMap::from([
                 (String::from("claim"), vec![String::from("CLOUD-1")]),
                 (
