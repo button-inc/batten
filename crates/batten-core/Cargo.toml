@@ -18,10 +18,10 @@ authors.workspace = true
 
 [dependencies]
 anyhow.workspace = true
-batten-base = { path = "../batten-base", version = "=0.0.222" }
-batten-facts = { path = "../batten-facts", version = "=0.0.222" }
-batten-fsio = { path = "../batten-fsio", version = "=0.0.222" }
-batten-stream = { path = "../batten-stream", version = "=0.0.222" }
+batten-base = { path = "../batten-base", version = "=0.0.221" }
+batten-facts = { path = "../batten-facts", version = "=0.0.221" }
+batten-fsio = { path = "../batten-fsio", version = "=0.0.221" }
+batten-stream = { path = "../batten-stream", version = "=0.0.221" }
 compio.workspace = true
 etcetera.workspace = true
 flate2.workspace = true
@@ -43,7 +43,7 @@ toml.workspace = true
 
 [dev-dependencies]
 # `lease` and `main_watch` cases stand up `fetch` and `rest` fixtures.
-batten-base = { path = "../batten-base", version = "=0.0.222", features = ["seam"] }
+batten-base = { path = "../batten-base", version = "=0.0.221", features = ["seam"] }
 
 [target.'cfg(unix)'.dependencies]
 rustix.workspace = true
