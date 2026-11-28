@@ -544,7 +544,7 @@ precondition = "the refusal is the fixture's point and there is nothing to fix"
 [[step]]
 id = "enforce-tree"
 inputs = ["."]
-tools = [[{exe:?}, "enforce", "--half", "tree", "--inputs-digest"]]
+tools = [[{exe:?}, "enforce", "--half", "tree", "--inputs-digest"], ["batten", "step", "config"]]
 "#,
         exe = env!("CARGO_BIN_EXE_batten")
     )
