@@ -1181,6 +1181,14 @@ pub fn row_for<'a>(config: &'a McpConfig, method: &str) -> Option<&'a ResultRow>
 ///
 /// A pure function of the result, so a case can drive the verb's whole answer
 /// without a listener; the verb writes these and adds nothing of its own.
+///
+/// # The server's whole answer, never a reduction of it (CLOUD-2956)
+///
+/// Stdout is the payload exactly as the capture store holds it, so the verb's
+/// output pipes into `jq` with every field the server sent. Bounding what reaches
+/// an agent's context is the hooks' job alone: they see every tool call, this
+/// verb's included, and a second reducer here ran where no hook could see what it
+/// dropped, for callers that are programs with no context to protect.
 #[derive(Debug)]
 pub struct Report {
     /// The document printed on stdout, without its trailing newline.
@@ -1189,62 +1197,27 @@ pub struct Report {
     pub stderr: Vec<String>,
     /// The code the verb returns.
     pub exit: crate::exit::ExitCode,
-    /// Whether a declared row narrowed the answer.
-    pub reduced: bool,
 }
 
 /// Decide [`Report`] for one dispatched result.
 ///
 /// # Errors
 ///
-/// Only when the answer cannot be serialized.
+/// Only when the payload cannot be serialized.
 pub fn report(
-    config: &McpConfig,
     result: &serde_json::Value,
     method: &str,
     source: &str,
     handle: &str,
 ) -> Result<Report> {
     let payload = payload(result);
-    let whole = serde_json::to_vec(&payload.value)?;
+    // `to_string` writes the bytes `to_vec` writes, which is what the store holds.
+    let stdout = serde_json::to_string(&payload.value)?;
     let outcome = outcome(result, &payload, method, source, handle);
-    let declared = row_for(config, method);
-    let reduced = declared
-        .filter(|_| outcome.projectable)
-        .and_then(|row| reduce(row, &payload.value));
-    let disposition = match (declared, &reduced) {
-        (Some(_), Some(_)) => "reduced",
-        (Some(_), None) => "unreduced",
-        (None, _) => "undeclared",
-    };
-    let mut stderr = Vec::new();
-    if disposition == "unreduced" && outcome.projectable {
-        stderr.push(format!(
-            "batten: mcp call: {method} declares a reduction and its node was not reachable in \
-             this response — passing the response through whole. Check the row's `node` and \
-             `embedded` against what the server actually returned; the stored capture is the \
-             evidence."
-        ));
-    }
-    let answer = match &reduced {
-        Some(kept) => serde_json::Value::Object(kept.clone()),
-        None => payload.value.clone(),
-    };
-    let rendered = serde_json::to_string_pretty(&answer)?;
-    let emitted = u64::try_from(rendered.len()).unwrap_or(u64::MAX);
-    let held = u64::try_from(whole.len()).unwrap_or(u64::MAX);
-    stderr.push(format!(
-        "batten: mcp call: {handle} {method} via {source} {disposition} — stored {held} bytes, \
-         emitted {emitted}"
-    ));
-    if let Some(failure) = outcome.failure {
-        stderr.push(failure);
-    }
     Ok(Report {
-        stdout: rendered,
-        stderr,
+        stdout,
+        stderr: outcome.failure.into_iter().collect(),
         exit: outcome.exit,
-        reduced: reduced.is_some(),
     })
 }
 
@@ -2014,8 +1987,8 @@ fn post_all(
 /// and "SHOULD be limited to a concise single sentence". One sentence is a
 /// pointer; the structured value beside it is the payload rule 4 refuses.
 ///
-/// Bounded on both axes anyway, because a SHOULD is not a guarantee: the first
-/// line only, and [`REFUSAL_MESSAGE_BOUND`] bytes of it.
+/// The message travels whole: a SHOULD is not a guarantee, and bounding what
+/// reaches a context is the hooks' job (CLOUD-2956).
 ///
 /// The measured cost of the old shape: a `-32003` with no message was the entire
 /// diagnosis available for a refused write, and the identical call through the
@@ -2069,38 +2042,17 @@ pub fn envelope(response: &crate::fetch::Response, method: &str) -> Result<serde
     })
 }
 
-/// How much of a JSON-RPC `message` a refusal carries (CLOUD-1403).
+/// A server's refusal message, whole (CLOUD-2956).
 ///
-/// JSON-RPC 2.0 §5.1 says the message "SHOULD be limited to a concise single
-/// sentence", and a SHOULD is not a guarantee — a server is free to answer with a
-/// stack trace, and a gate that echoed one back would be republishing whatever
-/// that was. So the relay is bounded here rather than trusted there.
-pub const REFUSAL_MESSAGE_BOUND: usize = 200;
-
-/// One line of a server's refusal message, bounded.
-///
-/// The FIRST line, because a multi-line body is the shape §5.1 asks servers not
-/// to send and the one a trace arrives as; and [`REFUSAL_MESSAGE_BOUND`] bytes of
-/// it, cut on a character boundary so the result is always renderable.
-///
-/// Truncation is MARKED. A silently cut message reads as a complete sentence that
-/// happens to end oddly, and a reader cannot tell the server's own wording from
-/// this function's edit — which is the same class of unreadable answer the whole
-/// row is about.
+/// The text the server wrote, trimmed; `no message` when it wrote none. It was
+/// once cut to its first line and 200 bytes, which corrupted the verb's answer for
+/// every caller; bounding what reaches a context is the hooks' job alone.
 fn refusal_message(text: &str) -> String {
-    let line = text.lines().next().unwrap_or_default().trim();
-    if line.is_empty() {
+    let text = text.trim();
+    if text.is_empty() {
         return "no message".to_owned();
     }
-    if line.len() <= REFUSAL_MESSAGE_BOUND {
-        return line.to_owned();
-    }
-    // No floor is needed: offset 0 is always a character boundary.
-    let mut cut = REFUSAL_MESSAGE_BOUND;
-    while !line.is_char_boundary(cut) {
-        cut -= 1;
-    }
-    format!("{}…", &line[..cut])
+    text.to_owned()
 }
 
 /// The authentication SCHEME a refusal challenges with, if it names one.
@@ -2398,36 +2350,14 @@ mod tests {
     }
 
     #[test]
-    fn a_multi_line_message_is_cut_to_its_first_line() {
-        // A stack trace is what a server sends when it ignores the SHOULD, and
-        // relaying the whole of one is the payload rule 4 refuses.
-        assert_eq!(
-            refusal_message("bad request\n  at Foo.bar (/srv/app/foo.js:12)\n  at Baz"),
-            "bad request"
+    fn a_multi_line_or_long_message_travels_whole() {
+        // CLOUD-2956: the server's error is relayed whole; bounding what reaches
+        // a context is the hooks' job, never this verb's.
+        let text = format!(
+            "bad request\n  at Foo.bar (/srv/app/foo.js:12)\n{}",
+            "é".repeat(300)
         );
-    }
-
-    #[test]
-    fn an_over_long_message_is_cut_and_the_cut_is_marked() {
-        // MARKED, because a silently truncated sentence reads as the server's own
-        // wording and a reader cannot tell it from this function's edit.
-        let long = "x".repeat(REFUSAL_MESSAGE_BOUND + 50);
-        let cut = refusal_message(&long);
-        assert!(cut.ends_with('…'), "the cut is marked: {cut}");
-        assert_eq!(
-            cut.chars().filter(|c| *c == 'x').count(),
-            REFUSAL_MESSAGE_BOUND
-        );
-    }
-
-    #[test]
-    fn a_cut_lands_on_a_character_boundary() {
-        // Shown able to fail in the direction that would panic: a naive slice at
-        // a fixed byte offset splits a multi-byte character. The input is chosen
-        // so the cut falls mid-character.
-        let text = "é".repeat(REFUSAL_MESSAGE_BOUND);
-        let cut = refusal_message(&text);
-        assert!(cut.ends_with('…'), "the cut is marked: {cut}");
+        assert_eq!(refusal_message(&text), text);
     }
 
     #[test]
@@ -3549,18 +3479,6 @@ mod tests {
             ledger.ends_with(Path::new(".git").join(SPAWN_LEDGER)),
             "{}",
             ledger.display()
-        );
-    }
-
-    /// Fails by: a cut that lands mid-character, or one that moves the wrong
-    /// way. One ASCII byte first puts the bound inside a two-byte character.
-    #[test]
-    fn a_cut_backs_off_to_the_boundary_before_the_bound() {
-        let text = format!("a{}", "é".repeat(REFUSAL_MESSAGE_BOUND));
-        let cut = refusal_message(&text);
-        assert_eq!(
-            cut,
-            format!("a{}…", "é".repeat((REFUSAL_MESSAGE_BOUND - 2) / 2))
         );
     }
 

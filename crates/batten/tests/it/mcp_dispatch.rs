@@ -643,20 +643,15 @@ fn a_refusal_never_carries_the_arbitrary_data_member() {
 }
 
 #[test]
-fn a_refusal_message_a_server_wrote_as_a_trace_is_cut_to_one_line() {
-    // A server that ignores the SHOULD sends frames. Relaying the whole of one
-    // buries the line a reader needs, which is the second half of the same
-    // defect: the old output printed a backtrace for somebody else's verdict.
+fn a_refusal_message_a_server_wrote_as_a_trace_travels_whole() {
+    // CLOUD-2956: a server's error is relayed whole. Bounding what reaches a
+    // context is the hooks' job, never this verb's.
     let line = refusal(
         "{\"jsonrpc\":\"2.0\",\"id\":1,\"error\":{\"code\":-32000,\"message\":\"bad request\\n  at Foo.bar (/srv/app.js:12)\\n  at Baz\"}}",
     );
     assert!(
-        line.contains("bad request"),
-        "the first line travels: {line}"
-    );
-    assert!(
-        !line.contains("Foo.bar"),
-        "and the frames after it do not: {line}"
+        line.contains("bad request\n  at Foo.bar (/srv/app.js:12)\n  at Baz"),
+        "every line travels: {line}"
     );
 }
 
@@ -993,22 +988,8 @@ fn a_reduced_read_points_at_a_view_whose_lines_hold_each_field() {
 // --- the verb prints the server's whole answer (CLOUD-2956) ------------------
 //
 // Bounding what reaches a context is the hooks' job alone. These drive
-// `mcp::report`, the whole of what `mcp call` writes, against this repository's
-// own `[mcp]` table, so a row `batten.toml` declares is the row in force.
-
-/// This repository's committed `[mcp]` table.
-fn committed_mcp() -> batten::config_model::McpConfig {
-    let text =
-        std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../batten.toml"))
-            .expect("read batten.toml");
-    let document: toml::Table = toml::from_str(&text).expect("batten.toml parses");
-    document
-        .get("mcp")
-        .cloned()
-        .map_or_else(Default::default, |table| {
-            table.try_into().expect("the [mcp] table loads")
-        })
-}
+// `mcp::report`, the whole of what `mcp call` writes. Each failed against the
+// bundle tip, where the verb reduced through this repository's `[mcp]` rows.
 
 /// A `tools/call` result carrying `document` as its one text block.
 fn text_result(document: &serde_json::Value) -> serde_json::Value {
@@ -1022,14 +1003,7 @@ fn stored_bytes(result: &serde_json::Value) -> String {
 }
 
 fn report_for(method: &str, result: &serde_json::Value) -> batten::mcp::Report {
-    batten::mcp::report(
-        &committed_mcp(),
-        result,
-        method,
-        "claude-code-remote",
-        "response:abc123",
-    )
-    .expect("a report")
+    batten::mcp::report(result, method, "claude-code-remote", "response:abc123").expect("a report")
 }
 
 #[test]
@@ -1061,7 +1035,6 @@ fn a_large_response_is_printed_whole_and_is_the_stored_capture() {
         stored_bytes(&result),
         "stdout is byte-identical to the stored capture"
     );
-    assert!(!report.reduced, "nothing narrows the answer");
     assert!(
         report.stderr.iter().all(|line| !line.contains("emitted")),
         "no `emitted` line: {:?}",
