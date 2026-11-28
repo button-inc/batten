@@ -1534,9 +1534,15 @@ fn engine_update(out: &mut dyn Write) -> Result<ExitCode> {
 /// `engine gate`'s finding for a source pin, which builds this tree and so never
 /// lands: a release is what `main` may pin.
 fn source_never_lands(config_path: &Path, out: &mut dyn Write) -> Result<ExitCode> {
+    never_lands(config_path, "source", out)
+}
+
+/// The landing refusal a source pin and a dev pin share (CLOUD-2903): `kind`
+/// names which, and the words after it are the same for both.
+fn never_lands(config_path: &Path, kind: &str, out: &mut dyn Write) -> Result<ExitCode> {
     writeln!(
         out,
-        "{} engine pin source never lands: pin a release with `batten engine pin <tag>`",
+        "{} engine pin {kind} never lands: pin a release with `batten engine pin <tag>`",
         config_path.display()
     )?;
     Ok(ExitCode::Violation)
@@ -2492,7 +2498,9 @@ fn run_engine(command: cli::EngineCommand, out: &mut dyn Write) -> Result<ExitCo
         cli::EngineCommand::Pin { value, check, .. } => {
             return engine_pin(&root, value.as_deref(), check, out);
         }
-        cli::EngineCommand::Gate { lanes } => return engine_gate(&root, &lanes, out),
+        cli::EngineCommand::Gate { lanes, landing } => {
+            return engine_gate(&root, &lanes, landing, out);
+        }
         cli::EngineCommand::Install => return engine_install(out),
         cli::EngineCommand::Outdated {
             notice,
@@ -2658,7 +2666,12 @@ fn engine_pin_source_only(root: &Path, out: &mut dyn Write) -> Result<ExitCode> 
 /// - No pin is nothing to judge.
 ///
 /// Every finding is a pointer: the file, the token, the pin.
-fn engine_gate(root: &Path, lanes: &[String], out: &mut dyn Write) -> Result<ExitCode> {
+fn engine_gate(
+    root: &Path,
+    lanes: &[String],
+    landing: bool,
+    out: &mut dyn Write,
+) -> Result<ExitCode> {
     let config_path = root.join(crate::config_model::CONFIG_FILE);
     let text = crate::fsio::read_to_string(&config_path)?;
     let tag = match engine::declared(&text).map(crate::config_model::Pin::kind) {
@@ -2671,6 +2684,14 @@ fn engine_gate(root: &Path, lanes: &[String], out: &mut dyn Write) -> Result<Exi
         }
     };
     let tag = tag.as_str();
+    // A DEV PIN NEVER LANDS, AS A SOURCE PIN NEVER DOES (CLOUD-2903): a dev
+    // pre-release is one branch head's build, cut on request so the branch runs
+    // faster; `main` pins only a release. Laps before the one that lands still
+    // run on it, so only `--landing` refuses it.
+    if landing && engine::release_version(tag).is_ok_and(|v| crate::version::is_dev_prerelease(&v))
+    {
+        return never_lands(&config_path, &format!("dev {tag}"), out);
+    }
     // EVERY COPY AGREES WITH THE PIN (CLOUD-2279), decided before anything is
     // fetched: a batten provision row on another release, or a floor above the
     // pin, is a config that names two engines. Each finding names the move that

@@ -630,6 +630,9 @@ pub enum EngineCommand {
     Gate {
         /// Workflows whose command lines run the released binary.
         lanes: Vec<String>,
+        /// The lap that lands: a dev pin is refused as a source pin is
+        /// (CLOUD-2903).
+        landing: bool,
     },
     /// Install the engine the pin names: the generated bootstrap's last step,
     /// and an installed engine's repair (CLOUD-2203, CLOUD-2287).
@@ -3882,6 +3885,7 @@ fn engine_of(matches: &ArgMatches) -> Option<EngineCommand> {
                 .get_many::<String>("lane")
                 .map(|values| values.cloned().collect())
                 .unwrap_or_default(),
+            landing: flag(matches, "landing"),
         }),
         _ => None,
     }

@@ -656,6 +656,23 @@ pub(crate) const ENGINE_PIN_REQUIRE_SOURCE: FlagDecl = FlagDecl {
     value: ValueDecl::Bool,
 };
 
+/// `engine gate --landing` (CLOUD-2903): the lap that lands. A dev pin is the
+/// branch's own build, accepted on every lap before it and refused on this one,
+/// as a source pin is.
+pub(crate) const ENGINE_GATE_LANDING: FlagDecl = FlagDecl {
+    id: "landing",
+    long: Some("landing"),
+    short: None,
+    help: "Judge the pin as the lap that lands judges it: a dev pin is refused as a source pin is",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Bool,
+};
+
 /// `engine outdated --notice` (CLOUD-2279): the session's half.
 pub(crate) const ENGINE_OUTDATED_NOTICE: FlagDecl = FlagDecl {
     id: "notice",
@@ -8066,7 +8083,7 @@ pub const SURFACE: &[CommandDecl] = &[
         data_channel: false,
         exits: EXITS_STANDARD,
         effect: Effect::Write,
-        flags: &[ENGINE_LANE],
+        flags: &[ENGINE_LANE, ENGINE_GATE_LANDING],
     },
     // `write`, for the materialised tree and the build cache it keeps under the
     // repository's state directory (CLOUD-2090). The verdict is the base tests'

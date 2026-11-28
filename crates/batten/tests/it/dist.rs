@@ -624,25 +624,19 @@ fn the_release_build_is_marked_by_its_tag() {
     }
 }
 
-/// A DEV PRE-RELEASE IS PUBLISHED UNDER THE `dev/` NAMESPACE (CLOUD-2903), on
-/// every push to a pull request, drafts included, as a draft then a non-latest
-/// pre-release; and the tag the workflow spells is the one `engine::forge_tag`
-/// fetches a dev pin from.
+/// A DEV PRE-RELEASE IS PUBLISHED UNDER THE `dev/` NAMESPACE (CLOUD-2903),
+/// drafts served, as a draft then a non-latest pre-release; and the tag the
+/// workflow spells is the one `engine::forge_tag` fetches a dev pin from.
 #[test]
 fn a_dev_prerelease_is_published_under_the_dev_namespace() {
     let dev = workflow("dev-prerelease.yml");
-    let types: Vec<&str> = dev["on"]["pull_request"]["types"]
-        .as_vec()
-        .unwrap()
-        .iter()
-        .filter_map(yaml_rust2::Yaml::as_str)
-        .collect();
-    assert!(types.contains(&"synchronize") && types.contains(&"opened"));
     assert!(
-        dev["jobs"]["build"]["if"]
-            .as_str()
-            .is_some_and(|guard| !guard.contains("draft")),
-        "drafts are published too"
+        ["resolve", "build", "publish"]
+            .iter()
+            .all(|job| dev["jobs"][*job]["if"]
+                .as_str()
+                .is_none_or(|guard| !guard.contains("draft"))),
+        "drafts are served"
     );
     let publish = dev["jobs"]["publish"]["steps"]
         .as_vec()
@@ -714,17 +708,69 @@ fn a_dev_publish_never_carries_the_flag_the_freeze_reads() {
     );
 }
 
-/// `#MUTANT dev-prerelease-cancels-started` reddens here. A branch that pushes
-/// faster than a build takes never published while each push cancelled the
-/// run ahead of it (CLOUD-2903); a started run now finishes, and the build it
-/// targets is the run's own `head.sha`, never the pull request's newest head.
+/// `#MUTANT dev-prerelease-on-push` reddens here. A dev build is cut on
+/// request by manual dispatch and on nothing else (CLOUD-2903): no open, push
+/// or ready of a pull request starts one.
 #[test]
-fn a_started_dev_publish_is_never_cancelled_by_a_newer_push() {
+fn the_dev_publish_runs_only_when_dispatched() {
+    let doc = workflow("dev-prerelease.yml");
+    let triggers: Vec<&str> = doc["on"]
+        .as_hash()
+        .expect("the triggers are a map")
+        .keys()
+        .filter_map(yaml_rust2::Yaml::as_str)
+        .collect();
+    assert_eq!(triggers, ["workflow_dispatch"]);
+    let inputs: Vec<&str> = doc["on"]["workflow_dispatch"]["inputs"]
+        .as_hash()
+        .expect("the dispatch takes inputs")
+        .keys()
+        .filter_map(yaml_rust2::Yaml::as_str)
+        .collect();
+    assert_eq!(inputs, ["pr"], "its one input is the pull request number");
+}
+
+/// `#MUTANT dev-prerelease-unnumbered` reddens here. A dispatched run has no
+/// `refs/pull/<N>` in `GITHUB_REF`, so the build step sets `BATTEN_BUILD_PR`
+/// from the input, and the identity is `pr<N>`'s (CLOUD-2903).
+#[test]
+fn a_dispatched_build_carries_the_pull_requests_number() {
+    let doc = workflow("dev-prerelease.yml");
+    let numbered: Vec<&str> = doc["jobs"]["build"]["steps"]
+        .as_vec()
+        .unwrap()
+        .iter()
+        .filter_map(|step| step["env"][batten::build_identity::BUILD_PR].as_str())
+        .collect();
+    assert_eq!(numbered, ["${{ inputs.pr }}"]);
+    let resolve = doc["jobs"]["resolve"]["steps"]
+        .as_vec()
+        .unwrap()
+        .iter()
+        .filter_map(|step| step["run"].as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        resolve.contains("a fork's head is never published"),
+        "{resolve}"
+    );
+}
+
+/// `#MUTANT dev-prerelease-cancels-started` reddens here. A second dispatch
+/// for the same pull request waits behind a started run and never cancels it
+/// (CLOUD-2903); the build it publishes is the head the run resolved when it
+/// started, never the pull request's newest head.
+#[test]
+fn a_second_dispatch_never_cancels_a_started_dev_publish() {
     let doc = workflow("dev-prerelease.yml");
     assert_eq!(
         doc["concurrency"]["cancel-in-progress"].as_bool(),
         Some(false),
         "a started dev publish finishes"
+    );
+    assert_eq!(
+        doc["concurrency"]["group"].as_str(),
+        Some("dev-prerelease-${{ inputs.pr }}")
     );
     let publish = dev_publish_runs().join("\n");
     assert!(publish.contains("--target \"$SHA\""), "{publish}");
@@ -734,7 +780,50 @@ fn a_started_dev_publish_is_never_cancelled_by_a_newer_push() {
         .iter()
         .find_map(|step| step["env"]["SHA"].as_str())
         .expect("the publish names the sha it built");
-    assert_eq!(sha, "${{ github.event.pull_request.head.sha }}");
+    assert_eq!(sha, "${{ needs.resolve.outputs.sha }}");
+}
+
+/// A DEV PIN IS REFUSED AT LAND AS A SOURCE PIN IS (CLOUD-2903): `engine gate
+/// --landing`, which `engine-pin-land-check` runs when `land` readies, answers
+/// a dev pin with the source pin's words and exit, before anything is fetched.
+/// The task is one of the land body gates, so the lap that lands runs it.
+#[test]
+fn a_dev_pin_is_refused_at_land_as_a_source_pin_is() {
+    let dir = crate::common::scratch("dev-pin-never-lands");
+    write(
+        &dir,
+        "batten.toml",
+        "version = 1\nengine = { release = \"v0.0.222-dev.pr1276.20261128054722+52134973caec\" }\n",
+    );
+    crate::common::init_repo(&dir);
+    let out = batten()
+        .args(["engine", "gate", "--landing"])
+        .current_dir(&dir)
+        .output()
+        .expect("run batten");
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert_eq!(out.status.code(), Some(1), "{text}");
+    assert!(
+        text.trim_end().ends_with(
+            "engine pin dev v0.0.222-dev.pr1276.20261128054722+52134973caec never lands: pin a release with `batten engine pin <tag>`"
+        ),
+        "{text}"
+    );
+    let manifest = std::fs::read_to_string(at_root("mise.toml")).unwrap();
+    let gates = manifest
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("LAND_BODY_GATES = "))
+        .expect("the land body gates are declared");
+    assert!(
+        gates
+            .split('|')
+            .any(|gate| gate.trim_matches('"') == "mise run engine-pin-land-check"),
+        "{gates}"
+    );
+    assert!(
+        manifest.contains("engine gate --landing"),
+        "the task asks as the landing lap"
+    );
 }
 
 /// `#MUTANT dev-prerelease-unflag-widened` reddens here. A step ahead of the
