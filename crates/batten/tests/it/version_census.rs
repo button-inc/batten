@@ -267,6 +267,29 @@ const KNOWN: &[(&str, &str, &str)] = &[
         "not a version: a lease token's progress stamp, whose first field is a second",
     ),
     (
+        "crates/batten/src/land/receipts.rs",
+        "dotted-split",
+        "not a version: a receipt file name's `<sealed>.<archive>.<part>` hex halves and an \
+         `.at` stamp's integer seconds",
+    ),
+    (
+        "crates/batten/tests/it/step_receipt.rs",
+        "dotted-split",
+        "not a version: a `stage` line's decimal seconds read as milliseconds",
+    ),
+    (
+        "crates/batten/src/wiring.rs",
+        "dotted-split",
+        "a real hand-rolled release triple in a test helper, landed on the bundle beside \
+         this census; `wiring.rs` is held by another session, so its move to \
+         `batten_base::version` is owed there, not done here",
+    ),
+    (
+        "crates/batten/src/wiring.rs",
+        "v-trimmed",
+        "the same test helper's `strip_prefix('v')`, owed with its dotted-split",
+    ),
+    (
         "crates/batten-base/src/deferral.rs",
         "dotted-split",
         "Cargo's `rust-version` is a PARTIAL version (`1.98`), not semver, so the semver \
