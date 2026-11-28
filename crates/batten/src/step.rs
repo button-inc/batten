@@ -346,7 +346,10 @@ fn material(
     lines.push(row_line(row)?);
     lines.extend(args.iter().map(|arg| format!("arg {}", quoted(arg))));
     if let Some(command) = command {
-        lines.push(format!("command {}", serde_json::to_string(command).ok()?));
+        let var = |name: &str| std::env::var(name).ok();
+        let engine = || crate::engine::digest(root).ok();
+        let keyed = keyed_command(command, tools, &engine, &trusted_stamp, &var);
+        lines.push(format!("command {}", serde_json::to_string(&keyed).ok()?));
     }
     // THE DECLARED ENVIRONMENT (CLOUD-2786) is a `batten step env` entry of
     // `tools`, answered in-process by `tool_said`: a row without one keys byte
@@ -799,6 +802,92 @@ struct BaseAsk {
     reference: String,
     ref_env: Option<String>,
     paths: Vec<String>,
+}
+
+/// The command as its key reads it (CLOUD-2904): by what it runs, never by how
+/// the lap spelled it.
+///
+/// Measured on #1276: an unchanged red `test-replay` ran again in full (596 s)
+/// because its key took the argv verbatim, and two laps over one tree spell it
+/// two ways. The engine is `$BATTEN_BIN` when the lap's build is current and
+/// `cargo run --quiet -p batten --` when it is not, and the base is
+/// `$BATTEN_SPEC_BASE` when a bet is out and `origin/main` when none is.
+///
+/// - **A launcher that runs this tree's engine is `engine <digest>`**
+///   ([`crate::engine::digest`]): `cargo run` naming only `-p batten` and
+///   `--quiet`, which builds the tree it runs in, or a binary whose stamp
+///   ([`trusted_stamp`]) is that digest. Any other launcher keys literally, as
+///   before, so an engine the tree did not build never shares a key with one
+///   it did.
+/// - **A word spelling the ref a `step base` tool of the row resolves is
+///   `<base>`**: that tool already keys the base by its content, so its name
+///   adds only the spelling.
+fn keyed_command(
+    command: &[String],
+    tools: &[Vec<String>],
+    engine: &dyn Fn() -> Option<String>,
+    stamp: &dyn Fn(&Path) -> Option<String>,
+    var: &dyn Fn(&str) -> Option<String>,
+) -> Vec<String> {
+    let rest = launched_rest(command).or_else(|| {
+        let first = Path::new(command.first()?);
+        let named = first.file_name().is_some_and(|name| name == "batten");
+        (named && stamp(first).is_some_and(|built| Some(built) == engine()))
+            .then(|| command.get(1..).unwrap_or_default())
+    });
+    let mut keyed = match (rest, rest.and_then(|_| engine())) {
+        (Some(rest), Some(digest)) => {
+            let mut keyed = vec![format!("engine {digest}")];
+            keyed.extend(rest.iter().cloned());
+            keyed
+        }
+        _ => command.to_vec(),
+    };
+    let refs: Vec<String> = tools
+        .iter()
+        .filter_map(|tool| after(tool, &BASE))
+        .filter_map(base_ask)
+        .map(|ask| base_ref(&ask, var))
+        .collect();
+    for word in &mut keyed {
+        if refs.contains(word) {
+            *word = String::from("<base>");
+        }
+    }
+    keyed
+}
+
+/// The words after `cargo run [--quiet|-q] -p batten [--quiet|-q] --`, or
+/// `None` for any other shape: another package, a feature, a profile or a
+/// target each builds something else, so each keys literally.
+fn launched_rest(command: &[String]) -> Option<&[String]> {
+    let words: Vec<&str> = command.iter().map(String::as_str).collect();
+    let ["cargo", "run", ..] = words.as_slice() else {
+        return None;
+    };
+    let dash = words.iter().position(|word| *word == "--")?;
+    let flags = words.get(2..dash)?;
+    let mut package = false;
+    let mut at = flags.iter();
+    while let Some(word) = at.next() {
+        match *word {
+            "--quiet" | "-q" => {}
+            "-p" | "--package" if at.next() == Some(&"batten") && !package => package = true,
+            _ => return None,
+        }
+    }
+    package.then(|| command.get(dash + 1..)).flatten()
+}
+
+/// `binary`'s stamp, trusted only when the stamp is at least as new as the
+/// binary: a build after stamping leaves a stamp naming source the binary may
+/// no longer be, and that one is no stamp.
+fn trusted_stamp(binary: &Path) -> Option<String> {
+    let modified = |path: &Path| std::fs::metadata(path).ok()?.modified().ok();
+    let stamped = modified(&crate::engine::stamp_path(binary))?;
+    (stamped >= modified(binary)?)
+        .then(|| crate::engine::stamp_of(binary))
+        .flatten()
 }
 
 /// The [`BaseAsk`] a tool line's words after [`BASE`] spell, or `None` for any
@@ -4453,5 +4542,122 @@ mod tests {
                 "{path:?}"
             );
         }
+    }
+}
+
+/// CLOUD-2904: one tree, two laps, one key, whichever launcher and base
+/// spelling each lap used.
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod keyed_command_tests {
+    use super::*;
+
+    fn words(line: &str) -> Vec<String> {
+        line.split_whitespace().map(String::from).collect()
+    }
+
+    /// `test-replay`'s base tool: `origin/main`, or `$BATTEN_SPEC_BASE`.
+    fn tools() -> Vec<Vec<String>> {
+        vec![words(
+            "batten step base --ref origin/main --ref-env BATTEN_SPEC_BASE -- crates",
+        )]
+    }
+
+    const DIGEST: &str = "d1g35t";
+    const BIN: &str = "/repo/target/debug/batten";
+
+    /// The key's command for `command` under `spec` as `$BATTEN_SPEC_BASE`,
+    /// with `BIN` stamped `stamp`.
+    fn key(command: &str, spec: Option<&str>, stamp: Option<&str>) -> Vec<String> {
+        let engine = || Some(String::from(DIGEST));
+        let stamped = |path: &Path| {
+            (path == Path::new(BIN))
+                .then(|| stamp.map(String::from))
+                .flatten()
+        };
+        let var = |name: &str| {
+            (name == "BATTEN_SPEC_BASE")
+                .then(|| spec.map(String::from))
+                .flatten()
+        };
+        keyed_command(&words(command), &tools(), &engine, &stamped, &var)
+    }
+
+    #[test]
+    fn two_laps_over_one_tree_key_one_command_under_either_launcher_and_base() {
+        let cargo = key(
+            "cargo run --quiet -p batten -- test replay --base origin/main",
+            None,
+            None,
+        );
+        let built = key(
+            &format!("{BIN} test replay --base 0123abcd"),
+            Some("0123abcd"),
+            Some(DIGEST),
+        );
+        assert_eq!(cargo, built);
+        let expected: Vec<String> = ["engine d1g35t", "test", "replay", "--base", "<base>"]
+            .map(String::from)
+            .into();
+        assert_eq!(cargo, expected);
+    }
+
+    #[test]
+    fn a_binary_the_tree_did_not_build_keys_literally() {
+        let line = format!("{BIN} test replay --base origin/main");
+        assert_eq!(key(&line, None, Some("0ther"))[0], BIN);
+        assert_eq!(key(&line, None, None)[0], BIN);
+        assert_ne!(
+            key(&line, None, Some("0ther")),
+            key(
+                "cargo run -p batten -- test replay --base origin/main",
+                None,
+                None
+            )
+        );
+    }
+
+    #[test]
+    fn cargo_building_anything_else_keys_literally() {
+        for line in [
+            "cargo run -p other -- test replay",
+            "cargo run --release -p batten -- test replay",
+            "cargo run -p batten --features x -- test replay",
+            "cargo run -- test replay",
+        ] {
+            assert_eq!(key(line, None, None)[0], "cargo", "{line}");
+        }
+    }
+
+    #[test]
+    fn a_base_spelled_differently_from_the_tools_ref_is_kept() {
+        assert_eq!(
+            key(
+                "cargo run -p batten -- test replay --base other/ref",
+                None,
+                None
+            )
+            .last()
+            .unwrap(),
+            "other/ref"
+        );
+    }
+
+    #[test]
+    fn a_stamp_older_than_its_binary_is_no_stamp() {
+        let dir = crate::scratch::scratch("keyed-command-stamp");
+        std::fs::create_dir_all(&dir).unwrap();
+        let binary = dir.join("batten");
+        std::fs::write(&binary, b"bin").unwrap();
+        crate::engine::stamp(&binary, DIGEST).unwrap();
+        assert_eq!(trusted_stamp(&binary).as_deref(), Some(DIGEST));
+        let later = std::time::SystemTime::now() + std::time::Duration::from_secs(60);
+        std::fs::File::options()
+            .write(true)
+            .open(&binary)
+            .unwrap()
+            .set_modified(later)
+            .unwrap();
+        assert_eq!(trusted_stamp(&binary), None);
     }
 }

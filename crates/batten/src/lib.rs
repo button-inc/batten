@@ -13324,6 +13324,13 @@ fn lap_engine(root: &Path) -> Option<(Option<String>, EngineUse)> {
     let engine = (used != EngineUse::Fallback)
         .then(|| engine_for_gate(&exe, &now, &now))
         .flatten();
+    // THE ENGINE HANDED TO A GATE CARRIES ITS SOURCE (CLOUD-2904), so a step's
+    // key reads `$BATTEN_BIN` and `cargo run` as the one engine they are
+    // (`step.rs` `keyed_command`). An economy: a stamp not written keys the
+    // path literally, a miss and never a wrong hit.
+    if engine.is_some() {
+        let _ = engine::stamp(&exe, &now);
+    }
     Some((engine, used))
 }
 
