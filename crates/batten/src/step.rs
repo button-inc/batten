@@ -1049,7 +1049,11 @@ pub fn run_step(
     // check, run and record, so a second runner waits, then reads the first's
     // receipt as a hit. A lock that cannot be taken runs unlocked: it is an
     // economy, and the step's verdict is its command's alone.
-    let _held = step_lock(step);
+    let held = step_lock(step);
+    // THE BODY HOLDS THE LOCK TOO (CLOUD-2955): its descriptor is inherited by
+    // the command, so a run whose `step run` was killed still holds it while
+    // any of its processes lives, and no second body starts beside it.
+    let _inherited = held.as_ref().map(|held| Inherited::open(held.file()));
     let answer = check(step, args, Some(command));
     let _ = writeln!(err, "{}", answer.line(step));
     if let Answer::Hit(key) = &answer {
@@ -1104,7 +1108,7 @@ pub fn run_step(
         .then(|| crate::mutate::trace::Host::here().tracer())
         .flatten()
         .filter(|_| !declared(step).is_some_and(|row| untraced(&row)))
-        .and_then(|strace| Some((strace, trace_file(step)?)));
+        .and_then(|strace| Some((strace, run_trace_file(step)?)));
     let mut report = Vec::new();
     // A WATCHED STEP TELLS ITS COMMAND SO (CLOUD-2925): the watcher collects
     // from this process, outside the trace, and a collection run inside the
@@ -1409,7 +1413,7 @@ fn run_published(
     report: &mut Vec<u8>,
 ) -> Result<ExitCode> {
     crate::git::repo_root(Path::new(".")).and_then(|root| {
-        crate::exec::run_in_with_env(&root, argv, &[], settings, published, report)
+        crate::exec::run_owned_in_with_env(&root, argv, settings, published, report)
     })
 }
 
@@ -1954,6 +1958,25 @@ fn trace_file(step: &str) -> Option<std::path::PathBuf> {
     )))
 }
 
+/// Where THIS run of `step` traces (CLOUD-2955): [`trace_file`]'s name with
+/// this process's pid before the extension, so two runs never write one file
+/// and a killed run's trace is told apart from the live one's.
+fn run_trace_file(step: &str) -> Option<std::path::PathBuf> {
+    trace_file(step).map(|file| file.with_extension(format!("{}.trace", std::process::id())))
+}
+
+/// A listing beside a trace: the step's own name, `<TRACES>-<digest>.<ext>`,
+/// whichever run or shard the trace was. One listing per step, as before
+/// traces were per run.
+fn listing_of(trace: &Path, ext: &str) -> std::path::PathBuf {
+    let name = trace
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default();
+    let base = name.split('.').next().unwrap_or(name);
+    trace.with_file_name(format!("{base}.{ext}"))
+}
+
 /// The exclusive lock one runner of `step` holds (CLOUD-2783), waiting until
 /// any other runner of the same step lets go; released when the guard drops.
 /// `None` where the git dir or the lock cannot be had.
@@ -1961,24 +1984,274 @@ fn trace_file(step: &str) -> Option<std::path::PathBuf> {
 /// THE WAIT IS [`batten_facts::lock_wait`]'S (CLOUD-2789): on the other runner's
 /// release, never a blocking `flock`, and a lock this process already holds
 /// is refused as re-entry rather than waited on for ever.
+///
+/// AND A START ENDS THE LAST RUN (CLOUD-2955). Crash-only: a `step run` that
+/// was killed leaves its body running, holding the lock it inherited. The lock
+/// file names the pid of the `step run` that took it; where that process is
+/// gone and the lock is still held, its recorded group is sent SIGKILL and the
+/// wait goes on until every holder has let go. A wait on a live holder is also
+/// woken by that holder's death, for the same check.
 fn step_lock(step: &str) -> Option<batten_facts::lock_wait::Held> {
     let git_dir = crate::git::git_dir(Path::new(".")).ok()?;
-    step_lock_at(&git_dir, step)
+    let root = crate::git::repo_root(Path::new(".")).ok();
+    step_lock_ending(&git_dir, root.as_deref(), step)
 }
 
 /// [`step_lock`] under an explicit git dir, for a case to hold.
+#[cfg(test)]
 fn step_lock_at(git_dir: &Path, step: &str) -> Option<batten_facts::lock_wait::Held> {
-    use batten_facts::lock_wait::{Mode, Taken};
-    let path = git_dir.join(format!("{LOCKS}-{}", crate::tools::digest(step.as_bytes())));
-    let file = std::fs::OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .write(true)
-        .open(&path)
-        .ok()?;
-    match batten_facts::lock_wait::acquire(file, &path, Mode::Exclusive, None).ok()? {
-        Taken::Held(held) => Some(held),
-        Taken::Stopped | Taken::Reentrant => None,
+    step_lock_ending(git_dir, None, step)
+}
+
+/// How many times a start re-reads the lock after a holder died under its
+/// wait: each round follows a death, so this bounds a chain of them.
+const LOCK_ROUNDS: usize = 16;
+
+/// [`step_lock`]'s body: `root` is where the last run's group record is read,
+/// `None` to read none.
+fn step_lock_ending(
+    git_dir: &Path,
+    root: Option<&Path>,
+    step: &str,
+) -> Option<batten_facts::lock_wait::Held> {
+    use batten_facts::lock_wait::{Mode, Stop, Taken};
+    let digest = crate::tools::digest(step.as_bytes());
+    let path = git_dir.join(format!("{LOCKS}-{digest}"));
+    let open = || {
+        std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .open(&path)
+            .ok()
+    };
+    for _ in 0..LOCK_ROUNDS {
+        let holder = std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|body| body.trim().parse::<u32>().ok());
+        let live = holder.filter(|pid| process_alive(*pid));
+        if let (Some(pid), None, Some(root)) = (holder, live, root) {
+            end_orphaned_run(root, pid, open()?);
+        }
+        let stop = Stop::new().ok();
+        let taken = std::thread::scope(|scope| {
+            let cancel = live.zip(stop.as_ref()).and_then(|(pid, stop)| {
+                let (cancel, watched) = std::sync::mpsc::channel::<()>();
+                let woken = HolderWatch::new(pid)?;
+                let ender = woken.ender();
+                scope.spawn(move || {
+                    if woken.wait() {
+                        stop.raise();
+                    }
+                    drop(watched);
+                });
+                Some((cancel, ender))
+            });
+            let taken =
+                batten_facts::lock_wait::acquire(open()?, &path, Mode::Exclusive, stop.as_ref());
+            if let Some((cancel, ender)) = cancel {
+                drop(cancel);
+                ender.end();
+            }
+            taken.ok()
+        })?;
+        match taken {
+            Taken::Held(held) => {
+                stamp(&held);
+                if let Some(root) = root {
+                    drop(
+                        holder
+                            .and_then(|pid| crate::exec::recorded_group(root, pid))
+                            .map(|(record, _)| std::fs::remove_file(record)),
+                    );
+                }
+                remove_dead_traces(git_dir, &digest);
+                return Some(held);
+            }
+            Taken::Stopped => {}
+            Taken::Reentrant => return None,
+        }
+    }
+    None
+}
+
+/// End the run a dead `step run` of pid `holder` left (CLOUD-2955): where the
+/// lock is still held — by the body, which inherited it — the group recorded
+/// under `holder` is sent SIGKILL. A free lock means nothing of that run lives,
+/// and its record is only removed.
+fn end_orphaned_run(root: &Path, holder: u32, probe: std::fs::File) {
+    let held = probe.try_lock().is_err();
+    drop(probe);
+    if let Some((record, pgid)) = crate::exec::recorded_group(root, holder) {
+        if held {
+            crate::exec::kill_group(pgid);
+        }
+        drop(std::fs::remove_file(record));
+    }
+}
+
+/// Write this process's pid into the held lock file, in place: replacing the
+/// file would put a new inode under the path and the lock on the old one.
+fn stamp(held: &batten_facts::lock_wait::Held) {
+    use std::io::{Seek as _, Write as _};
+    let mut file = held.file();
+    let _ = file
+        .set_len(0)
+        .and_then(|()| file.seek(std::io::SeekFrom::Start(0)))
+        .and_then(|_| writeln!(file, "{}", std::process::id()));
+}
+
+/// Remove every trace of the step `digest` under `git_dir`: called with its
+/// lock held, so every earlier run is over and none is still writing. The
+/// listings stay.
+fn remove_dead_traces(git_dir: &Path, digest: &str) {
+    let prefix = format!("{TRACES}-{digest}.");
+    for entry in std::fs::read_dir(git_dir).into_iter().flatten().flatten() {
+        let name = entry.file_name();
+        let Some(rest) = name.to_str().and_then(|name| name.strip_prefix(&prefix)) else {
+            continue;
+        };
+        if rest.ends_with(".trace") || rest == "trace" || rest.contains(".shard") {
+            drop(std::fs::remove_file(entry.path()));
+        }
+    }
+}
+
+/// Whether `pid` names a process that has not exited. A zombie has: its
+/// descriptors, the lock among them, are closed. Off Linux, whether it can be
+/// signalled.
+fn process_alive(pid: u32) -> bool {
+    if cfg!(target_os = "linux") {
+        return std::fs::read_to_string(format!("/proc/{pid}/stat")).is_ok_and(|body| {
+            body.rfind(')')
+                .and_then(|end| body[end + 1..].split_whitespace().next())
+                .is_some_and(|state| state != "Z")
+        });
+    }
+    #[cfg(unix)]
+    {
+        i32::try_from(pid)
+            .ok()
+            .and_then(rustix::process::Pid::from_raw)
+            .is_some_and(|pid| rustix::process::test_kill_process(pid).is_ok())
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = pid;
+        false
+    }
+}
+
+/// A wait on a live lock holder's exit, ended early by its [`HolderEnder`]: a
+/// pidfd and an eventfd polled together, with no timeout. Linux only; elsewhere
+/// none is made and a waiter waits on the lock alone.
+struct HolderWatch {
+    #[cfg(target_os = "linux")]
+    pidfd: rustix::fd::OwnedFd,
+    #[cfg(target_os = "linux")]
+    cancel: std::sync::Arc<rustix::fd::OwnedFd>,
+}
+
+/// Ends a [`HolderWatch`]'s wait from another thread.
+struct HolderEnder {
+    #[cfg(target_os = "linux")]
+    cancel: std::sync::Arc<rustix::fd::OwnedFd>,
+}
+
+impl HolderWatch {
+    fn new(pid: u32) -> Option<Self> {
+        #[cfg(target_os = "linux")]
+        {
+            let pid = rustix::process::Pid::from_raw(i32::try_from(pid).ok()?)?;
+            let pidfd =
+                rustix::process::pidfd_open(pid, rustix::process::PidfdFlags::empty()).ok()?;
+            let cancel = rustix::event::eventfd(0, rustix::event::EventfdFlags::CLOEXEC).ok()?;
+            Some(Self {
+                pidfd,
+                cancel: std::sync::Arc::new(cancel),
+            })
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = pid;
+            None
+        }
+    }
+
+    fn ender(&self) -> HolderEnder {
+        HolderEnder {
+            #[cfg(target_os = "linux")]
+            cancel: std::sync::Arc::clone(&self.cancel),
+        }
+    }
+
+    /// Wait for the holder's exit or the end: `true` when the holder exited.
+    fn wait(&self) -> bool {
+        #[cfg(target_os = "linux")]
+        {
+            use rustix::event::{PollFd, PollFlags};
+            loop {
+                let mut fds = [
+                    PollFd::new(&self.pidfd, PollFlags::IN),
+                    PollFd::new(&*self.cancel, PollFlags::IN),
+                ];
+                match rustix::event::poll(&mut fds, None) {
+                    Ok(_) => {
+                        let [holder, cancel] = &fds;
+                        return holder.revents().contains(PollFlags::IN)
+                            && !cancel.revents().contains(PollFlags::IN);
+                    }
+                    Err(rustix::io::Errno::INTR) => {}
+                    Err(_) => return false,
+                }
+            }
+        }
+        #[cfg(not(target_os = "linux"))]
+        false
+    }
+}
+
+impl HolderEnder {
+    fn end(&self) {
+        #[cfg(target_os = "linux")]
+        drop(rustix::io::write(&*self.cancel, &1_u64.to_ne_bytes()));
+    }
+}
+
+/// The held lock's descriptor made inheritable for the length of a run
+/// (CLOUD-2955), so the body holds the lock too; close-on-exec again on drop.
+struct Inherited<'held> {
+    #[cfg(unix)]
+    file: &'held std::fs::File,
+    #[cfg(not(unix))]
+    file: std::marker::PhantomData<&'held ()>,
+}
+
+impl<'held> Inherited<'held> {
+    fn open(file: &'held std::fs::File) -> Self {
+        #[cfg(unix)]
+        {
+            drop(rustix::io::fcntl_setfd(file, rustix::io::FdFlags::empty()));
+            Self { file }
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = file;
+            Self {
+                file: std::marker::PhantomData,
+            }
+        }
+    }
+}
+
+impl Drop for Inherited<'_> {
+    fn drop(&mut self) {
+        #[cfg(unix)]
+        drop(rustix::io::fcntl_setfd(
+            self.file,
+            rustix::io::FdFlags::CLOEXEC,
+        ));
     }
 }
 
@@ -2022,6 +2295,7 @@ pub fn sweep_orphaned_traces(git_dir: &Path) -> (usize, u64) {
             .to_str()
             .and_then(|name| name.strip_prefix(&format!("{TRACES}-")))
             .and_then(|rest| rest.strip_suffix(".trace"))
+            .and_then(|rest| rest.split('.').next())
         else {
             continue;
         };
@@ -2122,7 +2396,7 @@ fn lint_accessed(
         .collect();
     let wrote = written_inputs(root, declaration.inputs, &written, ignored);
     if !wrote.is_empty() {
-        let listing = file.with_extension("wrote");
+        let listing = listing_of(file, "wrote");
         let mut body = wrote.join("\n");
         body.push('\n');
         if crate::durable::replace(&listing, body).is_err() {
@@ -2140,7 +2414,7 @@ fn lint_accessed(
     if found.is_empty() {
         return Linted::Declared;
     }
-    let listing = file.with_extension("undeclared");
+    let listing = listing_of(file, "undeclared");
     let mut body = found.join("\n");
     body.push('\n');
     if crate::durable::replace(&listing, body).is_err() {

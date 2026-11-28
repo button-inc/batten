@@ -1871,6 +1871,64 @@ pub fn run_in_with_env(
     report_bundle(repo_root, &bundle, &outcomes, patterns, settings, report)
 }
 
+/// [`run_in_with_env`] with Batten owning the child's process group outright
+/// (CLOUD-2955), whatever an ancestor's marker or the session says: a step's
+/// body must be endable WHOLE by the next start of its step after this process
+/// is killed, and a body left in the caller's group cannot be signalled apart
+/// from it. SIGHUP, SIGINT, SIGQUIT and SIGTERM are forwarded to the group, and
+/// the group is recorded under this process's pid ([`recorded_group`]) for as
+/// long as the child runs.
+///
+/// # Errors
+///
+/// As [`run`].
+pub(crate) fn run_owned_in_with_env(
+    repo_root: &Path,
+    command: &[String],
+    settings: &ExecConfig,
+    published: &[(String, String)],
+    report: &mut dyn Write,
+) -> Result<ExitCode> {
+    let bundle = split_bundle(command)?;
+    let decided = Decided {
+        group: GroupDecision::OWNED,
+        drain: PIPE_DRAIN_TIMEOUT,
+    };
+    let outcomes = dispatch_decided(repo_root, &bundle, settings, published, next_run(), decided)?;
+    report_bundle(repo_root, &bundle, &outcomes, &[], settings, report)
+}
+
+/// The process group a Batten of pid `supervisor` recorded as owned
+/// (`GroupRecord`), with the record's path: a record still present names a
+/// Batten that died holding that group, or one still running.
+pub(crate) fn recorded_group(
+    repo_root: &Path,
+    supervisor: u32,
+) -> Option<(std::path::PathBuf, u32)> {
+    let path = crate::state::repo_state_dir(repo_root)
+        .ok()?
+        .join("exec")
+        .join(format!("group.{supervisor}"));
+    let pgid = std::fs::read_to_string(&path).ok()?.trim().parse().ok()?;
+    Some((path, pgid))
+}
+
+/// Send SIGKILL to the process group led by `pgid`, best effort: the end of a
+/// run whose supervisor is already dead (CLOUD-2955). Nothing where there are
+/// no process groups.
+pub(crate) fn kill_group(pgid: u32) {
+    #[cfg(unix)]
+    if let Some(group) = i32::try_from(pgid)
+        .ok()
+        .filter(|raw| *raw > 0)
+        .and_then(rustix::process::Pid::from_raw)
+    {
+        signal_group(group, rustix::process::Signal::KILL);
+    }
+    #[cfg(not(unix))]
+    let _ = pgid;
+}
+
 // -- The named lock a child may be held under (CLOUD-1710) -------------------
 //
 // `mise-tasks/with-lock.sh` is retired onto this. Everything about WHAT a lock
