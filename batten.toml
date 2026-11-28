@@ -19762,7 +19762,7 @@ tools = [
   ["batten", "step", "config"],
   ["rustc", "--version"],
   ["cargo", "--version"],
-  ["git", "log", "--format=%B", "origin/main..HEAD"],
+  ["git", "log", "--format=%an%x00%ae%x00%B", "--raw", "origin/main..HEAD"],
 ]
 
 [[step]]
