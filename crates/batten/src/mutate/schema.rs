@@ -6697,30 +6697,24 @@ fn dropped_because(
     }
 }
 
-/// [`carry_forward`], and the [`Reasons`] for every record it did not carry.
+/// The functions and files a fresh mutant charges, and whether one charges the
+/// whole store: every mutant in `identity` the previous run did not list.
+///
+/// A MUTANT NO PROBED FUNCTION ENCLOSES IS CHARGED TO ITS FILE, NOT TO THE
+/// SUITE: one keyless const or field mutant used to clear every record and
+/// re-record the whole suite. Its file's functions are what a case reaching it
+/// most likely ran. The limit: a case that reaches it only through a skeleton
+/// item, running none of that file's functions, keeps its record, and the
+/// mutant may read as a survivor it is not, which fails closed. A file with no
+/// probe has no function to charge, so it still clears everything.
 ///
 /// # Errors
 ///
-/// As [`carry_forward`].
-#[expect(
-    clippy::too_many_lines,
-    reason = "one pass over the store that decides carry, drop and resume per record, with the reasons beside each (CLOUD-2959)"
-)]
-fn carry_counted(
-    base: &std::path::Path,
-    inputs: &str,
-    identity: &Identity<'_>,
-    (recompute, over): (&Recompute<'_>, Option<Over<'_>>),
-    carry: bool,
-) -> anyhow::Result<(usize, usize, Reasons)> {
-    let mut reasons = Reasons::new();
-    std::fs::create_dir_all(base)?;
-    let same_tree = crate::fsio::read_to_string(base.join(TREE)).is_ok_and(|held| held == inputs);
-    let listed: BTreeSet<String> = crate::fsio::read_to_string(base.join(LISTED))
-        .unwrap_or_default()
-        .lines()
-        .map(str::to_owned)
-        .collect();
+/// When a site's index does not fit a mutant id.
+fn fresh_sites<'a>(
+    identity: &'a Identity<'_>,
+    listed: &BTreeSet<String>,
+) -> anyhow::Result<(BTreeSet<String>, BTreeSet<&'a str>, bool)> {
     let mut fresh_fns = BTreeSet::new();
     let mut fresh_files: BTreeSet<&str> = BTreeSet::new();
     let mut fresh_unplaced = false;
@@ -6729,14 +6723,6 @@ fn carry_counted(
         if identity.classic.contains(&id) || key.as_ref().is_some_and(|key| listed.contains(key)) {
             continue;
         }
-        // A MUTANT NO PROBED FUNCTION ENCLOSES IS CHARGED TO ITS FILE, NOT TO
-        // THE SUITE: one keyless const or field mutant used to clear every
-        // record and re-record the whole suite. Its file's functions are what
-        // a case reaching it most likely ran. The limit: a case that reaches
-        // it only through a skeleton item, running none of that file's
-        // functions, keeps its record, and the mutant may read as a survivor
-        // it is not, which fails closed. A file with no probe has no function
-        // to charge, so it still clears everything.
         match (identity.mutant_fns.get(&id), identity.file_fns.get(&id)) {
             (Some(function), _) => {
                 fresh_fns.insert(function.clone());
@@ -6753,6 +6739,30 @@ fn carry_counted(
             },
         }
     }
+    Ok((fresh_fns, fresh_files, fresh_unplaced))
+}
+
+/// [`carry_forward`], and the [`Reasons`] for every record it did not carry.
+///
+/// # Errors
+///
+/// As [`carry_forward`].
+fn carry_counted(
+    base: &std::path::Path,
+    inputs: &str,
+    identity: &Identity<'_>,
+    (recompute, over): (&Recompute<'_>, Option<Over<'_>>),
+    carry: bool,
+) -> anyhow::Result<(usize, usize, Reasons)> {
+    let mut reasons = Reasons::new();
+    std::fs::create_dir_all(base)?;
+    let same_tree = crate::fsio::read_to_string(base.join(TREE)).is_ok_and(|held| held == inputs);
+    let listed: BTreeSet<String> = crate::fsio::read_to_string(base.join(LISTED))
+        .unwrap_or_default()
+        .lines()
+        .map(str::to_owned)
+        .collect();
+    let (fresh_fns, fresh_files, fresh_unplaced) = fresh_sites(identity, &listed)?;
     let functions = ids_by_value(identity.probes.iter().enumerate());
     let mut candidates: Vec<(std::path::PathBuf, Case, Carried, bool)> = Vec::new();
     let mut resumed = 0;
@@ -7444,6 +7454,46 @@ fn empty_scratch_parent(target: &std::path::Path) -> std::io::Result<()> {
     }
 }
 
+/// `text` with the run's filter set: the cases no finished record holds
+/// (CLOUD-2904), with the count of cases the run starts said on `out`.
+///
+/// A LAP RUNS ONLY THE CASES IT RECORDS: with 11,740 of 11,797 records
+/// carried, the suite still started every case for the recorder to skip,
+/// 1,891 s to re-record 57. A double recording clears every record, so it
+/// runs them all ([`run_filter`]). The count, not the seconds, is what a
+/// relaunch is checked by, so no case a stopped run finished runs again.
+///
+/// # Errors
+///
+/// When `out` cannot be written.
+fn filtered_config(
+    mut text: String,
+    (work, state, base): (&std::path::Path, &std::path::Path, &std::path::Path),
+    (binaries, metadata): (&std::path::Path, &std::path::Path),
+    out: &mut dyn std::io::Write,
+) -> anyhow::Result<String> {
+    let listed = listed_cases(work, state, (binaries, metadata));
+    let filter = listed
+        .as_ref()
+        .and_then(|listed| run_filter(listed, &finished_cases(base), super::stable::twice()));
+    crate::mutate::progress!(
+        out,
+        "{}",
+        reach_starts_line(listed.as_ref(), filter.as_deref(), &finished_cases(base))
+    )?;
+    if let Some(filter) = filter {
+        text = text.replacen(
+            "[profile.batten-cover]\n",
+            &format!(
+                "[profile.batten-cover]\ndefault-filter = {}\n",
+                toml_edit::Value::from(filter)
+            ),
+            1,
+        );
+    }
+    Ok(text)
+}
+
 /// Run the suite once on the schema build with no mutant active, recording
 /// which sites each case reaches; a case whose record [`carry_forward`] kept
 /// is skipped by the recorder, so a lap re-runs only what its change touched.
@@ -7453,10 +7503,6 @@ fn empty_scratch_parent(target: &std::path::Path) -> std::io::Result<()> {
 /// # Errors
 ///
 /// A case failed unmutated, or the run could not be made.
-#[expect(
-    clippy::too_many_lines,
-    reason = "the reach stage's one sequence: key, carry, record, seal (CLOUD-2959)"
-)]
 pub fn record_reach(
     work: &std::path::Path,
     target: &std::path::Path,
@@ -7503,36 +7549,9 @@ pub fn record_reach(
     std::fs::copy(super::running_image()?, &staged)?;
     std::fs::rename(&staged, &recorder)?;
     let (binaries, metadata) = suite_binaries((work, target, state), packages)?;
-    let mut text =
-        super::cover::wrapped_config(work, &recorder, RECORD_ARG, &state.join("nextest"))?;
-    // A LAP RUNS ONLY THE CASES IT RECORDS (CLOUD-2904): with 11,740 of 11,797
-    // records carried, the suite still started every case for the recorder to
-    // skip, 1,891 s to re-record 57. The cases no record holds finished are
-    // the run's filter. A double recording clears every record, so it runs
-    // them all ([`run_filter`]).
-    let listed = listed_cases(work, state, (&binaries, &metadata));
-    let filter = listed
-        .as_ref()
-        .and_then(|listed| run_filter(listed, &finished_cases(&base), super::stable::twice()));
-    // HOW MANY CASES THE RUN STARTS, SAID (CLOUD-2904): a relaunch is checked
-    // by this count, never by its seconds, to re-run no case a stopped run
-    // finished.
-    crate::mutate::progress!(
-        out,
-        "{}",
-        reach_starts_line(listed.as_ref(), filter.as_deref(), &finished_cases(&base))
-    )?;
+    let text = super::cover::wrapped_config(work, &recorder, RECORD_ARG, &state.join("nextest"))?;
+    let text = filtered_config(text, (work, state, &base), (&binaries, &metadata), out)?;
     let at = stage_took(out, "reach listing", at)?;
-    if let Some(filter) = filter {
-        text = text.replacen(
-            "[profile.batten-cover]\n",
-            &format!(
-                "[profile.batten-cover]\ndefault-filter = {}\n",
-                toml_edit::Value::from(filter)
-            ),
-            1,
-        );
-    }
     crate::durable::replace(&config, text)?;
     let args = reach_args(&config, (&binaries, &metadata));
     let mut env: Vec<(String, String)> = Vec::new();
@@ -13409,6 +13428,45 @@ type Reached = (
     Red,
 );
 
+/// The [`SealContext`] a sweep's reach record is sealed under, as JSON: every
+/// input a case digest is a function of, beside the tree's own digest.
+///
+/// # Errors
+///
+/// The tree cannot be digested, or the context cannot be serialised.
+fn seal_context(
+    (root, dirs, schema): (
+        &std::path::Path,
+        &std::collections::BTreeMap<String, String>,
+        &Schema,
+    ),
+    ids: (&std::collections::BTreeMap<String, String>, &str),
+    identity: &Identity<'_>,
+    format: &Format,
+    (build, unprobed): (&str, &std::collections::BTreeMap<String, String>),
+) -> anyhow::Result<String> {
+    Ok(serde_json::to_string(&SealContext {
+        root: root.to_path_buf(),
+        dirs: dirs.clone(),
+        compiled: schema.compiled.clone(),
+        probes: schema.probes.clone(),
+        names: schema.names.clone(),
+        items: schema.items.clone(),
+        mentions: schema.mentions.clone(),
+        resources: ids.0.clone(),
+        untraced: ids.1.to_owned(),
+        sites: identity.sites.to_vec(),
+        mutant_fns: schema.mutant_fns.clone(),
+        file_fns: identity.file_fns.clone(),
+        unplaced: identity.unplaced.clone(),
+        classic: identity.classic.clone(),
+        format: Some(format.clone()),
+        build: Some(build.to_owned()),
+        unprobed: unprobed.clone(),
+        snapshot: Some(tree_digest(root)?),
+    })?)
+}
+
 /// Record reach over the schema, carrying every case the change left alone;
 /// key every recorded case on what it depends on; take each case's seconds,
 /// a carried one's as sealed; and seal the record for the next sweep.
@@ -13416,10 +13474,6 @@ type Reached = (
 /// # Errors
 ///
 /// The reach run fails, or its record cannot be read or sealed.
-#[expect(
-    clippy::too_many_lines,
-    reason = "one read of a sealed record's reach, every field beside its check (CLOUD-2959)"
-)]
 fn reached(
     (work, target, state): (&std::path::Path, &std::path::Path, &std::path::Path),
     root: &std::path::Path,
@@ -13445,26 +13499,13 @@ fn reached(
     crate::mutate::progress!(out, "{}", build_line(root, ids.0, format, &build))?;
     let derived = Derived::at(state, &build);
     derived.drop_other_versions();
-    let context = serde_json::to_string(&SealContext {
-        root: root.to_path_buf(),
-        dirs: dirs.clone(),
-        compiled: schema.compiled.clone(),
-        probes: schema.probes.clone(),
-        names: schema.names.clone(),
-        items: schema.items.clone(),
-        mentions: schema.mentions.clone(),
-        resources: ids.0.clone(),
-        untraced: ids.1.to_owned(),
-        sites: site_keys.to_vec(),
-        mutant_fns: schema.mutant_fns.clone(),
-        file_fns: in_file.clone(),
-        unplaced: out_of_fns.clone(),
-        classic: classic.clone(),
-        format: Some(format.clone()),
-        build: Some(build.clone()),
-        unprobed: unprobed.clone(),
-        snapshot: Some(tree_digest(root)?),
-    })?;
+    let context = seal_context(
+        (root, &dirs, schema),
+        ids,
+        identity,
+        format,
+        (&build, &unprobed),
+    )?;
     // THE MEMO OUTLIVES THE RUN (CLOUD-2959): every case digest is a function
     // of this context, the engine and the case's own ran and read sets, so an
     // unchanged tip takes none of them again, where the carry used to
