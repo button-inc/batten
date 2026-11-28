@@ -5000,7 +5000,6 @@ fn run_mcp(
     file_and_report(
         &repo,
         &McpAnswer {
-            config: &config,
             method,
             params: &params,
             source: &wiring.source,
@@ -5281,8 +5280,6 @@ fn mcp_log_root() -> Option<PathBuf> {
 /// already happened, so an error past this point loses the answer the caller paid
 /// for.
 struct McpAnswer<'a> {
-    /// The table the reduction is declared in.
-    config: &'a crate::config_model::McpConfig,
     /// The method that was called.
     method: &'a str,
     /// The params it was handed, which a `[[mint]]` row's `selects_at` reads
@@ -5383,7 +5380,6 @@ fn file_and_report(
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
     let McpAnswer {
-        config,
         method,
         params,
         source,
@@ -5451,12 +5447,7 @@ fn file_and_report(
     // both read an `issue-read` receipt, so a deny over the raw tool with nothing
     // minting here would refuse every board write in the repository.
     //
-    // BEFORE THE REDUCTION, and that is the ordering decision. `mcp::reduce`
-    // narrows the answer to a row's declared `fields`, so a receipt minted from
-    // the reduction would resolve its `key_from` and `requires` through a
-    // projection nobody declared for it — one `[[mcp.result]]` row would silently
-    // decide whether an unrelated `[[mint]]` row fires. `payload.value` is the
-    // unframed whole, which is exactly what the hook path passes.
+    // FROM THE UNFRAMED WHOLE, which is exactly what the hook path passes.
     //
     // BEFORE THE EMITS, which use `?`. Minting after them would let a closed
     // stdout turn a completed dispatch into a run that wrote no receipt, and the
@@ -5467,43 +5458,14 @@ fn file_and_report(
     // a mint can never be the reason a capture is missing.
     mint_dispatched(mints, patterns, method, params, &payload.value, checkout);
 
-    // THE TRANSPARENCY DEFAULT (CLOUD-418's mirror). A method no row declares is
-    // returned WHOLE, and so is one whose row could not reach its payload: a
-    // reducer that silently emitted a narrower answer over a node it never found
-    // would be indistinguishable from a genuinely narrow row, which is the exact
-    // failure this verb exists to prevent.
-    //
-    // THREE ANSWERS, NOT TWO, and collapsing the last two was this function's own
-    // first defect: "no row declares this method" and "a row declared it and could
-    // not reach its payload" both hand the response back whole, and reporting them
-    // with one word would make a BROKEN row indistinguishable from an absent one —
-    // the same conflation the module refuses at every other boundary. The second
-    // is loud on stderr, because a reduction that quietly stopped applying is
-    // exactly how the saving becomes notional.
-    // THE CALL'S OWN VERDICT, decided before any reduction and owned by `mcp`
-    // rather than re-derived here (CLOUD-1645). Both channels a caller reads —
-    // the exit code and the emitted line — come from this one value, which is
-    // what makes the decision testable without a listener.
-    let report = mcp::report(config, result, method, source, &stored.handle())?;
-    let (failure, records) = match report.exit {
-        ExitCode::Success => (None, &report.stderr[..]),
-        _ => match report.stderr.split_last() {
-            Some((last, rest)) => (Some(last), rest),
-            None => (None, &report.stderr[..]),
-        },
-    };
-    for line in records {
-        writeln!(err, "{line}")?;
-    }
-    // THE POINTER HAS TO LEAD SOMEWHERE A READER CAN NAVIGATE (CLOUD-2207).
-    if report.reduced
-        && let Ok(Some((path, index))) = capture::view(repo, &stored, &whole)
-    {
-        writeln!(err, "{}", capture::pointer_line(&path, &index, &[&stored]))?;
-    }
+    // THE SERVER'S WHOLE ANSWER ON STDOUT, BYTE FOR BYTE WHAT THE STORE HOLDS
+    // (CLOUD-2956). The verb reduces nothing: bounding what reaches a context is
+    // the hooks' job, and they bound this verb's output like any other result.
+    // The failure line, when there is one, is the call's own verdict on stderr.
+    let report = mcp::report(result, method, source, &stored.handle())?;
     writeln!(out, "{}", report.stdout)?;
-    if let Some(failure) = failure {
-        writeln!(err, "{failure}")?;
+    for line in &report.stderr {
+        writeln!(err, "{line}")?;
     }
     Ok(report.exit)
 }
