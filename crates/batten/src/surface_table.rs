@@ -3113,6 +3113,15 @@ pub(crate) const STEP_EXISTS_SPECS: FlagDecl = FlagDecl::trailing(
     "The pathspecs, after `--`: an `exists <path>` line per index path they select, `exists none` where none",
 );
 
+/// The parts on `step config`, after `--`; none is every part (CLOUD-2960).
+pub(crate) const STEP_CONFIG_PARTS: FlagDecl = FlagDecl {
+    required: false,
+    ..FlagDecl::trailing(
+        "parts",
+        "The config parts, after `--`: a `config <part> <digest>` line each, every part where none",
+    )
+};
+
 /// The step's own command on `step run`, after the mandatory `--`.
 pub(crate) const STEP_COMMAND: FlagDecl = FlagDecl::trailing(
     "command",
@@ -7643,6 +7652,19 @@ pub const SURFACE: &[CommandDecl] = &[
         exits: EXITS_STANDARD,
         effect: Effect::Read,
         flags: &[STEP_EXISTS_SPECS],
+    },
+    // `step config` (CLOUD-2960): reads the committed config and the
+    // worktree's agreement with it and writes nothing: `read`. An empty part
+    // name is usage, never a verdict, so its exits are the standard set.
+    // unreached: "step config" CLOUD-2960 a [[step]] tools line the step cache answers in-process; nothing spawns it.
+    CommandDecl {
+        path: "step config",
+        id: "step.config",
+        about: "Print the digests of the config parts a step reads, the step cache's answer to the tool line",
+        data_channel: false,
+        exits: EXITS_STANDARD,
+        effect: Effect::Read,
+        flags: &[STEP_CONFIG_PARTS],
     },
     // The module-graph noun (CLOUD-2789). `cycle` reads the crate's source and
     // writes nothing: `read`. Its refusal over `--max` is a statement about the
