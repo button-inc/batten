@@ -77,6 +77,7 @@
 //! written down there, once, in the row's `gloss`.
 
 use crate::capture::Streamed as _;
+use crate::hook::HarnessExt as _;
 use std::path::Path;
 
 use serde::Serialize;
@@ -170,6 +171,68 @@ impl Outcome {
             reason: Some(reason),
         }
     }
+}
+
+/// The built-in step's id: harness registration, run before any declared row
+/// and with or without a `batten.toml` (CLOUD-2953).
+pub const HARNESS_REGISTRATION: &str = "harness-registration";
+
+/// The built-in harness-registration step, first in every run of the rows
+/// (CLOUD-2953), and the warnings it owes stderr.
+///
+/// A step rather than a `[[startup]]` row because the row needs a `batten.toml`
+/// and the repair must not: the setup script runs from the home, in no
+/// repository, and found `0 row(s)` there while the session it set up loaded no
+/// batten hook at all.
+///
+/// The user level is [`crate::wiring::register_user`]'s; inside a repository the
+/// committed surfaces are [`crate::wiring::register_committed`]'s, in both
+/// postures. `repair` false is the check mode: nothing is written and an owed
+/// write fails the step `not-provisioned`. A machine's user-level conflicts are
+/// warnings only — the step stays `ok` and the exit code does not move.
+#[must_use]
+pub fn registration(root: &Path, repair: bool) -> (Outcome, Vec<String>) {
+    let Some(home) = crate::hook::home_dir() else {
+        return (
+            Outcome::failed(HARNESS_REGISTRATION, CHECK_UNRUNNABLE),
+            Vec::new(),
+        );
+    };
+    let repo = crate::git::worktree_root(root).ok();
+    let user = crate::wiring::register_user(&home, repo.as_deref(), !repair);
+    let committed = repo
+        .as_deref()
+        .map(|repo| crate::wiring::register_committed(repo, !repair))
+        .transpose();
+    let (Ok(user), Ok(committed)) = (user, committed) else {
+        return (
+            Outcome::failed(HARNESS_REGISTRATION, REPAIR_FAILED),
+            Vec::new(),
+        );
+    };
+    let warnings = user
+        .conflicts
+        .iter()
+        .map(|conflict| {
+            format!(
+                "startup: {HARNESS_REGISTRATION}: {} {} holds {} hook registration(s) that are not batten's",
+                conflict.harness.as_str(),
+                conflict.surface,
+                conflict.count
+            )
+        })
+        .collect();
+    let owed = !user.owed.is_empty()
+        || committed
+            .iter()
+            .flatten()
+            .any(|(_, events)| !events.is_empty());
+    let outcome = match (owed, repair) {
+        (false, _) => Outcome::passed(HARNESS_REGISTRATION),
+        (true, true) => Outcome::repaired(HARNESS_REGISTRATION),
+        (true, false) => Outcome::failed(HARNESS_REGISTRATION, NOT_PROVISIONED),
+    };
+    (outcome, warnings)
 }
 
 /// `startup`'s human arm, EVERY row rather than only the failing ones: a silent

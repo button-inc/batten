@@ -7055,15 +7055,15 @@ pub const SURFACE: &[CommandDecl] = &[
         effect: Effect::Destructive,
         flags: &[DRY_RUN, CHECK],
     },
-    // BATTEN'S OWN REGISTRATION WHERE A SESSION ROOT LOADS IT (CLOUD-2111). A
-    // host loads project wiring only from the directory a session is rooted at,
-    // so a session over a parent of the repository loads none of it. This
-    // writes the ROOT's project surface, never the user-level one, which would
-    // double-fire in a session rooted at the repository (CLOUD-525).
+    // BATTEN'S OWN REGISTRATION AT THE USER LEVEL (CLOUD-2953). A host loads
+    // project wiring from its working directory, which moves mid-session, so
+    // the user-level surface is the one every directory loads. Batten's entries
+    // there are byte-identical to the committed ones, and the host runs one
+    // handler once however many files define it, so it does not double-fire.
     //
-    // `write`, not `destructive`: it only ADDS batten's own registration, never
-    // removes or rewrites anybody's, and writes only where the environment is
-    // declared disposable — `reclaim`'s posture without `reclaim`'s subject.
+    // `write`, not `destructive`, as before: it writes only where the
+    // environment is disposable (declared, or detected from the hosted
+    // harness), and there a home that is provisioned per session is batten's.
     CommandDecl {
         path: "wiring register",
         id: "wiring.register",

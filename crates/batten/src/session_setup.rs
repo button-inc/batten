@@ -426,6 +426,9 @@ pub fn run(
         crate::clock::now_unix(),
     );
     let _ = crate::pinned::refresh(root);
+    // The built-in harness registration first, as `startup --repair` runs it
+    // (CLOUD-2953): this is the path rows run on since CLOUD-2840.
+    let _ = crate::startup::registration(root, true);
     let _ = crate::startup::repair(root, &rest);
 
     task::push(

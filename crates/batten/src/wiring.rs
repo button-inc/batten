@@ -358,7 +358,7 @@ pub fn reclaim(dir: &Path, home: &Path, dry_run: bool) -> Result<Reclaimed> {
     // surface, still counts every sibling, and still reports them — it simply
     // does not write, which is what `--check` already means here.
     let mut out = Reclaimed {
-        authoritative: crate::environment::disposable(),
+        authoritative: hook::disposable_here(Some(home)),
         ..Reclaimed::default()
     };
     let dry_run = dry_run || !out.authoritative;
@@ -371,7 +371,7 @@ pub fn reclaim(dir: &Path, home: &Path, dry_run: bool) -> Result<Reclaimed> {
             .wiring()
             .map_or(hook::WiringFile::Whole(""), |w| w.file);
         for surface in harness.merge_surfaces() {
-            let path = home.join(surface);
+            let path = hook::user_config_path(*harness, home, surface);
             // The committed surface is not this verb's subject; see the module
             // header. Not counted as read either — it was never a merged one.
             if same_file(&path, &dir.join(surface)) {
@@ -544,112 +544,186 @@ fn prune_siblings(
     removed
 }
 
-// --- the register half: batten's own wiring, where a session ROOT can load it ---
+// --- the register half: batten's own wiring, at the level every directory loads --
 //
-// A host loads its project-level wiring from the directory a session is ROOTED
-// at, and nowhere below it (CLOUD-2111). A session opened over a parent of one
-// or more batten repositories therefore loads none of their committed
-// registrations: no `SessionStart` provisioning, no `PreToolUse` adjudication,
-// no `PostToolUse` mint. Measured: a consumer's landing script refused for want
-// of a receipt a `Skill` call should have minted, because nothing observed it.
+// A host loads its PROJECT wiring from wherever its working directory is, and
+// that directory moves during a session with no restart (CLOUD-2953, measured:
+// checkout → `/home/user` → checkout in one turn). Project files written above
+// the clone (CLOUD-2205) and the harness process's own cwd (CLOUD-2676) both
+// named a place the host had already left. The USER-LEVEL surface is the one
+// every directory loads, so it is the one registration that cannot be left.
 //
-// NOT THE USER-LEVEL SURFACE. That one loads for every session, including one
-// rooted AT the repository, where batten would then fire twice — the second
-// authority `doctor`'s merged census refuses (CLOUD-525). The session root's
-// OWN project surface loads only for sessions rooted there, so it is the one
-// place a registration reaches the parent session and nothing else.
+// IT DOES NOT DOUBLE-FIRE WHEN IT IS IDENTICAL. The host runs one handler once
+// however many settings files define it (measured: the committed block copied
+// to the user level fired once per call; a copy spelled differently, twice). So
+// the user surface carries exactly the entries `register_committed` writes,
+// compared byte for byte — never `is_batten`'s broad selector, which would keep
+// a differently spelled batten that fires a second time.
 
-/// What one [`register`] did, or would do.
-#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
+/// One merged surface and how many registrations on it are not batten's.
+///
+/// Pointer-only (rule 4): the harness, the home-relative surface and a count,
+/// never a command line or a resolved path.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 #[non_exhaustive]
-pub struct Registered {
-    /// The events the session root's surface lacked batten on.
-    pub events: Vec<String>,
-    /// Whether the surface was rewritten. Never under a check.
-    pub written: bool,
-    /// Whether the environment is declared disposable, so a write was allowed.
-    pub authoritative: bool,
-    /// Whether `root` is a strict ancestor of `repo`. When it is not, the
-    /// session loads the repository's own committed wiring and nothing is owed.
-    pub above: bool,
+pub struct Conflict {
+    /// The harness whose merged surface it is.
+    pub harness: crate::config_model::Harness,
+    /// The surface, home-relative as the harness table spells it.
+    pub surface: &'static str,
+    /// How many registrations on it are not batten's.
+    pub count: usize,
 }
 
-/// Register batten on the project surface of the session root `root`, for a
-/// session rooted above the repository `repo`.
+/// What one [`register_user`] did, or would do.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
+#[non_exhaustive]
+pub struct UserRegistration {
+    /// Whether this machine is disposable, so the user level is batten's to own.
+    pub authoritative: bool,
+    /// The surfaces a disposable repair owes a rewrite: the user surface not
+    /// exactly batten's, or another merged surface carrying a sibling.
+    pub owed: Vec<(crate::config_model::Harness, &'static str)>,
+    /// Whether the owed surfaces were rewritten. Never under a check.
+    pub written: bool,
+    /// On a machine that is not disposable, every merged surface holding a
+    /// registration that is not batten's. Reported, never touched.
+    pub conflicts: Vec<Conflict>,
+}
+
+/// Own the user-level hook registrations under `home` (CLOUD-2953).
 ///
-/// Claude Code only: it is the host whose session root this can name, and the
-/// committed surface's own path is reused, so the file is the one that host
-/// reads at a root.
+/// **Disposable:** each harness's [`hook::HarnessExt::user_surface`] carries
+/// exactly batten's registrations, byte-identical to what [`register_committed`]
+/// writes; every other merged surface loses its non-batten registrations as
+/// [`reclaim`] removes them. Keys the verb does not own are preserved, and the
+/// write is write-then-rename for [`reclaim`]'s reason.
+///
+/// **Not disposable:** nothing is written. Each merged surface holding a
+/// registration that is not batten's is answered as a [`Conflict`].
+///
+/// `repo`'s committed surfaces are never touched here: a merged path that is the
+/// same file as one is skipped, as [`reclaim`] skips it.
 ///
 /// # Errors
 ///
-/// When the surface parsed and cannot be written back. A surface that will not
-/// parse is left alone, as [`reclaim`] leaves one.
-pub fn register(root: &Path, repo: &Path, check: bool) -> Result<Registered> {
-    let mut out = Registered {
-        authoritative: crate::environment::disposable(),
-        ..Registered::default()
+/// When an owed surface cannot be written back. A surface that will not parse
+/// is left alone.
+pub fn register_user(home: &Path, repo: Option<&Path>, check: bool) -> Result<UserRegistration> {
+    let mut out = UserRegistration {
+        authoritative: hook::disposable_here(Some(home)),
+        ..UserRegistration::default()
     };
-    let (root, repo) = (git::canonical(root), git::canonical(repo));
-    out.above = repo != root && repo.starts_with(&root);
-    let harness = crate::config_model::Harness::ClaudeCode;
-    let (true, Some(wiring)) = (out.above, harness.wiring()) else {
-        return Ok(out);
-    };
-    let surface = match wiring.file {
-        hook::WiringFile::Key { path, .. } | hook::WiringFile::Whole(path) => path,
-    };
-    let path = root.join(surface);
-    let mut document = match crate::fsio::read_to_string(&path) {
-        Ok(raw) => match serde_json::from_str::<serde_json::Value>(&raw) {
-            Ok(document) if document.is_object() => document,
-            _ => return Ok(out),
-        },
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            serde_json::Value::Object(serde_json::Map::new())
+    let mut planned: Vec<(PathBuf, serde_json::Value)> = Vec::new();
+    for harness in crate::config_model::Harness::ALL {
+        let Some(wiring) = harness.wiring() else {
+            continue;
+        };
+        let command = hook::wiring_command(*harness);
+        let user = harness.user_surface();
+        for surface in harness.merge_surfaces() {
+            let path = hook::user_config_path(*harness, home, surface);
+            if repo.is_some_and(|repo| same_file(&path, &repo.join(surface))) {
+                continue;
+            }
+            let is_user = user == Some(*surface);
+            let mut document = match crate::fsio::read_to_string(&path) {
+                Ok(raw) => match serde_json::from_str::<serde_json::Value>(&raw) {
+                    Ok(document) if document.is_object() => document,
+                    _ => continue,
+                },
+                Err(error) if is_user && error.kind() == std::io::ErrorKind::NotFound => {
+                    serde_json::Value::Object(serde_json::Map::new())
+                }
+                Err(_) => continue,
+            };
+            if committed_events(&document, wiring.file).is_none() {
+                continue;
+            }
+            if !out.authoritative {
+                let count: usize =
+                    prune_siblings(&mut document, wiring.file, &command, harness.entry_shape())
+                        .iter()
+                        .map(|(_, count)| count)
+                        .sum();
+                if count > 0 {
+                    out.conflicts.push(Conflict {
+                        harness: *harness,
+                        surface,
+                        count,
+                    });
+                }
+                continue;
+            }
+            let changed = if is_user {
+                own_exactly(&mut document, wiring, *harness, &command)
+            } else {
+                !prune_siblings(&mut document, wiring.file, &command, harness.entry_shape())
+                    .is_empty()
+            };
+            if changed {
+                out.owed.push((*harness, *surface));
+                planned.push((path, document));
+            }
         }
-        Err(_) => return Ok(out),
-    };
+    }
+    if check || planned.is_empty() {
+        return Ok(out);
+    }
+    for (path, document) in planned {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let staged = path.with_extension("json.batten-tmp");
+        crate::durable::replace(
+            &staged,
+            format!("{}\n", serde_json::to_string_pretty(&document)?),
+        )?;
+        std::fs::rename(&staged, &path)?;
+    }
+    out.written = true;
+    Ok(out)
+}
+
+/// The event map [`register_committed`] writes into an empty surface for
+/// `harness`: the one spelling of batten's registration, so the user copy and
+/// the committed copy cannot drift apart.
+pub(crate) fn owned_events(
+    wiring: hook::Wiring,
+    harness: crate::config_model::Harness,
+    command: &str,
+) -> serde_json::Value {
+    let mut fresh = serde_json::Value::Object(serde_json::Map::new());
     let spellings: Vec<&str> = wiring
         .registrations(harness)
         .into_iter()
         .map(|(_, spelling)| spelling)
         .collect();
-    out.events = add_missing(
-        &mut document,
-        wiring.file,
-        &spellings,
-        &hook::wiring_command(harness),
-        harness,
-    );
-    if out.events.is_empty() || check || !out.authoritative {
-        return Ok(out);
-    }
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    // Write-then-rename for `reclaim`'s reason: the document carries keys this
-    // verb never read, and a truncating write could lose them.
-    let staged = path.with_extension("json.batten-tmp");
-    crate::durable::replace(
-        &staged,
-        format!("{}\n", serde_json::to_string_pretty(&document)?),
-    )?;
-    std::fs::rename(&staged, &path)?;
-    out.written = true;
-    Ok(out)
+    let _ = add_missing(&mut fresh, wiring.file, &spellings, command, harness);
+    fresh
+        .get(event_key(wiring.file))
+        .cloned()
+        .unwrap_or_else(|| serde_json::Value::Object(serde_json::Map::new()))
 }
 
-/// The live session's root: the cwd of the harness process `$CLAUDE_PID`
-/// names, or `None` outside a session (CLOUD-2676).
-///
-/// The one resolution both `wiring register` and `doctor` read, so the file
-/// one writes is the file the other judges.
-#[must_use]
-pub fn live_session_root() -> Option<PathBuf> {
-    std::env::var("CLAUDE_PID")
-        .ok()
-        .and_then(|pid| std::fs::read_link(format!("/proc/{pid}/cwd")).ok())
+/// Make `document`'s event map exactly [`owned_events`], and answer whether it
+/// changed. Every other key is left as it is.
+fn own_exactly(
+    document: &mut serde_json::Value,
+    wiring: hook::Wiring,
+    harness: crate::config_model::Harness,
+    command: &str,
+) -> bool {
+    let owned = owned_events(wiring, harness, command);
+    let key = event_key(wiring.file);
+    let Some(root) = document.as_object_mut() else {
+        return false;
+    };
+    if root.get(key) == Some(&owned) {
+        return false;
+    }
+    root.insert(key.to_owned(), owned);
+    true
 }
 
 /// Register batten on every harness's COMMITTED surface under `repo`, in
@@ -948,7 +1022,7 @@ pub fn disarm(home: &Path, declared: &[Disarm], dry_run: bool) -> Result<Disarme
     // either, and two verbs in one module disagreeing about whose disk this is
     // would be the negotiation CLOUD-1383 deleted.
     let mut out = Disarmed {
-        authoritative: crate::environment::disposable(),
+        authoritative: hook::disposable_here(Some(home)),
         ..Disarmed::default()
     };
     let dry_run = dry_run || !out.authoritative;
@@ -1567,47 +1641,94 @@ mod tests {
     }
 
     #[test]
-    fn a_session_rooted_at_the_repository_owes_nothing() {
-        let repo = scratch("register-at");
-        let done = register(&repo, &repo, true).unwrap();
-        assert!(!done.above);
-        assert!(done.events.is_empty());
+    fn a_user_surface_that_is_the_committed_one_is_skipped() {
+        // A checkout AT the home: the user surface is the committed file, which
+        // is never this verb's subject.
+        let home = scratch("register-user-at-home");
+        let done = register_user(&home, Some(&home), true).unwrap();
+        assert!(done.owed.is_empty(), "{done:?}");
+        assert!(done.conflicts.is_empty(), "{done:?}");
     }
 
     #[test]
-    fn a_session_rooted_above_owes_every_event_and_a_check_writes_nothing() {
-        let root = scratch("register-above");
-        let repo = root.join("repo");
-        std::fs::create_dir_all(&repo).unwrap();
-        let done = register(&root, &repo, true).unwrap();
-        assert!(done.above);
-        let expected = crate::config_model::Harness::ClaudeCode
-            .wiring()
-            .unwrap()
-            .registrations(crate::config_model::Harness::ClaudeCode)
-            .len();
-        assert_eq!(done.events.len(), expected);
-        assert!(!done.written);
-        assert_eq!(std::fs::read_dir(&root).unwrap().count(), 1);
-    }
-
-    /// An existing surface is read and extended, and only a disposable
-    /// environment's run writes it back.
-    #[test]
-    fn a_session_root_with_a_surface_is_extended_only_where_disposable() {
-        let root = scratch("register-existing");
-        let repo = root.join("repo");
-        std::fs::create_dir_all(&repo).unwrap();
-        let committed = match claude() {
-            hook::WiringFile::Key { path, .. } | hook::WiringFile::Whole(path) => path,
+    fn a_check_owes_the_user_surface_only_where_disposable_and_writes_nothing() {
+        let home = scratch("register-user-check");
+        let done = register_user(&home, None, true).unwrap();
+        assert_eq!(done.authoritative, hook::disposable_here(Some(&home)));
+        let expected: Vec<(crate::config_model::Harness, &str)> = if done.authoritative {
+            vec![(
+                crate::config_model::Harness::ClaudeCode,
+                ".claude/settings.json",
+            )]
+        } else {
+            Vec::new()
         };
-        let path = root.join(committed);
+        assert_eq!(done.owed, expected);
+        assert!(!done.written);
+        assert_eq!(std::fs::read_dir(&home).unwrap().count(), 0);
+    }
+
+    /// An existing user surface keeps its other keys, and only a disposable
+    /// machine's run writes it back, as exactly batten's events.
+    #[test]
+    fn a_user_surface_is_owned_only_where_disposable() {
+        let home = scratch("register-user-existing");
+        let path = hook::user_config_path(
+            crate::config_model::Harness::ClaudeCode,
+            &home,
+            ".claude/settings.json",
+        );
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, "{\"permissions\": {}}\n").unwrap();
-        let done = register(&root, &repo, false).unwrap();
-        assert_eq!(done.authoritative, crate::environment::disposable());
-        assert!(!done.events.is_empty(), "the surface lacked batten");
+        let done = register_user(&home, None, false).unwrap();
         assert_eq!(done.written, done.authoritative);
+        let after: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert!(after.get("permissions").is_some(), "{after}");
+        let harness = crate::config_model::Harness::ClaudeCode;
+        let owned = owned_events(
+            harness.wiring().unwrap(),
+            harness,
+            &hook::wiring_command(harness),
+        );
+        assert_eq!(
+            after.get("hooks") == Some(&owned),
+            done.authoritative,
+            "{after}"
+        );
+    }
+
+    /// A foreign hook on a merged surface is removed where disposable, and is a
+    /// counted conflict everywhere else.
+    #[test]
+    fn a_foreign_merged_hook_is_removed_or_reported() {
+        let home = scratch("register-user-foreign");
+        let local = home.join(".claude").join("settings.local.json");
+        std::fs::create_dir_all(local.parent().unwrap()).unwrap();
+        std::fs::write(
+            &local,
+            r#"{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"/opt/x"}]}]}}"#,
+        )
+        .unwrap();
+        let done = register_user(&home, None, true).unwrap();
+        let harness = crate::config_model::Harness::ClaudeCode;
+        if done.authoritative {
+            assert!(
+                done.owed
+                    .contains(&(harness, ".claude/settings.local.json")),
+                "{done:?}"
+            );
+            assert!(done.conflicts.is_empty());
+        } else {
+            assert_eq!(
+                done.conflicts,
+                vec![Conflict {
+                    harness,
+                    surface: ".claude/settings.local.json",
+                    count: 1
+                }]
+            );
+        }
     }
 
     #[test]
@@ -1674,7 +1795,7 @@ mod tests {
         )
         .unwrap();
         let checked = reclaim(&dir, &home, true).unwrap();
-        assert_eq!(checked.authoritative, crate::environment::disposable());
+        assert_eq!(checked.authoritative, hook::disposable_here(Some(&home)));
         assert_eq!(
             checked.rows,
             vec![AtLoadRow {
@@ -1697,7 +1818,7 @@ mod tests {
     fn a_disarm_reports_whether_its_environment_is_disposable() {
         let home = scratch("disarm-posture");
         let done = disarm(&home, &[], true).unwrap();
-        assert_eq!(done.authoritative, crate::environment::disposable());
+        assert_eq!(done.authoritative, hook::disposable_here(Some(&home)));
         assert!(done.rows.is_empty());
     }
 
@@ -1767,12 +1888,13 @@ mod tests {
     }
 
     #[test]
-    fn a_sibling_directory_is_not_a_session_root_above() {
+    fn a_repository_beside_the_home_does_not_hide_the_user_surface() {
         let parent = scratch("register-sibling");
-        let (one, two) = (parent.join("one"), parent.join("two"));
-        std::fs::create_dir_all(&one).unwrap();
-        std::fs::create_dir_all(&two).unwrap();
-        assert!(!register(&one, &two, true).unwrap().above);
+        let (home, repo) = (parent.join("home"), parent.join("repo"));
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::create_dir_all(&repo).unwrap();
+        let done = register_user(&home, Some(&repo), true).unwrap();
+        assert_eq!(done.owed.is_empty(), !done.authoritative, "{done:?}");
     }
 
     #[test]

@@ -27,10 +27,12 @@
 //!
 //! # The default is the safe one, deliberately
 //!
-//! Absent means a real machine. A developer who never sets it gets a batten that
-//! reports and never removes; a container whose environment field was mistyped
-//! gets the same, which is a stalled repair rather than a surprise deletion. The
-//! expensive direction is the one that requires saying so.
+//! Absent, and with no hosted harness stating otherwise, means a real machine. A
+//! developer who never sets it gets a batten that reports and never removes; a
+//! container whose environment field was mistyped gets the same, since any
+//! explicit value but the licence refuses, which is a stalled repair rather than
+//! a surprise deletion. What a hosted harness states about itself is the one
+//! exception, detected rather than declared (CLOUD-2953).
 
 /// The variable a disposable environment sets.
 ///
@@ -42,25 +44,52 @@ const KEY: &str = "BATTEN_ENVIRONMENT";
 /// The one value that licenses a destructive repair.
 const DISPOSABLE: &str = "disposable";
 
-/// Whether this environment declared itself disposable.
+/// Whether this environment is disposable: declared so, or, with nothing
+/// declared, a hosted harness session that states it is one (CLOUD-2953).
 ///
-/// **An exact match, never a truthiness test**, and that is the whole of the
-/// spelling decision. `BATTEN_ENVIRONMENT=1`, `=true`, `=disposible` and an empty
-/// value are all *not* this value, so every way of getting it wrong lands on the
-/// conservative arm. A predicate that accepted "anything non-empty" would turn a
-/// typo into a licence to delete from somebody's home directory, which is the
-/// failure this module's default exists to make unreachable.
+/// **An explicit value decides, and only the exact one licenses.**
+/// `BATTEN_ENVIRONMENT=1`, `=true`, `=disposible`, `=machine` and an empty value
+/// are all *not* this value, so every explicit way of getting it wrong lands on
+/// the conservative arm — over a harness that says it is hosted too. A predicate
+/// that accepted "anything non-empty" would turn a typo into a licence to delete
+/// from somebody's home directory.
+///
+/// **With the variable unset, the harness's own statement decides**: `signal`,
+/// the variable its hosted form exports, or `marker`, a directory under its user
+/// config directory that its hosted setup run writes into (the variable is not
+/// known to be exported while a setup script runs). The owner's ruling of
+/// 2026-11-27: a hosted container is detected, never declared by hand, because
+/// one forgotten export left a whole cloud session's hooks unregistered.
 ///
 /// Read at the point of decision rather than resolved once into config: it is not
 /// a repository fact and giving it a config seat would invite exactly the
 /// committed-override shape the header rules out.
 ///
-/// The read itself is judged over the compiled binary (CLOUD-2497): the reclaim
-/// suite runs one bench declared disposable and one not, and each repairs only
-/// as its declaration licenses.
+/// The read itself is judged over the compiled binary (CLOUD-2497, CLOUD-2953):
+/// the reclaim and registration suites run benches declared, detected and
+/// neither, and each repairs only as its environment licenses.
 #[must_use]
-pub fn disposable() -> bool {
-    licenses(std::env::var(KEY).ok().as_deref())
+pub fn disposable(signal: Option<HostSignal>, marker: Option<&std::path::Path>) -> bool {
+    let read = |key: &str| std::env::var(key).ok();
+    disposable_of(signal, marker.is_some_and(std::path::Path::is_dir), &read)
+}
+
+/// [`disposable`]'s decision over an environment reader and whether the marker
+/// directory exists, split for the unit cases (`set_var` is `unsafe`).
+fn disposable_of(
+    signal: Option<HostSignal>,
+    marked: bool,
+    read: &dyn Fn(&str) -> Option<String>,
+) -> bool {
+    match read(KEY) {
+        Some(value) => licenses(Some(&value)),
+        None => marked || stated(signal, read),
+    }
+}
+
+/// Whether the harness's variable carries its hosted value.
+fn stated(signal: Option<HostSignal>, read: &dyn Fn(&str) -> Option<String>) -> bool {
+    signal.is_some_and(|(key, value)| read(key).as_deref() == Some(value))
 }
 
 /// The predicate over the variable's value, split from the environment read.
@@ -102,9 +131,13 @@ impl Host {
 /// laptop. So each harness's own signal decides, and [`disposable`]'s explicit
 /// declaration is the fallback for a harness whose hosted form states nothing.
 ///
-/// Distinct from [`disposable`] on purpose: a destructive repair still needs the
-/// explicit declaration, because the expensive direction is the one that must be
-/// said; a policy that only refuses a practice can follow detection.
+/// Distinct from [`disposable`] in one arm: an explicit value other than the
+/// licence does not stop this answer following detection, because a policy that
+/// only refuses a practice may err toward the hosted reading. The repair's
+/// predicate lets an explicit value overrule detection, since that is the
+/// operator stating what this machine is. (CLOUD-2953 retired the earlier ruling
+/// that a destructive repair needs the declaration at all: a hosted container is
+/// detected, on the owner's instruction.)
 #[must_use]
 pub fn host(signal: Option<HostSignal>) -> Host {
     let read = |key: &str| std::env::var(key).ok();
@@ -120,8 +153,7 @@ pub type HostSignal = (&'static str, &'static str);
 /// [`host`]'s decision over an environment reader, split for the unit cases
 /// (`set_var` is `unsafe`, and `unsafe` is forbidden here).
 fn host_of(signal: Option<HostSignal>, read: &dyn Fn(&str) -> Option<String>) -> Host {
-    let stated = signal.is_some_and(|(key, value)| read(key).as_deref() == Some(value));
-    if licenses(read(KEY).as_deref()) || stated {
+    if licenses(read(KEY).as_deref()) || stated(signal, read) {
         Host::Disposable
     } else {
         Host::Machine
@@ -155,6 +187,43 @@ mod tests {
         // The declaration decides wherever detection says nothing.
         assert_eq!(host_of(None, &declared), Host::Disposable);
         assert_eq!(host_of(None, &local), Host::Machine);
+    }
+
+    /// CLOUD-2953. Fails by: a hosted container read as a machine because the
+    /// variable was unset, or an explicit value overruled by detection.
+    #[test]
+    fn detection_decides_only_where_nothing_is_declared() {
+        let claude: Option<HostSignal> = Some(("CLAUDE_CODE_REMOTE", "true"));
+        let env = |pairs: &'static [(&'static str, &'static str)]| {
+            move |key: &str| {
+                pairs
+                    .iter()
+                    .find(|(name, _)| *name == key)
+                    .map(|(_, value)| (*value).to_owned())
+            }
+        };
+        let remote = env(&[("CLAUDE_CODE_REMOTE", "true")]);
+        assert!(disposable_of(claude, false, &remote));
+        assert!(!disposable_of(
+            claude,
+            false,
+            &env(&[("CLAUDE_CODE_REMOTE", "1")])
+        ));
+        assert!(disposable_of(claude, true, &env(&[])));
+        assert!(!disposable_of(claude, false, &env(&[])));
+        assert!(!disposable_of(None, false, &remote));
+        let refused = env(&[
+            ("CLAUDE_CODE_REMOTE", "true"),
+            ("BATTEN_ENVIRONMENT", "machine"),
+        ]);
+        assert!(!disposable_of(claude, true, &refused));
+        assert!(!disposable_of(
+            claude,
+            true,
+            &env(&[("BATTEN_ENVIRONMENT", "")])
+        ));
+        let declared = env(&[("BATTEN_ENVIRONMENT", "disposable")]);
+        assert!(disposable_of(None, false, &declared));
     }
 
     #[test]
