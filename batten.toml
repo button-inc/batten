@@ -20371,6 +20371,8 @@ inputs = [
   "mise.agent.lock",
   ".gitignore",
   ".ignore",
+  ".serena/.gitignore",
+  ".cargo",
 ]
 tools = [
   ["batten", "step", "config"],
