@@ -623,7 +623,13 @@ pub fn register_user(home: &Path, repo: Option<&Path>, check: bool) -> Result<Us
         let user = harness.user_surface();
         for surface in harness.merge_surfaces() {
             let path = hook::user_config_path(*harness, home, surface);
-            if repo.is_some_and(|repo| same_file(&path, &repo.join(surface))) {
+            // The lexical arm covers a surface not yet written: `same_file`
+            // canonicalizes, so a missing file at a home that IS the checkout
+            // would otherwise be judged the user's and owed.
+            if repo.is_some_and(|repo| {
+                let committed = repo.join(surface);
+                path == committed || same_file(&path, &committed)
+            }) {
                 continue;
             }
             let is_user = user == Some(*surface);
