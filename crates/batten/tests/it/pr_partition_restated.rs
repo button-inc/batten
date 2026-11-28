@@ -47,6 +47,8 @@ use common::{batten, git_in, scratch, stderr, stdout, write};
 const MODULE: &str = include_str!("../../../../policy/pr-partition-restated.rego");
 
 /// The shipped configuration, read so the fixture's copy can be held to it.
+/// The FILE WHOLE, not `common::committed_config` (CLOUD-2960): the case holds
+/// a row's pattern to the bytes as written, escapes included.
 const SHIPPED: &str = include_str!("../../../../batten.toml");
 
 /// The pattern the shipped registry declares, copied here because a fixture

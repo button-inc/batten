@@ -27,7 +27,7 @@ fn fixture(name: &str) -> PathBuf {
     // Plus the retired substitution row (CLOUD-2698), the row every case edits.
     let config = format!(
         "{}{}",
-        without_session_handlers(include_str!("../../../../batten.toml")),
+        without_session_handlers(&common::committed_config()),
         common::SUBSTITUTION_ROW
     );
     let staged = Fixture::new(name).config(&config);

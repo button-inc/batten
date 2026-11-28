@@ -233,7 +233,7 @@ use common::{Fixture, run_with_stdin, stderr};
 /// the authority: a row edited in `batten.toml` is exercised by the next run
 /// rather than by whoever remembers to update a duplicate.
 fn repo(name: &str) -> PathBuf {
-    let staged = Fixture::new(name).config(include_str!("../../../../batten.toml"));
+    let staged = Fixture::new(name).config(&common::committed_config());
     // The modules the committed config names, copied by ENUMERATION rather than by
     // name, and staged BEFORE the commit so they are tracked like the config is.
     //

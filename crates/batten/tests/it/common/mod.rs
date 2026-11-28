@@ -4029,3 +4029,19 @@ pub(crate) fn link_file(target: impl AsRef<Path>, link: impl AsRef<Path>) {
     #[cfg(windows)]
     std::os::windows::fs::symlink_file(target, link).expect("the link is made");
 }
+
+/// This repository's committed config as a step key sees it (CLOUD-2960):
+/// read at run time, without the `engine` pin and without the `[[step]]`
+/// rows' scheduling ([`batten::step::config_view`]). A case that stages the
+/// repository's own rows reads them through this, so it never compiles in the
+/// bytes its step does not key; a case whose subject IS the pin or the
+/// scheduling reads the file whole and says so.
+#[allow(
+    dead_code,
+    reason = "not every test binary stages the committed config"
+)]
+pub fn committed_config() -> String {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../batten.toml");
+    let text = std::fs::read_to_string(&path).expect("this repository's batten.toml is readable");
+    batten::step::config_view(&text).expect("this repository's batten.toml parses")
+}
