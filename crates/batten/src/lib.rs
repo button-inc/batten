@@ -13463,6 +13463,9 @@ fn run_land_lap(
         // WHAT A LAP THAT NEVER RETURNED LEFT SPENDING, reconciled once after the
         // lock and inside the window, so its forge writes read as in flight
         // (CLOUD-2371): `unwind_lap` is the fast path on a normal return.
+        if let Some(code) = record_a_landing_at_entry(root, url, reference, branch, out)? {
+            return Ok(code);
+        }
         reconcile_at_entry(root, branch, out)?;
         // EACH COLLECTION REACHES THE LAP RECORD WHEN IT ENDS (CLOUD-2782), not
         // when the landing does: a lap that dies mid-run keeps what the watcher
@@ -13592,6 +13595,43 @@ fn abandon_runs(repo: &str, sha: &str, what: &str, out: &mut dyn Write) -> Resul
     Ok(())
 }
 
+/// Record, at entry, a landing a killed lap never recorded (CLOUD-2904 R7 (b)).
+///
+/// A kill after the fast-forward and before [`landed_for_real`] leaves the
+/// trunk at this branch's head and the lease held until its TTL, so every
+/// waiter sits that TTL out. The trunk already holding the head is the landing
+/// itself — nothing a lap could add — so the entry does what the merged arm
+/// would have: hands the lease back and retires the branch. A trunk the forge
+/// would not show is could-not-look, and the laps run as before.
+fn record_a_landing_at_entry(
+    root: &Path,
+    url: &str,
+    reference: &str,
+    branch: &str,
+    out: &mut dyn Write,
+) -> Result<Option<ExitCode>> {
+    let Some(repo) = repo_slug(root) else {
+        return Ok(None);
+    };
+    let Ok(head) = git::head_commit(root) else {
+        return Ok(None);
+    };
+    let trunk = main_watch::read(&trunk_watch(reference, &head, &repo, 0), None)
+        .filter(|answer| answer.status == 200)
+        .and_then(|answer| main_watch::head_from_body(&answer.body));
+    if !land::landed_at_entry(trunk.as_deref(), &head) {
+        return Ok(None);
+    }
+    writeln!(
+        out,
+        "land: entry — the trunk already holds {}; recording the landing a lap did not",
+        short(&head)
+    )?;
+    hand_back_the_lease(root, branch, out);
+    retire_the_branch(root, url, reference, branch, out)?;
+    Ok(Some(ExitCode::Success))
+}
+
 /// Undo, at entry, what a lap that never returned left spending (CLOUD-2371).
 ///
 /// Crash-only: a SIGKILL, a background `deadline` stop or a reclaimed container
@@ -13604,7 +13644,8 @@ fn abandon_runs(repo: &str, sha: &str, what: &str, out: &mut dyn Write) -> Resul
 /// NOT `unwind_lap`'s tap, whose ownership proof is the lease this run does not
 /// hold yet (`Step::Lease` takes it later). The proof here is narrower and its
 /// own: the pull request is this branch's, the stale head is a strict ancestor
-/// of this clone's HEAD, so it is this branch's own superseded push, AND no
+/// of this clone's HEAD or a head this clone's branch held before a rebase
+/// replaced it, so it is this branch's own superseded push, AND no
 /// other clone holds the lease ([`no_rival_holds_lease`]), so no live lander is
 /// waiting on those runs.
 fn reconcile_at_entry(root: &Path, branch: &str, out: &mut dyn Write) -> Result<()> {
@@ -13622,9 +13663,15 @@ fn reconcile_at_entry(root: &Path, branch: &str, out: &mut dyn Write) -> Result<
     };
     let superseded = read.head != local
         && git::is_ancestor(root, &read.head, &local).ok().flatten() == Some(true);
-    let land::Reconcile::AbandonAndRedraft { stale } =
-        land::entry_reconcile(Some((!read.draft, &read.head)), &local, superseded)
-    else {
+    // A head this clone's branch held and a rebase replaced (CLOUD-2904 R7 (a)):
+    // not an ancestor, but the branch's own reflog proves it was this clone's.
+    let replaced = !superseded && git::branch_once_held(root, branch, &read.head);
+    let land::Reconcile::AbandonAndRedraft { stale } = land::entry_reconcile(
+        Some((!read.draft, &read.head)),
+        &local,
+        superseded,
+        replaced,
+    ) else {
         return Ok(());
     };
     // ASKED LAST, only once there is something to undo: the lease read is a

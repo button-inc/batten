@@ -171,8 +171,16 @@ pub fn release_satisfied(tag: &str, running: &str, declared: &str, own_build: bo
 }
 
 /// Whether the tree's OWN build `running` answers the DEV pin `pin` (CLOUD-2903,
-/// the review of #1291's HIGH 1): both are dev pre-releases of one next patch,
-/// and `running` was committed at or after the pinned build.
+/// the review of #1291's HIGH 1): both are dev pre-releases, `running` was
+/// committed at or after the pinned build, and its version is the pinned one's
+/// or later — never earlier.
+///
+/// LATER, NOT ONLY THE SAME PATCH (CLOUD-2903, "Two defects of a dev pin",
+/// defect 2): when `main` takes a release and the branch is replayed onto it,
+/// the branch's own next build is the NEXT patch's dev identity, so a
+/// same-patch rule refused the branch's own later build and stopped every lap.
+/// An earlier version is still refused: it cannot be a later commit of the
+/// pinned line.
 ///
 /// WHY: a branch pins the dev pre-release CI published for one of its own
 /// heads, and every later commit on it builds a later identity (a later commit
@@ -187,11 +195,11 @@ pub fn release_satisfied(tag: &str, running: &str, declared: &str, own_build: bo
 /// text. An identity with no commit second (`dev.unknown`) answers nothing.
 #[must_use]
 pub fn dev_pin_answered(pin: &semver::Version, running: &semver::Version) -> bool {
-    let same_patch =
-        (pin.major, pin.minor, pin.patch) == (running.major, running.minor, running.patch);
+    let not_earlier =
+        (running.major, running.minor, running.patch) >= (pin.major, pin.minor, pin.patch);
     let dev = crate::version::is_dev_prerelease(pin) && crate::version::is_dev_prerelease(running);
     match (committed_second(pin), committed_second(running)) {
-        (Some(pinned), Some(built)) => same_patch && dev && built >= pinned,
+        (Some(pinned), Some(built)) => not_earlier && dev && built >= pinned,
         _ => false,
     }
 }
@@ -2353,7 +2361,22 @@ mod tests {
         assert!(release_satisfied(pin, pin, declared, false));
         assert!(!release_satisfied(pin, later, declared, false));
         assert!(!release_satisfied(pin, earlier, declared, true));
-        assert!(!release_satisfied(pin, next_patch, declared, true));
+        // The next patch's own later build answers (CLOUD-2903 defect 2: `main`
+        // released and the branch was replayed onto it); the previous patch's
+        // never does, even committed later.
+        assert!(release_satisfied(pin, next_patch, declared, true));
+        assert!(!release_satisfied(
+            pin,
+            "v0.0.221-dev.pr1291.20261124130000+0123456789ab",
+            declared,
+            true
+        ));
+        assert!(!release_satisfied(
+            pin,
+            "v0.0.223-dev.pr1291.20261124110000+0123456789ab",
+            declared,
+            true
+        ));
         assert!(!release_satisfied(
             pin,
             "v0.0.222-dev.unknown",

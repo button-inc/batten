@@ -5238,6 +5238,28 @@ pub fn is_ancestor(dir: &Path, ancestor: &str, descendant: &str) -> Result<Optio
     ))
 }
 
+/// Whether this clone's local `branch` once pointed at `commit`, read from the
+/// branch's own reflog (CLOUD-2904 R7 (a)): the proof that a head which is no
+/// longer an ancestor was replaced here, by a rebase or replay, rather than
+/// pushed by somebody else. A branch with no reflog, or an unreadable one,
+/// held nothing — the answer that cancels nothing.
+#[must_use]
+pub fn branch_once_held(dir: &Path, branch: &str, commit: &str) -> bool {
+    let Ok(repo) = open_fresh(dir) else {
+        return false;
+    };
+    let Ok(reference) = repo.find_reference(format!("refs/heads/{branch}").as_str()) else {
+        return false;
+    };
+    let mut log = reference.log_iter();
+    let Ok(Some(lines)) = log.all() else {
+        return false;
+    };
+    lines
+        .flatten()
+        .any(|line| line.new_oid.to_hex().to_string() == commit)
+}
+
 /// The paths whose blob differs between two revisions, added and removed
 /// included (CLOUD-2033 G2), over the same tree walk [`base_delta`] uses.
 ///
@@ -9579,6 +9601,35 @@ mod tests {
             ],
         );
         assert_eq!(remote_tips_before(&repo, 0), vec![first]);
+    }
+
+    /// A head the branch held before a rebase replaced it is one it once
+    /// held; a commit it never pointed at, and an unknown branch, are not
+    /// (CLOUD-2904 R7 (a)).
+    ///
+    /// Fails by: matching every reflog line, or none.
+    #[test]
+    fn a_rebased_away_head_is_one_the_branch_once_held() {
+        let repo = scratch("once-held");
+        git(&repo, &["init", "-q", "-b", "topic"]);
+        git(&repo, &["commit", "-q", "--allow-empty", "-m", "chore: a"]);
+        let base = head_commit(&repo).unwrap();
+        git(&repo, &["commit", "-q", "--allow-empty", "-m", "chore: b"]);
+        let replaced = head_commit(&repo).unwrap();
+        git(&repo, &["reset", "-q", "--hard", &base]);
+        git(
+            &repo,
+            &["commit", "-q", "--allow-empty", "-m", "chore: b again"],
+        );
+        git(&repo, &["checkout", "-q", "--detach", &base]);
+        git(
+            &repo,
+            &["commit", "-q", "--allow-empty", "-m", "chore: elsewhere"],
+        );
+        let foreign = head_commit(&repo).unwrap();
+        assert!(branch_once_held(&repo, "topic", &replaced));
+        assert!(!branch_once_held(&repo, "topic", &foreign));
+        assert!(!branch_once_held(&repo, "other", &replaced));
     }
 
     #[test]

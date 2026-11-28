@@ -2833,6 +2833,16 @@ pub enum Reconcile {
     },
 }
 
+/// Whether the trunk already holds `head` at a landing's entry (CLOUD-2904 R7
+/// (b)): a lap killed after the fast-forward and before the landing was
+/// recorded left exactly this, and the next start records it rather than
+/// lapping a branch that has landed. A trunk nobody could read (`None`) is
+/// could-not-look, never a landing.
+#[must_use]
+pub fn landed_at_entry(trunk: Option<&str>, head: &str) -> bool {
+    trunk.is_some_and(|trunk| trunk == head)
+}
+
 /// Reconcile a ready pull request left by a killed lap, from observation alone
 /// (CLOUD-2371).
 ///
@@ -2844,16 +2854,28 @@ pub enum Reconcile {
 /// - No pull request, or a draft: nothing is spending. `Leave`.
 /// - Ready on the head this run holds: the running matrix grades what this run
 ///   pushes, so it is adopted. `Leave`.
-/// - Ready on a head that is not an ancestor: somebody else's push or a
-///   diverged branch, and could-not-tell is never a cancel. `Leave`.
+/// - Ready on a head that is not an ancestor and this clone's branch never
+///   held: somebody else's push or a diverged branch, and could-not-tell is
+///   never a cancel. `Leave`.
 /// - Ready on a strict ancestor: this branch's own superseded push, whose runs
 ///   grade a tree it will never land. `AbandonAndRedraft`.
+/// - Ready on a head this clone's branch once held and has since `replaced`
+///   (a rebase or replay after the ready, CLOUD-2904 R7 (a)): its runs grade a
+///   tree nobody will land, and leaving them to the workflow's
+///   `cancel-in-progress` pays for a matrix until the next push. Same answer.
 #[must_use]
-pub fn entry_reconcile(pr: Option<(bool, &str)>, local_head: &str, superseded: bool) -> Reconcile {
+pub fn entry_reconcile(
+    pr: Option<(bool, &str)>,
+    local_head: &str,
+    superseded: bool,
+    replaced: bool,
+) -> Reconcile {
     match pr {
-        Some((true, head)) if head != local_head && superseded => Reconcile::AbandonAndRedraft {
-            stale: head.to_owned(),
-        },
+        Some((true, head)) if head != local_head && (superseded || replaced) => {
+            Reconcile::AbandonAndRedraft {
+                stale: head.to_owned(),
+            }
+        }
         _ => Reconcile::Leave,
     }
 }
@@ -5374,31 +5396,75 @@ mod lap_tests {
     fn entry_reconcile_cancels_only_a_superseded_ready_head() {
         use super::{Reconcile, entry_reconcile};
         assert_eq!(
-            entry_reconcile(None, "b", false),
+            entry_reconcile(None, "b", false, false),
             Reconcile::Leave,
             "no pull request"
         );
         assert_eq!(
-            entry_reconcile(Some((false, "a")), "b", true),
+            entry_reconcile(Some((false, "a")), "b", true, false),
             Reconcile::Leave,
             "a draft"
         );
         assert_eq!(
-            entry_reconcile(Some((true, "b")), "b", false),
+            entry_reconcile(Some((true, "b")), "b", false, false),
             Reconcile::Leave,
             "the head this run holds"
         );
         assert_eq!(
-            entry_reconcile(Some((true, "a")), "b", false),
+            entry_reconcile(Some((true, "a")), "b", false, false),
             Reconcile::Leave,
             "a head that is not an ancestor"
         );
         assert_eq!(
-            entry_reconcile(Some((true, "a")), "b", true),
+            entry_reconcile(Some((true, "a")), "b", true, false),
             Reconcile::AbandonAndRedraft {
                 stale: String::from("a")
             },
             "a strict ancestor"
+        );
+    }
+
+    /// CLOUD-2904 R7 (b): a start that finds the trunk at its own head records
+    /// the landing (and so hands the dead run's lease back); a trunk elsewhere,
+    /// or one nobody could read, laps as before.
+    ///
+    /// Fails by: answering a could-not-look as landed, which would retire a
+    /// branch whose landing nobody saw, or never answering, which holds the
+    /// lease to its TTL.
+    #[test]
+    fn a_start_with_the_trunk_at_its_head_records_the_landing() {
+        use super::landed_at_entry;
+        assert!(landed_at_entry(Some("b"), "b"), "the trunk holds the head");
+        assert!(!landed_at_entry(Some("a"), "b"), "the trunk elsewhere");
+        assert!(!landed_at_entry(None, "b"), "the trunk unreadable");
+    }
+
+    /// CLOUD-2904 R7 (a): a ready pull request on a head this clone's branch
+    /// held before a rebase replaced it is re-drafted at the next start, so
+    /// the only head left to ready is the one this run holds; a draft, or the
+    /// head this run holds, is still left as it is.
+    ///
+    /// Fails by: `replaced` dropped from the guard, which answers `Leave` and
+    /// leaves the replaced head's paid matrix running beside the new one.
+    #[test]
+    fn entry_reconcile_redrafts_a_ready_head_a_rebase_replaced() {
+        use super::{Reconcile, entry_reconcile};
+        assert_eq!(
+            entry_reconcile(Some((true, "a")), "b", false, true),
+            Reconcile::AbandonAndRedraft {
+                stale: String::from("a")
+            },
+            "a replaced head"
+        );
+        assert_eq!(
+            entry_reconcile(Some((false, "a")), "b", false, true),
+            Reconcile::Leave,
+            "a replaced head already a draft"
+        );
+        assert_eq!(
+            entry_reconcile(Some((true, "b")), "b", false, true),
+            Reconcile::Leave,
+            "the head this run holds"
         );
     }
 
