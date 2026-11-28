@@ -217,6 +217,10 @@ tiktoken-rs.workspace = true
 # and parses the package version as semver (CLOUD-2906).
 sha2.workspace = true
 semver.workspace = true
+# The build identity's git reads (branch, HEAD's commit time, the index's
+# tracked inputs), in process: a build script that spawns `git` is a spawn no
+# adapter places (owner ruling, 2026-11-28).
+gix.workspace = true
 regex-automata = { version = "0.4", default-features = false, features = [
   "std",
   "dfa-build",
