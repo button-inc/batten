@@ -5484,80 +5484,28 @@ fn file_and_report(
     // rather than re-derived here (CLOUD-1645). Both channels a caller reads —
     // the exit code and the emitted line — come from this one value, which is
     // what makes the decision testable without a listener.
-    let outcome = mcp::outcome(result, &payload, method, source, &stored.handle());
-    let declared = mcp::row_for(config, method);
-    let reduced = declared
-        .filter(|_| outcome.projectable)
-        .and_then(|row| mcp::reduce(row, &payload.value));
-    let disposition = match (declared, &reduced) {
-        (Some(_), Some(_)) => "reduced",
-        (Some(_), None) => "unreduced",
-        (None, _) => "undeclared",
+    let report = mcp::report(config, result, method, source, &stored.handle())?;
+    let (failure, records) = match report.exit {
+        ExitCode::Success => (None, &report.stderr[..]),
+        _ => match report.stderr.split_last() {
+            Some((last, rest)) => (Some(last), rest),
+            None => (None, &report.stderr[..]),
+        },
     };
-    // ONLY THE GENUINE NODE-UNREACHABLE CASE GETS THIS MESSAGE. A row that was
-    // never consulted because the result was unprojectable has nothing wrong with
-    // its `node`, and sending its author to check one would be a remedy pointing
-    // at the wrong file — the class this repository refuses (CLOUD-1050).
-    if disposition == "unreduced" && outcome.projectable {
-        writeln!(
-            err,
-            "batten: mcp call: {method} declares a reduction and its node was not reachable in \
-             this response — passing the response through whole. Check the row's `node` and \
-             `embedded` against what the server actually returned; the stored capture is the \
-             evidence."
-        )?;
+    for line in records {
+        writeln!(err, "{line}")?;
     }
-    let answer = match &reduced {
-        Some(kept) => serde_json::Value::Object(kept.clone()),
-        // The PAYLOAD rather than the envelope, so what a caller gets when no
-        // reduction applies is the same document the store holds and the same one
-        // the connector would have handed back — which is what "byte-identical to
-        // no-Batten" has to mean here.
-        None => payload.value.clone(),
-    };
-    let rendered = serde_json::to_string_pretty(&answer)?;
-
-    // THE DELTA IS THE POINT AND IS REPORTED AS ONE. A pointer with no number
-    // beside it makes the saving an impression; the two byte counts make it a
-    // measurement anybody can check against the store.
-    let emitted = u64::try_from(rendered.len()).unwrap_or(u64::MAX);
-    let held = u64::try_from(whole.len()).unwrap_or(u64::MAX);
-    // THE RECORD GOES TO STDERR AND THE PRODUCT TO STDOUT, which is `exec`'s split
-    // and its reason: the answer belongs to whoever asked for it, and a record
-    // ABOUT the call interleaved into that answer makes it unparseable. It is
-    // pointer-only — a handle, a source id, a disposition and two byte counts,
-    // never a byte of what was stored.
-    writeln!(
-        err,
-        "batten: mcp call: {} {method} via {source} {disposition} — stored {held} bytes, emitted \
-         {emitted}",
-        stored.handle(),
-    )?;
-    // THE POINTER HAS TO LEAD SOMEWHERE A READER CAN NAVIGATE (CLOUD-2207). The
-    // stored body is one JSON line, so the handle above names bytes no line read
-    // can slice. The view is the same document laid out field by field, and the
-    // index says which lines hold which field — a plain file read with an offset
-    // and a limit then takes exactly what the reader chose, never the whole body
-    // and never a second fetch through the raw connector.
-    if reduced.is_some()
+    // THE POINTER HAS TO LEAD SOMEWHERE A READER CAN NAVIGATE (CLOUD-2207).
+    if report.reduced
         && let Ok(Some((path, index))) = capture::view(repo, &stored, &whole)
     {
         writeln!(err, "{}", capture::pointer_line(&path, &index, &[&stored]))?;
     }
-    writeln!(out, "{rendered}")?;
-    // THE EXIT CODE IS THE ANSWER, AND UNTIL CLOUD-1645 IT WAS NOT ONE. This
-    // returned `Ok(ExitCode::Success)` unconditionally, so a refused tool call, a
-    // rejected write and a not-found read all reported clean — a false-completion
-    // signal inside the verb whose purpose is to kill them, and §7's "no per-verb
-    // exception" broken exactly as CLOUD-292 broke it in `exec`.
-    //
-    // The line is pointer-only, per rule 4: the method, the connector and the
-    // stored response's address, so the error text is fetchable from the capture
-    // store without a byte of it entering anyone's context.
-    if let Some(failure) = &outcome.failure {
+    writeln!(out, "{}", report.stdout)?;
+    if let Some(failure) = failure {
         writeln!(err, "{failure}")?;
     }
-    Ok(outcome.exit)
+    Ok(report.exit)
 }
 
 /// `batten target prune` (CLOUD-1030).

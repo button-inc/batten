@@ -1176,6 +1176,78 @@ pub fn row_for<'a>(config: &'a McpConfig, method: &str) -> Option<&'a ResultRow>
     config.results.iter().find(|row| row.method == method)
 }
 
+/// What `batten mcp call` writes for one dispatched result: the stdout
+/// document, the stderr lines, and the exit code.
+///
+/// A pure function of the result, so a case can drive the verb's whole answer
+/// without a listener; the verb writes these and adds nothing of its own.
+#[derive(Debug)]
+pub struct Report {
+    /// The document printed on stdout, without its trailing newline.
+    pub stdout: String,
+    /// The lines printed on stderr, in order.
+    pub stderr: Vec<String>,
+    /// The code the verb returns.
+    pub exit: crate::exit::ExitCode,
+    /// Whether a declared row narrowed the answer.
+    pub reduced: bool,
+}
+
+/// Decide [`Report`] for one dispatched result.
+///
+/// # Errors
+///
+/// Only when the answer cannot be serialized.
+pub fn report(
+    config: &McpConfig,
+    result: &serde_json::Value,
+    method: &str,
+    source: &str,
+    handle: &str,
+) -> Result<Report> {
+    let payload = payload(result);
+    let whole = serde_json::to_vec(&payload.value)?;
+    let outcome = outcome(result, &payload, method, source, handle);
+    let declared = row_for(config, method);
+    let reduced = declared
+        .filter(|_| outcome.projectable)
+        .and_then(|row| reduce(row, &payload.value));
+    let disposition = match (declared, &reduced) {
+        (Some(_), Some(_)) => "reduced",
+        (Some(_), None) => "unreduced",
+        (None, _) => "undeclared",
+    };
+    let mut stderr = Vec::new();
+    if disposition == "unreduced" && outcome.projectable {
+        stderr.push(format!(
+            "batten: mcp call: {method} declares a reduction and its node was not reachable in \
+             this response — passing the response through whole. Check the row's `node` and \
+             `embedded` against what the server actually returned; the stored capture is the \
+             evidence."
+        ));
+    }
+    let answer = match &reduced {
+        Some(kept) => serde_json::Value::Object(kept.clone()),
+        None => payload.value.clone(),
+    };
+    let rendered = serde_json::to_string_pretty(&answer)?;
+    let emitted = u64::try_from(rendered.len()).unwrap_or(u64::MAX);
+    let held = u64::try_from(whole.len()).unwrap_or(u64::MAX);
+    stderr.push(format!(
+        "batten: mcp call: {handle} {method} via {source} {disposition} — stored {held} bytes, \
+         emitted {emitted}"
+    ));
+    if let Some(failure) = outcome.failure {
+        stderr.push(failure);
+    }
+    Ok(Report {
+        stdout: rendered,
+        stderr,
+        exit: outcome.exit,
+        reduced: reduced.is_some(),
+    })
+}
+
 /// A dispatched result with the protocol's own framing taken off.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Payload {
