@@ -1819,9 +1819,13 @@ task_cargo contains trimmed if {
 # carry a third of its own.
 task_cargo contains cmd if {
 	some raw in split(task_run("test:cargo"), "\n")
-	parts := split(trim_space(raw), " step run test:cargo -- ")
+	parts := split(trim_space(raw), " step run test:cargo ")
 	count(parts) == 2
-	cmd = parts[1]
+	# The step's own options (`--shards N`, 649cc9ce4) sit before `--`; the
+	# statement is everything after it.
+	tail := split(concat("", [" ", parts[1]]), " -- ")
+	count(tail) == 2
+	cmd = tail[1]
 	startswith(cmd, "cargo ")
 }
 
@@ -2164,6 +2168,17 @@ test_a_wrapped_statement_yields_its_tail if {
 	wrapped := object.union(
 		sound_manifest.tasks,
 		{"test:cargo": {"run": "cargo run --quiet -p batten -- step run test:cargo -- cargo nextest run --workspace"}},
+	)
+	count(violation) == 0 with input as swap("mise.toml", object.union(sound_manifest, {"tasks": wrapped}))
+}
+
+# STEP OPTIONS BEFORE `--` ARE THE WRAPPER'S, NEVER THE STATEMENT'S: the shipped
+# task passes `--shards` (649cc9ce4), and a parse that split on the bare
+# `step run test:cargo -- ` read no statement and refused the tree as unread.
+test_a_wrapped_statement_with_step_options_yields_its_tail if {
+	wrapped := object.union(
+		sound_manifest.tasks,
+		{"test:cargo": {"run": "cargo run --quiet -p batten -- step run test:cargo --shards 4 -- cargo nextest run --workspace"}},
 	)
 	count(violation) == 0 with input as swap("mise.toml", object.union(sound_manifest, {"tasks": wrapped}))
 }
