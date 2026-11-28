@@ -2697,7 +2697,7 @@ pub fn tree_inputs_digest(root: &Path) -> Result<String> {
     frame(
         &mut hasher,
         "records",
-        crate::rules::recorded_for_digest(root)
+        crate::recorder::recorded_for_digest(root)
             .as_deref()
             .map(str::as_bytes),
     );
