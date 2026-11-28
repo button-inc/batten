@@ -13,7 +13,7 @@ use crate::common;
 
 use std::path::{Path, PathBuf};
 
-use common::{batten, git_in, scratch, stderr, write};
+use common::{batten, git_in, stderr, write};
 
 /// A subject convention, an attribution policy, and a protected glob only
 /// when asked for: the policy edit a case makes in the working tree.
@@ -34,8 +34,7 @@ fn config(protected: bool) -> String {
 
 /// A repository with the policy committed as its base, and the base's id.
 fn fixture(name: &str) -> (PathBuf, String) {
-    let dir = scratch(name);
-    git_in(&dir, &["init", "-q", "-b", "main"]);
+    let dir = common::scratch_repo(name);
     git_in(&dir, &["config", "user.name", "Accountable Human"]);
     git_in(&dir, &["config", "user.email", "human@example.test"]);
     write(&dir, "batten.toml", &config(false));
