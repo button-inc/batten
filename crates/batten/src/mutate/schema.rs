@@ -15789,6 +15789,115 @@ mod tests {
         assert_eq!(reasons, [("unplaced-mutant", 1)].into());
     }
 
+    /// Records `names` under `base`, each sealed over `function` with the
+    /// `same` digest and `from` as its provenance line.
+    fn sealed_store(base: &std::path::Path, names: &[(&str, &str)], from: &str) {
+        for (name, function) in names {
+            record(
+                base,
+                name,
+                name,
+                Some("0"),
+                &[(DEPENDS, &format!("Dsame\nF{function}\nT1\n{from}"))],
+            );
+        }
+        std::fs::write(base.join(LISTED), "").unwrap();
+    }
+
+    /// The `same` digest for every case it is asked about: a tree on which
+    /// nothing any record read has moved.
+    fn unmoved(
+        executed: &std::collections::BTreeMap<Case, BTreeSet<usize>>,
+        _: &std::collections::BTreeMap<Case, BTreeSet<String>>,
+    ) -> std::collections::BTreeMap<Case, String> {
+        executed
+            .keys()
+            .map(|case| (case.clone(), String::from("same")))
+            .collect()
+    }
+
+    /// Fails by: an unchanged tree sending any sealed record back, or doing so
+    /// with no reason counted (CLOUD-2959).
+    #[test]
+    fn an_unchanged_tree_carries_every_sealed_record() {
+        let base = crate::scratch::scratch("schema-carry-unchanged");
+        sealed_store(
+            &base,
+            &[("a", "fa"), ("b", "fb"), ("c", "fa")],
+            FIXTURE_FROM,
+        );
+        let probes = [String::from("fa"), String::from("fb")];
+        let (carried, _, reasons) = carry_counted(
+            &base,
+            "tree-1",
+            &no_identity_over(&probes),
+            (&unmoved, None),
+            true,
+        )
+        .unwrap();
+        assert_eq!((carried, reasons), (3, Reasons::new()));
+    }
+
+    /// Fails by: a one-function edit sending back a record that never ran the
+    /// function, or keeping one that did, or not saying why (CLOUD-2959).
+    #[test]
+    fn a_one_function_edit_sends_back_only_the_records_that_ran_it() {
+        let base = crate::scratch::scratch("schema-carry-one-function");
+        sealed_store(
+            &base,
+            &[("ran-a", "fa"), ("ran-b", "fb"), ("ran-b2", "fb")],
+            FIXTURE_FROM,
+        );
+        // `fa`'s body changed, so its digest is now `fa2`; `fb` is untouched.
+        let probes = [String::from("fa2"), String::from("fb")];
+        let (carried, _, reasons) = carry_counted(
+            &base,
+            "tree-2",
+            &no_identity_over(&probes),
+            (&unmoved, None),
+            true,
+        )
+        .unwrap();
+        assert_eq!(carried, 2);
+        assert!(!base.join("ran-a").exists(), "it ran the edited function");
+        assert!(base.join("ran-b").exists() && base.join("ran-b2").exists());
+        assert_eq!(reasons, [("function-gone", 1)].into());
+    }
+
+    /// Fails by: a record sealed by another engine and run at the same tree
+    /// sent back, or one naming no provenance carried or counted under any
+    /// other reason (CLOUD-2959, b1f42a48).
+    #[test]
+    fn a_store_sealed_elsewhere_is_carried_whole_at_the_same_tree() {
+        let probes = [String::from("fa")];
+        let elsewhere = crate::scratch::scratch("schema-carry-elsewhere");
+        sealed_store(
+            &elsewhere,
+            &[("a", "fa"), ("b", "fa")],
+            "Pfrom seal_dir another-engine tree 4242@99\n",
+        );
+        let (carried, _, reasons) = carry_counted(
+            &elsewhere,
+            "tree-1",
+            &no_identity_over(&probes),
+            (&unmoved, None),
+            true,
+        )
+        .unwrap();
+        assert_eq!((carried, reasons), (2, Reasons::new()));
+        let anonymous = crate::scratch::scratch("schema-carry-anonymous");
+        sealed_store(&anonymous, &[("a", "fa"), ("b", "fa")], "");
+        let (carried, _, reasons) = carry_counted(
+            &anonymous,
+            "tree-1",
+            &no_identity_over(&probes),
+            (&unmoved, None),
+            true,
+        )
+        .unwrap();
+        assert_eq!((carried, reasons), (0, [("no-provenance", 2)].into()));
+    }
+
     /// Fails by: a record CI would have kept counted under another reason, or
     /// not at all: under CI nothing is carried (CLOUD-2959).
     #[test]
