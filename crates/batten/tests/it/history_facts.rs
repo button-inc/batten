@@ -181,6 +181,9 @@ test_could_not_look_fires_neither if {
 "#;
 
 /// A repository with a tag and a deleted path.
+// needs-real-fixture: CLOUD-2906 this family reads commit history and answers
+// could-not-look for a shallow clone, so the fixture builds real, unshallow
+// history with git outside the tree. A template copy carries no commits.
 fn fixture(name: &str, config: &str) -> PathBuf {
     // OUTSIDE the tree, deliberately: `target/` is inside this repository,
     // which is itself SHALLOW, and this family answers could-not-look for a

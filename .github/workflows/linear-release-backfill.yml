@@ -47,6 +47,8 @@ permissions: {}
 # THE INSTALL LIST BINDS (`tool pin loose`, CLOUD-2556): the job installs `rust`
 # only, and a `mise run` must not re-install the whole toolchain behind it.
 env:
+  # Install locked, as every mise-action workflow does (`workflow run unsafe`).
+  MISE_LOCKFILE: "true"
   MISE_TASK_RUN_AUTO_INSTALL: "false"
   MISE_EXEC_AUTO_INSTALL: "false"
 
