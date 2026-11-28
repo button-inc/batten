@@ -6476,6 +6476,10 @@ pub struct Identity<'a> {
     /// probed function in its file ([`file_fns`]); absent where the file has
     /// no probe.
     pub file_fns: &'a std::collections::BTreeMap<u32, BTreeSet<String>>,
+    /// Each mutant in a file no probed function covers, by its file
+    /// (CLOUD-2959): a record goes back for it only when its read listing
+    /// names that file. Empty where unknown, which sends every record back.
+    pub unplaced: &'a std::collections::BTreeMap<u32, String>,
     /// The mutants this rendering does not switch, handed back or unviable
     /// ([`unswitched`]): no reach run reaches them, so none is ever listed.
     pub classic: &'a BTreeSet<u32>,
@@ -6510,6 +6514,25 @@ fn file_fns(
                 .cloned()
                 .collect();
             (!probes.is_empty()).then_some((id, probes))
+        })
+        .collect()
+}
+
+/// [`Identity::unplaced`] for `mutants` over `schema`: each mutant no probed
+/// function encloses and whose file has no probe ([`file_fns`] maps none),
+/// by its file.
+fn unplaced_files(
+    mutants: &[Listed],
+    schema: &Schema,
+    in_file: &std::collections::BTreeMap<u32, BTreeSet<String>>,
+) -> std::collections::BTreeMap<u32, String> {
+    mutants
+        .iter()
+        .enumerate()
+        .filter_map(|(id, mutant)| {
+            let id = u32::try_from(id).ok()?;
+            (!schema.mutant_fns.contains_key(&id) && !in_file.contains_key(&id))
+                .then(|| (id, mutant.file.clone()))
         })
         .collect()
 }
@@ -6650,6 +6673,7 @@ fn carry_counted(
         .map(str::to_owned)
         .collect();
     let mut fresh_fns = BTreeSet::new();
+    let mut fresh_files: BTreeSet<&str> = BTreeSet::new();
     let mut fresh_unplaced = false;
     for (id, key) in identity.sites.iter().enumerate() {
         let id = u32::try_from(id)?;
@@ -6669,7 +6693,15 @@ fn carry_counted(
                 fresh_fns.insert(function.clone());
             }
             (None, Some(functions)) => fresh_fns.extend(functions.iter().cloned()),
-            (None, None) => fresh_unplaced = true,
+            // CHARGED TO THE RECORDS THAT READ ITS FILE (CLOUD-2959), never to
+            // the store: one keyless mutant in an unprobed file sent back every
+            // record. A file it is not known for still sends back every one.
+            (None, None) => match identity.unplaced.get(&id) {
+                Some(file) => {
+                    fresh_files.insert(file.as_str());
+                }
+                None => fresh_unplaced = true,
+            },
         }
     }
     let functions = ids_by_value(identity.probes.iter().enumerate());
@@ -6723,6 +6755,15 @@ fn carry_counted(
     let now = recompute(&executed, &read);
     let mut kept: Vec<(std::path::PathBuf, Case, Ran)> = Vec::new();
     for (dir, case, record, carried) in candidates {
+        // NO LISTING, NO PROOF IT NEVER READ THE FILE: an untraced record
+        // goes back for any unplaced mutant, as every record used to.
+        let reads_fresh = !fresh_files.is_empty()
+            && read.get(&case).is_none_or(|listing| {
+                listing
+                    .iter()
+                    .any(|file| fresh_files.contains(file.as_str()))
+            });
+        let carried = carried && !reads_fresh;
         if now.get(&case) != Some(&record.digest) {
             *reasons.entry("dependency-changed").or_default() += 1;
             let _ = std::fs::remove_dir_all(&dir);
@@ -6732,7 +6773,7 @@ fn carry_counted(
         } else {
             let reason = if !carry {
                 "ci"
-            } else if fresh_unplaced {
+            } else if fresh_unplaced || reads_fresh {
                 "unplaced-mutant"
             } else {
                 "witness"
@@ -7148,6 +7189,10 @@ struct SealContext {
     /// an unplaced one clears every record, as it did then.
     #[serde(default)]
     file_fns: std::collections::BTreeMap<u32, BTreeSet<String>>,
+    /// [`Identity::unplaced`]; a context written before it existed knows
+    /// none, so an unplaced mutant sends every record back, as it did then.
+    #[serde(default)]
+    unplaced: std::collections::BTreeMap<u32, String>,
     classic: BTreeSet<u32>,
     /// What a case's selection digest is read in ([`seal_tested`]): the probed
     /// and unprobed files, the features and the cargo arguments. A context
@@ -7200,6 +7245,7 @@ impl SealContext {
             sites: &self.sites,
             mutant_fns: &self.mutant_fns,
             file_fns: &self.file_fns,
+            unplaced: &self.unplaced,
             classic: &self.classic,
         }
     }
@@ -13197,11 +13243,13 @@ fn reached(
     let dirs = package_dirs(mutants);
     let started = std::time::Instant::now();
     let in_file = file_fns(mutants, schema);
+    let out_of_fns = unplaced_files(mutants, schema, &in_file);
     let identity = &Identity {
         probes: &schema.probes,
         sites: site_keys,
         mutant_fns: &schema.mutant_fns,
         file_fns: &in_file,
+        unplaced: &out_of_fns,
         classic,
     };
     let packages: BTreeSet<&str> = mutants.iter().map(|m| m.package.as_str()).collect();
@@ -13236,6 +13284,7 @@ fn reached(
             sites: site_keys.to_vec(),
             mutant_fns: schema.mutant_fns.clone(),
             file_fns: in_file.clone(),
+            unplaced: out_of_fns.clone(),
             classic: classic.clone(),
             format: Some(format.clone()),
             build: Some(build.clone()),
@@ -15267,6 +15316,7 @@ mod tests {
             sites: &[],
             mutant_fns: &fns,
             file_fns: &std::collections::BTreeMap::new(),
+            unplaced: &std::collections::BTreeMap::new(),
             classic: &classic,
         };
         let same = |executed: &std::collections::BTreeMap<Case, BTreeSet<usize>>,
@@ -15433,11 +15483,14 @@ mod tests {
         static FILE_FNS: std::collections::BTreeMap<u32, BTreeSet<String>> =
             std::collections::BTreeMap::new();
         static CLASSIC: BTreeSet<u32> = BTreeSet::new();
+        static UNPLACED: std::collections::BTreeMap<u32, String> =
+            std::collections::BTreeMap::new();
         Identity {
             probes: &[],
             sites: &[],
             mutant_fns: &FNS,
             file_fns: &FILE_FNS,
+            unplaced: &UNPLACED,
             classic: &CLASSIC,
         }
     }
@@ -15527,6 +15580,7 @@ mod tests {
                 sites: &sites,
                 mutant_fns: &std::collections::BTreeMap::new(),
                 file_fns: &std::collections::BTreeMap::new(),
+                unplaced: &std::collections::BTreeMap::new(),
                 classic: &classic,
             };
             let recompute =
@@ -15655,6 +15709,7 @@ mod tests {
             sites: &sites,
             mutant_fns: &fns,
             file_fns: &std::collections::BTreeMap::new(),
+            unplaced: &std::collections::BTreeMap::new(),
             classic: &classic,
         };
         let same = |executed: &std::collections::BTreeMap<Case, BTreeSet<usize>>,
@@ -15682,6 +15737,56 @@ mod tests {
             7,
             "every record read"
         );
+    }
+
+    /// Fails by: one new mutant in a file no probed function covers sending
+    /// back every record in the store (CLOUD-2959, `fresh_unplaced`), where
+    /// only a record that read that file could have reached it.
+    #[test]
+    fn a_new_mutant_outside_any_function_sends_back_only_the_records_that_read_its_file() {
+        let base = crate::scratch::scratch("schema-carry-unplaced-file");
+        let proven =
+            |digest: &str, function: &str| format!("D{digest}\nF{function}\nT1\n{FIXTURE_FROM}");
+        record(
+            &base,
+            "reads-a",
+            "reads-a",
+            Some("0"),
+            &[(DEPENDS, &proven("same", "fa")), (READ, "src/a.rs\n")],
+        );
+        record(
+            &base,
+            "reads-b",
+            "reads-b",
+            Some("0"),
+            &[(DEPENDS, &proven("same", "fa")), (READ, "src/b.rs\n")],
+        );
+        std::fs::write(base.join(LISTED), "").unwrap();
+        let probes = [String::from("fa")];
+        let sites = [Some(String::from("key-new"))];
+        let unplaced: std::collections::BTreeMap<u32, String> =
+            [(0, String::from("src/a.rs"))].into();
+        let identity = Identity {
+            sites: &sites,
+            unplaced: &unplaced,
+            ..no_identity_over(&probes)
+        };
+        let same = |executed: &std::collections::BTreeMap<Case, BTreeSet<usize>>,
+                    _: &std::collections::BTreeMap<Case, BTreeSet<String>>| {
+            executed
+                .keys()
+                .map(|case| (case.clone(), String::from("same")))
+                .collect()
+        };
+        let (carried, _, reasons) =
+            carry_counted(&base, "tree-2", &identity, (&same, None), true).unwrap();
+        assert_eq!(carried, 1, "only the record reading src/b.rs is carried");
+        assert!(
+            base.join("reads-b").exists(),
+            "it never read the mutant's file"
+        );
+        assert!(!base.join("reads-a").exists(), "it read the mutant's file");
+        assert_eq!(reasons, [("unplaced-mutant", 1)].into());
     }
 
     /// Fails by: a record CI would have kept counted under another reason, or
@@ -15775,6 +15880,7 @@ mod tests {
             sites: &sites,
             mutant_fns: &fns,
             file_fns: &std::collections::BTreeMap::new(),
+            unplaced: &std::collections::BTreeMap::new(),
             classic: &classic,
         };
         let recompute =
@@ -15837,6 +15943,7 @@ mod tests {
             sites: &[],
             mutant_fns: &std::collections::BTreeMap::new(),
             file_fns: &std::collections::BTreeMap::new(),
+            unplaced: &std::collections::BTreeMap::new(),
             classic: &BTreeSet::new(),
         };
         let reach = collect_reach(&base, &identity).unwrap();
@@ -15886,6 +15993,7 @@ mod tests {
                 sites: &sites,
                 mutant_fns: &fns,
                 file_fns: &std::collections::BTreeMap::new(),
+                unplaced: &std::collections::BTreeMap::new(),
                 classic: then,
             };
             let mut reach = collect_reach(&base, &recorded).unwrap();
@@ -15971,6 +16079,7 @@ mod tests {
             sites: &sites,
             mutant_fns: &fns,
             file_fns: &in_file,
+            unplaced: &std::collections::BTreeMap::new(),
             classic: &classic,
         };
         assert_eq!(
@@ -16013,6 +16122,7 @@ mod tests {
             sites: &sites,
             mutant_fns: &fns,
             file_fns: &std::collections::BTreeMap::new(),
+            unplaced: &std::collections::BTreeMap::new(),
             classic: &classic,
         };
         let mut reach = collect_reach(&base, &identity).unwrap();
@@ -16077,6 +16187,7 @@ mod tests {
             sites: vec![Some(String::from("key-0"))],
             mutant_fns: std::collections::BTreeMap::new(),
             file_fns: std::collections::BTreeMap::new(),
+            unplaced: std::collections::BTreeMap::new(),
             classic: BTreeSet::new(),
             format: None,
             build: None,
@@ -20478,6 +20589,7 @@ mod tests {
             sites: &[],
             mutant_fns: &std::collections::BTreeMap::new(),
             file_fns: &std::collections::BTreeMap::new(),
+            unplaced: &std::collections::BTreeMap::new(),
             classic: &BTreeSet::new(),
         };
         let reach = collect_dirs([dir], &identity).unwrap();
@@ -20505,6 +20617,7 @@ mod tests {
             sites: &[],
             mutant_fns: &std::collections::BTreeMap::new(),
             file_fns: &std::collections::BTreeMap::new(),
+            unplaced: &std::collections::BTreeMap::new(),
             classic: &BTreeSet::new(),
         };
         let reach = collect_dirs([dir], &identity).unwrap();
@@ -20554,6 +20667,7 @@ mod tests {
             sites: &[],
             mutant_fns: &std::collections::BTreeMap::new(),
             file_fns: &std::collections::BTreeMap::new(),
+            unplaced: &std::collections::BTreeMap::new(),
             classic: &BTreeSet::new(),
         };
         let reach = collect_dirs([dir], &identity).unwrap();
@@ -24665,6 +24779,7 @@ mod tests {
             sites: &[],
             mutant_fns: &std::collections::BTreeMap::new(),
             file_fns: &std::collections::BTreeMap::new(),
+            unplaced: &std::collections::BTreeMap::new(),
             classic: &BTreeSet::new(),
         };
         let reach = collect_dirs(dirs, &identity).unwrap();
