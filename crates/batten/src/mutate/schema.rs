@@ -6170,14 +6170,14 @@ fn carried_unless_ci(
     (inputs, ci): (&str, bool),
     identity: &Identity<'_>,
     carry: (&Recompute<'_>, Option<Over<'_>>),
-) -> anyhow::Result<(usize, usize)> {
+) -> anyhow::Result<(usize, usize, Reasons)> {
     if !ci {
-        return carry_forward(base, inputs, identity, carry, true);
+        return carry_counted(base, inputs, identity, carry, true);
     }
     // EVERY RECORD CI WOULD HAVE TRUSTED IS A WITNESS (CLOUD-2904): it is about
     // to be recorded again over the same inputs anyway, so the second recording
     // is free and [`super::stable::judge`] compares the two.
-    let _ = carry_forward(base, inputs, identity, carry, false)?;
+    let (_, _, reasons) = carry_counted(base, inputs, identity, carry, false)?;
     let witnesses = super::stable::witnesses(base);
     cleared(std::fs::remove_dir_all(base))?;
     std::fs::create_dir_all(base)?;
@@ -6185,7 +6185,25 @@ fn carried_unless_ci(
         super::stable::keep(base, case, functions)?;
     }
     crate::durable::replace(base.join(TREE), inputs)?;
-    Ok((0, 0))
+    Ok((0, 0, reasons))
+}
+
+/// The reach stage's account of its records (CLOUD-2959): how many it carried
+/// and resumed, then each reason it carried none of the rest, with its count.
+fn carry_line(carried: usize, resumed: usize, reasons: &Reasons) -> String {
+    let mut line = format!(
+        "mutate schema: reach carried {carried} case(s) across the change, resumed {resumed}"
+    );
+    let named: Vec<String> = reasons
+        .iter()
+        .filter(|(_, count)| **count > 0)
+        .map(|(reason, count)| format!("{reason} {count}"))
+        .collect();
+    if !named.is_empty() {
+        line.push_str("; not carried: ");
+        line.push_str(&named.join(", "));
+    }
+    line
 }
 
 /// A removal's outcome as a clearing reads it: done, or nothing there to
@@ -6577,13 +6595,53 @@ pub type Recompute<'r> = dyn Fn(
 /// # Errors
 ///
 /// The directory cannot be read, cleared or written.
+#[cfg(test)]
 fn carry_forward(
+    base: &std::path::Path,
+    inputs: &str,
+    identity: &Identity<'_>,
+    carry_with: (&Recompute<'_>, Option<Over<'_>>),
+    carry: bool,
+) -> anyhow::Result<(usize, usize)> {
+    let (carried, resumed, _) = carry_counted(base, inputs, identity, carry_with, carry)?;
+    Ok((carried, resumed))
+}
+
+/// Why a record was not carried, by reason, each record counted once
+/// (CLOUD-2959): what [`carry_counted`] did not keep, beside the count it did.
+pub type Reasons = std::collections::BTreeMap<&'static str, usize>;
+
+/// Why the record at `dir` is not a carry candidate (CLOUD-2959): ONE reason,
+/// the first that applies. `passing` is [`finished_passing`]; `held` is
+/// whether a [`DEPENDS`] file exists, the record it parsed to and its case.
+fn dropped_because(
+    dir: &std::path::Path,
+    passing: bool,
+    held: (bool, Option<Carried>, Option<Case>),
+) -> &'static str {
+    let exit = crate::fsio::read_to_string(dir.join(DONE)).ok();
+    match (exit, held) {
+        (None, _) | (_, (_, _, None)) => "unsealed",
+        (Some(_), _) if !passing => "did-not-pass",
+        (Some(_), (_, Some(_), Some(_))) => "function-gone",
+        (Some(_), (true, None, Some(_))) => "no-provenance",
+        (Some(_), (false, None, Some(_))) => "unsealed",
+    }
+}
+
+/// [`carry_forward`], and the [`Reasons`] for every record it did not carry.
+///
+/// # Errors
+///
+/// As [`carry_forward`].
+fn carry_counted(
     base: &std::path::Path,
     inputs: &str,
     identity: &Identity<'_>,
     (recompute, over): (&Recompute<'_>, Option<Over<'_>>),
     carry: bool,
-) -> anyhow::Result<(usize, usize)> {
+) -> anyhow::Result<(usize, usize, Reasons)> {
+    let mut reasons = Reasons::new();
     std::fs::create_dir_all(base)?;
     let same_tree = crate::fsio::read_to_string(base.join(TREE)).is_ok_and(|held| held == inputs);
     let listed: BTreeSet<String> = crate::fsio::read_to_string(base.join(LISTED))
@@ -6623,9 +6681,8 @@ fn carry_forward(
         if !dir.is_dir() {
             continue;
         }
-        let record = crate::fsio::read_to_string(dir.join(DEPENDS))
-            .ok()
-            .and_then(|text| carried(&text));
+        let depends = crate::fsio::read_to_string(dir.join(DEPENDS)).ok();
+        let record = depends.as_deref().and_then(carried);
         let case = crate::fsio::read_to_string(dir.join("case"))
             .ok()
             .map(|head| {
@@ -6643,7 +6700,9 @@ fn carry_forward(
                 candidates.push((dir, case, record, carried));
             }
             (true, None, Some(_)) if same_tree => resumed += 1,
-            _ => {
+            (passing, record, case) => {
+                let reason = dropped_because(&dir, passing, (depends.is_some(), record, case));
+                *reasons.entry(reason).or_default() += 1;
                 let _ = std::fs::remove_dir_all(&dir);
             }
         }
@@ -6665,11 +6724,20 @@ fn carry_forward(
     let mut kept: Vec<(std::path::PathBuf, Case, Ran)> = Vec::new();
     for (dir, case, record, carried) in candidates {
         if now.get(&case) != Some(&record.digest) {
+            *reasons.entry("dependency-changed").or_default() += 1;
             let _ = std::fs::remove_dir_all(&dir);
         } else if carried {
             let touched = read.get(&case).cloned();
             kept.push((dir, case, (record.functions, touched)));
         } else {
+            let reason = if !carry {
+                "ci"
+            } else if fresh_unplaced {
+                "unplaced-mutant"
+            } else {
+                "witness"
+            };
+            *reasons.entry(reason).or_default() += 1;
             super::stable::keep(base, &case, &record.functions)?;
             let _ = std::fs::remove_dir_all(&dir);
         }
@@ -6680,7 +6748,7 @@ fn carry_forward(
         let _ = retest_carried(base, &kept, over);
     }
     crate::durable::replace(base.join(TREE), inputs)?;
-    Ok((kept.len(), resumed))
+    Ok((kept.len(), resumed, reasons))
 }
 
 /// Write the selection digest ([`TESTED`]) of every record of `carried` over
@@ -7292,17 +7360,14 @@ pub fn record_reach(
         reach.resumed = true;
         return Ok((reach, true));
     }
-    let (carried, resumed) = carried_unless_ci(
+    let (carried, resumed, reasons) = carried_unless_ci(
         &base,
         (&inputs, crate::step::under_ci()),
         identity,
         (recompute, over),
     )?;
     write_listed(&base, identity)?;
-    crate::mutate::progress!(
-        out,
-        "mutate schema: reach carried {carried} case(s) across the change, resumed {resumed}"
-    )?;
+    crate::mutate::progress!(out, "{}", carry_line(carried, resumed, &reasons))?;
     let config = state.join("nextest.toml");
     // A PRIVATE COPY of this binary is the recorder: the suite runs for minutes,
     // and the checkout's own `target/debug/batten` is relinked by any build in
@@ -15472,9 +15537,9 @@ mod tests {
                         .map(|case| (case.clone(), String::from("same")))
                         .collect()
                 };
-            let counts =
+            let (carried, resumed, _) =
                 carried_unless_ci(&base, ("tree-2", ci), &identity, (&recompute, None)).unwrap();
-            (counts, base.join("kept").exists())
+            ((carried, resumed), base.join("kept").exists())
         };
         assert_eq!(
             carry("schema-ci-carry-local", false),
@@ -15524,6 +15589,138 @@ mod tests {
             "{prelude}"
         );
         assert!(!prelude.contains("write_fmt"), "{prelude}");
+    }
+
+    /// Fails by: a record dropped or re-recorded with no reason counted, a
+    /// record counted twice, or the wrong reason named (CLOUD-2959). The
+    /// counts and `carried` sum to the records read, so the reach line says
+    /// where every re-run came from.
+    #[test]
+    fn every_record_not_carried_is_counted_under_one_reason() {
+        let base = crate::scratch::scratch("schema-carry-reasons");
+        let sealed = |digest: &str, function: &str, from: &str| {
+            format!("D{digest}\nF{function}\nT1\n{from}")
+        };
+        let proven = |digest: &str, function: &str| sealed(digest, function, FIXTURE_FROM);
+        record(
+            &base,
+            "kept",
+            "kept",
+            Some("0"),
+            &[(DEPENDS, &proven("same", "fa"))],
+        );
+        record(
+            &base,
+            "anon",
+            "anon",
+            Some("0"),
+            &[(DEPENDS, &sealed("same", "fa", ""))],
+        );
+        record(
+            &base,
+            "red",
+            "red",
+            Some("101"),
+            &[(DEPENDS, &proven("same", "fa"))],
+        );
+        record(&base, "killed", "killed", None, &[]);
+        record(
+            &base,
+            "gone",
+            "gone",
+            Some("0"),
+            &[(DEPENDS, &proven("same", "fz"))],
+        );
+        record(
+            &base,
+            "moved",
+            "moved",
+            Some("0"),
+            &[(DEPENDS, &proven("old", "fa"))],
+        );
+        record(
+            &base,
+            "fresh",
+            "fresh",
+            Some("0"),
+            &[(DEPENDS, &proven("same", "fb"))],
+        );
+        std::fs::write(base.join(LISTED), "key-0\n").unwrap();
+        let probes = [String::from("fa"), String::from("fb")];
+        let sites = [Some(String::from("key-0")), Some(String::from("key-new"))];
+        let fns: std::collections::BTreeMap<u32, String> = [(1, String::from("fb"))].into();
+        let classic = BTreeSet::new();
+        let identity = Identity {
+            probes: &probes,
+            sites: &sites,
+            mutant_fns: &fns,
+            file_fns: &std::collections::BTreeMap::new(),
+            classic: &classic,
+        };
+        let same = |executed: &std::collections::BTreeMap<Case, BTreeSet<usize>>,
+                    _: &std::collections::BTreeMap<Case, BTreeSet<String>>| {
+            executed
+                .keys()
+                .map(|case| (case.clone(), String::from("same")))
+                .collect()
+        };
+        let (carried, resumed, reasons) =
+            carry_counted(&base, "tree-2", &identity, (&same, None), true).unwrap();
+        assert_eq!((carried, resumed), (1, 0));
+        let expected: Reasons = [
+            ("no-provenance", 1),
+            ("did-not-pass", 1),
+            ("unsealed", 1),
+            ("function-gone", 1),
+            ("dependency-changed", 1),
+            ("witness", 1),
+        ]
+        .into();
+        assert_eq!(reasons, expected, "one reason per record not carried");
+        assert_eq!(
+            carried + reasons.values().sum::<usize>(),
+            7,
+            "every record read"
+        );
+    }
+
+    /// Fails by: a record CI would have kept counted under another reason, or
+    /// not at all: under CI nothing is carried (CLOUD-2959).
+    #[test]
+    fn under_ci_every_record_it_would_keep_is_counted_as_ci() {
+        let proven =
+            |digest: &str, function: &str| format!("D{digest}\nF{function}\nT1\n{FIXTURE_FROM}");
+        let probes = [String::from("fa")];
+        let same = |executed: &std::collections::BTreeMap<Case, BTreeSet<usize>>,
+                    _: &std::collections::BTreeMap<Case, BTreeSet<String>>| {
+            executed
+                .keys()
+                .map(|case| (case.clone(), String::from("same")))
+                .collect()
+        };
+        let ci = crate::scratch::scratch("schema-carry-reasons-ci");
+        record(
+            &ci,
+            "kept",
+            "kept",
+            Some("0"),
+            &[(DEPENDS, &proven("same", "fa"))],
+        );
+        let (carried, _, reasons) = carry_counted(
+            &ci,
+            "tree-2",
+            &no_identity_over(&probes),
+            (&same, None),
+            false,
+        )
+        .unwrap();
+        assert_eq!((carried, reasons), (0, [("ci", 1)].into()));
+    }
+
+    /// [`no_identity`] with `probes` as the tree's probed functions.
+    fn no_identity_over(probes: &[String]) -> Identity<'_> {
+        let blank = no_identity();
+        Identity { probes, ..blank }
     }
 
     /// A sealed record is carried across a change when its functions still
