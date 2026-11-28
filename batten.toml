@@ -19677,9 +19677,12 @@ tools = [
   ["batten", "step", "config"],
   ["rustc", "--version"],
   ["cargo", "--version"],
-  ["git", "merge-base", "HEAD", "origin/main"],
+  # The merge base by CONTENT and the calendar by where today stands against
+  # each declared date (CLOUD-2329): a commit id and the day each moved the key
+  # between laps over one unchanged tree.
+  ["batten", "step", "base", "--ref", "origin/main", "--", "."],
   ["git", "rev-parse", "HEAD^{tree}"],
-  ["date", "-u", "+%F"],
+  ["batten", "step", "dated"],
   ["batten", "enforce", "--half", "tree", "--inputs-digest"],
 ]
 
