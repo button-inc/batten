@@ -202,6 +202,31 @@ fn a_ledger_content_change_under_the_same_paths_is_judged_again() {
 }
 
 #[test]
+fn a_passing_commit_is_held_under_this_repositorys_own_policy() {
+    // The escape the fixture policy hid: the real config carries keys that
+    // resolve to null, and a policy digest that could not render one held
+    // nothing, so every lap judged the whole range again.
+    let dir = common::scratch_repo("receipt-own-policy");
+    git_in(&dir, &["config", "user.name", "Accountable Human"]);
+    git_in(&dir, &["config", "user.email", "human@example.test"]);
+    write(&dir, "batten.toml", &common::committed_config());
+    git_in(&dir, &["add", "-A"]);
+    git_in(&dir, &["commit", "-q", "-m", "chore: base"]);
+    let base = head(&dir);
+    commit(&dir, "a.txt", "a\n", "feat: one");
+    let (_, said) = commit_check(&dir, &base);
+    assert!(
+        said.contains("commit check: judged 1 of 1, 0 held"),
+        "{said}"
+    );
+    let (_, said) = commit_check(&dir, &base);
+    assert!(
+        said.contains("commit check: judged 0 of 1, 1 held"),
+        "{said}"
+    );
+}
+
+#[test]
 fn attribution_judges_one_new_commit() {
     let (dir, base) = fixture("receipt-attribution");
     three(&dir);

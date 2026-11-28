@@ -20540,10 +20540,33 @@ impl ReceiptLedger {
 /// The digest of the whole resolved policy a commit verdict runs under,
 /// overrides included, through [`step::config_digest`]; `None` where the
 /// resolved config does not render as TOML.
+///
+/// # Through JSON, nulls dropped
+///
+/// The resolved document carries `null` for an absent key, which TOML cannot
+/// spell, so a direct render failed on this repository's own config and every
+/// key came out absent: nothing was ever held. A null is an absent key in
+/// either spelling, so dropping it loses nothing the verdict reads.
 fn receipt_policy_digest(overrides: &Overrides) -> Result<Option<String>> {
+    fn pruned(value: serde_json::Value) -> Option<serde_json::Value> {
+        match value {
+            serde_json::Value::Null => None,
+            serde_json::Value::Array(items) => Some(serde_json::Value::Array(
+                items.into_iter().filter_map(pruned).collect(),
+            )),
+            serde_json::Value::Object(map) => Some(serde_json::Value::Object(
+                map.into_iter()
+                    .filter_map(|(key, value)| pruned(value).map(|value| (key, value)))
+                    .collect(),
+            )),
+            other => Some(other),
+        }
+    }
     let resolved = resolve::resolve(Path::new("."), overrides)?;
-    let text = toml::Value::try_from(&resolved)
+    let text = serde_json::to_value(&resolved)
         .ok()
+        .and_then(pruned)
+        .and_then(|value| toml::Value::try_from(value).ok())
         .and_then(|value| toml::to_string(&value).ok());
     Ok(text.and_then(|text| step::config_digest(&text, &[])))
 }
