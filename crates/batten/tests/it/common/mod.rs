@@ -4052,3 +4052,13 @@ pub fn committed_config() -> String {
     let text = std::fs::read_to_string(&path).expect("this repository's batten.toml is readable");
     batten::step::config_view(&text).expect("this repository's batten.toml parses")
 }
+
+/// [`committed_config`] written as `batten.toml` in a scratch directory of its
+/// own, for a case that loads the config by path (CLOUD-2960).
+#[allow(dead_code, reason = "not every test binary loads the committed config")]
+pub fn committed_config_file(name: &str) -> PathBuf {
+    let dir = scratch(&format!("committed-config-{name}"));
+    let path = dir.join("batten.toml");
+    std::fs::write(&path, committed_config()).expect("the committed config view is writable");
+    path
+}

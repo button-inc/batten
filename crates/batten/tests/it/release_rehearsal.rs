@@ -86,7 +86,9 @@ fn move_to_next_release(scratch: &Path) -> String {
     let files = Files {
         manifest,
         lock: read("Cargo.lock"),
-        config: batten::engine::rewrite(&read("batten.toml"), &pinned),
+        // ITS OWN FIXTURE CONFIG (CLOUD-2960): the committed parts with no pin,
+        // and the pin this case is about written in by `rewrite`.
+        config: batten::engine::rewrite(&common::committed_config(), &pinned),
         // Read because `bump` requires its heading; never written (above).
         changelog: read("crates/batten/CHANGELOG.md"),
     };
@@ -104,8 +106,8 @@ fn the_release_rules_are_clean_one_release_ahead() {
     let root = common::at_root(".")
         .canonicalize()
         .expect("this checkout is where the manifest says it is");
-    let config =
-        batten::config::load(&root.join("batten.toml")).expect("the committed config loads");
+    let config = batten::config::load(&common::committed_config_file("release-rehearsal"))
+        .expect("the committed config loads");
     let selected: Vec<batten::config_model::Rule> = config
         .rules
         .iter()

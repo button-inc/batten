@@ -738,7 +738,11 @@ fn an_undeclared_config_or_index_family_is_null() {
 fn a_trunk_whose_history_breaks_partway_is_could_not_look() {
     let dir = scratch("git-walk-broken");
     common::init_repo(&dir);
-    std::fs::copy(common::at_root("batten.toml"), dir.join("batten.toml")).expect("config");
+    std::fs::copy(
+        common::committed_config_file("git_state_facts"),
+        dir.join("batten.toml"),
+    )
+    .expect("config");
     write(&dir, "merged.tsv", "");
     write(&dir, "refs.txt", "");
     git_in(

@@ -162,7 +162,8 @@ impl Declared {
 }
 
 fn declared() -> Declared {
-    let text = fs::read_to_string(at_root("batten.toml")).expect("read the committed config");
+    let text = fs::read_to_string(common::committed_config_file("review_answered"))
+        .expect("read the committed config");
     let mut rows: std::collections::BTreeMap<String, std::collections::BTreeMap<String, String>> =
         std::collections::BTreeMap::new();
     for block in text.split("[[fact]]").skip(1) {

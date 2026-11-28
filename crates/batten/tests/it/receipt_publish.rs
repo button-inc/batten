@@ -849,9 +849,10 @@ fn a_deleted_claim_stays_deleted() {
 /// this red; restoring them with the pin bump is the moment to delete this case.
 #[test]
 fn the_session_row_is_withheld_until_a_release_ships_the_verb() {
-    let config: toml::Value =
-        toml::from_str(&std::fs::read_to_string(crate::common::at_root("batten.toml")).unwrap())
-            .unwrap();
+    let config: toml::Value = toml::from_str(
+        &std::fs::read_to_string(crate::common::committed_config_file("receipt_publish")).unwrap(),
+    )
+    .unwrap();
     let handlers = config["hook"]["handler"].as_array().unwrap();
     assert!(
         !handlers
@@ -866,7 +867,8 @@ fn the_session_row_is_withheld_until_a_release_ships_the_verb() {
         manifest["tasks"].get("session:receipts").is_none(),
         "the session:receipts task is withheld with its row"
     );
-    let authority = std::fs::read_to_string(crate::common::at_root("batten.toml")).unwrap();
+    let authority =
+        std::fs::read_to_string(crate::common::committed_config_file("receipt_publish")).unwrap();
     assert!(
         authority.contains("# id = \"session-receipts\"")
             && authority.contains("# [tasks.\"session:receipts\"]"),

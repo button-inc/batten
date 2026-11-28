@@ -1834,7 +1834,7 @@ fn a_row_the_branch_closes_leaves_the_filed_checklist() {
     // THE CLOSING GRAMMAR AND THE TRUNK, from the committed authority: the
     // closing read needs both, and the fixture carries neither.
     let base = format!("{CONFIG}{FILED_ROWS}");
-    let committed: toml::Table = fs::read_to_string(common::at_root("batten.toml"))
+    let committed: toml::Table = fs::read_to_string(common::committed_config_file("stop_posture"))
         .expect("read the committed authority")
         .parse()
         .expect("the committed authority parses");

@@ -34,8 +34,8 @@ fn local_build() -> String {
 
 /// The committed `[[startup]]` rows.
 fn startup_rows() -> Vec<toml::Value> {
-    let text =
-        std::fs::read_to_string(common::at_root("batten.toml")).expect("the committed authority");
+    let text = std::fs::read_to_string(common::committed_config_file("install_local"))
+        .expect("the committed authority");
     let table: toml::Table = text.parse().expect("the committed authority parses");
     table["startup"]
         .as_array()

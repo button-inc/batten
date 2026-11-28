@@ -2187,7 +2187,8 @@ fn removing_an_inline_body_never_violates_either_row() {
 /// The committed `symbol skip unused` row's pattern, read from `batten.toml`,
 /// so the case drives the row this repository ships and not a copy of it.
 fn committed_pattern(id: &str) -> String {
-    let text = std::fs::read_to_string(common::at_root("batten.toml")).expect("batten.toml");
+    let text =
+        std::fs::read_to_string(common::committed_config_file("ratchet")).expect("batten.toml");
     let parsed: toml::Value = toml::from_str(&text).expect("batten.toml parses as TOML");
     parsed["rule"]
         .as_array()

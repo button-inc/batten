@@ -207,7 +207,8 @@ fn bound_four_the_policy_authority_is_a_protected_path() {
     //
     // Fails by: dropping the authority from the protected set — the maximal
     // weakening, since it disarms every gate at once including this one.
-    let text = fs::read_to_string(at_root("batten.toml")).expect("read the authority");
+    let text = fs::read_to_string(common::committed_config_file("ambient_authority"))
+        .expect("read the authority");
     let Look::Is(config) = Format::Toml.read(&text) else {
         panic!("the authority did not parse");
     };

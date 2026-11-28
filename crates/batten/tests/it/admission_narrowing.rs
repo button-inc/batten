@@ -194,7 +194,7 @@ fn the_committed_bundles_publish_no_engine_side_rule_name() {
     // ITS OWN STATE ROOT (CLOUD-2936): the bundle load writes its cache, and
     // against the developer's store one recording wrote it and the next read it.
     common::scratch_state_root();
-    let root = common::at_root("batten.toml");
+    let root = common::committed_config_file("admission_narrowing");
     let root = root.parent().expect("the committed config has a parent");
     let config = batten::resolve::resolve(root, &batten::resolve::Overrides::default())
         .expect("the committed config resolves");

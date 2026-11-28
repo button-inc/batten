@@ -573,8 +573,8 @@ const OWED: [&str; 3] = ["simplify", "security-review", "code-review"];
 /// read out of this repository's `batten.toml` with the base re-pointed at the
 /// ref the fixture pins (`common::Fixture::base_commit`).
 fn committed_ready_config() -> String {
-    let text =
-        std::fs::read_to_string(common::at_root("batten.toml")).expect("the committed authority");
+    let text = std::fs::read_to_string(common::committed_config_file("review_receipt_delta"))
+        .expect("the committed authority");
     let authority: toml::Table = text.parse().expect("the committed authority parses");
     let rows = |table: &str, field: &str, names: &[&str]| -> Vec<toml::Value> {
         authority[table]

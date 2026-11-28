@@ -387,10 +387,11 @@ fn no_compile_runs_without_a_source_pin() {
         "crates/batten/Cargo.toml",
         "[package]\nname = \"batten\"\nversion = \"0.0.0\"\n",
     );
-    let committed: toml::Table = std::fs::read_to_string(common::at_root("batten.toml"))
-        .expect("the committed authority")
-        .parse()
-        .expect("the committed authority parses");
+    let committed: toml::Table =
+        std::fs::read_to_string(common::committed_config_file("session_start"))
+            .expect("the committed authority")
+            .parse()
+            .expect("the committed authority parses");
     let rows: Vec<toml::Value> = committed["startup"]
         .as_array()
         .expect("[[startup]] rows")

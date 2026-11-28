@@ -535,8 +535,10 @@ fn argv(row: &toml::Value, field: &str) -> Vec<String> {
 /// `mise install` (mutant `agent-toolchain-unprovisioned`).
 #[test]
 fn the_agent_toolchain_is_installed_before_any_client_launches() {
-    let config: toml::Value =
-        toml::from_str(&std::fs::read_to_string(at_root("batten.toml")).unwrap()).unwrap();
+    let config: toml::Value = toml::from_str(
+        &std::fs::read_to_string(common::committed_config_file("mcp_spawn")).unwrap(),
+    )
+    .unwrap();
     let rows = config
         .get("startup")
         .and_then(toml::Value::as_array)

@@ -339,7 +339,7 @@ struct Row {
 /// scan actually found rows, so a header this repository re-spells cannot turn
 /// every case below vacuous.
 fn handler_rows() -> Vec<Row> {
-    let text = std::fs::read_to_string(at_root("batten.toml"))
+    let text = std::fs::read_to_string(common::committed_config_file("session_provisioning"))
         .expect("the committed authority is readable");
 
     let mut rows = Vec::new();

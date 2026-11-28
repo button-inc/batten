@@ -425,7 +425,7 @@ fn an_unchanged_subject_is_a_cache_hit() {
 /// than leaving every case above passing over a module nothing runs.
 #[test]
 fn the_committed_row_is_the_one_these_cases_exercise() {
-    let committed = batten::config::load(&common::at_root("batten.toml"))
+    let committed = batten::config::load(&common::committed_config_file("review_dispatched"))
         .expect("the committed config loads")
         .rules;
     let declared = committed

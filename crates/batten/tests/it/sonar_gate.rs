@@ -98,8 +98,10 @@ const VOCABULARY: [&str; 8] = [
 
 /// The committed `batten.toml`, parsed.
 fn committed() -> toml::Value {
-    toml::from_str(&std::fs::read_to_string(at_root("batten.toml")).expect("the config"))
-        .expect("batten.toml parses")
+    toml::from_str(
+        &std::fs::read_to_string(common::committed_config_file("sonar_gate")).expect("the config"),
+    )
+    .expect("batten.toml parses")
 }
 
 /// The rows of one array-of-tables whose `key` is one of `ids`.

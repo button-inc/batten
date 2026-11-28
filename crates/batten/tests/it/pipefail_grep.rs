@@ -45,7 +45,7 @@ use common::{Fixture, git_in, run, stdout};
 /// row could not reach these cases and survived: a second spelling of the rule
 /// that only agreed with the first by hand.
 fn committed_patterns(ids: &[&str]) -> String {
-    let text = std::fs::read_to_string(common::at_root("batten.toml")).unwrap();
+    let text = std::fs::read_to_string(common::committed_config_file("pipefail_grep")).unwrap();
     let config: toml::Value = toml::from_str(&text).unwrap();
     let rows = config["pattern"].as_array().unwrap();
     ids.iter().fold(String::new(), |mut out, id| {

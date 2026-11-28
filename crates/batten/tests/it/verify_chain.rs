@@ -583,7 +583,8 @@ fn each_hk_step_runs_in_exactly_one_place_per_lap() {
 #[test]
 fn no_traced_step_reaches_a_mutant_sweep() {
     let table: toml::Value = toml::from_str(
-        &std::fs::read_to_string(common::at_root("batten.toml")).expect("the committed authority"),
+        &std::fs::read_to_string(common::committed_config_file("verify_chain"))
+            .expect("the committed authority"),
     )
     .expect("the committed authority parses");
     let untraced = |row: &toml::Value| {
@@ -762,11 +763,8 @@ fn the_perf_gate_runs_alone_and_last_before_the_receipt() {
 /// run, and a row no task names would be dead, so the case pins both halves.
 #[test]
 fn the_receipted_tasks_name_their_own_step_rows() {
-    let table: toml::Value = toml::from_str(
-        &std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../batten.toml"))
-            .expect("the committed authority reads"),
-    )
-    .expect("the committed authority parses");
+    let table: toml::Value =
+        toml::from_str(&common::committed_config()).expect("the committed authority parses");
     let rows: Vec<&str> = table
         .get("step")
         .and_then(toml::Value::as_array)

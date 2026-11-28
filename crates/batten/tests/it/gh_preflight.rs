@@ -222,7 +222,7 @@ fn no_resolvable_repository_is_a_failed_diagnosis() {
 /// table, so this is the one that reddens on the committed rows being absent.
 #[test]
 fn this_repository_declares_the_claims_its_tasks_need() {
-    let text = std::fs::read_to_string(common::at_root("batten.toml")).expect("the config");
+    let text = common::committed_config();
     let config: toml::Value = toml::from_str(&text).expect("batten.toml parses");
     let probes = config
         .get("forge")

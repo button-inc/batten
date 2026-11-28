@@ -311,9 +311,10 @@ fn an_unclaimed_branch_is_not_this_gates_business() {
 /// than leaving every case above passing over a module nothing runs.
 #[test]
 fn the_committed_row_is_the_one_these_cases_exercise() {
-    let committed: Vec<Rule> = batten::config::load(&common::at_root("batten.toml"))
-        .expect("the committed config loads")
-        .rules;
+    let committed: Vec<Rule> =
+        batten::config::load(&common::committed_config_file("plan-complete"))
+            .expect("the committed config loads")
+            .rules;
     let declared = committed
         .iter()
         .find(|rule| rule.id == "plan cover partial")

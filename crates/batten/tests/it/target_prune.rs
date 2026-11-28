@@ -273,7 +273,7 @@ fn live(profile: &Path, name: &str, hash: &str, age_seconds: u64, bytes: usize) 
 /// it warm and this case reads the committed file.
 #[test]
 fn the_committed_build_root_is_basis_moving() {
-    let text = std::fs::read_to_string(common::at_root("batten.toml")).unwrap();
+    let text = std::fs::read_to_string(common::committed_config_file("target_prune")).unwrap();
     let config: toml::Value = toml::from_str(&text).unwrap();
     let build = config
         .get("prune")

@@ -958,7 +958,7 @@ fn a_record_with_no_sec1_column_is_outside_this_arm() {
 /// than leaving every case above passing over a module nothing runs.
 #[test]
 fn the_committed_row_is_the_one_these_cases_exercise() {
-    let committed: Vec<Rule> = batten::config::load(&common::at_root("batten.toml"))
+    let committed: Vec<Rule> = batten::config::load(&common::committed_config_file("filed_here"))
         .expect("the committed config loads")
         .rules;
     let declared = committed

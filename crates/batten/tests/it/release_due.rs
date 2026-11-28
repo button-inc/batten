@@ -53,7 +53,8 @@ const LATEST: &str = "release-due-latest";
 /// `since.seconds`, and a fixture carrying its own copy would test a window
 /// nobody ships.
 fn committed_queries() -> String {
-    let text = std::fs::read_to_string(at_root("batten.toml")).expect("the authority");
+    let text = std::fs::read_to_string(common::committed_config_file("release_due"))
+        .expect("the authority");
     let parsed: toml::Value = toml::from_str(&text).expect("batten.toml parses");
     let rows: Vec<toml::Value> = parsed["forge"]["query"]
         .as_array()

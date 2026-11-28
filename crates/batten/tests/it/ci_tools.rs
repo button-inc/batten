@@ -709,9 +709,10 @@ fn rule_checks() -> &'static [(String, Facts)] {
     }
     READING.with(|reading| reading.set(true));
     CHECKS.get_or_init(|| {
-        let config: toml::Value =
-            toml::from_str(&std::fs::read_to_string(common::at_root("batten.toml")).unwrap())
-                .unwrap();
+        let config: toml::Value = toml::from_str(
+            &std::fs::read_to_string(common::committed_config_file("ci_tools")).unwrap(),
+        )
+        .unwrap();
         config
             .get("rule")
             .and_then(toml::Value::as_array)

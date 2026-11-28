@@ -6105,8 +6105,7 @@ mod tests {
     /// call answered from the cache.
     #[test]
     fn one_config_survives_the_parse_cache_unchanged() {
-        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../batten.toml");
-        let text = crate::fsio::read_to_string(&path).unwrap();
+        let text = super::committed_config_view();
         let parsed = parse_ungated(&text, "batten.toml").unwrap();
         let dir = crate::scratch::scratch("config-parse-cache-roundtrip");
         let entry = dir.join("entry.cfg");
@@ -6438,4 +6437,16 @@ mod tests {
             "a parse that dropped a row must not be served from the cache"
         );
     }
+}
+
+/// This repository's committed config as a step key sees it (CLOUD-2960), for
+/// the crate's own unit tests: the twin of the integration suite's
+/// `common::committed_config`, so no case reads bytes its step does not key.
+#[cfg(test)]
+#[must_use]
+pub(crate) fn committed_config_view() -> String {
+    // THE ONE READ OF THE CHECKOUT CONFIG in the crate's sources (CLOUD-2960).
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../batten.toml");
+    let text = std::fs::read_to_string(path).unwrap_or_default();
+    crate::step::config_view(&text).unwrap_or_default()
 }

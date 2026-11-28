@@ -54,7 +54,7 @@ use std::path::Path;
 
 fn main() -> std::process::ExitCode {
     // The committed authority, relative to the repository root the task layer
-    // runs from — the same path `common::at_root("batten.toml")` resolves for the
+    // runs from — the same path the suite's `common::at_root` resolves `batten.toml` to for the
     // harness this is measuring on behalf of.
     match batten::perf::config_load(Path::new("batten.toml")) {
         Ok(reading) => {

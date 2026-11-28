@@ -18351,10 +18351,7 @@ mod half_tests {
         // THE PROPERTY OVER THE ROWS THAT SHIP. Every committed row lands on one
         // half; a tree row declares only tree facts and is a kind that cannot
         // spawn; and the split buys something — some rows are tree.
-        let text = std::fs::read_to_string(
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../batten.toml"),
-        )
-        .expect("the committed authority reads");
+        let text = crate::config::committed_config_view();
         let table: toml::Table = toml::from_str(&text).expect("the committed authority parses");
         let rows: Vec<Rule> = table
             .get("rule")

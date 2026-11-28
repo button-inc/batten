@@ -122,7 +122,8 @@ fn runnable(target: &str) -> String {
 /// vendored one, as `(class, route target)`.
 fn git_routes() -> Vec<(String, String)> {
     let mut routes = Vec::new();
-    let text = std::fs::read_to_string(common::at_root("batten.toml")).expect("read batten.toml");
+    let text = std::fs::read_to_string(common::committed_config_file("git_preset"))
+        .expect("read batten.toml");
     let config: toml::Value = toml::from_str(&text).expect("batten.toml parses");
     for verdict in config
         .get("verdict")

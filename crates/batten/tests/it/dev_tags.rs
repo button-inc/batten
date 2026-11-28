@@ -129,9 +129,7 @@ fn the_backfill_base_is_never_a_dev_or_pre_release_tag() {
 /// The glob this repository's `release-tags` history row declares, which is
 /// every tag `tag mint wrong` (`policy/release-tag-shape.rego`) judges.
 fn release_tags_glob() -> String {
-    let text =
-        std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../batten.toml"))
-            .unwrap();
+    let text = common::committed_config();
     let config: toml::Table = toml::from_str(&text).unwrap();
     config["rule"]
         .as_array()

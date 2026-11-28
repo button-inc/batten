@@ -613,8 +613,10 @@ fn the_census_is_byte_stable() {
 /// itself, and that every declared home is a line source.
 #[test]
 fn this_repositorys_ban_reads_the_census_declaration() {
-    let authority: toml::Value =
-        toml::from_str(&std::fs::read_to_string(common::at_root("batten.toml")).unwrap()).unwrap();
+    let authority: toml::Value = toml::from_str(
+        &std::fs::read_to_string(common::committed_config_file("census_shell")).unwrap(),
+    )
+    .unwrap();
     let row = authority["rule"]
         .as_array()
         .unwrap()

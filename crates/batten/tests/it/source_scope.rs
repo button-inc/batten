@@ -21,7 +21,7 @@ const SOURCE_KEYS: &[&str] = &[
 
 /// The committed config, parsed.
 fn committed() -> toml::Table {
-    std::fs::read_to_string(common::at_root("batten.toml"))
+    std::fs::read_to_string(common::committed_config_file("source_scope"))
         .expect("batten.toml")
         .parse()
         .expect("batten.toml parses")

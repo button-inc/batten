@@ -64,7 +64,8 @@ fn root() -> PathBuf {
 
 /// The committed `batten.toml`, parsed.
 fn authority() -> toml::Value {
-    let text = fs::read_to_string(common::at_root("batten.toml")).expect("the committed config");
+    let text = fs::read_to_string(common::committed_config_file("commit_wiring"))
+        .expect("the committed config");
     toml::from_str(&text).expect("batten.toml parses as TOML")
 }
 
@@ -253,7 +254,8 @@ fn the_variable_is_gone_no_conventional_re_survives_in_mise_toml() {
 
 #[test]
 fn the_pattern_lives_in_batten_toml_and_exactly_once() {
-    let text = fs::read_to_string(common::at_root("batten.toml")).expect("the committed config");
+    let text = fs::read_to_string(common::committed_config_file("commit_wiring"))
+        .expect("the committed config");
     let declared = text
         .lines()
         .filter(|line| line.starts_with("subject_pattern = "))

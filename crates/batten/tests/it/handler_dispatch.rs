@@ -392,7 +392,8 @@ fn a_write_inside_the_tree_is_selected() {
 #[test]
 fn this_repositorys_filed_row_settled_is_tree_only() {
     use batten::facts::{Format, Look, Node};
-    let text = std::fs::read_to_string(common::at_root("batten.toml")).expect("read the authority");
+    let text = std::fs::read_to_string(common::committed_config_file("handler_dispatch"))
+        .expect("read the authority");
     let Look::Is(config) = Format::Toml.read(&text) else {
         panic!("the authority did not parse");
     };

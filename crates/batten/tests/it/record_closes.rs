@@ -39,7 +39,7 @@ fn repo(name: &str) -> PathBuf {
     std::fs::write(root.join("seed.txt"), "seed\n").expect("seed");
     common::git_in(&root, &["add", "-A"]);
     common::git_in(&root, &["commit", "--quiet", "-m", "base"]);
-    let authority = common::at_root("batten.toml");
+    let authority = common::committed_config_file("record_closes");
     std::fs::copy(authority, root.join("batten.toml")).expect("install the committed authority");
     root
 }
@@ -101,10 +101,11 @@ fn a_body_that_closes_rows_records_them_in_the_readers_own_shape() {
 /// repository does not carry, the hook cannot load it there, and it records
 /// nothing.
 fn body_recorder_config() -> String {
-    let committed: toml::Table = std::fs::read_to_string(common::at_root("batten.toml"))
-        .expect("read the committed authority")
-        .parse()
-        .expect("the committed authority parses");
+    let committed: toml::Table =
+        std::fs::read_to_string(common::committed_config_file("record_closes"))
+            .expect("read the committed authority")
+            .parse()
+            .expect("the committed authority parses");
     let rows: Vec<toml::Value> = committed["recorder"]
         .as_array()
         .expect("the authority declares recorders")

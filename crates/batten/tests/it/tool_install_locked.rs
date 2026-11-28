@@ -50,8 +50,7 @@ const VERDICTS: &[&str] = &["lock read loose", "tool install unsafe"];
 
 /// The committed rows this rule needs, as a config of their own.
 fn committed_config() -> String {
-    let authority: toml::Table = std::fs::read_to_string(common::at_root("batten.toml"))
-        .expect("read batten.toml")
+    let authority: toml::Table = common::committed_config()
         .parse()
         .expect("batten.toml parses");
     let rows = |table: &str, keep: &dyn Fn(&str) -> bool| -> toml::Value {
@@ -313,8 +312,7 @@ fn a_switch_inside_a_script_block_is_reported() {
 /// path the module names that the row never feeds it.
 #[test]
 fn every_line_source_is_read() {
-    let authority: toml::Table = std::fs::read_to_string(common::at_root("batten.toml"))
-        .expect("read batten.toml")
+    let authority: toml::Table = common::committed_config()
         .parse()
         .expect("batten.toml parses");
     let row = authority["rule"]

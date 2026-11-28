@@ -42,7 +42,7 @@ use common::{at_root, batten, write};
 
 /// The hatches the committed config declares, read the way the helper reads them.
 fn declared_row_hatches() -> Vec<String> {
-    batten::config::load(&at_root("batten.toml"))
+    batten::config::load(&common::committed_config_file("bypass_scrub"))
         .expect("the committed config loads")
         .rules
         .iter()
@@ -122,7 +122,7 @@ fn the_cheap_bypass_read_names_what_the_full_load_names() {
         vec![String::from("BATTEN_FIXTURE_HATCH")]
     );
     assert_eq!(common::bypass_env_vars_in(&fixture), full(&fixture));
-    let committed = at_root("batten.toml");
+    let committed = common::committed_config_file("bypass_scrub");
     assert_eq!(common::bypass_env_vars_in(&committed), full(&committed));
 }
 

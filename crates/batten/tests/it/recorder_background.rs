@@ -33,8 +33,7 @@ fn repo(name: &str) -> PathBuf {
 /// scratch repository does not hold, and the hook refuses to adjudicate without
 /// them.
 fn authority() -> String {
-    let committed =
-        std::fs::read_to_string(common::at_root("batten.toml")).expect("read the authority");
+    let committed = common::committed_config();
     let mut sections: Vec<Vec<&str>> = Vec::new();
     for line in committed.lines() {
         if line.starts_with('[') || sections.is_empty() {

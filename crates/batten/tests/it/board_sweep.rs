@@ -319,7 +319,8 @@ fn a_consumer_with_another_board_vocabulary_is_swept() {
 /// repository could not run would otherwise read as a gate it has.
 #[test]
 fn this_repositorys_sweep_declares_the_board_check_and_the_drain() {
-    let text = std::fs::read_to_string(common::at_root("batten.toml")).expect("the config");
+    let text =
+        std::fs::read_to_string(common::committed_config_file("board_sweep")).expect("the config");
     let config: toml::Value = toml::from_str(&text).expect("the config parses");
     let rows = config
         .get("board")

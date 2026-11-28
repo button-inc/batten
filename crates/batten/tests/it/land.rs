@@ -1078,7 +1078,7 @@ fn the_conflict_stop_and_its_gate_name_a_route_that_exists() {
         "the refusal must say why there is nothing to continue, or its absence reads as a defect"
     );
 
-    let config = std::fs::read_to_string(common::at_root("batten.toml"))
+    let config = std::fs::read_to_string(common::committed_config_file("land"))
         .expect("the committed authority is readable");
     let row = config
         .split_once("id = \"patch run loose\"")

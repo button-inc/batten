@@ -216,7 +216,7 @@ fn a_conformant_document_passes() {
 fn the_default_standards_set_is_satisfiable() {
     // The committed authority's list, read rather than restated: it must not ask
     // the SPDX-3-only standard a 2.3 document can never satisfy.
-    let committed = std::fs::read_to_string(at_root("batten.toml")).expect("the authority");
+    let committed = common::committed_config();
     let parsed: toml::Value = toml::from_str(&committed).expect("batten.toml parses");
     let standards: Vec<String> = parsed["sbom"]["conformance"]["standards"]
         .as_array()

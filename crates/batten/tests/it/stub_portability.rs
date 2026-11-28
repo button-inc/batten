@@ -64,8 +64,8 @@ struct Row {
 /// The `shell * unsafe` rows, read from the committed config — one authority for
 /// the patterns, never a second spelling of them here.
 fn rows() -> Vec<Row> {
-    let config =
-        batten::config::load(&common::at_root("batten.toml")).expect("the committed config loads");
+    let config = batten::config::load(&common::committed_config_file("stub_portability"))
+        .expect("the committed config loads");
     config
         .rules
         .iter()

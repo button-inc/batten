@@ -899,8 +899,10 @@ fn an_existing_shell_file_that_grows_under_migrate_is_refused() {
 /// to it is a failing test a reviewer must read.
 #[test]
 fn the_exemption_set_is_exactly_the_files_that_must_be_shell() {
-    let authority: toml::Value =
-        toml::from_str(&std::fs::read_to_string(common::at_root("batten.toml")).unwrap()).unwrap();
+    let authority: toml::Value = toml::from_str(
+        &std::fs::read_to_string(common::committed_config_file("shell_banned")).unwrap(),
+    )
+    .unwrap();
     let exempt: BTreeSet<&str> = authority["census"]["shell"]["exempt"]
         .as_array()
         .unwrap()
@@ -928,8 +930,10 @@ fn the_exemption_set_is_exactly_the_files_that_must_be_shell() {
 /// would count a home the gate never judged.
 #[test]
 fn this_repositorys_ban_reads_every_declared_home() {
-    let authority: toml::Value =
-        toml::from_str(&std::fs::read_to_string(common::at_root("batten.toml")).unwrap()).unwrap();
+    let authority: toml::Value = toml::from_str(
+        &std::fs::read_to_string(common::committed_config_file("shell_banned")).unwrap(),
+    )
+    .unwrap();
     let row = authority["rule"]
         .as_array()
         .unwrap()

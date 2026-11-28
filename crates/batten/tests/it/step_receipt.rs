@@ -857,7 +857,7 @@ fn a_passing_step_whose_record_refuses_stays_green() {
 #[test]
 fn every_step_a_task_names_is_declared_and_the_retired_task_is_gone() {
     let manifest = std::fs::read_to_string(common::at_root("mise.toml")).expect("mise.toml");
-    let config = std::fs::read_to_string(common::at_root("batten.toml")).expect("batten.toml");
+    let config = common::committed_config();
     let declared: toml::Value = toml::from_str(&config).expect("batten.toml parses");
     let ids: Vec<&str> = declared["step"]
         .as_array()
@@ -1401,9 +1401,7 @@ fn a_rebase_onto_an_unrelated_trunk_commit_hits() {
 /// This repository's own `[[step]]` row `id`, as a fixture authority holding it
 /// alone: the case judges the row as declared, never a copy of it.
 fn declared_step_table(id: &str) -> String {
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../batten.toml");
-    let authority: toml::Table = std::fs::read_to_string(path)
-        .expect("this repository's batten.toml")
+    let authority: toml::Table = common::committed_config()
         .parse()
         .expect("this repository's batten.toml parses");
     let row = authority["step"]
@@ -2343,5 +2341,76 @@ fn a_row_that_reads_the_config_undeclared_fails_its_trace_lint() {
         Some(0),
         "{}",
         common::stderr(&declared)
+    );
+}
+
+/// THE TESTS READ THE CONFIG AS THE KEY DOES (CLOUD-2960): a step's key holds
+/// the config's parts and not its pin, comments or scheduling, so a case that
+/// reads the checkout's `batten.toml` whole can see bytes no key covers and
+/// pass on a stale hit. Every read goes through `common::committed_config`;
+/// this scans every test source and every crate's sources for any other.
+///
+/// The one read kept whole is named here with its reason, so it is a decision
+/// and not a gap: `pr_partition_restated.rs` holds a row's pattern to the
+/// bytes as written, escapes included. The crate's unit tests read through
+/// `config::committed_config_view`, whose one read is marked.
+///
+/// Fails by: any test or source file spelling a path to the checkout's config
+/// outside the helper and the named exception.
+#[test]
+fn no_test_reads_the_checkout_config_but_through_the_helper() {
+    const SPELLINGS: [&str; 3] = [
+        "at_root(\"batten.toml\")",
+        "\"../../batten.toml\"",
+        "\"../../../../batten.toml\"",
+    ];
+    const KEPT_WHOLE: [&str; 2] = [
+        "crates/batten/tests/it/common/mod.rs",
+        "crates/batten/tests/it/pr_partition_restated.rs",
+    ];
+    let root = common::at_root(".");
+    let mut offenders = Vec::new();
+    let mut stack = vec![root.join("crates")];
+    while let Some(dir) = stack.pop() {
+        for entry in std::fs::read_dir(&dir).expect("a crates directory is readable") {
+            let path = entry.expect("a directory entry").path();
+            if path.is_dir() {
+                if path.file_name().is_some_and(|name| name != "target") {
+                    stack.push(path);
+                }
+                continue;
+            }
+            if path.extension().is_none_or(|ext| ext != "rs") {
+                continue;
+            }
+            let relative = path
+                .strip_prefix(&root)
+                .expect("under the root")
+                .to_string_lossy()
+                .replace('\\', "/");
+            if KEPT_WHOLE.contains(&relative.as_str()) {
+                continue;
+            }
+            let text = std::fs::read_to_string(&path).expect("a source file is readable");
+            let lines: Vec<&str> = text.lines().collect();
+            for (at, line) in lines.iter().enumerate() {
+                // The crate's own twin of the helper names itself on the line
+                // above its read.
+                let marked = at
+                    .checked_sub(1)
+                    .and_then(|above| lines.get(above))
+                    .is_some_and(|above| above.contains("THE ONE READ OF THE CHECKOUT CONFIG"));
+                if !marked && SPELLINGS.iter().any(|spelling| line.contains(spelling)) {
+                    offenders.push(format!("{relative}:{}", at + 1));
+                }
+            }
+        }
+    }
+    offenders.sort();
+    assert!(
+        offenders.is_empty(),
+        "{} read(s) of the checkout's config outside common::committed_config:\n{}",
+        offenders.len(),
+        offenders.join("\n")
     );
 }

@@ -22,7 +22,7 @@ use crate::common;
 
 /// The `toolchain-is-provisioned` row's repair argv, as the engine loads it.
 fn repair() -> Vec<String> {
-    batten::config::load(&common::at_root("batten.toml"))
+    batten::config::load(&common::committed_config_file("lock_installable"))
         .expect("the committed config loads")
         .startup
         .into_iter()

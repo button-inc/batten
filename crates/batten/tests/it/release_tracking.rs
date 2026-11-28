@@ -275,7 +275,8 @@ fn row() -> Rule {
 }
 
 fn patterns() -> Vec<batten::pattern::NamedPattern> {
-    let config = fs::read_to_string(common::at_root("batten.toml")).expect("the committed config");
+    let config = fs::read_to_string(common::committed_config_file("release_tracking"))
+        .expect("the committed config");
     let parsed: toml::Value = toml::from_str(&config).expect("batten.toml parses");
     let rows = parsed["pattern"].as_array().expect("`[[pattern]]` rows");
     let found: Vec<_> = rows

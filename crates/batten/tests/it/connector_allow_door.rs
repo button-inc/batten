@@ -383,7 +383,7 @@ fn the_impersonation_detector_is_live_behind_this_row() {
 /// deletion that reads as a port. This is the case that reddens on it.
 #[test]
 fn this_repository_declares_the_names_its_guard_translates() {
-    let text = std::fs::read_to_string(common::at_root("batten.toml")).expect("the config");
+    let text = common::committed_config();
     let config: toml::Value = toml::from_str(&text).expect("batten.toml parses");
     let mcp = config.get("mcp").expect("an [mcp] table");
     let aliases: Vec<&str> = mcp

@@ -512,7 +512,8 @@ fn the_reading_carries_no_pr_predicate_and_the_marker_has_one_authority() {
         !source.contains(&marker),
         "the marker is the row's, not the reading's"
     );
-    let config = std::fs::read_to_string(common::at_root("batten.toml")).expect("the config");
+    let config =
+        std::fs::read_to_string(common::committed_config_file("released")).expect("the config");
     assert_eq!(
         config
             .lines()

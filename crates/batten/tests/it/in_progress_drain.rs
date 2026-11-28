@@ -80,7 +80,7 @@ impl Board {
         common::init_repo(&board.repo);
         board.git(&["checkout", "-q", "-b", "work"]);
         std::fs::copy(
-            common::at_root("batten.toml"),
+            common::committed_config_file("in_progress_drain"),
             board.repo.join("batten.toml"),
         )
         .expect("config");

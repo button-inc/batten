@@ -12,7 +12,8 @@ use common::{Fixture, run, stdout};
 
 /// The `[[rule]]` block whose id is `program run loose`, as `batten.toml` spells it.
 fn committed_row() -> String {
-    let text = std::fs::read_to_string(common::at_root("batten.toml")).expect("the authority");
+    let text = std::fs::read_to_string(common::committed_config_file("program_run_loose"))
+        .expect("the authority");
     let id = text
         .find("id = \"program run loose\"")
         .expect("batten.toml declares the row");

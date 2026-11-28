@@ -3981,8 +3981,7 @@ fn committed_policy_modules(dir: &Path) {
 
 /// The committed authority, read once per case that needs its bytes.
 fn committed_config() -> String {
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../batten.toml");
-    fs::read_to_string(&path).expect("read the committed batten.toml")
+    common::committed_config()
 }
 
 /// A fixture carrying the **committed** `batten.toml`, naming no tracker key.
@@ -7201,8 +7200,7 @@ fn the_committed_repo_config_gates_a_repository() {
     // shape it bans. `the_committed_repo_agnosticism_rules_fire_on_every_banned_shape`
     // below is that fixture for the CLOUD-7 rules, and any rule landing later
     // owes one of its own.
-    let committed = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../batten.toml");
-    let contents = fs::read_to_string(&committed).expect("read batten.toml");
+    let contents = common::committed_config();
 
     let dir = repo_with_config("config-committed", &contents);
     let home = committed_config_fixture_git(&dir);
@@ -7261,8 +7259,7 @@ fn the_committed_delegating_rule_is_refused_by_the_read_only_verb() {
     // because a `command` rule reaches user-supplied code and `check` promises
     // it never does (§5, CLOUD-170). The refusal must name the verb that does
     // run it — that is what `mise run batten-check` was pointed at.
-    let committed = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../batten.toml");
-    let contents = fs::read_to_string(&committed).expect("read batten.toml");
+    let contents = common::committed_config();
     let dir = repo_with_config("config-committed-read-refusal", &contents);
     let home = committed_config_fixture_git(&dir);
     committed_budget_surfaces(&dir);
@@ -7297,8 +7294,7 @@ fn the_committed_delegating_rule_spawns_nothing_when_its_glob_misses() {
     // reachable if the glob selected nothing and no process was spawned at all.
     // A version of this test with an empty tree would pass just as well against
     // an engine that spawned the delegate over zero files.
-    let committed = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../batten.toml");
-    let contents = fs::read_to_string(&committed).expect("read batten.toml");
+    let contents = common::committed_config();
     let dir = repo_with_config("config-committed-glob-miss", &contents);
     let home = committed_config_fixture_git(&dir);
     committed_budget_surfaces(&dir);
@@ -7416,8 +7412,7 @@ fn the_committed_repo_agnosticism_rules_fire_on_every_banned_shape() {
          const KEY: &str = r\"{tracker_key}\";\nconst ALT: &str = r\"{tracker_key_escape}\";\n"
     );
 
-    let committed = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../batten.toml");
-    let contents = fs::read_to_string(&committed).expect("read batten.toml");
+    let contents = common::committed_config();
 
     // A stale fixture from a prior run would add findings and break the byte
     // equality below — `repo_with_config` does not clear the directory itself.
@@ -7536,8 +7531,7 @@ fn the_committed_portability_rules_fire_on_every_banned_shape() {
     // Unlike that test, the banned literals CAN be written as source text here:
     // both globs are anchored at a first segment (`mise-tasks/`, `tests/`) that
     // this file, at `crates/batten/tests/it/cli.rs`, does not sit under.
-    let committed = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../batten.toml");
-    let contents = fs::read_to_string(&committed).expect("read batten.toml");
+    let contents = common::committed_config();
 
     let _ = fs::remove_dir_all(common::target_tmp().join("config-portability-dirty"));
     let dirty = repo_with_config("config-portability-dirty", &contents);
@@ -13017,8 +13011,7 @@ fn help_leads_with_the_crate_description() {
 /// portability case can: the row's glob is `**/*.md`, and this file is `.rs`.
 #[test]
 fn a_tracked_instruction_may_not_prescribe_the_denied_commit_identity() {
-    let committed = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../batten.toml");
-    let contents = fs::read_to_string(&committed).expect("read batten.toml");
+    let contents = common::committed_config();
 
     // The prescription, spelled the way the hook spells it. Line 2, so the
     // pointer proves the finding is anchored rather than reported file-wide.

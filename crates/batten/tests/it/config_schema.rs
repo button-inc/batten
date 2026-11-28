@@ -166,7 +166,8 @@ fn the_schema_validates_this_repositorys_own_config() {
     // is asserted against the config Batten itself is gated by.
     let schema = derived_schema();
     let validator = jsonschema::validator_for(&schema).expect("the schema compiles");
-    let own = fs::read_to_string(at_root("batten.toml")).expect("read batten.toml");
+    let own = fs::read_to_string(common::committed_config_file("config_schema"))
+        .expect("read batten.toml");
     assert!(
         validator.is_valid(&as_json(&own)),
         "this repository's own batten.toml failed the schema it ships"

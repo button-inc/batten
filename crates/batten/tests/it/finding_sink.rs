@@ -691,7 +691,8 @@ fn a_concurrent_decide_waits_for_the_one_holding_the_record() {
 /// The declared door the engine's end-of-turn ladder runs.
 #[test]
 fn the_stop_handler_row_runs_this_task() {
-    let text = std::fs::read_to_string(common::at_root("batten.toml")).expect("the config");
+    let text =
+        std::fs::read_to_string(common::committed_config_file("finding_sink")).expect("the config");
     let config: toml::Value = toml::from_str(&text).expect("parses");
     let rows = config["hook"]["handler"].as_array().expect("handler rows");
     let row = rows
