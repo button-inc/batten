@@ -86,6 +86,9 @@ declared_modules := {
 	"session_watch",
 	"register", "spec", "state", "stop", "store", "surface", "transcript", "traversal", "trust", "trust_pin", "uses",
 	"verbs", "verdict", "waiver", "worktree",
+	# `version` (CLOUD-2906, batten-base): the one semver reader every version
+	# string is parsed through; a leaf.
+	"version",
 	# `brief`, `main` and `selfwrite` were absent from the first draft of this
 	# table, and the coverage rule caught all three on its first run against the
 	# real tree — which is the property working before any human read it. `main`
