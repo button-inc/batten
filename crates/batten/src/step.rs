@@ -2749,7 +2749,7 @@ fn ancestor_of(dir: &str, spec: &str) -> bool {
 
 /// A receipt's stamp: the first field of its first line, RFC 3339 in UTC, so
 /// it orders as text. A receipt without one sorts first, as the oldest.
-fn receipt_stamp(value: &str) -> String {
+pub(crate) fn receipt_stamp(value: &str) -> String {
     value
         .lines()
         .next()
@@ -2762,7 +2762,7 @@ fn receipt_stamp(value: &str) -> String {
 /// ties broken by name, first in first out. A hit writes nothing, so recency
 /// is the write, never a read, and the read path stays write-free under
 /// concurrent runs of one step.
-fn evict(entries: &[(String, String)], cap: usize) -> Vec<String> {
+pub(crate) fn evict(entries: &[(String, String)], cap: usize) -> Vec<String> {
     let mut ranked: Vec<&(String, String)> = entries.iter().collect();
     ranked.sort_by(|(a_name, a_stamp), (b_name, b_stamp)| {
         a_stamp.cmp(b_stamp).then_with(|| a_name.cmp(b_name))

@@ -129,6 +129,7 @@ mod commit_admission;
 mod commit_arm_sequencing;
 mod commit_claims;
 mod commit_meta_facts;
+mod commit_receipt;
 mod commit_refusal_explain;
 mod commit_wiring;
 mod common;

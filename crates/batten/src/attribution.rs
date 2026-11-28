@@ -355,9 +355,18 @@ impl AttributionExt for Attribution {
 /// exit `1` — "could not look" — never a clean pass over commits nobody read.
 /// A commit whose record does not carry all four fields is refused there, where
 /// it used to answer with empty strings here.
-pub fn read_range(dir: &Path, base: &str, head: &str) -> Result<Vec<CommitMeta>> {
+pub fn read_range(
+    dir: &Path,
+    base: &str,
+    head: &str,
+    passed: &std::collections::BTreeSet<String>,
+) -> Result<Vec<CommitMeta>> {
     let mut commits = Vec::new();
     for sha in git::commits_in_range(dir, base, head)? {
+        // A commit holding a passing receipt is not read (CLOUD-2962).
+        if passed.contains(&sha) {
+            continue;
+        }
         let record = git::commit_record(dir, &sha)?;
         commits.push(CommitMeta {
             label: short(&sha),
@@ -1157,7 +1166,7 @@ mod tests {
         crate::gitwrite::commit_paths(&dir, &["a".to_owned()], "first").unwrap();
         std::fs::write(dir.join("a"), "b").unwrap();
         crate::gitwrite::commit_paths(&dir, &["a".to_owned()], "second\n").unwrap();
-        let read = read_range(&dir, "HEAD~1", "HEAD").unwrap();
+        let read = read_range(&dir, "HEAD~1", "HEAD", &std::collections::BTreeSet::new()).unwrap();
         assert_eq!(read.len(), 1, "{read:?}");
         assert_eq!(read[0].label.len(), 8);
         assert!(read[0].body.starts_with("second"), "{:?}", read[0].body);

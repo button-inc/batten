@@ -502,7 +502,14 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
                 json,
                 range,
                 message,
-            } => run_commit_check(json, range.as_deref(), message.as_deref(), &overrides, out),
+            } => run_commit_check(
+                json,
+                range.as_deref(),
+                message.as_deref(),
+                &overrides,
+                out,
+                err,
+            ),
         },
         Some(Command::Worktree { command }) => match command {
             WorktreeCommand::Status { json } => run_worktree_status(json, &overrides, out),
@@ -19984,6 +19991,7 @@ fn commit_admissions(
     range: Option<&str>,
     message: Option<&str>,
     overrides: &Overrides,
+    passed: &std::collections::BTreeSet<String>,
 ) -> Result<Vec<commit::Finding>> {
     let root = Path::new(".");
     // ONE resolve for both tables. `protected` answers "is this guarded" and
@@ -20003,7 +20011,7 @@ fn commit_admissions(
                 return Ok(Vec::new());
             };
             Ok(commit::judge_admissions(
-                &git::writes_in_range(root, base, head, &protected)?,
+                &git::writes_in_range_except(root, base, head, &protected, passed)?,
                 &redirects,
             ))
         }
@@ -20147,6 +20155,7 @@ fn commit_arm_sequencing(
     range: Option<&str>,
     message: Option<&str>,
     overrides: &Overrides,
+    passed: &std::collections::BTreeSet<String>,
 ) -> Result<Vec<commit::Finding>> {
     let root = Path::new(".");
     let resolved = resolve::resolve(root, overrides)?;
@@ -20175,7 +20184,7 @@ fn commit_arm_sequencing(
                 return Ok(Vec::new());
             };
             let mut sequences = Vec::new();
-            for write in git::writes_in_range(root, base, head, &globs)? {
+            for write in git::writes_in_range_except(root, base, head, &globs, passed)? {
                 // A commit that did not touch the config declared no arm, so the
                 // introduced set is empty by construction and neither blob is
                 // read. This is what keeps the clause free on the overwhelming
@@ -20376,6 +20385,7 @@ fn commit_claims(
     range: &str,
     claims: &crate::config_model::Claims,
     overrides: &Overrides,
+    passed: &std::collections::BTreeSet<String>,
 ) -> Result<Vec<commit::Finding>> {
     let root = Path::new(".");
     let grammar = board_grammar(overrides)?;
@@ -20386,7 +20396,7 @@ fn commit_claims(
         )));
     };
     let mut claimants = Vec::with_capacity(commits.len());
-    for meta in commits {
+    for meta in commits.iter().filter(|meta| !passed.contains(&meta.commit)) {
         let record = git::commit_record(root, &meta.commit)?;
         let claimed = race::claimed_from("", "", &record.body, "", &grammar, race::Source::All);
         claimants.push(commit::Claimant {
@@ -20399,15 +20409,159 @@ fn commit_claims(
     commit::judge_claims(&claimants, claims)
 }
 
+/// The record family `commit check` keeps one passing receipt per commit in
+/// (CLOUD-2962).
+const COMMIT_RECEIPTS: &str = "commit-receipts";
+/// The record family `attribution check --range` keeps its receipts in.
+const ATTRIBUTION_RECEIPTS: &str = "attribution-receipts";
+/// The one group both families write under.
+const RECEIPT_GROUP: &str = "check";
+/// How many receipts a family keeps before the oldest is evicted.
+const KEPT_COMMIT_RECEIPTS: usize = 8192;
+
+/// One range's receipts: which commits hold a passing one and are not judged,
+/// and the key each judged commit earns a receipt under (CLOUD-2962).
+///
+/// # The key is never the commit id
+///
+/// It digests what the verdict reads about the commit, which the caller
+/// spells, and the whole resolved policy, so a rebase that moves none of it
+/// still hits and a policy edit re-judges the range once. Where the policy
+/// cannot be digested no key exists: every commit is judged and none is kept,
+/// the direction a miss must fail in.
+struct ReceiptLedger {
+    family: &'static str,
+    git_dir: Option<std::path::PathBuf>,
+    /// Every walked commit by full id, with its key where one exists.
+    keys: Vec<(String, Option<String>)>,
+    /// The full ids holding a passing receipt.
+    held: std::collections::BTreeSet<String>,
+}
+
+impl ReceiptLedger {
+    /// Walk `base..head` once and look every commit's receipt up.
+    fn open(
+        family: &'static str,
+        overrides: &Overrides,
+        range: (&str, &str),
+        with_diff: bool,
+        material: impl Fn(&git::ReceiptFacts) -> String,
+    ) -> Result<Self> {
+        let root = Path::new(".");
+        let policy = receipt_policy_digest(overrides)?;
+        let git_dir = git::git_dir(root).ok();
+        let mut keys = Vec::new();
+        let mut held = std::collections::BTreeSet::new();
+        for facts in git::receipt_facts_in_range(root, range.0, range.1, with_diff)? {
+            let key = policy.as_ref().map(|policy| {
+                crate::tools::digest(format!("{}\npolicy\n{policy}", material(&facts)).as_bytes())
+            });
+            let hit = match (&git_dir, &key) {
+                (Some(git_dir), Some(key)) => {
+                    record::keyed_group_read(git_dir, family, RECEIPT_GROUP, key).is_some()
+                }
+                _ => false,
+            };
+            if hit {
+                held.insert(facts.commit.clone());
+            }
+            keys.push((facts.commit, key));
+        }
+        Ok(Self {
+            family,
+            git_dir,
+            keys,
+            held,
+        })
+    }
+
+    /// Write a receipt for every judged commit no finding names, then evict
+    /// past the cap. Best effort: a receipt not written costs a re-judge, never
+    /// a verdict.
+    fn settle(&self, refused: &std::collections::BTreeSet<String>) {
+        let Some(git_dir) = self.git_dir.as_deref() else {
+            return;
+        };
+        let stamp = crate::clock::rfc3339_utc(crate::clock::now_unix());
+        for (commit, key) in &self.keys {
+            let Some(key) = key else {
+                continue;
+            };
+            if self.held.contains(commit) || refused.contains(&commit_label(commit)) {
+                continue;
+            }
+            let _ = record::keyed_group_write(
+                git_dir,
+                self.family,
+                RECEIPT_GROUP,
+                key,
+                &format!("{stamp}\n"),
+            );
+        }
+        let entries: Vec<(String, String)> =
+            record::keyed_group_entries(git_dir, self.family, RECEIPT_GROUP)
+                .into_iter()
+                .map(|(name, value)| (name, step::receipt_stamp(&value)))
+                .collect();
+        for name in step::evict(&entries, KEPT_COMMIT_RECEIPTS) {
+            let _ = record::keyed_group_remove(git_dir, self.family, RECEIPT_GROUP, &name);
+        }
+    }
+
+    /// `judged <J> of <N>, <H> held`.
+    fn line(&self) -> String {
+        let total = self.keys.len();
+        let held = self.held.len();
+        format!("judged {} of {total}, {held} held", total - held)
+    }
+}
+
+/// The digest of the whole resolved policy a commit verdict runs under,
+/// overrides included, through [`step::config_digest`]; `None` where the
+/// resolved config does not render as TOML.
+fn receipt_policy_digest(overrides: &Overrides) -> Result<Option<String>> {
+    let resolved = resolve::resolve(Path::new("."), overrides)?;
+    let text = toml::Value::try_from(&resolved)
+        .ok()
+        .and_then(|value| toml::to_string(&value).ok());
+    Ok(text.and_then(|text| step::config_digest(&text, &[])))
+}
+
+/// What `commit check` reads about one commit: author, the blob ids it writes,
+/// and its message.
+fn commit_receipt_material(facts: &git::ReceiptFacts) -> String {
+    format!(
+        "author {}\nraw\n{}\nmessage {}\n{}",
+        facts.author,
+        facts.raw.join("\n"),
+        facts.message.len(),
+        facts.message
+    )
+}
+
+/// What `attribution check` reads about one commit: both identities and the
+/// message.
+fn attribution_receipt_material(facts: &git::ReceiptFacts) -> String {
+    format!(
+        "author {}\ncommitter {}\nmessage {}\n{}",
+        facts.author,
+        facts.committer,
+        facts.message.len(),
+        facts.message
+    )
+}
+
 fn run_commit_check(
     json: bool,
     range: Option<&str>,
     message: Option<&str>,
     overrides: &Overrides,
     out: &mut dyn Write,
+    err: &mut dyn Write,
 ) -> Result<ExitCode> {
     // Exactly one mode. Both is ambiguous, and neither is a run over nothing that
     // would exit 0 — the vacuous pass a gate must never produce.
+    let mut ledger = None;
     let subjects = match (range, message) {
         (Some(_), Some(_)) => {
             return Err(UsageError::raise(
@@ -20428,17 +20582,43 @@ fn run_commit_check(
                     "commit check: `{range}` is not a <base>..<head> range"
                 ))
             })?;
-            commit::read_range(Path::new("."), base, head)?
+            // `-J` keeps no receipts: a document reader asked for every verdict.
+            if !json {
+                ledger = Some(ReceiptLedger::open(
+                    COMMIT_RECEIPTS,
+                    overrides,
+                    (base, head),
+                    true,
+                    commit_receipt_material,
+                )?);
+            }
+            let passed = ledger
+                .as_ref()
+                .map(|kept| kept.held.clone())
+                .unwrap_or_default();
+            commit::read_range(Path::new("."), base, head, &passed)?
         }
         (None, Some(message)) => vec![commit::read_message(Path::new(message))?],
     };
+    let passed = ledger
+        .as_ref()
+        .map(|kept| kept.held.clone())
+        .unwrap_or_default();
 
     let policy = commit_policy(overrides)?;
     let mut findings = policy.judge(&subjects)?;
-    findings.extend(commit_admissions(range, message, overrides)?);
-    findings.extend(commit_arm_sequencing(range, message, overrides)?);
+    findings.extend(commit_admissions(range, message, overrides, &passed)?);
+    findings.extend(commit_arm_sequencing(range, message, overrides, &passed)?);
     if let (Some(range), Some(claims)) = (range, policy.claims.as_ref()) {
-        findings.extend(commit_claims(range, claims, overrides)?);
+        findings.extend(commit_claims(range, claims, overrides, &passed)?);
+    }
+    if let Some(ledger) = &ledger {
+        let refused = findings
+            .iter()
+            .map(|finding| finding.label.clone())
+            .collect();
+        ledger.settle(&refused);
+        writeln!(err, "commit check: {}", ledger.line())?;
     }
 
     if json {
@@ -20477,6 +20657,7 @@ fn run_attribution(
             harness,
             overrides,
             out,
+            err,
         ),
         AttributionCommand::Tagger { tag, json } => {
             run_attribution_tagger(&tag, json, overrides, out)
@@ -20542,9 +20723,11 @@ fn run_attribution_check(
     harness: Option<crate::config_model::Harness>,
     overrides: &Overrides,
     out: &mut dyn Write,
+    err: &mut dyn Write,
 ) -> Result<ExitCode> {
     // Exactly one mode. Both is ambiguous and neither is a run over nothing that
     // would exit 0 — the vacuous pass a gate must never produce.
+    let mut ledger = None;
     let commits = match (range, message) {
         (Some(_), Some(_)) => {
             return Err(UsageError::raise(
@@ -20565,7 +20748,21 @@ fn run_attribution_check(
                     "attribution check: `{range}` is not a <base>..<head> range"
                 ))
             })?;
-            attribution::read_range(Path::new("."), base, head)?
+            // `-J` keeps no receipts: a document reader asked for every verdict.
+            if !json {
+                ledger = Some(ReceiptLedger::open(
+                    ATTRIBUTION_RECEIPTS,
+                    overrides,
+                    (base, head),
+                    false,
+                    attribution_receipt_material,
+                )?);
+            }
+            let passed = ledger
+                .as_ref()
+                .map(|kept| kept.held.clone())
+                .unwrap_or_default();
+            attribution::read_range(Path::new("."), base, head, &passed)?
         }
         (None, Some(message)) => {
             vec![attribution::read_message(
@@ -20579,6 +20776,14 @@ fn run_attribution_check(
     let mut findings = Vec::new();
     for commit in &commits {
         findings.extend(policy.judge(commit)?);
+    }
+    if let Some(ledger) = &ledger {
+        let refused = findings
+            .iter()
+            .map(|finding| finding.label.clone())
+            .collect();
+        ledger.settle(&refused);
+        writeln!(err, "attribution check: {}", ledger.line())?;
     }
 
     if json {

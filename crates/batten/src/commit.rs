@@ -595,9 +595,16 @@ pub fn judge_arm_sequencing(sequences: &[ArmSequence]) -> Vec<Finding> {
 ///
 /// Returns an error when the range does not resolve or git cannot be run. That is
 /// exit `1` — "could not look" — never a clean pass over commits nobody read.
-pub fn read_range(dir: &Path, base: &str, head: &str) -> Result<Vec<Subject>> {
+pub fn read_range(
+    dir: &Path,
+    base: &str,
+    head: &str,
+    passed: &std::collections::BTreeSet<String>,
+) -> Result<Vec<Subject>> {
     Ok(git::subjects_in_range(dir, base, head)?
         .into_iter()
+        // A commit holding a passing receipt is not judged (CLOUD-2962).
+        .filter(|read| !passed.contains(&read.commit))
         .map(|read| Subject {
             label: short(&read.commit),
             text: read.subject,
@@ -1121,7 +1128,7 @@ mod tests {
         let base = git::head_commit(&dir).unwrap();
         crate::gitwrite::commit_paths(&dir, &[], "feat: second").unwrap();
         let head = git::head_commit(&dir).unwrap();
-        let read = read_range(&dir, &base, "HEAD").unwrap();
+        let read = read_range(&dir, &base, "HEAD", &std::collections::BTreeSet::new()).unwrap();
         assert_eq!(read.len(), 1);
         assert_eq!(read[0].text, "feat: second");
         assert_eq!(read[0].label, short(&head));

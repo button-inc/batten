@@ -3838,6 +3838,22 @@ pub fn writes_in_range(
     head: &str,
     globs: &[String],
 ) -> Result<Vec<CommitWrite>> {
+    writes_in_range_except(dir, base, head, globs, &BTreeSet::new())
+}
+
+/// [`writes_in_range`] over every commit but those `skipped` names by full id:
+/// a held commit is passed over before either tree is walked (CLOUD-2962).
+///
+/// # Errors
+///
+/// As [`writes_in_range`].
+pub fn writes_in_range_except(
+    dir: &Path,
+    base: &str,
+    head: &str,
+    globs: &[String],
+    skipped: &BTreeSet<String>,
+) -> Result<Vec<CommitWrite>> {
     let repo = open(dir)?;
     let refused = || UsageError::raise("could not resolve the commit range".to_owned());
     let (base_id, head_id) = (
@@ -3866,8 +3882,11 @@ pub fn writes_in_range(
         if info.parent_ids().count() > 1 {
             continue;
         }
-        let commit = repo.find_commit(info.id).map_err(|_| refused())?;
         let sha = info.id().to_hex().to_string();
+        if skipped.contains(&sha) {
+            continue;
+        }
+        let commit = repo.find_commit(info.id).map_err(|_| refused())?;
         let now = ids_at(&sha)?;
         // A root commit has no parent, so its whole tree is the change. An empty
         // map is exactly that comparison and needs no special case below.
@@ -3890,6 +3909,130 @@ pub fn writes_in_range(
             commit: sha,
             message: commit.message_raw().map_err(|_| refused())?.to_string(),
             paths,
+        });
+    }
+    Ok(out)
+}
+
+/// One non-merge commit's receipt material (CLOUD-2962): everything a commit
+/// verdict reads about it, and never its id.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReceiptFacts {
+    /// The full commit id, which the caller filters by and never keys on.
+    pub commit: String,
+    /// The author's name and email, `name <email>`.
+    pub author: String,
+    /// The committer's name and email, `name <email>`.
+    pub committer: String,
+    /// The raw message, `%B`.
+    pub message: String,
+    /// One `<old-id> <new-id> <path>` line per blob the commit writes against
+    /// its first parent (the empty tree for a root), sorted. Empty when the
+    /// walk was asked for no diff.
+    pub raw: Vec<String>,
+}
+
+/// Every non-merge commit in `base..head` with its [`ReceiptFacts`], in ONE
+/// walk (CLOUD-2962), so a caller holding a receipt per commit spends no
+/// further read on a held one.
+///
+/// The diff is blob ids only, never contents: an id settles whether a side
+/// moved, and the ledger and config blobs a verdict reads are named by it.
+/// Directory rows are skipped on [`tree_changes`]' reason: a tree id encodes
+/// its siblings, which would make the key depend on the base.
+///
+/// # Errors
+///
+/// A [`UsageError`] (exit `1`) when the range does not resolve or a commit or
+/// tree cannot be read.
+pub fn receipt_facts_in_range(
+    dir: &Path,
+    base: &str,
+    head: &str,
+    with_diff: bool,
+) -> Result<Vec<ReceiptFacts>> {
+    use gix_diff::tree::recorder::Change as Recorded;
+    let repo = open(dir)?;
+    let refused = || UsageError::raise("could not resolve the commit range".to_owned());
+    let (base_id, head_id) = (
+        repo.rev_parse_single(base).map_err(|_| refused())?,
+        repo.rev_parse_single(head).map_err(|_| refused())?,
+    );
+    let walk = repo
+        .rev_walk([head_id.detach()])
+        .with_hidden([base_id.detach()])
+        .all()
+        .map_err(|_| refused())?;
+    let hash = repo.object_hash();
+    let person = |signature: gix::actor::SignatureRef<'_>| {
+        format!("{} <{}>", signature.name, signature.email)
+    };
+    let mut out = Vec::new();
+    for step in walk {
+        let info = step.map_err(|_| refused())?;
+        if info.parent_ids().count() > 1 {
+            continue;
+        }
+        let commit = repo.find_commit(info.id).map_err(|_| refused())?;
+        let author = person(commit.author().map_err(|_| refused())?);
+        let committer = person(commit.committer().map_err(|_| refused())?);
+        let message = commit.message_raw().map_err(|_| refused())?.to_string();
+        let mut raw = Vec::new();
+        if with_diff {
+            let new_tree = commit.tree().map_err(|_| refused())?;
+            let old_tree = match info.parent_ids().next() {
+                Some(parent) => repo
+                    .find_commit(parent.detach())
+                    .map_err(|_| refused())?
+                    .tree()
+                    .map_err(|_| refused())?,
+                None => repo.empty_tree(),
+            };
+            let mut recorder = gix_diff::tree::Recorder::default();
+            gix_diff::tree(
+                gix::objs::TreeRefIter::from_bytes(&old_tree.data, hash),
+                gix::objs::TreeRefIter::from_bytes(&new_tree.data, hash),
+                gix_diff::tree::State::default(),
+                &repo.objects,
+                &mut recorder,
+            )
+            .map_err(|_| refused())?;
+            let null = gix::ObjectId::null(hash);
+            for change in recorder.records {
+                let (mode, old, new, path) = match change {
+                    Recorded::Addition {
+                        entry_mode,
+                        oid,
+                        path,
+                        ..
+                    } => (entry_mode, null, oid, path),
+                    Recorded::Deletion {
+                        entry_mode,
+                        oid,
+                        path,
+                        ..
+                    } => (entry_mode, oid, null, path),
+                    Recorded::Modification {
+                        entry_mode,
+                        previous_oid,
+                        oid,
+                        path,
+                        ..
+                    } => (entry_mode, previous_oid, oid, path),
+                };
+                if mode.is_tree() {
+                    continue;
+                }
+                raw.push(format!("{old} {new} {path}"));
+            }
+            raw.sort();
+        }
+        out.push(ReceiptFacts {
+            commit: info.id().to_hex().to_string(),
+            author,
+            committer,
+            message,
+            raw,
         });
     }
     Ok(out)
