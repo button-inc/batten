@@ -1035,6 +1035,27 @@ fn a_pull_request_job_missing_from_the_roster_is_refused() {
     );
 }
 
+/// A workflow declaring its spend (`CI_SPEND_AUTHORISED`) is a publisher, not a
+/// landing check: its jobs need no lease step and no roster entry (CLOUD-2903).
+#[test]
+fn a_workflow_that_declares_its_spend_is_neither_leased_nor_rostered() {
+    let root = sound("spend-declared");
+    common::write(
+        &root,
+        ".github/workflows/publish.yml",
+        "name: publish\non:\n  pull_request:\n    types: [opened]\nenv:\n  \
+         CI_SPEND_AUTHORISED: \"publishes each head\"\njobs:\n  publish:\n    \
+         name: publish\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo publish\n",
+    );
+    let raised = verdicts_raised(&root);
+    assert!(
+        !raised
+            .iter()
+            .any(|v| v == "job list missing" || v == "lease guard absent"),
+        "a declared spend is neither leased nor rostered: {raised:?}"
+    );
+}
+
 /// CLOUD-2317: the host counts a job skipped by its own `if:` as success, and the
 /// fan-in is the one check it requires. Skipped on a draft, `final` let d11b89f
 /// reach `main` with no CI run; with no condition it skips whenever a need fails.

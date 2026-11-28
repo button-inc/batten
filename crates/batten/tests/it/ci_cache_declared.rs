@@ -297,6 +297,30 @@ fn a_cargo_job_with_no_cache_step_is_refused() {
     );
 }
 
+/// A workflow declaring its spend publishes what it builds, and a published
+/// build restores no shared cache (CLOUD-2903).
+#[test]
+fn a_workflow_that_declares_its_spend_is_not_asked_for_a_cache() {
+    let uncached = READER
+        .split_once("      - uses: Swatinem/rust-cache")
+        .expect("the fixture carries a cache step")
+        .0
+        .replace(
+            "jobs:",
+            "env:\n  CI_SPEND_AUTHORISED: \"publishes each head\"\njobs:",
+        );
+    let root = tree(
+        "spend-declared",
+        MANIFEST,
+        &[("warm.yml", WARM), ("pr.yml", &uncached)],
+    );
+    let found = findings(&root);
+    assert!(
+        found.is_empty(),
+        "a declared spend needs no cache: {found:?}"
+    );
+}
+
 /// A `depends` chain FIVE hops from cargo, which is past the three levels the
 /// closure used to be expanded to by hand (CLOUD-1863).
 const DEEP_MANIFEST: &str = r#"
