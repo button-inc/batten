@@ -737,6 +737,7 @@ mod tests {
         // `cover`, `env` and `exists` read and write nothing; the noun stays
         // off for `capture`'s reason, since `run` executes.
         "step base",
+        "step config",
         "step cover",
         "step env",
         "step exists",
@@ -1410,6 +1411,7 @@ mod tests {
             "step".to_owned(),
             "step base".to_owned(),
             "step check".to_owned(),
+            "step config".to_owned(),
             "step cover".to_owned(),
             "step env".to_owned(),
             "step exists".to_owned(),

@@ -2181,6 +2181,14 @@ const CENSUS: &[Verb] = &[
              key's own input — the other way to see them is the caller's environment itself",
         ),
     },
+    // `step config` (CLOUD-2960) prints one `config <part> <digest>` line per
+    // part it names, never a byte of the config: pointers by construction.
+    Verb {
+        path: "step config",
+        args: &["--", "rule"],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
     // `step exists` (CLOUD-2835) prints one `exists <path>` line per index path
     // its pathspecs select, never a byte of one: pointers by construction.
     Verb {
