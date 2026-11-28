@@ -802,7 +802,7 @@ fn a_dev_pin_is_refused_at_land_as_a_source_pin_is() {
         .output()
         .expect("run batten");
     let text = String::from_utf8_lossy(&out.stdout);
-    assert_eq!(out.status.code(), Some(1), "{text}");
+    assert_eq!(out.status.code(), Some(2), "{text}");
     assert!(
         text.trim_end().ends_with(
             "engine pin dev v0.0.222-dev.pr1276.20261128054722+52134973caec never lands: pin a release with `batten engine pin <tag>`"
