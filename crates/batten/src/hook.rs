@@ -166,6 +166,14 @@ pub trait HarnessExt: Sized {
     #[must_use]
     fn host_signal(self) -> Option<crate::environment::HostSignal>;
 
+    /// The variable this harness exports to its tool shells naming the session
+    /// its hooks were given, or `None` where none is measured (CLOUD-2953). A
+    /// command run from a shell that left the checkout looks its session's
+    /// recorded home up by it. Claude Code exports `CLAUDE_CODE_SESSION_ID`,
+    /// equal to the hook payload's `session_id` (measured 2026-11-28).
+    #[must_use]
+    fn session_variable(self) -> Option<&'static str>;
+
     /// The directory, relative to this harness's user config directory, that
     /// its hosted setup run writes into: the second form of
     /// [`Self::host_signal`], read where the variable is not known to be
@@ -468,6 +476,17 @@ impl HarnessExt for Harness {
             // an exit code. There is no file to register in, and inventing one
             // would be claiming something about a host nobody named.
             Harness::ExitCode => None,
+        }
+    }
+
+    fn session_variable(self) -> Option<&'static str> {
+        match self {
+            Harness::ClaudeCode => Some("CLAUDE_CODE_SESSION_ID"),
+            Harness::CodexCli
+            | Harness::CopilotCli
+            | Harness::GeminiCli
+            | Harness::Cursor
+            | Harness::ExitCode => None,
         }
     }
 

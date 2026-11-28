@@ -875,9 +875,11 @@ fn session_call(cwd: &Path, session: &str, command: &str) -> String {
 #[test]
 fn setup_from_outside_the_checkout_sets_up_the_prepared_one() {
     let dir = bench("install-gate-setup-outside");
-    let _ = session_start(&dir);
+    let session = "cloud-2953-setup-outside";
+    start_as(&dir, session);
     let outside = common::scratch_outside_tree("install-gate", "setup-outside");
     let ran = common::batten()
+        .env("CLAUDE_CODE_SESSION_ID", session)
         .current_dir(&outside)
         .args(["startup", "--session"])
         .output()
@@ -944,4 +946,77 @@ fn a_hold_from_outside_the_checkout_admits_the_move_back_with_the_dispatch() {
         let said = session_call(&outside, session, &refused);
         assert!(held(&said), "`{refused}` is still held: {said}");
     }
+}
+
+/// A HOLD AT THE CHECKOUT'S PARENT IS CLEARED BY THE COMMAND IT ADMITS
+/// (CLOUD-2953, "A session that cannot leave the hold"). The harness put a
+/// held session at the parent of its checkout; the one admitted command then
+/// failed there, and the session could never leave the hold.
+///
+/// Fails by: the admitted dispatch failing from the parent, so the next call
+/// is still held `session-setup undispatched`.
+#[test]
+fn a_hold_at_the_checkouts_parent_is_cleared_by_the_admitted_dispatch() {
+    let parent = common::scratch_outside_tree("install-gate", "hold-parent");
+    let dir = parent.join("checkout");
+    let copied = std::process::Command::new("cp")
+        .arg("-a")
+        .arg(bench("install-gate-hold-parent"))
+        .arg(&dir)
+        .status()
+        .expect("cp runs");
+    assert!(
+        copied.success(),
+        "the checkout lands under a non-repository"
+    );
+    let session = "cloud-2953-parent";
+    let payload = serde_json::json!({
+        "hook_event_name": "SessionStart",
+        "source": "startup",
+        "session_id": session,
+        "cwd": dir,
+    })
+    .to_string();
+    let _ = common::stdin_run(
+        &mut common::batten(),
+        &dir,
+        &["adjudicate", "--harness", "claude-code"],
+        &payload,
+    );
+    let said = session_call(&parent, session, "batten startup --session");
+    assert!(!held(&said), "the hold admits its dispatch: {said}");
+    let ran = common::batten()
+        .env("CLAUDE_CODE_SESSION_ID", session)
+        .current_dir(&parent)
+        .args(["startup", "--session"])
+        .output()
+        .expect("setup runs");
+    assert!(
+        ran.status.success(),
+        "the admitted dispatch succeeds from the parent: {}",
+        common::stderr(&ran)
+    );
+    let said = session_call(&parent, session, "touch made");
+    assert!(
+        !said.contains("session-setup undispatched"),
+        "the hold is cleared once its dispatch ran: {said}"
+    );
+}
+
+/// A `SessionStart` at `dir` carrying `session`, so the session's home is
+/// recorded under its id.
+fn start_as(dir: &Path, session: &str) {
+    let payload = serde_json::json!({
+        "hook_event_name": "SessionStart",
+        "source": "startup",
+        "session_id": session,
+        "cwd": dir,
+    })
+    .to_string();
+    let _ = common::stdin_run(
+        &mut common::batten(),
+        dir,
+        &["adjudicate", "--harness", "claude-code"],
+        &payload,
+    );
 }

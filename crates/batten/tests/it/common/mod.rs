@@ -881,6 +881,10 @@ pub(crate) fn batten_as(program: &Path) -> Batten {
         // the user-level surface out of the pinned scratch home, so a case that
         // inherited it would read, and repair, the developer's own settings.
         "CLAUDE_CONFIG_DIR",
+        // NOR THE HOST SESSION'S ID (CLOUD-2953): setup run outside a checkout
+        // looks the session's recorded home up by it, so an inherited one would
+        // name the developer's own session.
+        "CLAUDE_CODE_SESSION_ID",
         // NOR THE HOST'S LIVE SESSION (CLOUD-2789): the retired
         // `wiring::live_session_root` read the cwd of the process this names
         // (gone with CLOUD-2953), so `doctor`'s `hook-wiring` judged the host

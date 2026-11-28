@@ -223,45 +223,6 @@ pub fn record_session_authority(session: &str, root: &Path) -> Result<()> {
         .with_context(|| format!("write {}", path.display()))
 }
 
-/// The record of the checkout whose session setup was last prepared.
-fn setup_root_file(state: &Path) -> PathBuf {
-    state.join("session-setup-root")
-}
-
-/// Record `root`, which must be absolute, as the checkout whose session setup
-/// `SessionStart` last prepared (CLOUD-2953).
-///
-/// THE SETUP COMMAND CARRIES NO SESSION, so the per-session record cannot
-/// answer it: a harness that moved the working directory out of the checkout
-/// left `batten startup --session` with no repository to set up, while the
-/// hold admitted nothing else. This is the one fact it reads there.
-///
-/// # Errors
-///
-/// Returns an error when the state root cannot be resolved or the record cannot
-/// be written.
-pub fn record_setup_root(root: &Path) -> Result<()> {
-    let path = setup_root_file(&state_root()?);
-    let text = root.to_string_lossy();
-    if crate::fsio::read_to_string(&path).is_ok_and(|held| held == text) {
-        return Ok(());
-    }
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
-    }
-    crate::durable::replace(&path, text.as_bytes())
-        .with_context(|| format!("write {}", path.display()))
-}
-
-/// The checkout [`record_setup_root`] last recorded, where it still holds
-/// `file`: a moved or deleted checkout is never answered for by its ghost.
-#[must_use]
-pub fn recorded_setup_root(file: &str) -> Option<PathBuf> {
-    let root =
-        PathBuf::from(crate::fsio::read_to_string(setup_root_file(&state_root().ok()?)).ok()?);
-    (root.is_absolute() && root.join(file).is_file()).then_some(root)
-}
-
 /// The authority root this session last resolved, if it still carries one.
 #[must_use]
 pub fn recorded_session_authority(session: &str, file: &str) -> Option<PathBuf> {

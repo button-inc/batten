@@ -3390,10 +3390,19 @@ fn run_session_setup(overrides: &Overrides) -> Result<ExitCode> {
     // FROM OUTSIDE ANY REPOSITORY, THE CHECKOUT SETUP WAS PREPARED FOR
     // (CLOUD-2953): a harness that moved the session's directory to the
     // checkout's parent left this, the one command the hold admits, failing
-    // `not a git repository`, and the session held for good.
+    // `not a git repository`, and the session held for good. The session id the
+    // harness gives its tool shells names the home its hook recorded.
     let dot = Path::new(".");
     let recorded = (session_setup::git_dir_of(dot).is_none() && git::git_dir(dot).is_err())
-        .then(|| state::recorded_setup_root(crate::config_model::CONFIG_FILE))
+        .then(|| {
+            config_model::Harness::ALL
+                .iter()
+                .filter_map(|harness| harness.session_variable())
+                .filter_map(|name| std::env::var(name).ok())
+                .find_map(|session| {
+                    state::recorded_session_authority(&session, crate::config_model::CONFIG_FILE)
+                })
+        })
         .flatten();
     let here = recorded.as_deref().unwrap_or(dot);
     let resolved = resolve::resolve(here, overrides)?;
@@ -24775,9 +24784,6 @@ fn prepare_session_setup(
         return;
     };
     let session = envelope.session.as_deref().unwrap_or_default();
-    // WHERE THE SETUP COMMAND FINDS THIS CHECKOUT from a directory that is not
-    // one (CLOUD-2953): it carries no session to look the home up by.
-    let _ = state::record_setup_root(&git::canonical(here));
     if session_setup::prepare(&git_dir, raw, session) {
         advice.push(advisory::Advice::rendered(
             severity::AdvisoryTier::Warning,
